@@ -10,6 +10,9 @@
     "dist",
     "docs/api",
     "docs/media",
+    "examples/standalone",
+    "examples/git",
+    "docs/site/agent-quickstart.mdx",
     "README.md",
     "LICENSE"
   ],
@@ -297,6 +300,7 @@
   },
   "peerDependencies": {
     "react": "^18.3.1 || ^19.2.0",
+    "react-dom": "^18.3.1 || ^19.2.0",
     "wrangler": "^4.127.1"
   },
   "peerDependenciesMeta": {

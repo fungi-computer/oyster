@@ -14,7 +14,16 @@ delete manifest.devDependencies;
 delete manifest.publishConfig;
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
-for (const path of ["dist", "docs/api", "docs/media", "README.md", "LICENSE"]) {
+for (const path of [
+  "dist",
+  "docs/api",
+  "docs/media",
+  "examples/standalone",
+  "examples/git",
+  "docs/site/agent-quickstart.mdx",
+  "README.md",
+  "LICENSE",
+]) {
   await cp(new URL(path, root), new URL(path, destination), {
     recursive: true,
   });

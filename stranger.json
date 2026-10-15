@@ -177,6 +177,11 @@
     "package/docs/media/architecture.png",
     "package/docs/media/bonsai-network.png",
     "package/docs/media/bonsai-repository.png",
+    "package/docs/site/agent-quickstart.mdx",
+    "package/examples/git/worker.ts",
+    "package/examples/git/wrangler.jsonc",
+    "package/examples/standalone/worker.ts",
+    "package/examples/standalone/wrangler.jsonc",
     "package/package.json"
   ],
   "localDependencies": [
