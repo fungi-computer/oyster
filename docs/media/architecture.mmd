@@ -1,0 +1,32 @@
+flowchart LR
+  people["Browsers<br/>git clients<br/>MCP agents"]
+
+  subgraph oyster["Oyster Worker · Cloudflare Workers or celld"]
+    direction TB
+    router["Router<br/>/apps · /api · /git · /mcp"]
+    home["Tourtois home<br/>launcher · windows · settings"]
+    registry[("OysterRegistry DO<br/>installations")]
+    instance["App Instance DO<br/>one per installation"]
+    facet["App backend<br/>Worker Loader facet<br/>with its own SQLite"]
+    door["git door<br/>per-agent keys"]
+    router --> home
+    router --> registry
+    router --> instance --> facet
+    router --> door
+  end
+
+  apps["Apps as immutable Releases<br/>Bonsai · Workflows · Shed<br/>Inkcap · Grove · Prints"]
+
+  subgraph services["Bindings the host provides"]
+    direction TB
+    r2[("R2<br/>Release artifacts")]
+    artifacts[("Artifacts<br/>git repositories")]
+    platform["Braid Workflows · Computers<br/>Agents · Workers AI"]
+  end
+
+  people --> router
+  home -. "UI in sandboxed frames" .-> apps
+  registry -- "Release refs" --> r2
+  door --> artifacts
+  facet -- "declared only" --> platform
+  facet -- "GIT binding" --> artifacts

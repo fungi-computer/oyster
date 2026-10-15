@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "rootDir": "..",
+    "outDir": "../../dist"
+  },
+  "include": ["*.ts", "*.tsx"],
+  "exclude": ["main.ts", "public-home.tsx", "grant-consent.tsx"]
+}

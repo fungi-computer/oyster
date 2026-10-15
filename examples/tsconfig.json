@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "include": [
+    "*.ts",
+    "standalone/*.ts",
+    "git/*.ts",
+    "notes-app/backend/*.ts",
+    "notes-app/*.ts"
+  ],
+  "exclude": []
+}

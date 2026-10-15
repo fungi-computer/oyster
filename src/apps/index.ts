@@ -1,0 +1,47 @@
+/** Installation records and pure admission rules; tenant state and commits stay host-owned. */
+export {
+  applyInstallationCommand,
+  approvedGrantSchema,
+  declaredOperationsSchema,
+  installationCommandSchema,
+  installationIdSchema,
+  installationRefusalSchema,
+  installationSchema,
+  type Approval,
+  type ApprovedGrant,
+  type CapabilityOperationDescriptor,
+  type DeclaredOperations,
+  type GrantRequest,
+  type Installation,
+  type InstallationCommand,
+  type InstallationContext,
+  type InstallationReader,
+  type InstallationRefusal,
+  type InstallationUpdate,
+  type ResourceRef,
+} from "./installation.js";
+export {
+  admits,
+  admitMethodMetadata,
+  appInvocationCeiling,
+  approvedBindingGrants,
+  scopedBindings,
+  grantsFor,
+  gateRefusalSchema,
+  gateRequestSchema,
+  invocationGrantsSchema,
+  type AppMethodDeclaration,
+  type AppMethodMetadataDecision,
+  type GateDecision,
+  type GateFacts,
+  type GateRequest,
+  type HostPrincipal,
+  type InvocationGrants,
+} from "./gate.js";
+export { deriveDeclaredOperations, appCallOperation } from "./operations.js";
+export {
+  appToolPolicySchema,
+  type AppToolAccess,
+  type AppToolEntry,
+  type AppToolPolicy,
+} from "./tools.js";

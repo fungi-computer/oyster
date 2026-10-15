@@ -1,0 +1,39 @@
+{
+  "name": "oyster-notes-example",
+  "private": true,
+  "type": "module",
+  "fungi": {
+    "app": {
+      "displayName": "Notes",
+      "capabilities": [
+        "computer.readFile",
+        "computer.writeFile"
+      ],
+      "handlers": [],
+      "roles": [],
+      "commands": [
+        {
+          "id": "save",
+          "title": "Save note",
+          "category": "File",
+          "description": "Save the note",
+          "projections": {
+            "bindings": {
+              "values": [
+                "<leader> s"
+              ],
+              "order": 0
+            },
+            "menu": {
+              "order": 0
+            },
+            "palette": {
+              "order": 0
+            }
+          }
+        }
+      ]
+    },
+    "backendDefinition": "backend/methods.ts"
+  }
+}

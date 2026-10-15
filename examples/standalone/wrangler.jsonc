@@ -1,0 +1,21 @@
+{
+  "$schema": "../../../../node_modules/wrangler/config-schema.json",
+  "name": "oyster",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "OYSTER_ORIGIN": "https://oyster.example" },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "oyster-releases" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MCP", "class_name": "OysterMcp" },
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "INSTANCES", "class_name": "OysterInstance" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OysterRegistry", "OysterInstance"] },
+    { "tag": "mcp-session-owner-v1", "new_sqlite_classes": ["OysterMcp"] },
+  ],
+}

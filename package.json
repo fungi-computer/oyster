@@ -1,0 +1,318 @@
+{
+  "name": "@fungi.computer/oyster",
+  "version": "0.0.1",
+  "author": "Levi <levi@technomancy.dev>",
+  "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "docs/api",
+    "docs/media",
+    "README.md",
+    "LICENSE"
+  ],
+  "imports": {
+    "#frame-binding-wire-script": {
+      "types": "./src/frame-binding-wire-script.d.ts",
+      "default": "./dist/frame-binding-wire-script.js"
+    },
+    "#page-script": {
+      "types": "./src/page-script.d.ts",
+      "default": "./dist/page-script.js"
+    },
+    "#snapshot-program-scripts": {
+      "types": "./src/build/snapshot-program-scripts.d.ts",
+      "default": "./dist/build/snapshot-program-scripts.js"
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cloudflare": {
+      "types": "./dist/cloudflare.d.ts",
+      "import": "./dist/cloudflare.js"
+    },
+    "./invocation": {
+      "types": "./dist/invocation.d.ts",
+      "import": "./dist/invocation.js"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    },
+    "./workers": {
+      "types": "./dist/workers.d.ts",
+      "import": "./dist/workers.js"
+    },
+    "./pack": {
+      "types": "./dist/pack.d.ts",
+      "import": "./dist/pack.js"
+    },
+    "./git": {
+      "types": "./dist/git.d.ts",
+      "import": "./dist/git.js"
+    },
+    "./workers-git": {
+      "types": "./dist/workers-git.d.ts",
+      "import": "./dist/workers-git.js"
+    },
+    "./event-recipients": {
+      "types": "./dist/event-recipients.d.ts",
+      "import": "./dist/event-recipients.js"
+    },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "import": "./dist/shell/index.js"
+    },
+    "./shell/workbench": {
+      "types": "./dist/shell/workbench.d.ts",
+      "import": "./dist/shell/workbench.js"
+    },
+    "./shell/shell-module": {
+      "types": "./dist/shell/shell-module.d.ts",
+      "import": "./dist/shell/shell-module.js"
+    },
+    "./shell/command-host": {
+      "types": "./dist/shell/command-host.d.ts",
+      "import": "./dist/shell/command-host.js"
+    },
+    "./shell/keys": {
+      "types": "./dist/shell/keys.d.ts",
+      "import": "./dist/shell/keys.js"
+    },
+    "./shell/commands": {
+      "types": "./dist/shell/commands.d.ts",
+      "import": "./dist/shell/commands.js"
+    },
+    "./shell/window-manager": {
+      "types": "./dist/shell/window-manager.d.ts",
+      "import": "./dist/shell/window-manager.js"
+    },
+    "./shell/app-directory": {
+      "types": "./dist/shell/app-directory.d.ts",
+      "import": "./dist/shell/app-directory.js"
+    },
+    "./app-storage": {
+      "types": "./dist/app-storage.d.ts",
+      "import": "./dist/app-storage.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./files": {
+      "types": "./dist/files.d.ts",
+      "import": "./dist/files.js"
+    },
+    "./computer": {
+      "types": "./dist/computer.d.ts",
+      "import": "./dist/computer.js"
+    },
+    "./agents": {
+      "types": "./dist/agents.d.ts",
+      "import": "./dist/agents.js"
+    },
+    "./build": {
+      "types": "./dist/build.d.ts",
+      "import": "./dist/build.js"
+    },
+    "./app-builds": {
+      "types": "./dist/app-builds.d.ts",
+      "import": "./dist/app-builds.js"
+    },
+    "./r2-artifact-writer": {
+      "types": "./dist/build/r2-artifact-writer.d.ts",
+      "import": "./dist/build/r2-artifact-writer.js"
+    },
+    "./build-contract": {
+      "types": "./dist/build-contract.d.ts",
+      "import": "./dist/build-contract.js"
+    },
+    "./build-jobs": {
+      "types": "./dist/build-jobs.d.ts",
+      "import": "./dist/build-jobs.js"
+    },
+    "./source": {
+      "types": "./dist/source/index.d.ts",
+      "import": "./dist/source/index.js"
+    },
+    "./source/template-write": {
+      "types": "./dist/source/template-write.d.ts",
+      "import": "./dist/source/template-write.js"
+    },
+    "./app-sources": {
+      "types": "./dist/app-sources.d.ts",
+      "import": "./dist/app-sources.js"
+    },
+    "./catalog-frame": {
+      "types": "./dist/catalog-frame.d.ts",
+      "import": "./dist/catalog-frame.js"
+    },
+    "./media": {
+      "types": "./dist/media.d.ts",
+      "import": "./dist/media.js"
+    },
+    "./root-data": {
+      "types": "./dist/root-data.d.ts",
+      "import": "./dist/root-data.js"
+    },
+    "./page": {
+      "types": "./dist/page/mount.d.ts",
+      "import": "./dist/page/mount.js"
+    },
+    "./tenant": {
+      "types": "./dist/tenant.d.ts",
+      "import": "./dist/tenant.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
+    },
+    "./apps": {
+      "types": "./dist/apps/index.d.ts",
+      "import": "./dist/apps/index.js"
+    },
+    "./keys": {
+      "types": "./dist/keys.d.ts",
+      "import": "./dist/keys.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    },
+    "./testing/workers-runtime": {
+      "types": "./dist/testing/workers-runtime.d.ts",
+      "import": "./dist/testing/workers-runtime.js"
+    },
+    "./testing/worker": {
+      "types": "./dist/testing/worker.d.ts",
+      "import": "./dist/testing/worker.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm run clean && tsc -p tsconfig.build.json && tsc -p src/shell/tsconfig.build.json && tsc -p src/page/tsconfig.build.json && node scripts/build-page.mjs",
+    "clean": "node --input-type=module --eval \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit && tsc -p src/page/tsconfig.json && tsc -p examples/tsconfig.json && tsc -p examples/notes-app/ui/tsconfig.json && tsc -p src/shell/tsconfig.json && tsc -p test/shell/tsconfig.json && tsc -p src/build/tsconfig.json && tsc -p src/build/snapshot-programs/tsconfig.json",
+    "test": "node test/core.mjs && vitest run --config vitest.config.mjs && node --test test/mcp-catalog.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/guest-security.test.mjs test/host-routes.test.mjs test/visibility-authority-resync.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs && node --import tsx --test test/page-capabilities.test.mjs test/external-app.test.mjs && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs",
+    "lint": "eslint src test examples --max-warnings=0 && oxlint --config ../../oxlint.config.ts --deny-warnings src test examples",
+    "format:check": "node ../../tooling/repository/scripts/format-package-check.mjs",
+    "lint:anti-slop": "node ../../tooling/repository/scripts/lint-package-anti-slop.mjs",
+    "docs": "tsx ../../tooling/repository/src/docs/cli.ts check --root ../..",
+    "docs:write": "tsx ../../tooling/repository/src/docs/cli.ts write --root ../..",
+    "pack": "mkdir -p ../../.botanical/oyster-pack && pnpm pack --pack-destination \"$PWD/../../.botanical/oyster-pack\"",
+    "smoke": "node test/stranger/runtime.mjs",
+    "stranger": "tsx ../../tooling/repository/src/artifacts/cli.ts --repo-root ../.. .",
+    "test:packed-native": "node --import tsx test/stranger/qualify-packed.mjs",
+    "test:background-replay": "node test/background-replay.native.mjs",
+    "test:standalone": "node test/standalone.native.mjs",
+    "test:source-builds": "node test/source-distribution-build.native.mjs",
+    "test:git-door": "node test/git-example.native.mjs",
+    "test:page-launch": "node --test test/page-launch.browser.mjs",
+    "test:standalone:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/standalone.native.mjs",
+    "prepack": "node scripts/prepare-package.mjs",
+    "test:storage-backend": "node test/storage-backend.native.mjs",
+    "test:reinstall-survival": "node test/reinstall-survival.native.mjs",
+    "test:storage-backend:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/storage-backend.native.mjs",
+    "test:grant-consent": "node --import tsx --test test/grant-consent.browser.mjs",
+    "test:grant-consent:native": "node --import tsx test/grant-consent.native.mjs",
+    "test:grant-consent:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs --import tsx test/grant-consent.native.mjs",
+    "test:mcp-owner:native": "node test/mcp-owner.native.mjs",
+    "test:mcp-owner:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/mcp-owner.native.mjs"
+  },
+  "dependencies": {
+    "@fungi.computer/cloudflare-worker-bundler": "workspace:*",
+    "@fungi.computer/agar": "workspace:*",
+    "@fungi.computer/burrow": "workspace:*",
+    "@fungi.computer/cairn": "workspace:*",
+    "@fungi.computer/ear-tag": "workspace:*",
+    "@fungi.computer/caps": "workspace:*",
+    "@fungi.computer/carrier": "workspace:*",
+    "@fungi.computer/forage": "workspace:*",
+    "@fungi.computer/gills": "workspace:*",
+    "@fungi.computer/knapsack": "workspace:*",
+    "@fungi.computer/mycelium": "workspace:*",
+    "@fungi.computer/puffball": "workspace:*",
+    "@fungi.computer/sigils": "workspace:*",
+    "@fungi.computer/watchdog": "workspace:*",
+    "@fungi.computer/whistle": "workspace:*",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@pnpm/lockfile.fs": "1100.2.13",
+    "@pnpm/lockfile.pruner": "1100.0.27",
+    "@fungi.computer/capnweb": "workspace:*",
+    "effect": "4.0.2",
+    "esbuild": "0.28.2",
+    "fast-json-stable-stringify": "2.1.0",
+    "hono": "4.13.5",
+    "isomorphic-git": "1.42.2",
+    "jose": "6.2.11",
+    "memfs": "4.80.0",
+    "mime": "4.1.0",
+    "path-to-regexp": "8.4.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260828.1",
+    "@fungi.computer/shiitake": "workspace:*",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@tailwindcss/node": "4.2.1",
+    "@tailwindcss/oxide": "4.2.1",
+    "@types/node": "24.13.3",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "playwright": "1.62.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vite-plugin-singlefile": "2.3.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.127.1",
+    "eslint": "10.9.1",
+    "oxlint": "1.78.0",
+    "tsx": "4.23.12"
+  },
+  "license": "MIT",
+  "botanical": {
+    "role": "package",
+    "operations": {
+      "lint": "required",
+      "typecheck": "required",
+      "build": "required",
+      "test": "required",
+      "docs": "required",
+      "pack": "required",
+      "smoke": "required",
+      "stranger": "required"
+    }
+  },
+  "publishConfig": {
+    "directory": ".botanical/package",
+    "linkDirectory": false
+  },
+  "peerDependencies": {
+    "react": "^18.3.1 || ^19.2.0",
+    "wrangler": "^4.127.1"
+  },
+  "peerDependenciesMeta": {
+    "wrangler": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fungi-computer/oyster.git"
+  },
+  "fungi": {
+    "build": {
+      "typescript": [
+        "src/shell/tsconfig.build.json"
+      ]
+    }
+  }
+}

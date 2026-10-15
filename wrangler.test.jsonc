@@ -1,0 +1,10 @@
+{
+  "name": "app-instance-local-proof",
+  "main": "src/testing/worker.ts",
+  "compatibility_date": "2026-09-04",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "INSTANCES", "class_name": "ConfiguredInstance" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConfiguredInstance"] }],
+}

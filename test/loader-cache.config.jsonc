@@ -1,0 +1,18 @@
+{
+  "name": "oyster-loader-cache-proof",
+  "main": "loader-cache.worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "loader-proof" }],
+  "vars": { "OYSTER_OWNER_KEY": "local-native-proof-not-an-owner-secret" },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "INSTANCES", "class_name": "LoaderProbe" },
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LoaderProbe", "OysterRegistry"] },
+  ],
+}

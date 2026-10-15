@@ -1,0 +1,15 @@
+[
+  { "label": "Overview", "link": "/" },
+  { "label": "Install", "link": "/install/" },
+  { "label": "Quickstart", "link": "/quickstart/" },
+  { "label": "Agent quick start", "link": "/agent-quickstart/" },
+  { "label": "Concepts", "link": "/concepts/" },
+  { "label": "Examples", "link": "/examples/" },
+  {
+    "label": "API reference",
+    "sigil": "list",
+    "collapsed": true,
+    "items": [{ "autogenerate": { "directory": "api" } }]
+  },
+  { "label": "Status", "link": "/status/" }
+]

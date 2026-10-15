@@ -1,0 +1,25 @@
+{
+  "name": "oyster-scoped-mcp-proof",
+  "main": "guest-worker.fixture.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "oyster-proof-releases" },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MCP", "class_name": "OysterMcp" },
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "INSTANCES", "class_name": "OysterInstance" },
+      { "name": "KEYS", "class_name": "OysterKeys" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["OysterRegistry", "OysterInstance", "OysterKeys"],
+    },
+    { "tag": "mcp-session-owner-v1", "new_sqlite_classes": ["OysterMcp"] },
+  ],
+}

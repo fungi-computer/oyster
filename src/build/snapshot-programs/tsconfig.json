@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "allowJs": false,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "module": "NodeNext",
+    "moduleDetection": "force",
+    "moduleResolution": "NodeNext",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "target": "ES2024",
+    "verbatimModuleSyntax": true,
+
+    "types": ["node"],
+    "lib": ["ES2024"],
+    "noEmit": true,
+    // @tailwindcss/node 4.2.1 publishes declarations that import its unshipped
+    // internal modules; the APIs these programs use do not depend on them.
+    "skipLibCheck": true
+  },
+  "include": ["*.ts"]
+}

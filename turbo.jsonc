@@ -1,0 +1,8 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Typed stranger consumers import this package's built public declarations.
+    "lint": { "dependsOn": ["build"] },
+  },
+}
