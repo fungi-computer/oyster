@@ -351,6 +351,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
             requestClose: () => host.requestClose(),
             requestBack: () => host.requestBack(),
             activateStatus: (action) => host.activateStatus(action),
+            activateNavigation: (activation) =>
+              host.activateNavigation(activation),
             setVisibility: (visibility) => {
               frame.hidden = visibility === "hidden";
               const target = launchTracker.current();

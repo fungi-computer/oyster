@@ -10,25 +10,29 @@ import {
 import * as z from "zod";
 
 /** An App address selects a host default or a specific installation. */
-export const appAddressSchema = z.union([
-  z.strictObject({
-    kind: z.literal("default"),
-    appId: z.string().min(1),
-  }),
-  z.strictObject({
-    kind: z.literal("installation"),
-    installationId: z.string().min(1),
-  }),
-]);
+export const appAddressSchema = z.lazy(() =>
+  z.union([
+    z.strictObject({
+      kind: z.literal("default"),
+      appId: z.string().min(1),
+    }),
+    z.strictObject({
+      kind: z.literal("installation"),
+      installationId: z.string().min(1),
+    }),
+  ]),
+);
 
 /** Host-reported progress of applying a revised App authority version. */
-export const appAuthorityEnforcementSchema = z.strictObject({
-  requestId: z.string().min(1),
-  address: appAddressSchema,
-  authorityVersion: z.number().int().positive(),
-  state: z.enum(["unaffected", "pending", "applied", "expired"]),
-  outstanding: z.number().int().nonnegative(),
-});
+export const appAuthorityEnforcementSchema = z.lazy(() =>
+  z.strictObject({
+    requestId: z.string().min(1),
+    address: appAddressSchema,
+    authorityVersion: z.number().int().positive(),
+    state: z.enum(["unaffected", "pending", "applied", "expired"]),
+    outstanding: z.number().int().nonnegative(),
+  }),
+);
 
 /** Decoded address of a default App or an installation. */
 export type AppAddress = z.output<typeof appAddressSchema>;
@@ -107,19 +111,23 @@ const appComputerOperationSchema = z.enum([
   "computer.execute",
 ]);
 
-const selectedComputerPermissionSchema = z.strictObject({
-  kind: z.literal("selected-computers"),
-  computers: z.array(
-    z.strictObject({
-      computerId: z.string().min(1),
-      operations: z.array(appComputerOperationSchema),
-    }),
-  ),
-});
-const allTeamComputersPermissionSchema = z.strictObject({
-  kind: z.literal("all-team-computers"),
-  operations: z.array(appComputerOperationSchema),
-});
+const selectedComputerPermissionSchema = z.lazy(() =>
+  z.strictObject({
+    kind: z.literal("selected-computers"),
+    computers: z.array(
+      z.strictObject({
+        computerId: z.string().min(1),
+        operations: z.array(appComputerOperationSchema),
+      }),
+    ),
+  }),
+);
+const allTeamComputersPermissionSchema = z.lazy(() =>
+  z.strictObject({
+    kind: z.literal("all-team-computers"),
+    operations: z.array(appComputerOperationSchema),
+  }),
+);
 /** App Computer permissions limited to selected Computers or the Team's Computers. */
 export const appComputerPermissionSchema = z.discriminatedUnion("kind", [
   selectedComputerPermissionSchema,
@@ -187,59 +195,66 @@ export type AppMarketplacePermissions = z.output<
  * A host's Team App directory with its permission projection, parsed strictly
  * by every consumer: an unknown field is a contract change both sides make.
  */
-export const appDirectoryResponseSchema = z.strictObject({
-  actorIsTeamOwner: z.boolean(),
-  needsUpdate: z
-    .array(
-      z.strictObject({
-        installationId: z.string().min(1).nullable(),
-        appId: z.string().min(1).nullable(),
-        displayName: z.string().min(1),
-      }),
-    )
-    .optional(),
-  apps: z.array(
-    appDirectoryEntrySchema.extend({
-      override: z
-        .strictObject({
-          appId: z.string().min(1).optional(),
-          releaseId: z.string().min(1),
-          surfaceRoute: z.string().min(1).nullable(),
-        })
-        .nullable(),
-      grants: z.array(
+export const appDirectoryResponseSchema = z.lazy(() =>
+  z.strictObject({
+    actorIsTeamOwner: z.boolean(),
+    needsUpdate: z
+      .array(
         z.strictObject({
-          operation: z.string().min(1),
-          resourceId: z.string().min(1),
+          installationId: z.string().min(1).nullable(),
+          appId: z.string().min(1).nullable(),
+          displayName: z.string().min(1),
         }),
-      ),
-      computerPermission: appComputerPermissionSchema.nullable().optional(),
-      generationPermissions: appGenerationPermissionsSchema,
-      marketplacePermissions: appMarketplacePermissionsSchema,
-      agentPermission: appAgentPermissionSchema,
-    }),
-  ),
-  /** The Team's effective App per role, owned and resolved by the host. */
-  roles: z.record(z.string().min(1), appRoleSelectionSchema),
-});
+      )
+      .optional(),
+    apps: z.array(
+      appDirectoryEntrySchema.extend({
+        override: z
+          .strictObject({
+            appId: z.string().min(1).optional(),
+            releaseId: z.string().min(1),
+            surfaceRoute: z.string().min(1).nullable(),
+          })
+          .nullable(),
+        grants: z.array(
+          z.strictObject({
+            operation: z.string().min(1),
+            resourceId: z.string().min(1),
+          }),
+        ),
+        computerPermission: appComputerPermissionSchema.nullable().optional(),
+        generationPermissions: appGenerationPermissionsSchema,
+        marketplacePermissions: appMarketplacePermissionsSchema,
+        agentPermission: appAgentPermissionSchema,
+      }),
+    ),
+    /** The Team's effective App per role, owned and resolved by the host. */
+    roles: z.record(z.string().min(1), appRoleSelectionSchema),
+  }),
+);
 
 /** The host-resolved Team App directory and its permission projections. */
 export type AppDirectory = z.output<typeof appDirectoryResponseSchema>;
 
 /** Desktop metadata is a method result, distinct from the full Release Gill declaration. */
-const catalogGillParamsSchema = z
-  .array(
-    z.strictObject({
-      key: z.string().max(64),
-      label: z.string().max(256),
-      kind: z.enum(["computer", "repository", "branch"]),
-      required: z.boolean(),
-      options: z.string().max(256).optional(),
-    }),
-  )
-  .max(4)
-  // The wire shape is representable; Gill owns its domain refinements.
-  .refine(Schema.is(appGillParamsSchema), "Invalid Gill placement parameters");
+const catalogGillParamsSchema = z.lazy(() =>
+  z
+    .array(
+      z.strictObject({
+        key: z.string().max(64),
+        label: z.string().max(256),
+        kind: z.enum(["computer", "repository", "branch"]),
+        required: z.boolean(),
+        options: z.string().max(256).optional(),
+      }),
+    )
+    .max(4)
+    // The wire shape is representable; Gill owns its domain refinements.
+    .refine(
+      Schema.is(appGillParamsSchema),
+      "Invalid Gill placement parameters",
+    ),
+);
 const catalogGillSchema = z.strictObject({
   id: z.string().trim().min(1).max(256),
   title: z.string().trim().min(1).max(256),
@@ -267,17 +282,18 @@ export const appCatalogEntrySchema = appDirectoryEntrySchema
   .extend({ gills: z.array(catalogGillSchema).max(16) });
 
 /** Read-only desktop metadata; identities are surface addresses, never launch authority. */
-export const appCatalogResponseSchema = z.strictObject({
-  apps: z.array(appCatalogEntrySchema).max(50),
-  roles: z.strictObject({
-    inbox: appRoleSelectionSchema.optional(),
+export const appCatalogResponseSchema = z.lazy(() =>
+  z.strictObject({
+    apps: z.array(appCatalogEntrySchema).max(50),
+    roles: z.strictObject({
+      inbox: appRoleSelectionSchema.optional(),
+    }),
   }),
-});
+);
 /** Parsed metadata returned by the read-only APPS.catalog binding. */
 export type AppCatalog = z.output<typeof appCatalogResponseSchema>;
 
 /** Complete APPS.catalog reply, including broker admission failures. */
-export const appCatalogBrokerResultSchema = z.union([
-  appCatalogResponseSchema,
-  z.strictObject({ error: z.string() }),
-]);
+export const appCatalogBrokerResultSchema = z.lazy(() =>
+  z.union([appCatalogResponseSchema, z.strictObject({ error: z.string() })]),
+);

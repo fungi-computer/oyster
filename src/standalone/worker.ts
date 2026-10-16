@@ -85,13 +85,15 @@ export { StandaloneEventDelivery as OysterWebhooks } from "./instance.js";
 export { AgentDirectory } from "./agents.js";
 
 /** After Oyster's bearer prefix: `<library>.<pass>`, as the library minted it. */
-const workflowGitPassToken = z
-  .string()
-  .regex(/^([a-zA-Z0-9_-]{1,256})\.([0-9a-f]{64})$/u)
-  .transform((token) => {
-    const [libraryId = "", passId = ""] = token.split(".");
-    return [libraryId, passId] as const;
-  });
+const workflowGitPassToken = z.lazy(() =>
+  z
+    .string()
+    .regex(/^([a-zA-Z0-9_-]{1,256})\.([0-9a-f]{64})$/u)
+    .transform((token) => {
+      const [libraryId = "", passId = ""] = token.split(".");
+      return [libraryId, passId] as const;
+    }),
+);
 /** The one composition root: every door reaches a tenant's host through `hostFor`. */
 const oysterRoot = oysterGitRoot<StandaloneEnv>({
   tenancy: (env) => ({

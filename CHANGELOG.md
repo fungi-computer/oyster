@@ -1,5 +1,62 @@
 # @fungi.computer/oyster
 
+## 0.2.0
+
+### Minor Changes
+
+- Changes since 0.1.0:
+
+  - fix(hub): project Agent avatars as closed records
+  - test(oyster): give the MCP proof's Agent its avatar
+  - fix(agar): keep the result-row decoder out of Apps that do not present
+  - feat(agents): make the avatar a property of the Agent, not the conversation
+  - fix(trellis): no silent failures on the run views and step presentation
+  - feat(shed): one Ghostty terminal for the light and full shells
+  - feat(sigils): wire round-two Sigils into every surface
+  - perf(oyster): build schemas on first use, not at import
+  - feat(tourtois): render app crumbs, commands and state in the window header
+  - feat(agar): let App methods declare how a finished call reads
+  - feat(oyster): public release 0.1.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.2.0
+  - @fungi.computer/braid@0.1.0
+  - @fungi.computer/caps@0.1.0
+  - @fungi.computer/computer@0.1.0
+  - @fungi.computer/darkroom@0.1.0
+  - @fungi.computer/ear-tag@0.0.2
+  - @fungi.computer/forage@0.1.0
+  - @fungi.computer/gills@0.1.0
+  - @fungi.computer/knapsack@0.1.0
+  - @fungi.computer/mycelium@0.1.0
+  - @fungi.computer/puffball@0.1.0
+  - @fungi.computer/shiitake@0.2.0
+  - @fungi.computer/sigils@0.1.0
+  - @fungi.computer/sprite-zdog@0.1.0
+  - @fungi.computer/sprite@0.1.0
+  - @fungi.computer/veil@0.1.0
+  - @fungi.computer/whistle@0.0.2
+  - @fungi.computer/workflows-wire@0.1.0
+
 ## 0.1.0
 
 ### Minor Changes

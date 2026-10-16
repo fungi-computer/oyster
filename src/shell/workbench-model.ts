@@ -11,6 +11,7 @@ import type {
   AppCommand,
   AppOpenRequest,
   FileNavigationInput,
+  AppNavigationActivation,
   AppNavigationState,
   AppStatusAction,
   AppStatusItem,
@@ -88,6 +89,8 @@ export type WorkbenchChildHandle = {
   requestBack(): Promise<boolean>;
   /** Deliver the person's use of a child's status item; `true` when it acted. */
   activateStatus(action: AppStatusAction): Promise<boolean>;
+  /** Deliver the person's use of a child's crumb or header command; `true` when it acted. */
+  activateNavigation(activation: AppNavigationActivation): Promise<boolean>;
   /** Run one of the child's currently presented commands. */
   invokeCommand(
     commandId: string,

@@ -21,9 +21,15 @@ import {
   grantsFor,
   type Installation,
 } from "../apps/index.js";
-import { pendingSchema } from "@fungi.computer/agar/backend-definition";
+import {
+  pendingSchema,
+  presentMethodName,
+} from "@fungi.computer/agar/backend-definition";
+import { resultRowSchemaV1, type ResultRow } from "@fungi.computer/gills";
+import type { AppMethodReply } from "@fungi.computer/agar/backend";
 import {
   verifyRelease,
+  type InstanceResult,
   type OysterHost,
   type VerifiedRelease,
 } from "../host.js";
@@ -966,14 +972,11 @@ export function createStandaloneWorkflowHost(
       };
       const deadlineAt = Date.now() + APP_INVOCATION_CEILING_MS;
       const deadline = { deadlineAt, grantExpiresAt: deadlineAt };
-      const facts =
+      const factsFor = (idempotencyKey: string) =>
         run.publication === undefined
           ? invocationFacts.fromCaller(
               authority,
-              {
-                ...savedCaller,
-                idempotencyKey: call.idempotencyKey,
-              },
+              { ...savedCaller, idempotencyKey },
               deadline,
             )
           : invocationFacts.fromWorkflowNode(
@@ -986,10 +989,11 @@ export function createStandaloneWorkflowHost(
                   nodeId: resolved.nodeId,
                   armedBy: savedCaller.actor,
                 },
-                idempotencyKey: call.idempotencyKey,
+                idempotencyKey,
               },
               deadline,
             );
+      const facts = factsFor(call.idempotencyKey);
       if (resolved.gitAccess !== undefined)
         recordGitNode(call.idempotencyKey, {
           teamId: run.teamId,
@@ -1065,11 +1069,51 @@ export function createStandaloneWorkflowHost(
       if (pending?.success) return pending.data;
       if (!accepts(parseProjection(pinned.output), value))
         return { kind: "refused", code: "invalid_output" };
-      return {
-        kind: "complete",
-        output: S.decodeUnknownSync(S.Json)(value),
+      const output = S.decodeUnknownSync(S.Json)(value);
+      const row =
+        verified.api.methods[resolved.method]?.present === undefined
+          ? undefined
+          : await presentedRow(
+              resolved.method,
+              host.instances
+                .get(authority.instanceId)
+                .call(
+                  factsFor(`${call.idempotencyKey}:present`),
+                  verified.api,
+                  presentMethodName,
+                  { method: resolved.method, input: resolved.input, output },
+                ),
+            );
+      const complete = {
+        kind: "complete" as const,
+        output,
         costMilliunits: 0,
       };
+      return row === undefined ? complete : { ...complete, row };
     },
   };
+}
+
+/**
+ * A failed or malformed projection costs the step only its row: the step stays
+ * complete, Trellis reads it as "<App> ran <method>" with the raw view, and
+ * the operator log records why.
+ */
+async function presentedRow(
+  method: string,
+  reply: Promise<InstanceResult<AppMethodReply>>,
+): Promise<ResultRow | undefined> {
+  try {
+    const result = await reply;
+    if (!result.ok || result.value.kind !== "ok") {
+      console.error("Workflow step presentation was refused", method);
+      return undefined;
+    }
+    return S.decodeUnknownSync(resultRowSchemaV1, {
+      onExcessProperty: "error",
+    })(result.value.value);
+  } catch (cause) {
+    console.error("Workflow step presentation failed", method, cause);
+    return undefined;
+  }
 }

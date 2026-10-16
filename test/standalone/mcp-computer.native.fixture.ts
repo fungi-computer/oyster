@@ -1,3 +1,4 @@
+import { seededAvatar } from "@fungi.computer/sprite/avatar";
 // The standalone Computer composition behind Oyster's shared MCP owner. Only
 // the Bonsai App, media and workflows are left out; the workspace, its
 // Computer capability routes and the native ComputerDO are the real ones. The
@@ -60,13 +61,19 @@ const notInProof = () =>
 const proofAgents = (): OysterAgents => ({
   list: () =>
     Promise.resolve([
-      { agentId: "amber", name: "Amber", sessionOperations: [] },
+      {
+        agentId: "amber",
+        name: "Amber",
+        avatar: seededAvatar("amber"),
+        sessionOperations: [],
+      },
     ]),
   policyRevision: () => Promise.resolve(null),
   policyStatus: () => Promise.resolve(null),
   appToolPolicy: () => Promise.resolve(null),
   create: notInProof,
   rename: notInProof,
+  setAvatar: notInProof,
   approveAppToolPolicy: notInProof,
   mcpServers: notInProof,
   addMcpServer: notInProof,

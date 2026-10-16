@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AppNavigationState } from "@fungi.computer/agar";
 import {
   createWindowManager,
   type WindowHost,
@@ -119,6 +120,55 @@ it("reports a failed mutation with its phase and the original generation", async
     cause,
   });
   await expect(manager.dispose()).rejects.toMatchObject({ errors: [cause] });
+});
+
+describe("window navigation activations", () => {
+  it("delivers only crumbs and enabled commands the App publishes now", async () => {
+    const delivered: unknown[] = [];
+    let publish: ((state: AppNavigationState | null) => void) | undefined;
+    const manager = createWindowManager<Launch, Container>({
+      createContainer: ({ windowId }) => ({ paneId: windowId }),
+      mount: (_container, _launch, _signal, events) => {
+        publish = events.onNavigationState;
+        return {
+          ...host(() => undefined),
+          activateNavigation: (activation) => {
+            delivered.push(activation);
+            return true;
+          },
+        };
+      },
+    });
+    await manager.open(launch("trellis"));
+    publish?.({
+      canGoBack: false,
+      crumbs: [
+        { id: "app", label: "Trellis" },
+        { id: "wf", label: "Flow", siblings: [{ id: "b", label: "B" }] },
+      ],
+      primary: [{ id: "run", label: "Run" }],
+      menu: [{ id: "fork", label: "Fork", disabled: true }],
+    });
+    const use = (
+      activation: Parameters<typeof manager.activateNavigation>[1],
+    ) => manager.activateNavigation("trellis", activation);
+    await expect(use({ kind: "crumb", crumbId: "app" })).resolves.toBe(true);
+    await expect(
+      use({ kind: "crumb", crumbId: "wf", siblingId: "b" }),
+    ).resolves.toBe(true);
+    await expect(use({ kind: "action", actionId: "run" })).resolves.toBe(true);
+    await expect(use({ kind: "action", actionId: "fork" })).resolves.toBe(
+      false,
+    );
+    await expect(use({ kind: "crumb", crumbId: "gone" })).resolves.toBe(false);
+    await expect(
+      use({ kind: "crumb", crumbId: "wf", siblingId: "z" }),
+    ).resolves.toBe(false);
+    expect(delivered).toHaveLength(3);
+    publish?.(null);
+    await expect(use({ kind: "crumb", crumbId: "app" })).resolves.toBe(false);
+    await manager.dispose();
+  });
 });
 
 describe("window status actions", () => {

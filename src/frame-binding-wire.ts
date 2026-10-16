@@ -15,7 +15,9 @@ export type FrameBindingWire<Methods> = {
     : never;
 };
 
-const frameStubsSchema = z.record(z.string(), z.instanceof(Object));
+const frameStubsSchema = z.lazy(() =>
+  z.record(z.string(), z.instanceof(Object)),
+);
 type FrameBindingStubs = z.output<typeof frameStubsSchema>;
 
 /** The host supplies its one closed refusal vocabulary to both copies of this decoder. */

@@ -30,6 +30,14 @@ import {
   type GillReply,
 } from "@fungi.computer/gills";
 
+export {
+  agentAvatarProjectionSchema,
+  agentAvatarSchema,
+  avatarFromProjection,
+  createAgentAvatarStore,
+  type AgentAvatarStore,
+} from "./agent-avatars.js";
+
 /** The Cairn ID family that mints and recognizes App Instance IDs (`instance_…`). */
 export const instanceIds = defineIdFamily({
   family: "app-instance",

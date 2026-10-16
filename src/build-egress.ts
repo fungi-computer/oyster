@@ -22,14 +22,18 @@ import {
  * recording without this module reaching into either host's state.
  */
 
-const statusSchema = z.strictObject({
-  status: z.enum(["succeeded", "failed"]),
-  detail: z.string().max(2_000).optional(),
-});
-const artifactSchema = z.strictObject({
-  digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-  bytes: z.number().int().nonnegative(),
-});
+const statusSchema = z.lazy(() =>
+  z.strictObject({
+    status: z.enum(["succeeded", "failed"]),
+    detail: z.string().max(2_000).optional(),
+  }),
+);
+const artifactSchema = z.lazy(() =>
+  z.strictObject({
+    digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    bytes: z.number().int().nonnegative(),
+  }),
+);
 
 /** The two facts a build job reports; a host's Team Git event is a superset
  * that also carries pushes, so a host's own record callback is always

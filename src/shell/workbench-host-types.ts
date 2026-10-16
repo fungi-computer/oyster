@@ -28,7 +28,11 @@ export type WorkbenchResolvedChild = Readonly<{
 /** The host's real mounted App; selection and lease replacement stay with it. */
 export type WorkbenchChildSurface = Pick<
   WorkbenchChildHandle,
-  "setVisibility" | "requestClose" | "requestBack" | "activateStatus"
+  | "setVisibility"
+  | "requestClose"
+  | "requestBack"
+  | "activateStatus"
+  | "activateNavigation"
 > & {
   /** Release the mounted child or host-owned observations. */
   dispose(): void;

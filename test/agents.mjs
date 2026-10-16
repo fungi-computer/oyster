@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { agentCapabilities } from "../dist/agents.js";
 import { capabilityFixture } from "../dist/testing/index.js";
+import { seededAvatar } from "@fungi.computer/sprite/avatar";
 
 const owner = { actor: { kind: "member", memberId: "owner" }, role: "owner" };
 const agents = [];
 const forwarded = [];
 let approvalWrites = 0;
 let renameWrites = 0;
+let avatarWrites = 0;
 // Simulates an Agent already pending from before owner-direct creation, or an
 // auto-approval that failed open; the "Allow App tools" control recovers it.
 let approvedPolicy = { status: "pending", revision: "agent_1:requested" };
@@ -17,7 +19,7 @@ let revisionReads = 0;
 let inboxRevision = 3;
 const adapter = {
   list: async () => agents,
-  create: async (name, requestId, principal, actor) => {
+  create: async (name, requestId, principal, actor, avatar) => {
     assert.equal(actor, "owner-direct");
     assert.deepEqual(principal, owner);
     const found = agents.find((agent) => agent.requestId === requestId);
@@ -25,6 +27,7 @@ const adapter = {
     const agent = {
       agentId: `agent_${agents.length + 1}`,
       name,
+      avatar: avatar ?? seededAvatar(`agent_${agents.length + 1}`),
       sessionOperations: ["agent.read", "agent.send", "agent.manage"],
       requestId,
     };
@@ -39,6 +42,14 @@ const adapter = {
       return { error: "name_taken" };
     renameWrites += 1;
     agent.name = name;
+    return agent;
+  },
+  setAvatar: async (agentId, avatar, principal) => {
+    assert.deepEqual(principal, owner);
+    const agent = agents.find((item) => item.agentId === agentId);
+    if (!agent) return { error: "not_found" };
+    avatarWrites += 1;
+    agent.avatar = avatar;
     return agent;
   },
   policyStatus: async (agentId) => {
@@ -102,6 +113,7 @@ const declared = [
   "agent.list",
   "agent.manage",
   "agent.rename",
+  "agent.avatar",
   "agent.toolPolicy",
   "agent.read",
   "agent.send",
@@ -194,6 +206,78 @@ assert.equal((await rename("Gardener", "agent_9")).status, 404);
 const second = await (await create("owner", "r2")).json();
 assert.equal((await rename("Gardener", second.agentId)).status, 409);
 assert.equal(renameWrites, 1, "a name conflict never writes");
+
+const cat = {
+  v: 1,
+  character: "cat",
+  appearance: { body: "#9bd47a", stripes: "#e6f8d8" },
+  expression: "normal",
+  renderStyle: "plain",
+};
+const setAvatar = (avatar, agentId = "agent_1", who = "owner") =>
+  call(
+    `/agent-avatars/${agentId}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId, avatar }),
+    },
+    who,
+  );
+assert.deepEqual(
+  created.avatar,
+  seededAvatar("agent_1"),
+  "an Agent created without a choice wears its seeded avatar",
+);
+assert.equal((await setAvatar(cat, "agent_1", "key")).status, 403);
+assert.equal(avatarWrites, 0, "a non-owner never changes an avatar");
+assert.equal(
+  (await setAvatar({ ...cat, appearance: { cap: "#ffffff" } })).status,
+  400,
+  "an avatar outside its character's catalog is refused",
+);
+assert.equal((await setAvatar({ ...cat, v: 2 })).status, 400);
+assert.equal((await setAvatar(cat, "agent_9")).status, 404);
+assert.deepEqual((await (await setAvatar(cat)).json()).avatar, cat);
+assert.equal(avatarWrites, 1);
+assert.deepEqual(
+  (await (await call("/agents")).json()).find(
+    (agent) => agent.agentId === "agent_1",
+  ).avatar,
+  cat,
+  "the chosen avatar reads back wherever the Agent is listed",
+);
+const chosen = await (
+  await call(
+    "/agents",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Burger", requestId: "r3", avatar: cat }),
+    },
+    "owner",
+  )
+).json();
+assert.deepEqual(chosen.avatar, cat, "creation stores a chosen avatar");
+assert.equal(
+  (
+    await call(
+      "/agents",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Broken",
+          requestId: "r4",
+          avatar: { v: 1 },
+        }),
+      },
+      "owner",
+    )
+  ).status,
+  400,
+  "creation refuses an invalid avatar",
+);
 
 assert.deepEqual(await (await call("/agent-policies/agent_1")).json(), {
   status: "pending",

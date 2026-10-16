@@ -18,18 +18,20 @@ export type StandalonePreviewEnv = Readonly<{
   OYSTER_PREVIEW_ORIGIN?: string;
 }>;
 
-const originSchema = z
-  .url()
-  .transform((input) => new URL(input))
-  .refine(
-    (url) =>
-      url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      !url.search &&
-      !url.hash,
-  );
+const originSchema = z.lazy(() =>
+  z
+    .url()
+    .transform((input) => new URL(input))
+    .refine(
+      (url) =>
+        url.protocol === "https:" &&
+        !url.username &&
+        !url.password &&
+        url.pathname === "/" &&
+        !url.search &&
+        !url.hash,
+    ),
+);
 
 export function previewOrigins(
   env: StandalonePreviewEnv,

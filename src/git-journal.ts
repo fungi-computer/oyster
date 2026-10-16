@@ -33,10 +33,12 @@ export type GitPushJournalPorts = Readonly<{
   now?: () => number;
 }>;
 
-const storedFact = z.strictObject({ fact: z.string() });
-const storedEpoch = z.strictObject({
-  epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-});
+const storedFact = z.lazy(() => z.strictObject({ fact: z.string() }));
+const storedEpoch = z.lazy(() =>
+  z.strictObject({
+    epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }),
+);
 const syncKey = (installationId: string, lane: string, epoch: number) =>
   `appsync:${createHash("sha256")
     .update(JSON.stringify([installationId, lane, epoch]))
@@ -47,7 +49,7 @@ export function backgroundWakeKey(
 ): string {
   return syncKey(wake.installationId, wake.lane, wake.epoch);
 }
-const installationIdSchema = z.string().min(1).max(256);
+const installationIdSchema = z.lazy(() => z.string().min(1).max(256));
 const postKey = (installationId: string, eventId: string) =>
   `gitpush:${createHash("sha256")
     .update(JSON.stringify([installationId, eventId]))

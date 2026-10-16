@@ -1,7 +1,9 @@
 import * as Redacted from "effect/Redacted";
 import {
   AppError,
+  navigationActivationAllowed,
   statusActionAllowed,
+  type AppNavigationActivation,
   type AppNavigationState,
   type AppStatusAction,
   type AppStatusItem,
@@ -42,7 +44,16 @@ function sameNavigation(
   next: AppNavigationState | null,
 ): boolean {
   if (current === null || next === null) return current === next;
-  return current.canGoBack === next.canGoBack && current.title === next.title;
+  return (
+    current.canGoBack === next.canGoBack &&
+    current.title === next.title &&
+    JSON.stringify([
+      current.crumbs,
+      current.primary,
+      current.menu,
+      current.status,
+    ]) === JSON.stringify([next.crumbs, next.primary, next.menu, next.status])
+  );
 }
 
 /** Minimum identity required to own a window across mount generations. */
@@ -61,6 +72,10 @@ export type WindowHost<Launch extends WindowLaunch> = Readonly<{
   requestClose?: () => boolean | Promise<boolean>;
   /** Ask the mounted App to go back in its own history; `true` when it did. */
   requestBack?: () => boolean | Promise<boolean>;
+  /** Deliver the person's use of a crumb or header command; `true` when the App acted. */
+  activateNavigation?: (
+    activation: AppNavigationActivation,
+  ) => boolean | Promise<boolean>;
   /** Deliver the person's use of a status item; `true` when the App acted. */
   activateStatus?: (action: AppStatusAction) => boolean | Promise<boolean>;
   /** Release the current mount and its host resources. */
@@ -149,6 +164,11 @@ export type WindowManager<Launch extends WindowLaunch, Container> = Readonly<{
   replace: (windowId: string, launch: Launch) => Promise<void>;
   /** Ask a ready window's App to go back; `false` when it cannot. */
   back: (windowId: string) => Promise<boolean>;
+  /** Deliver a crumb or header command to a ready window's App; `false` when it cannot. */
+  activateNavigation: (
+    windowId: string,
+    activation: AppNavigationActivation,
+  ) => Promise<boolean>;
   /** Deliver a status item action to a ready window's App; `false` when it cannot. */
   activateStatus: (
     windowId: string,
@@ -873,6 +893,22 @@ export function createWindowManager<Launch extends WindowLaunch, Container>(
     return requestBack ? await requestBack() : false;
   };
 
+  const activateNavigation = async (
+    windowId: string,
+    activation: AppNavigationActivation,
+  ): Promise<boolean> => {
+    const record = records.get(windowId);
+    if (!record || !isActive(record) || record.status !== "ready") return false;
+    // Only a crumb or enabled command the App currently publishes.
+    if (
+      record.navigation === null ||
+      !navigationActivationAllowed(record.navigation, activation)
+    )
+      return false;
+    const deliver = record.host?.activateNavigation;
+    return deliver ? await deliver(activation) : false;
+  };
+
   const activateStatus = async (
     windowId: string,
     action: AppStatusAction,
@@ -948,6 +984,7 @@ export function createWindowManager<Launch extends WindowLaunch, Container>(
     close,
     reconfigure,
     update,
+    activateNavigation,
     activateStatus,
     registerComputerChoice,
     replace,

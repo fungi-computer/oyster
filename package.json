@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -307,6 +307,8 @@
     "@fungi.computer/mycelium": "workspace:*",
     "@fungi.computer/puffball": "workspace:*",
     "@fungi.computer/sigils": "workspace:*",
+    "@fungi.computer/sprite": "workspace:*",
+    "@fungi.computer/sprite-zdog": "workspace:*",
     "@fungi.computer/watchdog": "workspace:*",
     "@fungi.computer/whistle": "workspace:*",
     "@modelcontextprotocol/server": "2.0.0",

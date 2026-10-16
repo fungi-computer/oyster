@@ -1,3 +1,4 @@
+import { seededAvatar } from "@fungi.computer/sprite/avatar";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
@@ -75,7 +76,7 @@ async function createApproved(
     );
     assert.equal("error" in policy, false);
   }
-  return { agentId: entry.agentId, name: entry.name };
+  return { agentId: entry.agentId, name: entry.name, avatar: entry.avatar };
 }
 const approve = (directory, agentId, principal, level, revision) =>
   directory.approveAppToolPolicy(
@@ -611,6 +612,65 @@ test("the standalone directory retains replay, oldest-first names and visits acr
       morel,
     );
     assert.equal(reopened.revision(), 5);
+
+    // The avatar is the Agent's: seeded until chosen, then kept across reopen.
+    assert.deepEqual(morel.avatar, seededAvatar(morel.agentId));
+    const cat = {
+      v: 1,
+      character: "cat",
+      appearance: { body: "#9bd47a", stripes: "#e6f8d8" },
+      expression: "normal",
+      renderStyle: "plain",
+    };
+    const owner = {
+      actor: { kind: "member", memberId: "Levi" },
+      role: "owner",
+    };
+    assert.deepEqual(
+      reopened.setAvatar(morel.agentId, cat, {
+        actor: { kind: "member", memberId: "Levi" },
+        role: "member",
+      }),
+      { error: "not_granted" },
+    );
+    assert.deepEqual(reopened.setAvatar("unknown", cat, owner), {
+      error: "not_found",
+    });
+    assert.deepEqual(reopened.setAvatar(morel.agentId, cat, owner), {
+      ...morel,
+      avatar: cat,
+    });
+    assert.equal(
+      reopened.revision(),
+      6,
+      "an avatar change is a directory change",
+    );
+    const burger = {
+      v: 1,
+      character: "burger",
+      appearance: { topBun: "#9b8cf0" },
+      expression: "normal",
+      renderStyle: "plain",
+    };
+    context.mock.timers.tick(1);
+    const chosen = reopened.create(
+      "Shiitake",
+      "create-shiitake",
+      owner,
+      "owner-direct",
+      burger,
+    );
+    assert.deepEqual(chosen.avatar, burger, "creation stores a chosen avatar");
+    assert.deepEqual(
+      newDirectory(state, env)
+        .list()
+        .map(({ name, avatar }) => ({ name, avatar })),
+      [
+        { name: "Morel", avatar: cat },
+        { name: "Enoki", avatar: enoki.avatar },
+        { name: "Shiitake", avatar: burger },
+      ],
+    );
   } finally {
     database.close();
   }

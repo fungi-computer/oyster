@@ -20,17 +20,23 @@ import type { StandaloneComputerEnv } from "./computer.js";
 const buildRegistry = (env: StandaloneComputerEnv, scope: TenantScope) =>
   env.REGISTRY.getByName(scope.durableName("registry"));
 
-const buildInput = z.strictObject({
-  appId: z.string().min(1).max(256),
-  sourceRevision: z.string().min(1).max(256),
-});
-const buildStatusInput = z.strictObject({
-  jobId: z.string().min(1).max(256),
-});
-const selectInput = z.strictObject({
-  installationId: z.string().min(1).max(256),
-  release: z.unknown(),
-});
+const buildInput = z.lazy(() =>
+  z.strictObject({
+    appId: z.string().min(1).max(256),
+    sourceRevision: z.string().min(1).max(256),
+  }),
+);
+const buildStatusInput = z.lazy(() =>
+  z.strictObject({
+    jobId: z.string().min(1).max(256),
+  }),
+);
+const selectInput = z.lazy(() =>
+  z.strictObject({
+    installationId: z.string().min(1).max(256),
+    release: z.unknown(),
+  }),
+);
 
 /** The Instance gate and native guest entrypoint share these argument codecs. */
 export const appsFrameMethods = {

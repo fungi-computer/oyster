@@ -32,27 +32,31 @@ export function ownerCodec<A, I>(schema: Schema.Codec<A, I>) {
 }
 
 /** Installation names cannot contain the tenant separator. */
-export const installationIdSchema = z
-  .string()
-  .regex(/^[a-z](?:[a-z0-9]|-(?!-)){0,62}$/u);
+export const installationIdSchema = z.lazy(() =>
+  z.string().regex(/^[a-z](?:[a-z0-9]|-(?!-)){0,62}$/u),
+);
 /** A resource identity minted and resolved by the host, never by this module. */
-const resourceRefSchema = z
-  .strictObject({
-    kind: z.string().min(1),
-    id: z.string().min(1),
-  })
-  .readonly();
+const resourceRefSchema = z.lazy(() =>
+  z
+    .strictObject({
+      kind: z.string().min(1),
+      id: z.string().min(1),
+    })
+    .readonly(),
+);
 export type ResourceRef = Exclude<
   ApprovedGrant["resources"],
   "tenant-scope"
 >[number];
-const operationsSchema = z
-  .array(z.string().min(1))
-  .refine(
-    (values) => new Set(values).size === values.length,
-    "Operations must be unique",
-  )
-  .readonly();
+const operationsSchema = z.lazy(() =>
+  z
+    .array(z.string().min(1))
+    .refine(
+      (values) => new Set(values).size === values.length,
+      "Operations must be unique",
+    )
+    .readonly(),
+);
 /**
  * Consent approves capabilities, with explicit operation and resource ceilings.
  * A Release adding a method that requires an already-approved capability needs
@@ -78,14 +82,16 @@ export const approvedGrantSchema = z
   .readonly();
 export type ApprovedGrant = Readonly<z.output<typeof approvedGrantSchema>>;
 /** One grant per capability keeps operation/resource pairs unambiguous. */
-const approvedGrantsSchema = z
-  .array(approvedGrantSchema)
-  .refine(
-    (grants) =>
-      new Set(grants.map((grant) => grant.capability)).size === grants.length,
-    "Capabilities must be unique",
-  )
-  .readonly();
+const approvedGrantsSchema = z.lazy(() =>
+  z
+    .array(approvedGrantSchema)
+    .refine(
+      (grants) =>
+        new Set(grants.map((grant) => grant.capability)).size === grants.length,
+      "Capabilities must be unique",
+    )
+    .readonly(),
+);
 /** Shorthand is accepted only on a command and expanded at approval time. */
 const grantRequestSchema = z.union([
   z.literal("none"),
@@ -108,15 +114,17 @@ export type GrantRequest = Extract<
   InstallationCommand,
   { kind: "install" }
 >["grants"];
-const versionSchema = z.number().int().positive();
+const versionSchema = z.lazy(() => z.number().int().positive());
 /** An owner's approval of a fixed operation snapshot. */
-const approvalSchema = z
-  .strictObject({
-    by: hostActorSchema,
-    at: z.number().int().nonnegative(),
-    authorityVersion: versionSchema,
-  })
-  .readonly();
+const approvalSchema = z.lazy(() =>
+  z
+    .strictObject({
+      by: hostActorSchema,
+      at: z.number().int().nonnegative(),
+      authorityVersion: versionSchema,
+    })
+    .readonly(),
+);
 export type Approval = NonNullable<Installation["approval"]>;
 const anonymousMethodsSchema = z
   .array(
@@ -137,21 +145,23 @@ const anonymousMethodsSchema = z
   )
   .readonly();
 /** Immutable operation facts derived from descriptor methods and the binding registry. */
-export const declaredOperationsSchema = z.strictObject({
-  artifactDigest: ownerCodec(sha256DigestSchema),
-  digest: ownerCodec(sha256DigestSchema),
-  anonymousMethods: anonymousMethodsSchema,
-  capabilities: z
-    .array(
-      z
-        .strictObject({
-          capability: ownerCodec(appCapabilityIdSchema),
-          operations: operationsSchema,
-        })
-        .readonly(),
-    )
-    .readonly(),
-});
+export const declaredOperationsSchema = z.lazy(() =>
+  z.strictObject({
+    artifactDigest: ownerCodec(sha256DigestSchema),
+    digest: ownerCodec(sha256DigestSchema),
+    anonymousMethods: anonymousMethodsSchema,
+    capabilities: z
+      .array(
+        z
+          .strictObject({
+            capability: ownerCodec(appCapabilityIdSchema),
+            operations: operationsSchema,
+          })
+          .readonly(),
+      )
+      .readonly(),
+  }),
+);
 export type DeclaredOperations = Readonly<
   z.output<typeof declaredOperationsSchema>
 >;
@@ -197,27 +207,32 @@ const releaseFields = {
   releasePin: installationSchema.shape.releasePin,
 };
 /** Host commands; floating targets have already been resolved to immutable Releases. */
-export const installationCommandSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("install"),
-    ...releaseFields,
-    grants: grantRequestSchema,
-  }),
-  z.strictObject({ kind: z.literal("select-release"), ...releaseFields }),
-  z.strictObject({
-    kind: z.literal("set-status"),
-    status: installationSchema.shape.status,
-  }),
-  z.strictObject({
-    kind: z.literal("set-visibility"),
-    visibility: installationSchema.shape.visibility,
-  }),
-  z.strictObject({ kind: z.literal("set-grants"), grants: grantRequestSchema }),
-  z.strictObject({
-    kind: z.literal("approve-anonymous"),
-    methods: anonymousMethodsSchema,
-  }),
-]);
+export const installationCommandSchema = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("install"),
+      ...releaseFields,
+      grants: grantRequestSchema,
+    }),
+    z.strictObject({ kind: z.literal("select-release"), ...releaseFields }),
+    z.strictObject({
+      kind: z.literal("set-status"),
+      status: installationSchema.shape.status,
+    }),
+    z.strictObject({
+      kind: z.literal("set-visibility"),
+      visibility: installationSchema.shape.visibility,
+    }),
+    z.strictObject({
+      kind: z.literal("set-grants"),
+      grants: grantRequestSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("approve-anonymous"),
+      methods: anonymousMethodsSchema,
+    }),
+  ]),
+);
 export type InstallationCommand = z.output<typeof installationCommandSchema>;
 /** Values captured by the host; identities and time are never generated by the reducer. */
 export type InstallationContext = Readonly<{
@@ -232,17 +247,19 @@ export type InstallationContext = Readonly<{
   anonymousConsent?: Readonly<{ memberId: string }>;
 }>;
 /** Closed refusals: failed commands produce no installation update. */
-export const installationRefusalSchema = z.strictObject({
-  kind: z.literal("refused"),
-  code: z.enum([
-    "unavailable",
-    "stale_authority",
-    "not_owner",
-    "not_declared",
-    "release_app_mismatch",
-    "invalid_command",
-  ]),
-});
+export const installationRefusalSchema = z.lazy(() =>
+  z.strictObject({
+    kind: z.literal("refused"),
+    code: z.enum([
+      "unavailable",
+      "stale_authority",
+      "not_owner",
+      "not_declared",
+      "release_app_mismatch",
+      "invalid_command",
+    ]),
+  }),
+);
 export type InstallationRefusal = z.output<typeof installationRefusalSchema>;
 export type InstallationUpdate = Readonly<{
   next: Installation;

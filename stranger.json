@@ -366,7 +366,7 @@
   "runtimeFixture": "test/stranger/runtime.mjs",
   "typecheckFixture": "test/stranger/consumer.mts",
   "docs": {
-    "sigil": "run",
+    "sigil": "oyster",
     "home": {
       "lead": "Run immutable App Releases with owner-selected state and lifecycle rules.",
       "example": {

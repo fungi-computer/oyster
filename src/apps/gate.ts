@@ -33,26 +33,28 @@ const bindingNameSchema = ownerCodec(
   ),
 );
 /** Requests select existing SDK methods, opaque backend calls and derived operation identities. */
-export const gateRequestSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("method"),
-    name: z.string(),
-    input: z.unknown(),
-    via: z.enum(["ui", "agent", "mcp", "workflow"]),
-  }),
-  z.strictObject({
-    kind: z.literal("capability-route"),
-    capability: ownerCodec(appCapabilityIdSchema),
-    operation: z.string().min(1),
-  }),
-  z.strictObject({
-    kind: z.literal("binding"),
-    binding: bindingNameSchema,
-    operation: z.string().min(1),
-  }),
-  z.strictObject({ kind: z.literal("list-tools") }),
-  z.strictObject({ kind: z.literal("backend") }),
-]);
+export const gateRequestSchema = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("method"),
+      name: z.string(),
+      input: z.unknown(),
+      via: z.enum(["ui", "agent", "mcp", "workflow"]),
+    }),
+    z.strictObject({
+      kind: z.literal("capability-route"),
+      capability: ownerCodec(appCapabilityIdSchema),
+      operation: z.string().min(1),
+    }),
+    z.strictObject({
+      kind: z.literal("binding"),
+      binding: bindingNameSchema,
+      operation: z.string().min(1),
+    }),
+    z.strictObject({ kind: z.literal("list-tools") }),
+    z.strictObject({ kind: z.literal("backend") }),
+  ]),
+);
 /** One decoded method, route, binding or catalog admission request. */
 export type GateRequest = z.output<typeof gateRequestSchema>;
 /** Immutable values the host already read; resource/grantor freshness remains host-owned. */
@@ -66,43 +68,47 @@ export type GateFacts = Readonly<{
   pins?: Readonly<{ authorityVersion: number; artifactDigest: string }>;
 }>;
 /** Binding grants have the exact S2 InvocationFacts shape and its maintained registry grammar. */
-export const invocationGrantsSchema = z
-  .array(
-    z.strictObject({
-      binding: bindingNameSchema,
-      operations: z.array(z.string().min(1)).readonly(),
-    }),
-  )
-  .refine(
-    (grants) =>
-      Schema.is(appBackendBindingsSchema)(
-        grants.map((grant) => ({
-          name: grant.binding,
-          operations: grant.operations,
-        })),
-      ),
-    "Invalid declared binding operations",
-  )
-  .readonly();
+export const invocationGrantsSchema = z.lazy(() =>
+  z
+    .array(
+      z.strictObject({
+        binding: bindingNameSchema,
+        operations: z.array(z.string().min(1)).readonly(),
+      }),
+    )
+    .refine(
+      (grants) =>
+        Schema.is(appBackendBindingsSchema)(
+          grants.map((grant) => ({
+            name: grant.binding,
+            operations: grant.operations,
+          })),
+        ),
+      "Invalid declared binding operations",
+    )
+    .readonly(),
+);
 /** The explicit binding ceiling passed to an invocation frame. */
 export type InvocationGrants = z.output<typeof invocationGrantsSchema>;
 /** A declared method from the canonical Puffball API grammar. */
 export type AppMethodDeclaration = AppApi["methods"][string];
 /** Ordered, closed refusal vocabulary; external methods always require approval. */
-export const gateRefusalSchema = z.strictObject({
-  kind: z.literal("refused"),
-  code: z.enum([
-    "unavailable",
-    "stale_authority",
-    "not_declared",
-    "not_approved",
-    "level_too_low",
-    "approval_required",
-    "requires_not_granted",
-    "invalid_input",
-    "visitor_read_only",
-  ]),
-});
+export const gateRefusalSchema = z.lazy(() =>
+  z.strictObject({
+    kind: z.literal("refused"),
+    code: z.enum([
+      "unavailable",
+      "stale_authority",
+      "not_declared",
+      "not_approved",
+      "level_too_low",
+      "approval_required",
+      "requires_not_granted",
+      "invalid_input",
+      "visitor_read_only",
+    ]),
+  }),
+);
 /** Either an admitted scoped ceiling or one closed refusal code. */
 export type GateDecision =
   | Readonly<{

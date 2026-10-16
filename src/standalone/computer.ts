@@ -133,7 +133,7 @@ export type StandaloneComputerResult =
   | z.output<typeof readOutputSchema>
   | z.output<typeof computerToolResultSchema>;
 
-const missingFile = z.object({ code: z.literal("ENOENT") });
+const missingFile = z.lazy(() => z.object({ code: z.literal("ENOENT") }));
 const workspaceId = computerGrantSchema.shape.computerId;
 const command = computerExecutionRequestSchema({ maximumTimeMs: 45_000 }).omit({
   requestId: true,
@@ -154,10 +154,12 @@ const processStart = processStartInputSchema.omit({
 const processStartHttpBody = processStartInputSchema.omit({
   requestScope: true,
 });
-const processStartReply = z.union([
-  computerProcessSchema,
-  z.strictObject({ error: z.literal("conflict") }),
-]);
+const processStartReply = z.lazy(() =>
+  z.union([
+    computerProcessSchema,
+    z.strictObject({ error: z.literal("conflict") }),
+  ]),
+);
 const bindingWrite = writeInputSchema.extend({
   expectedContent: replaceInputSchema.shape.expectedContent.optional(),
 });

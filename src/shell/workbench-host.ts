@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { AppError, parseAppStatusAction } from "@fungi.computer/agar";
 import type {
   AgentSessionSelection,
+  AppNavigationActivation,
   AppStatusAction,
 } from "@fungi.computer/agar";
 import type { AppOpenInput } from "@fungi.computer/agar/apps";
@@ -160,6 +161,13 @@ class MountedChildHandle implements WorkbenchChildHandle {
     if (this.#disposed) return false;
     // The shell relays the person's click; parse it at the host's edge.
     return this.surface.activateStatus(parseAppStatusAction(action));
+  }
+
+  async activateNavigation(
+    activation: AppNavigationActivation,
+  ): Promise<boolean> {
+    if (this.#disposed) return false;
+    return this.surface.activateNavigation(activation);
   }
 
   async invokeCommand(commandId: string, input: WorkbenchCommandInvocation) {

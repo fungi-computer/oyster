@@ -194,13 +194,15 @@ export async function deliverWorkflowEvent(
 }
 
 /** What a Workflow node frame attests when it asks for its Git step's pass. */
-export const workflowGitPassRequestSchema = z.strictObject({
-  installationId: z.string().min(1).max(256),
-  idempotencyKey: z.string().min(1).max(128),
-  workflow: workflowAttestationSchema,
-  memberId: z.string().min(1).max(256),
-  computerId: z.string().min(1).max(256),
-});
+export const workflowGitPassRequestSchema = z.lazy(() =>
+  z.strictObject({
+    installationId: z.string().min(1).max(256),
+    idempotencyKey: z.string().min(1).max(128),
+    workflow: workflowAttestationSchema,
+    memberId: z.string().min(1).max(256),
+    computerId: z.string().min(1).max(256),
+  }),
+);
 export type WorkflowGitPassRequest = z.output<
   typeof workflowGitPassRequestSchema
 >;

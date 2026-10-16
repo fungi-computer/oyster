@@ -244,20 +244,24 @@ export type AppFacetStub = Readonly<{
   fetch: (request: Request) => Promise<Response>;
 }>;
 
-const facetHttpReplySchema = z.strictObject({
-  status: z.number().int(),
-  statusText: z.string(),
-  headers: z.array(z.tuple([z.string(), z.string()])),
-  body: z.instanceof(ReadableStream).nullable(),
-});
+const facetHttpReplySchema = z.lazy(() =>
+  z.strictObject({
+    status: z.number().int(),
+    statusText: z.string(),
+    headers: z.array(z.tuple([z.string(), z.string()])),
+    body: z.instanceof(ReadableStream).nullable(),
+  }),
+);
 // App methods return JSON; HTTP carries binary bytes and lifecycle hooks return void.
 // Binding operation results keep their separate, operation-specific decoders.
-const facetHttpInputSchema = z.strictObject({
-  url: z.string(),
-  method: z.string(),
-  headers: z.array(z.tuple([z.string(), z.string()])),
-  body: z.instanceof(Uint8Array).nullable(),
-});
+const facetHttpInputSchema = z.lazy(() =>
+  z.strictObject({
+    url: z.string(),
+    method: z.string(),
+    headers: z.array(z.tuple([z.string(), z.string()])),
+    body: z.instanceof(Uint8Array).nullable(),
+  }),
+);
 const facetInvocationSchema = rpcHandleSchema({
   invoke: rpcMethod(z.union([z.json(), z.undefined()])).input(
     z.tuple([z.string(), z.array(z.unknown()), z.unknown()]),

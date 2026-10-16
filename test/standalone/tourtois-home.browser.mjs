@@ -360,7 +360,7 @@ const starterContent = {
     await expect(terminal).toBeVisible();
     await expect(
       terminal
-        .getByRole("textbox", { name: "Shell command", exact: true })
+        .locator(".terminal-host canvas")
         .or(terminal.getByText("Terminal unavailable", { exact: true }))
         .or(
           terminal.getByRole("button", {

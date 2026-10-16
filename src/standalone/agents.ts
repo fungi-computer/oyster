@@ -35,6 +35,11 @@ import {
   type FrameBindingProps,
 } from "../cloudflare.js";
 import { AppInstanceError } from "../index.js";
+import {
+  createAgentAvatarStore,
+  type AgentAvatarStore,
+} from "../agent-avatars.js";
+import type { Avatar } from "@fungi.computer/sprite/avatar";
 import type { InvocationFrame } from "../invocation.js";
 import type { OysterJson } from "../host.js";
 import { defineIdFamily } from "@fungi.computer/cairn";
@@ -142,8 +147,12 @@ const loadStreamSimple = async () =>
 /** Where Workers AI requests go: which model, through which gateway. */
 type WorkersAiOptions = Readonly<{ model?: string; gateway?: string }>;
 
-/** One directory entry: an agent's id and display name. */
-export type AgentEntry = Readonly<{ agentId: string; name: string }>;
+/** One directory entry: an agent's id, display name and own avatar. */
+export type AgentEntry = Readonly<{
+  agentId: string;
+  name: string;
+  avatar: Avatar;
+}>;
 
 /** Bindings the agent host reads. */
 export type StandaloneAgentsEnv = Readonly<{
@@ -515,6 +524,7 @@ const counterRow = Schema.Struct({ value: Schema.Number });
 /** Names this Oyster's agents and remembers which Sessions the member opened. */
 export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private readonly directory: ReturnType<typeof createAgentDirectory>;
+  private readonly avatars: AgentAvatarStore;
   private composedTenancy: Promise<StandaloneTenancy> | undefined;
 
   private grant(): AgentGrant {
@@ -529,6 +539,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   constructor(ctx: DurableObjectState, env: StandaloneAgentEnv) {
     super(ctx, env);
     this.directory = createAgentDirectory(ctx.storage.sql);
+    this.avatars = createAgentAvatarStore(ctx.storage.sql);
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS visits (agent_id TEXT NOT NULL, session_id TEXT NOT NULL, visited_at INTEGER NOT NULL, PRIMARY KEY (agent_id, session_id)) STRICT",
     );
@@ -544,7 +555,11 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return this.directory
       .list(this.grant())
       .toReversed()
-      .map(({ agentId, name }) => ({ agentId, name }));
+      .map(({ agentId, name }) => ({
+        agentId,
+        name,
+        avatar: this.avatars.read(agentId),
+      }));
   }
 
   has(agentId: string): boolean {
@@ -574,7 +589,11 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
           name,
         });
         this.bump();
-        return { agentId: renamed.agentId, name: renamed.name };
+        return {
+          agentId: renamed.agentId,
+          name: renamed.name,
+          avatar: this.avatars.read(renamed.agentId),
+        };
       } catch (cause) {
         if (cause instanceof DirectoryError && cause.code === "not_found")
           return { error: "not_found" } as const;
@@ -585,11 +604,34 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     });
   }
 
+  /** Owner-only avatar change; the Agent wears it in every App and list. */
+  setAvatar(
+    agentId: string,
+    avatar: Avatar,
+    principal: OysterPrincipal,
+  ): AgentEntry | Readonly<{ error: "not_found" | "not_granted" }> {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    const id = agentIds.agent.parse(agentId);
+    if (!id.ok) return { error: "not_found" };
+    return this.ctx.storage.transactionSync(() => {
+      const agent = this.directory.read(this.grant(), id.value);
+      if (agent === null) return { error: "not_found" } as const;
+      this.avatars.write(agent.agentId, avatar);
+      this.bump();
+      return {
+        agentId: agent.agentId,
+        name: agent.name,
+        avatar: this.avatars.read(agent.agentId),
+      };
+    });
+  }
+
   create(
     name: string,
     requestId: string,
     principal: OysterPrincipal,
     actor: AgentPolicyActor,
+    avatar?: Avatar,
   ): AgentEntry & { policyRevision: string | null } {
     if (!oysterPrincipalIsOwner(principal))
       throw new Error("Only the authenticated owner creates Agents");
@@ -602,6 +644,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
         { name, requestId, configuration: "none" },
       );
       if (fact !== null) {
+        if (avatar !== undefined) this.avatars.write(agent.agentId, avatar);
         this.bump();
         this.writePolicy(agent.agentId, {
           status: "pending",
@@ -614,6 +657,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       return {
         agentId: agent.agentId,
         name: agent.name,
+        avatar: this.avatars.read(agent.agentId),
         policyRevision:
           stored === null
             ? null
@@ -841,12 +885,19 @@ export function standaloneAgents(
   const toAgent = (entry: AgentEntry): OysterAgent => ({
     agentId: entry.agentId,
     name: entry.name,
+    avatar: entry.avatar,
     sessionOperations: everyOperation,
   });
   return {
     list: async () => (await directory().list()).map(toAgent),
-    create: async (name, requestId, principal, actor) => {
-      const entry = await directory().create(name, requestId, principal, actor);
+    create: async (name, requestId, principal, actor, avatar) => {
+      const entry = await directory().create(
+        name,
+        requestId,
+        principal,
+        actor,
+        avatar,
+      );
       await env.AGENTS.getByName(entry.agentId).usePolicyDirectory({
         directoryName,
         tenantId: scope?.tenantId ?? defaultTenant,
@@ -868,6 +919,10 @@ export function standaloneAgents(
     },
     rename: async (agentId, name, principal) => {
       const result = await directory().rename(agentId, name, principal);
+      return "error" in result ? result : toAgent(result);
+    },
+    setAvatar: async (agentId, avatar, principal) => {
+      const result = await directory().setAvatar(agentId, avatar, principal);
       return "error" in result ? result : toAgent(result);
     },
     policyStatus: async (agentId) => directory().policyStatus(agentId),

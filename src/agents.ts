@@ -8,6 +8,7 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import type { AppToolPolicy } from "./apps/tools.js";
 import * as Schema from "effect/Schema";
+import { z } from "zod";
 import {
   oysterPrincipalIsOwner,
   type CapabilityEnv,
@@ -16,7 +17,10 @@ import {
   type OysterPrincipal,
 } from "./host.js";
 import type { HostActor } from "@fungi.computer/puffball/app";
+import type { Avatar } from "@fungi.computer/sprite/avatar";
+import { agentAvatarSchema } from "./agent-avatars.js";
 import {
+  agentAvatar,
   agentList,
   agentManage,
   agentRename,
@@ -34,6 +38,8 @@ import type {
 export type OysterAgent = Readonly<{
   agentId: string;
   name: string;
+  /** The Agent's own avatar: the owner's choice, else its seeded default. */
+  avatar: Avatar;
   sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
 }>;
 
@@ -113,12 +119,16 @@ export type AgentToolPolicyStatus = Readonly<{
 export type OysterAgents = Readonly<{
   /** Every agent, oldest first. */
   list(): Promise<readonly OysterAgent[]>;
-  /** Create an agent; retrying with the same `requestId` returns the same one. */
+  /**
+   * Create an agent; retrying with the same `requestId` returns the same one.
+   * With no `avatar` it wears its seeded default until the owner picks one.
+   */
   create(
     name: string,
     requestId: string,
     principal: OysterPrincipal,
     actor: AgentPolicyActor,
+    avatar?: Avatar,
   ): Promise<OysterAgent>;
   /** Owner-only rename; refuses a name already held by another Agent. */
   rename(
@@ -129,6 +139,12 @@ export type OysterAgents = Readonly<{
     | OysterAgent
     | Readonly<{ error: "not_found" | "name_taken" | "not_granted" }>
   >;
+  /** Owner-only avatar change for an existing Agent. */
+  setAvatar(
+    agentId: string,
+    avatar: Avatar,
+    principal: OysterPrincipal,
+  ): Promise<OysterAgent | Readonly<{ error: "not_found" | "not_granted" }>>;
   /** This Agent's App-tool policy status, or `null` for no such Agent. */
   policyStatus(agentId: string): Promise<AgentToolPolicyStatus | null>;
   /** Read this Agent's stored App-tool approval; absence requires re-approval. A key's App access is its own grants (Ear Tag), not this policy. */
@@ -171,10 +187,12 @@ export type OysterAgents = Readonly<{
 const createSchema = Schema.Struct({
   name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   requestId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.:-]{1,256}$/u)),
+  avatar: Schema.optionalKey(Schema.Unknown),
 });
 const renameSchema = Schema.Struct({
   name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 });
+const avatarInputSchema = z.object({ avatar: agentAvatarSchema });
 const visitSchema = Schema.Struct({
   agentId: Schema.String,
   sessionId: Schema.String,
@@ -219,6 +237,19 @@ export function agentCapabilities(
       version: agentRename.version,
       methods: {
         rename: { kind: "json", method: "PUT", path: "agent-names/:agentId" },
+      },
+    },
+    {
+      ...shared,
+      id: "agent.avatar",
+      permission: "agent.avatar",
+      version: agentAvatar.version,
+      methods: {
+        setAvatar: {
+          kind: "json",
+          method: "PUT",
+          path: "agent-avatars/:agentId",
+        },
       },
     },
     {
@@ -273,6 +304,11 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
       await context.req.json(),
     );
     if (body._tag === "None") return refusal(400, "Name the agent");
+    const avatar =
+      body.value.avatar === undefined
+        ? undefined
+        : agentAvatarSchema.safeParse(body.value.avatar);
+    if (avatar?.success === false) return refusal(400, "Choose a valid avatar");
     // The owner's own authenticated request creates this Agent; its App tools
     // are approved the same way direct owner approval is, with no second path.
     return Response.json(
@@ -281,6 +317,7 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
         body.value.requestId,
         principal,
         "owner-direct",
+        avatar?.data,
       ),
     );
   });
@@ -304,6 +341,19 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
             : 403,
         result.error,
       );
+    return Response.json(result);
+  });
+  routes.put("/agent-avatars/:agentId", async (context) => {
+    const { principal } = context.env;
+    if (!oysterPrincipalIsOwner(principal))
+      return refusal(403, "Only the owner changes avatars");
+    const agentId = context.req.param("agentId");
+    if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+    const body = avatarInputSchema.safeParse(await context.req.json());
+    if (!body.success) return refusal(400, "Choose a valid avatar");
+    const result = await agents.setAvatar(agentId, body.data.avatar, principal);
+    if ("error" in result)
+      return refusal(result.error === "not_found" ? 404 : 403, result.error);
     return Response.json(result);
   });
   routes.get("/agent-policies/:agentId", async (context) => {

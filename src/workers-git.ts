@@ -1105,10 +1105,9 @@ const revokeKeySchema = Schema.Struct({
   keyId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   requestId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.:-]{1,112}$/u)),
 });
-const oysterGrantsArraySchema = z
-  .array(oysterKeyVocabulary.grantSchema)
-  .min(1)
-  .max(64);
+const oysterGrantsArraySchema = z.lazy(() =>
+  z.array(oysterKeyVocabulary.grantSchema).min(1).max(64),
+);
 
 /** One listed or issued key's owner-facing summary; never its secret or owner id. */
 export type OysterKeySummary = Readonly<{
