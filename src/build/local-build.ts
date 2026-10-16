@@ -13,12 +13,17 @@ function logEvent(operation: string, cause: unknown): void {
     }),
   );
 }
-import { frozenSnapshotInstallArguments } from "./snapshot-package-store.js";
-import mime from "mime";
+import {
+  frozenSnapshotInstallArguments,
+  packageScriptArguments,
+} from "./snapshot-package-store.js";
+import { isInsideSnapshot } from "./snapshot-programs/snapshot-path.js";
+import {
+  writeImmutableArtifact,
+  type ImmutableArtifactObjects,
+} from "./artifact-writer.js";
 import {
   assetPathSchema,
-  assetBuildJsonSchema,
-  decodeAssetBuild,
   type AssetBuildPolicy,
 } from "@fungi.computer/puffball/assets";
 import {
@@ -63,10 +68,6 @@ import {
   type SourceRevision,
 } from "@fungi.computer/puffball";
 import { appIdSchema } from "@fungi.computer/puffball/effect";
-import {
-  appBuildJsonSchema,
-  createAppBuild,
-} from "@fungi.computer/puffball/app";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as esbuild from "esbuild";
@@ -78,6 +79,7 @@ import {
   appBackendExportConditions,
   createAppPublisher,
   pinnedRecipeSchema,
+  pinsCurrentToolchain,
   type AppPublisher,
   type ArtifactWriter,
   type BuildExecutor,
@@ -110,12 +112,6 @@ const ACCEPTED_BRANCH = "main" as const;
 function localRepositoryPath(input: string): string {
   if (isAbsolute(input) && !input.startsWith("//")) return input;
   throw new AppPublisherError("configuration");
-}
-
-function sha256(bytes: Uint8Array): ReturnType<typeof parseSha256Digest> {
-  return parseSha256Digest(
-    `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-  );
 }
 
 async function sha256File(
@@ -579,6 +575,75 @@ export type FirstPartyAppSourceDistribution = Readonly<{
   }>[];
 }>;
 
+/** The provenance file every distribution records beside the App source. */
+function provenanceFile(appId: AppId, source: CapturedSource) {
+  return {
+    path: "botanical-app-source.json",
+    contents: new TextEncoder().encode(
+      JSON.stringify(
+        {
+          appId,
+          sourceRevision: source.sourceRevision,
+          sourceTreeDigest: source.sourceTreeDigest,
+        },
+        null,
+        2,
+      ) + "\n",
+    ),
+  };
+}
+
+/** Builder state a source listing writes into the snapshot, never source. */
+const snapshotScratch = new Set([".publisher-source-home", "node_modules"]);
+
+/**
+ * An App repository's distribution: every captured file, unchanged, plus its
+ * provenance. The repository's own pnpm lockfile pins its registry packages.
+ */
+function repositoryAppSourceDistribution(
+  appId: AppId,
+  source: CapturedSource,
+): Effect.Effect<FirstPartyAppSourceDistribution, unknown> {
+  return Effect.tryPromise({
+    try: async () => {
+      const snapshot = realpathSync(resolve(source.snapshotPath));
+      const collected = new Map<string, Uint8Array>();
+      const collect = async (relativePath: string): Promise<void> => {
+        const sourcePath = join(snapshot, relativePath);
+        const stats = await lstat(sourcePath);
+        if (stats.isSymbolicLink())
+          throw new Error("Source distribution cannot contain symbolic links");
+        if (stats.isFile()) {
+          collected.set(relativePath, await readFile(sourcePath));
+          return;
+        }
+        if (!stats.isDirectory())
+          throw new Error("Source distribution contains a non-file entry");
+        const entries = await readdir(sourcePath, { withFileTypes: true });
+        entries.sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of entries)
+          if (relativePath !== "" || !snapshotScratch.has(entry.name))
+            await collect(join(relativePath, entry.name));
+      };
+      await collect("");
+      const provenance = provenanceFile(appId, source);
+      if (collected.has(provenance.path))
+        throw new Error("Source distribution reserves its provenance path");
+      collected.set(provenance.path, provenance.contents);
+      return Object.freeze({
+        appId,
+        sourceRevision: source.sourceRevision,
+        sourceTreeDigest: source.sourceTreeDigest,
+        appDirectory: "",
+        files: [...collected]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([path, contents]) => Object.freeze({ path, contents })),
+      });
+    },
+    catch: (error) => error,
+  });
+}
+
 /**
  * Project one pinned first-party App and its pnpm workspace dependency graph
  * without changing upstream files or manufacturing Git history. The caller
@@ -609,6 +674,10 @@ export function createFirstPartyAppSourceDistribution(options: {
       (args) => runHtmlCommand(args, snapshot, env),
     );
     const appDirectory = recipe.directory;
+    // An App's own repository is the App at its root: its editable template
+    // is that repository's whole captured tree, as forking it would copy.
+    if (appDirectory === "")
+      return yield* repositoryAppSourceDistribution(appId, options.source);
     const listed = yield* runHtmlCommand(
       [
         ...productionWorkspaceSelectors(recipe),
@@ -716,22 +785,10 @@ export function createFirstPartyAppSourceDistribution(options: {
               collected.has(join(importerPath, "package.json")),
             ),
           );
-        if (collected.has("botanical-app-source.json"))
+        const provenance = provenanceFile(appId, options.source);
+        if (collected.has(provenance.path))
           throw new Error("Source distribution reserves its provenance path");
-        collected.set(
-          "botanical-app-source.json",
-          new TextEncoder().encode(
-            JSON.stringify(
-              {
-                appId,
-                sourceRevision: options.source.sourceRevision,
-                sourceTreeDigest: options.source.sourceTreeDigest,
-              },
-              null,
-              2,
-            ) + "\n",
-          ),
-        );
+        collected.set(provenance.path, provenance.contents);
         return [...collected]
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([path, contents]) => Object.freeze({ path, contents }));
@@ -839,7 +896,7 @@ function snapshotPrograms() {
   return import("#snapshot-program-scripts");
 }
 
-/** Compiler heap ceiling: fits a 6 GB Computer with room for pnpm and esbuild. */
+/** Compiler heap ceiling: fits a 12 GiB Computer with two builds at once. */
 const snapshotBuildHeapMegabytes = 4096;
 
 function snapshotBuildEnvironment(
@@ -847,8 +904,8 @@ function snapshotBuildEnvironment(
 ): NodeJS.ProcessEnv {
   // PATH locates pinned executables; the Computer's CA files authenticate
   // its egress gateway. Credentials and package-manager settings stay out.
-  // V8 sizes its default heap from the machine, about 2 GB in a 6 GB
-  // standard-2 Computer, where compiling Bonsai runs out; the build owns one
+  // V8 sizes its default heap from the machine, about 3 GB in a 12 GiB
+  // standard-4 Computer, where compiling Bonsai runs out; the build owns one
   // fixed ceiling instead.
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -863,10 +920,23 @@ function snapshotBuildEnvironment(
   return env;
 }
 
+/** How one build executor is composed; never part of a recipe or request. */
+export type LocalBuildExecutorOptions = Readonly<{
+  packageStoreDirectory?: string;
+  /**
+   * `run` executes a dependency's declared `fungi.build.script`. Only the
+   * admitted Computer build sets it; every other composition refuses a source
+   * that declares one, before installing anything.
+   */
+  packageScripts?: "run";
+  /** Hears how long the dependency install and the compile each took. */
+  onPhase?: (phase: "install" | "build", milliseconds: number) => void;
+}>;
+
 function rebuildViteSnapshot(
   sourceSnapshotPath: string,
   recipe: import("./effect.js").PinnedRecipe,
-  packageStoreDirectory: string | undefined,
+  options: LocalBuildExecutorOptions,
 ): Effect.Effect<BuildExecutorOutput, unknown> {
   if (recipe.kind === "source-html")
     return rebuildNpmSnapshot(sourceSnapshotPath, recipe);
@@ -887,10 +957,22 @@ function rebuildViteSnapshot(
         checkPinnedWorkspaceToolchain(sourceSnapshotPath, html, recipe),
       catch: (error) => error,
     });
+    if (
+      options.packageScripts !== "run" &&
+      html.steps.some((step) => step.kind === "script")
+    )
+      return yield* Effect.fail(
+        new Error(
+          "This source builds a dependency with its package script, which only a Computer build runs",
+        ),
+      );
+    const installStarted = performance.now();
     yield* run([
       ...productionWorkspaceSelectors(html),
-      ...frozenSnapshotInstallArguments(packageStoreDirectory),
+      ...frozenSnapshotInstallArguments(options.packageStoreDirectory),
     ]);
+    const buildStarted = performance.now();
+    options.onPhase?.("install", buildStarted - installStarted);
     const appDirectory = join(sourceSnapshotPath, html.directory);
     const dependencies = join(appDirectory, ".publisher-dependencies.mjs");
     const program = join(appDirectory, ".publisher-build.mjs");
@@ -915,9 +997,26 @@ function rebuildViteSnapshot(
         last.push(step);
       else groups.push([step]);
     }
-    for (const group of groups)
+    for (const group of groups) {
+      const [step] = group;
+      if (step?.kind === "script") {
+        // Exactly the named script, in its own package: no pre/post hooks or
+        // implicit install, whatever the captured repository's pnpm settings
+        // ask for. The script is arbitrary package code: its isolation is the
+        // admitted Computer, not this builder's compiler path checks.
+        const directory = resolve(sourceSnapshotPath, step.directory);
+        if (!isInsideSnapshot(sourceSnapshotPath, directory))
+          return yield* Effect.fail(
+            new Error("Package script directory escapes the captured source"),
+          );
+        yield* run([...packageScriptArguments, step.script], directory);
+        continue;
+      }
       yield* run(
         [
+          // The frozen install above is the only install, whatever the
+          // captured pnpm settings ask `exec` to verify first.
+          "--config.verify-deps-before-run=false",
           "exec",
           "node",
           dependencies,
@@ -925,11 +1024,14 @@ function rebuildViteSnapshot(
           html.directory,
           recipe.format,
           JSON.stringify(group),
+          tailwindToolchainDirectory(html),
         ],
         appDirectory,
       );
+    }
     yield* run(
       [
+        "--config.verify-deps-before-run=false",
         "exec",
         "node",
         program,
@@ -944,8 +1046,20 @@ function rebuildViteSnapshot(
       ],
       appDirectory,
     );
+    options.onPhase?.("build", performance.now() - buildStarted);
     return yield* readHtmlBuildOutput(sourceSnapshotPath, recipe);
   });
+}
+
+/**
+ * Where the captured Tailwind compiler lives: Caps, when the App builds Caps
+ * from its workspace, or else the App itself, which then pins the compiler
+ * and installs Caps' built stylesheet from a registry.
+ */
+function tailwindToolchainDirectory(html: WorkspaceBuild): string {
+  return html.dependencies.includes("packages/caps")
+    ? "packages/caps"
+    : html.directory;
 }
 
 const pinnedVersionsSchema = Schema.Record(Schema.String, Schema.String);
@@ -1021,14 +1135,18 @@ async function checkPinnedWorkspaceToolchain(
   const stylesheets = html.steps.filter((step) => step.kind === "tailwind");
   if (stylesheets.length === 0) return;
   // The captured Tailwind compiler and its typography plugin come from Caps.
-  const caps = await manifest("packages/caps");
-  pinned("packages/caps", caps.devDependencies, "@tailwindcss/cli", "4.2.1");
-  pinned(
-    "packages/caps",
-    caps.dependencies,
-    "@tailwindcss/typography",
-    "0.5.19",
-  );
+  // An App that installs Caps from a registry pins the compiler itself, and
+  // Caps' own dependencies bring the typography plugin its stylesheet uses.
+  const toolchain = tailwindToolchainDirectory(html);
+  const compiler = await manifest(toolchain);
+  pinned(toolchain, compiler.devDependencies, "@tailwindcss/cli", "4.2.1");
+  if (toolchain === "packages/caps")
+    pinned(
+      toolchain,
+      compiler.dependencies,
+      "@tailwindcss/typography",
+      "0.5.19",
+    );
   for (const directory of html.dependencies) {
     if (!stylesheets.some((step) => step.input.startsWith(`${directory}/`)))
       continue;
@@ -1262,7 +1380,7 @@ export function localSnapshotBuildOptions(
 
 /** Local proving adapter; it builds only the captured extracted snapshot. */
 export function createLocalBuildExecutor(
-  options: Readonly<{ packageStoreDirectory?: string }> = {},
+  options: LocalBuildExecutorOptions = {},
 ): BuildExecutor {
   const emissions = new WeakMap<
     CapturedSource,
@@ -1337,11 +1455,7 @@ export function createLocalBuildExecutor(
                 catch: () =>
                   new Error("Captured HTML bundle failed validation"),
               })
-            : rebuildViteSnapshot(
-                source.snapshotPath,
-                recipe,
-                options.packageStoreDirectory,
-              );
+            : rebuildViteSnapshot(source.snapshotPath, recipe, options);
           const code = yield* compiler.build(source, {
             bundle: true,
             entry,
@@ -1371,11 +1485,7 @@ export function createLocalBuildExecutor(
         });
       }
       return recipe.format !== "esm"
-        ? rebuildViteSnapshot(
-            source.snapshotPath,
-            recipe,
-            options.packageStoreDirectory,
-          )
+        ? rebuildViteSnapshot(source.snapshotPath, recipe, options)
         : Effect.acquireUseRelease(
             Effect.tryPromise({
               try: () => {
@@ -1425,6 +1535,10 @@ export function createLocalBuildExecutor(
   return {
     build: (source, recipe) =>
       Effect.gen(function* () {
+        if (!pinsCurrentToolchain(recipe))
+          return yield* Effect.fail(
+            new Error("Recipe pins another build toolchain or policy"),
+          );
         const emission = yield* Effect.tryPromise({
           try: () => createDefinitionEmission(source, recipe),
           catch: (cause: unknown) =>
@@ -1455,6 +1569,36 @@ export function createLocalBuildExecutor(
   };
 }
 
+/** The configured artifact directory as write-once immutable objects. */
+function directoryArtifactObjects(
+  artifactRoot: string,
+  signal: AbortSignal,
+): ImmutableArtifactObjects {
+  const pathOf = (artifactRef: string) =>
+    join(artifactRoot, artifactRef.slice("artifact:".length));
+  return {
+    async create(artifactRef, bytes) {
+      try {
+        await writeFile(pathOf(artifactRef), bytes, { flag: "wx", signal });
+        return "created";
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST"
+        )
+          return "exists";
+        throw error;
+      } finally {
+        signal.throwIfAborted();
+      }
+    },
+    async read(artifactRef) {
+      return new Uint8Array(await readFile(pathOf(artifactRef)));
+    },
+  };
+}
+
 async function writeArtifact(
   output: BuildOutput,
   artifactRoot: string,
@@ -1462,91 +1606,17 @@ async function writeArtifact(
   assetPolicy: AssetBuildPolicy | undefined,
 ): Promise<StoredArtifact> {
   signal.throwIfAborted();
-  const ui = output.kind === "backend" ? null : output.ui;
   await mkdir(artifactRoot, { recursive: true });
-  const persist = async (bytes: Uint8Array, ref?: string) => {
-    const digest = sha256(bytes);
-    const artifactRef = parseArtifactRef(
-      ref ?? `artifact:sha256-${digest.slice("sha256:".length)}`,
-    );
-    const artifactPath = join(
-      artifactRoot,
-      artifactRef.slice("artifact:".length),
-    );
-    try {
-      await writeFile(artifactPath, bytes, { flag: "wx", signal });
-    } catch (error) {
-      const code =
-        error instanceof Error && "code" in error ? error.code : undefined;
-      if (code !== "EEXIST" || sha256(await readFile(artifactPath)) !== digest)
-        throw error;
-    }
-    signal.throwIfAborted();
-    return {
-      artifactRef,
-      digest,
-      version: digest,
-      byteLength: bytes.byteLength,
-    };
-  };
-  const uiBytes = await (async () => {
-    if (ui === null) return null;
-    if (ui.content.kind === "html") return ui.content.bytes.slice();
-    if (!assetPolicy) throw new Error("Asset writer requires explicit policy");
-    const content: Record<string, ArrayBuffer> = {};
-    for (const asset of ui.content.assets) {
-      const path = Schema.decodeUnknownSync(assetPathSchema)(asset.path);
-      if (Object.hasOwn(content, path)) throw new Error("Duplicate build path");
-      content[path] = new Uint8Array(asset.bytes).buffer;
-    }
-    const assets = [];
-    for (const path of Object.keys(content).sort()) {
-      const bytes = content[path];
-      const mediaType = mime.getType(path);
-      const contentType = mediaType?.startsWith("text/")
-        ? `${mediaType}; charset=utf-8`
-        : mediaType;
-      if (!bytes || !contentType)
-        throw new Error("Build asset has no maintained content type");
-      assets.push({
-        path,
-        ...(await persist(new Uint8Array(bytes))),
-        contentType,
-      });
-    }
-    const manifest = new TextEncoder().encode(
-      Schema.encodeUnknownSync(assetBuildJsonSchema)({
-        format: "fungi-assets-v1",
-        base: ui.content.base,
-        assets,
-      }),
-    );
-    decodeAssetBuild(manifest, assetPolicy);
-    return manifest;
-  })();
-  const storedUi =
-    ui === null || uiBytes === null
-      ? null
-      : { ...(await persist(uiBytes)), mediaType: ui.mediaType };
-  const backendBytes = output.kind === "ui" ? null : output.backend;
-  const storedBackend =
-    backendBytes === null
-      ? null
-      : await persist(backendBytes.slice()).then((stored) => ({
-          ...stored,
-          mediaType: "application/vnd.fungi.app-backend+json" as const,
-        }));
-  const root = new TextEncoder().encode(
-    Schema.encodeUnknownSync(appBuildJsonSchema)(
-      createAppBuild(storedUi, storedBackend, output.declaration),
-    ),
+  return writeImmutableArtifact(
+    output,
+    directoryArtifactObjects(artifactRoot, signal),
+    {
+      rootArtifactRef: parseArtifactRef(
+        `artifact:${Buffer.from(randomBytes(16)).toString("hex")}`,
+      ),
+      assetPolicy,
+    },
   );
-  const rootRef = `artifact:${Buffer.from(randomBytes(16)).toString("hex")}`;
-  const storedRoot = await persist(root, rootRef);
-  return Object.freeze({
-    artifactRef: storedRoot.artifactRef,
-    artifactDigest: storedRoot.digest,
-  });
 }
 
 /** Local proving adapter; the configured root is private and write-once. */

@@ -32,9 +32,9 @@ const appEntries = [
   "apps/prints/index.html",
   "apps/inkcap/index.html",
   "apps/tourtois/index.html",
-  "apps/chat/index.html",
+  "apps/grove/index.html",
   "apps/shed/index.html",
-  "apps/workflows/index.html",
+  "apps/trellis/index.html",
 ];
 const selected =
   process.argv[2] === undefined
@@ -42,10 +42,10 @@ const selected =
     : [Schema.decodeUnknownSync(Schema.Literals(appEntries))(process.argv[2])];
 const backends = {
   "apps/bonsai/web/index.html": ["apps/bonsai/backend/index.ts", "BonsaiApp"],
-  "apps/chat/index.html": ["apps/chat/backend/index.ts", "Grove"],
+  "apps/grove/index.html": ["apps/grove/backend/index.ts", "Grove"],
   "apps/prints/index.html": ["apps/prints/backend/index.ts", "Prints"],
   "apps/inkcap/index.html": ["apps/inkcap/backend/index.ts", "Inkcap"],
-  "apps/workflows/index.html": ["apps/workflows/backend/index.ts", "Workflows"],
+  "apps/trellis/index.html": ["apps/trellis/backend/index.ts", "Trellis"],
   "packages/oyster/examples/notes-app/ui/index.html": [
     "packages/oyster/examples/notes-app/backend/index.ts",
     "Notes",

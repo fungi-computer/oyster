@@ -114,7 +114,13 @@ import {
   appStorageResetSchema,
 } from "@fungi.computer/agar/storage";
 import { createOysterRootData, type OysterRootDirectory } from "./root-data.js";
-import { backendCache, resolveBackend, type ArtifactStore } from "./release.js";
+import {
+  backendCache,
+  resolveBackend,
+  type ArtifactHeads,
+  type ArtifactStore,
+} from "./release.js";
+import { headContentObject } from "./build/content-objects.js";
 import type { AppApi } from "@fungi.computer/puffball";
 import type { AppDeclaration } from "@fungi.computer/puffball/app";
 import {
@@ -172,8 +178,11 @@ export type OysterWorkerEnv = Readonly<{
 }>;
 
 /** Store Release artifacts in an R2 bucket. */
-export function r2ArtifactStore(bucket: R2Bucket): ArtifactStore {
+export function r2ArtifactStore(
+  bucket: R2Bucket,
+): ArtifactStore & ArtifactHeads {
   return {
+    head: (artifactRef) => headContentObject(bucket, artifactRef),
     async get(artifactRef) {
       const object = await bucket.get(artifactRef);
       return object === null

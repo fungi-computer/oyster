@@ -355,7 +355,7 @@ it("approves signed API requirements and intersects stored operation identities 
     declaration: before,
     declaredOperations: await deriveDeclaredOperations(release, before, []),
     now: 1000,
-    identity: { installationId: "workflows", instanceId: null },
+    identity: { installationId: "trellis", instanceId: null },
   };
   const current = next(
     applyInstallationCommand(

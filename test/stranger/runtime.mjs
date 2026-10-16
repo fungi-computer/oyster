@@ -450,3 +450,152 @@ assert.throws(() =>
     revision: "old-policy",
   }),
 );
+
+// Tenancy: resolve provisioned tenants, verify identities, apply membership.
+{
+  const { createTenancy } = await import("@fungi.computer/oyster/tenancy");
+  const { subdomain, path } =
+    await import("@fungi.computer/oyster/tenancy/resolve");
+  const { memoryRegistry } =
+    await import("@fungi.computer/oyster/tenancy/registry");
+  const registry = memoryRegistry();
+  const identity = { provider: "fixture", subject: "owner" };
+  const tenancy = createTenancy({
+    resolve: subdomain("example.test"),
+    registry,
+    auth: [
+      {
+        id: "identity",
+        authenticate: () => Promise.resolve({ kind: "identity", identity }),
+      },
+    ],
+  });
+  const tenant = await tenancy.create({
+    handle: "alpha",
+    origin: "https://alpha.example.test",
+    domains: ["alpha.example.test"],
+    owner: identity,
+  });
+  const request = new globalThis.Request(tenant.origin);
+  assert.equal((await tenancy.resolve(request))?.id, tenant.id);
+  assert.deepEqual(await tenancy.authenticate(request, tenant), {
+    kind: "admitted",
+    tenant,
+    principal: {
+      actor: { kind: "member", memberId: tenant.owners[0] },
+      role: "owner",
+    },
+  });
+  assert.equal(path("/t/:tenant").kind, "path");
+  const { ownerKey } = await import("@fungi.computer/oyster/tenancy/owner-key");
+  const { auth0 } = await import("@fungi.computer/oyster/tenancy/auth0");
+  const ownerSecret = "packed-owner-secret-at-least-24-characters";
+  const ownerAdapter = ownerKey({
+    registry,
+    keys: {
+      get: () =>
+        Promise.resolve({ key: ownerSecret, memberId: tenant.owners[0] }),
+    },
+  });
+  assert.deepEqual(
+    await ownerAdapter.authenticate(
+      new globalThis.Request(tenant.origin, {
+        headers: { Authorization: `Bearer ${ownerSecret}` },
+      }),
+      tenant,
+    ),
+    {
+      kind: "principal",
+      principal: {
+        actor: { kind: "member", memberId: tenant.owners[0] },
+        role: "owner",
+      },
+    },
+  );
+  const auth0Adapter = auth0({
+    domain: "identity.example.test",
+    clientId: "application",
+    audience: "https://api.example.test",
+  });
+  assert.deepEqual(await auth0Adapter.authenticate(request, tenant), {
+    kind: "pass",
+  });
+  const oyster = tenancy.oyster();
+  const scoped = await oyster.resolve(request);
+  assert.equal(scoped.scope.origin, tenant.origin);
+  assert.deepEqual(await scoped.auth.authenticate(request), {
+    kind: "admitted",
+    principal: {
+      actor: { kind: "member", memberId: tenant.owners[0] },
+      role: "owner",
+    },
+  });
+  assert.equal(
+    await oyster.resolve(
+      new globalThis.Request("https://unknown.example.test"),
+    ),
+    null,
+  );
+  assert.equal(
+    "oyster" in
+      createTenancy({ registry, resolve: path("/t/:tenant"), auth: [] }),
+    false,
+  );
+
+  const { coldTenantDirectory } =
+    await import("@fungi.computer/oyster/tenancy/cold-directory");
+  const { tenantScope } = await import("@fungi.computer/oyster/tenant");
+  const coldSelected = await coldTenantDirectory(registry).resolve(
+    tenantScope(tenant.id, tenant.origin),
+  );
+  assert.ok(coldSelected);
+  assert.deepEqual(
+    await coldSelected.auth.resolve({
+      kind: "member",
+      memberId: tenant.owners[0],
+    }),
+    {
+      actor: { kind: "member", memberId: tenant.owners[0] },
+      role: "owner",
+      membershipVersion: (
+        await registry.memberById(tenant.id, tenant.owners[0])
+      ).membershipVersion,
+    },
+  );
+  assert.equal(
+    await coldSelected.auth.resolve({
+      kind: "team-key",
+      keyId: tenant.owners[0],
+    }),
+    null,
+  );
+  assert.deepEqual(await coldSelected.auth.authenticate(request), {
+    kind: "refused",
+    status: 401,
+  });
+  await registry.setStatus(tenant.id, "suspended");
+  assert.equal(
+    await coldSelected.auth.resolve({
+      kind: "member",
+      memberId: tenant.owners[0],
+    }),
+    null,
+  );
+
+  await registry.setStatus(tenant.id, "active");
+
+  await tenancy.delete(tenant.id);
+  assert.deepEqual(await scoped.auth.authenticate(request), {
+    kind: "refused",
+    status: 404,
+  });
+  assert.equal(await tenancy.resolve(request), null);
+
+  assert.equal(
+    await coldSelected.auth.resolve({
+      kind: "member",
+      memberId: tenant.owners[0],
+    }),
+    null,
+  );
+}

@@ -1366,6 +1366,16 @@ Release this host registration.
 
 `Promise`\<`void`\>
 
+---
+
+### TeamComputer
+
+```ts
+type TeamComputer = z.output<typeof teamComputerSchema>;
+```
+
+A decoded Team Computer inventory record.
+
 ## Variables
 
 ### workbenchGillRequestSchema
@@ -1476,6 +1486,50 @@ const appOpenRequestSchema: Union<
 
 Runtime check for an App-open handoff arriving across an untrusted boundary.
 
+---
+
+### teamComputerSchema
+
+```ts
+const teamComputerSchema: ZodObject<
+  {
+    computerId: ZodString;
+    name: ZodString;
+    createdAt: ZodNumber;
+    updatedAt: ZodNumber;
+  },
+  $strict
+>;
+```
+
+One Team Computer in a host's inventory: the wire of `computers()`.
+
+---
+
+### teamComputerDirectorySchema
+
+```ts
+const teamComputerDirectorySchema: ZodObject<
+  {
+    computers: ZodArray<
+      ZodObject<
+        {
+          computerId: ZodString;
+          name: ZodString;
+          createdAt: ZodNumber;
+          updatedAt: ZodNumber;
+        },
+        $strict
+      >
+    >;
+    nextOffset: ZodNullable<ZodNumber>;
+  },
+  $strict
+>;
+```
+
+One page of a host's Team Computer inventory.
+
 ## Functions
 
 ### createBrowserActionHandler()
@@ -1558,6 +1612,79 @@ Re-exports [AppDirectoryEntry](shell/app-directory.md#appdirectoryentry)
 
 Re-exports
 [appRoleSelectionSchema](shell/app-directory.md#approleselectionschema)
+
+---
+
+### appComputerPermissionSchema
+
+Re-exports
+[appComputerPermissionSchema](shell/app-directory.md#appcomputerpermissionschema)
+
+---
+
+### AppComputerOperation
+
+Re-exports [AppComputerOperation](shell/app-directory.md#appcomputeroperation)
+
+---
+
+### AppComputerPermission
+
+Re-exports [AppComputerPermission](shell/app-directory.md#appcomputerpermission)
+
+---
+
+### appAgentPermissionSchema
+
+Re-exports
+[appAgentPermissionSchema](shell/app-directory.md#appagentpermissionschema)
+
+---
+
+### AppAgentPermission
+
+Re-exports [AppAgentPermission](shell/app-directory.md#appagentpermission)
+
+---
+
+### appGenerationPermissionsSchema
+
+Re-exports
+[appGenerationPermissionsSchema](shell/app-directory.md#appgenerationpermissionsschema)
+
+---
+
+### AppGenerationPermissions
+
+Re-exports
+[AppGenerationPermissions](shell/app-directory.md#appgenerationpermissions)
+
+---
+
+### appMarketplacePermissionsSchema
+
+Re-exports
+[appMarketplacePermissionsSchema](shell/app-directory.md#appmarketplacepermissionsschema)
+
+---
+
+### AppMarketplacePermissions
+
+Re-exports
+[AppMarketplacePermissions](shell/app-directory.md#appmarketplacepermissions)
+
+---
+
+### appDirectoryResponseSchema
+
+Re-exports
+[appDirectoryResponseSchema](shell/app-directory.md#appdirectoryresponseschema)
+
+---
+
+### AppDirectory
+
+Re-exports [AppDirectory](shell/app-directory.md#appdirectory)
 
 ---
 

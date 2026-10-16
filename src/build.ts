@@ -29,3 +29,11 @@ export {
 
 /** Captured-dependency build program with guarded filesystem access. */
 export const dependencyBuildProgram: string = bundledDependencyBuildProgram;
+
+export {
+  stageBuildOutput,
+  writeArtifactRoot,
+  type ImmutableArtifactObjects,
+  type StagedArtifactObject,
+  type StagedBuildOutput,
+} from "./build/artifact-writer.js";

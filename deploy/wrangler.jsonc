@@ -1,0 +1,82 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  // A standalone Oyster with git, hosting Bonsai (and any other App).
+  "name": "bonsai-preview",
+  "main": "../examples/standalone/worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "workflows": [
+    {
+      "binding": "GRAPH_WORKFLOWS",
+      "name": "bonsai-graphs",
+      "class_name": "StandaloneGraphWorkflow",
+    },
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "containers": [
+    {
+      "class_name": "ComputerDO",
+      "image": "../../../packages/computer/Dockerfile",
+      "instance_type": "standard-4",
+      "max_instances": 1,
+      "rollout_active_grace_period": 0,
+      "rollout_step_percentage": [100],
+    },
+  ],
+  "ai": { "binding": "AI" },
+  "images": { "binding": "IMAGES" },
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "bonsai-preview-releases" },
+    { "binding": "APP_ARTIFACTS", "bucket_name": "bonsai-preview-releases" },
+  ],
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "bonsai-preview" }],
+  "vars": {
+    "OYSTER_COMPUTER_ID": "workspace",
+    "OYSTER_HOME_INSTALLATION": "tourtois",
+    "OYSTER_ORIGIN": "https://bonsai-preview.levi-fe0.workers.dev",
+    "OYSTER_OWNER_NAME": "levi",
+    // Names the AI Gateway that Prints' third-party models (GPT Image 2,
+    // Seedance, Veo) and the background media retry owner route through.
+    // Not a secret: Cloudflare creates the gateway by this id on first use.
+    "AI_GATEWAY_ID": "bonsai-preview",
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANTS", "class_name": "StandaloneTenants" },
+      { "name": "MCP", "class_name": "OysterMcp" },
+
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "WORKFLOW_RUNS", "class_name": "StandaloneWorkflowRuns" },
+      { "name": "INSTANCES", "class_name": "StandaloneInstance" },
+      { "name": "COMPUTER", "class_name": "ComputerDO" },
+      { "name": "KEYS", "class_name": "OysterKeys" },
+      { "name": "WEBHOOKS", "class_name": "OysterWebhooks" },
+      { "name": "AGENTS", "class_name": "StandaloneAgent" },
+      { "name": "AGENT_DIRECTORY", "class_name": "AgentDirectory" },
+      { "name": "MEDIA_OPERATION", "class_name": "MediaOperationDO" },
+    ],
+  },
+  // One initial tag: pre-launch history was collapsed (Levi 10-14, data wipe
+  // authorized), so a fresh Worker creates every bound class at once.
+  "migrations": [
+    {
+      "tag": "oyster-v1",
+      "new_sqlite_classes": [
+        "StandaloneTenants",
+        "OysterMcp",
+        "OysterRegistry",
+        "StandaloneWorkflowRuns",
+        "StandaloneInstance",
+        "ComputerDO",
+        "OysterKeys",
+        "OysterWebhooks",
+        "StandaloneAgent",
+        "AgentDirectory",
+        "MediaOperationDO",
+      ],
+    },
+  ],
+}

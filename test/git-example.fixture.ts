@@ -1,9 +1,9 @@
-// The unchanged examples/git root, with Artifacts reached over its REST API on a
+// The git root (git-root.fixture.ts), with Artifacts reached over its REST API on a
 // local native-Git provider instead of Cloudflare. Nothing else is replaced.
 import { createArtifactsRestNamespace } from "@fungi.computer/burrow";
 import type { OysterGitWorkerEnv } from "@fungi.computer/oyster/workers-git";
-import example from "../examples/git/worker.js";
-export * from "../examples/git/worker.js";
+import example from "./git-root.fixture.js";
+export * from "./git-root.fixture.js";
 
 export default {
   fetch(request, env, context) {

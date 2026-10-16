@@ -3,6 +3,7 @@ import {
   assetBaseSchema,
 } from "@fungi.computer/puffball/assets";
 import { boundedBundlePolicy, bundledHtmlRecipe } from "./html-recipe.js";
+import { workspaceBuildPolicy } from "./build-policy.js";
 import * as crypto from "node:crypto";
 import {
   backendJsonSchema,
@@ -23,6 +24,10 @@ import { appIdSchema } from "@fungi.computer/puffball/effect";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import type {
+  CandidateObject,
+  CandidateOutputManifest,
+} from "./submission-contract.js";
 
 const relativeEntrySchema = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
@@ -97,7 +102,7 @@ const workspaceHtmlToolchain = Object.freeze({
   tailwindOxide: "4.2.1",
   tailwindResolver: "5.24.5",
   typography: "0.5.19",
-  buildPolicy: "package-json-fungi-build-v1",
+  buildPolicy: workspaceBuildPolicy,
   recipe: "captured-workspace-html-v1",
 });
 const workspaceHtmlBackendToolchain = Object.freeze({
@@ -301,6 +306,35 @@ function sha256Digest(value: string): Sha256Digest {
   );
 }
 
+/** The toolchain this Publisher pins for a recipe of this kind, entry and backend. */
+function currentToolchain(
+  recipe: Pick<PinnedRecipe, "kind" | "entry" | "backend">,
+): Readonly<Record<string, string>> {
+  if (recipe.kind === "source-html") return sourceHtmlToolchain;
+  if (recipe.kind === bundledHtmlRecipe.kind)
+    return recipe.backend === null
+      ? bundledHtmlRecipe.toolchain
+      : { ...bundledHtmlRecipe.toolchain, ...esmToolchain, pnpm: "11.24.0" };
+  if (recipe.entry.endsWith(".html"))
+    return recipe.backend === null
+      ? workspaceHtmlToolchain
+      : workspaceHtmlBackendToolchain;
+  return esmToolchain;
+}
+
+/**
+ * Whether a pinned recipe pins this Publisher's current toolchain (its build
+ * policy included). An executor refuses any other: a recipe pinned under
+ * another policy describes a build this code does not perform.
+ */
+export function pinsCurrentToolchain(recipe: PinnedRecipe): boolean {
+  const entries = (toolchain: Readonly<Record<string, string>>) =>
+    JSON.stringify(
+      Object.entries(toolchain).sort(([a], [b]) => a.localeCompare(b)),
+    );
+  return entries(currentToolchain(recipe)) === entries(recipe.toolchain);
+}
+
 function captureConfig(input: AppPublisherCoreConfigInput): CapturedConfig {
   let decoded: Schema.Schema.Type<typeof AppPublisherCoreConfigSchema>;
   try {
@@ -356,17 +390,7 @@ function captureConfig(input: AppPublisherCoreConfigInput): CapturedConfig {
       : workspaceHtml
         ? ("html" as const)
         : ("esm" as const),
-    toolchain: sourceHtml
-      ? sourceHtmlToolchain
-      : bundled
-        ? decoded.recipe.backend === null
-          ? bundledHtmlRecipe.toolchain
-          : { ...bundledHtmlRecipe.toolchain, ...esmToolchain, pnpm: "11.24.0" }
-        : workspaceHtml
-          ? decoded.recipe.backend === null
-            ? workspaceHtmlToolchain
-            : workspaceHtmlBackendToolchain
-          : esmToolchain,
+    toolchain: currentToolchain(decoded.recipe),
     maxOutputBytes: decoded.recipe.maxOutputBytes,
     platform:
       decoded.recipe.backend === null
@@ -556,6 +580,41 @@ function encodeBackendOutput(
     ),
     Effect.mapError(() => stageFailure("build")),
   );
+}
+
+/**
+ * The largest single object a build under this recipe may upload: no larger
+ * than the largest output bound the recipe could assign it under.
+ */
+export function pinnedRecipeObjectBound(recipe: PinnedRecipe): number {
+  return Math.max(recipe.maxOutputBytes, recipe.assets?.maxObjectBytes ?? 0);
+}
+
+/**
+ * Whether output built elsewhere (a Computer's candidate manifest) is one
+ * this recipe could assign: the same surfaces and `maxOutputBytes` bound the
+ * preparer applies here. Asset sizes stay the artifact writer's policy.
+ */
+export function fitsPinnedRecipe(
+  output: CandidateOutputManifest,
+  recipe: PinnedRecipe,
+): boolean {
+  const uiFits = (
+    ui: Extract<CandidateOutputManifest, { kind: "ui" }>["ui"],
+  ) =>
+    ui.content.kind === "html"
+      ? ui.content.byteLength <= recipe.maxOutputBytes
+      : recipe.assets !== undefined && ui.content.base === recipe.assetBase;
+  const backendFits = (backend: CandidateObject) =>
+    recipe.backend !== null && backend.byteLength <= recipe.maxOutputBytes;
+  switch (output.kind) {
+    case "ui":
+      return recipe.backend === null && uiFits(output.ui);
+    case "backend":
+      return backendFits(output.backend);
+    case "app":
+      return uiFits(output.ui) && backendFits(output.backend);
+  }
 }
 
 function assignAppOutput(

@@ -23,7 +23,8 @@ read the "If it fails" notes under it before trying anything else.
 ## 1. Check prerequisites
 
 You need Node 24 or newer, pnpm, Git, curl and openssl. You do not need a
-Cloudflare account until step 7, and you never need Docker for these steps.
+Cloudflare account until step 7. Docker is needed only in step 7, where Wrangler
+builds the Computer's container image.
 
 ```sh
 node --version
@@ -43,13 +44,13 @@ If it fails:
 
 ## 2. Create a project
 
-Make a new directory, install Oyster and Wrangler, and copy the standalone
+Make a new directory, install Oyster, its Computer and Wrangler, and copy the
 example Worker out of the package:
 
 ```sh
 mkdir my-oyster
 cd my-oyster
-pnpm add @fungi.computer/oyster
+pnpm add @fungi.computer/oyster @fungi.computer/computer
 pnpm add -D wrangler
 cp node_modules/@fungi.computer/oyster/examples/standalone/worker.ts .
 cp node_modules/@fungi.computer/oyster/examples/standalone/wrangler.jsonc .
@@ -67,26 +68,30 @@ If it fails:
   `protobufjs`: pnpm installed them without running their install scripts, and
   nothing in this guide needs those scripts. Go on.
 - `cp: cannot stat …/examples/standalone/…`: the install did not finish. Run
-  `pnpm add @fungi.computer/oyster` again and read its first error.
+  `pnpm add @fungi.computer/oyster @fungi.computer/computer` again and read its
+  first error.
 
 ## 3. Run a local Oyster
 
-`worker.ts` and `wrangler.jsonc` are a complete single-owner Oyster. Run it
-under `wrangler dev` on your machine. Choose an owner key and keep this terminal
-open:
+`worker.ts` and `wrangler.jsonc` are the whole Oyster. Run it under
+`wrangler dev` on your machine, without its Computer container. Oyster serves an
+HTTPS origin; `--local-upstream` presents your loopback requests to it at
+`https://oyster.test`. Choose an owner key and keep this terminal open:
 
 ```sh
 export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
 export OYSTER_URL=http://127.0.0.1:8787
 echo "$OYSTER_OWNER_KEY" > .oyster-owner-key
-npx wrangler dev --local --ip 127.0.0.1 --port 8787 \
-  --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:$OYSTER_URL
+npx wrangler dev --local --enable-containers=false --ip 127.0.0.1 --port 8787 \
+  --local-upstream oyster.test --upstream-protocol https \
+  --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:https://oyster.test
 ```
 
-Expected output: a bindings table listing `env.MCP (OysterMcp)`,
-`env.REGISTRY (OysterRegistry)`, `env.INSTANCES (OysterInstance)`,
-`env.RELEASES (oyster-releases)` and `env.LOADER`, then
-`Ready on http://127.0.0.1:8787`.
+Expected output: warnings that the AI and Artifacts bindings reach remote
+resources, a bindings table listing `env.REGISTRY (OysterRegistry)`,
+`env.INSTANCES (StandaloneInstance)`, `env.COMPUTER (ComputerDO)` and the rest,
+then `Ready on http://127.0.0.1:8787`. Locally there is no Computer, git storage
+or Workers AI; steps 3 to 5 need none of them.
 
 Keep it running. Open a second terminal in `my-oyster`, set the same two
 variables there, and check that Oyster answers:
@@ -114,8 +119,9 @@ If it fails:
   `/login` check prints `200`:
 
   ```sh
-  npx wrangler dev --local --ip 127.0.0.1 --port 8787 \
-    --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:$OYSTER_URL \
+  npx wrangler dev --local --enable-containers=false --ip 127.0.0.1 --port 8787 \
+    --local-upstream oyster.test --upstream-protocol https \
+    --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:https://oyster.test \
     > oyster-dev.log 2>&1 &
   ```
 
@@ -265,29 +271,10 @@ If it fails:
 
 ## 6. Add Git
 
-The package also ships `examples/git`: the same Oyster with the git door, so
-people and agents `clone`, `fetch` and `push` App repositories with ordinary
-`git` at `/git/<installation>/<repo>.git`. Repositories live in Cloudflare
-Artifacts, which `wrangler dev` cannot emulate, so the Git worker runs once it
-is deployed in step 7. To use it, copy it over the standalone files:
-
-```sh
-cp node_modules/@fungi.computer/oyster/examples/git/worker.ts .
-cp node_modules/@fungi.computer/oyster/examples/git/wrangler.jsonc .
-```
-
-Compared with `examples/standalone`, `examples/git/worker.ts` builds one
-`oysterGitRoot` with `ownerOrKeyTenancy` and adds:
-
-- the git door, mounted by `createOysterGitWorker(root)`;
-- owner and named keys that sign in to git, plus `/api/keys` and
-  `/api/webhooks`;
-- `OysterGitInstance` as `OysterInstance`, which hands Apps `env.GIT` and
-  `env.EVENTS`;
-- the `ARTIFACTS` binding and the `KEYS` and `WEBHOOKS` Durable Objects in its
-  `wrangler.jsonc`, which names the Worker `oyster-git`.
-
-With the Git worker deployed, give each agent its own key:
+Git is already part of the host: people and agents `clone`, `fetch` and `push`
+App repositories with ordinary `git` at `/git/<installation>/<repo>.git`, with
+repositories in Cloudflare Artifacts. Artifacts runs only once the Worker is
+deployed in step 7. There, give each agent its own key:
 
 ```sh
 curl -s -X POST -H "Authorization: Bearer $OYSTER_OWNER_KEY" \
@@ -299,20 +286,15 @@ curl -s -X POST -H "Authorization: Bearer $OYSTER_OWNER_KEY" \
 Expected output: JSON with a `plaintext` field starting `oyk_`. Oyster shows it
 once; that key signs in to `git` and to `/mcp`.
 
-If it fails:
-
-- `404`: the deployed Worker is the standalone one. Copy the `examples/git`
-  files and deploy again.
-
 ## 7. Deploy to Cloudflare Workers
 
-This step needs a Cloudflare account on Workers Paid; Git also needs Artifacts
-enabled on it. Ask the person before you deploy anything.
+This step needs a Cloudflare account on Workers Paid with Containers, Artifacts,
+Workers AI and Workflows enabled, and Docker running on this machine. Ask the
+person before you deploy anything.
 
-`wrangler.jsonc` names the Worker (`oyster`, or `oyster-git` for Git) and its R2
-bucket, `oyster-releases`. The Worker's address is
-`https://<worker name>.<your-subdomain>.workers.dev`, or a custom domain. For
-the standalone Worker:
+`wrangler.jsonc` names the Worker `oyster`, its R2 bucket `oyster-releases` and
+its Artifacts namespace `oyster`. The Worker's address is
+`https://oyster.<your-subdomain>.workers.dev`, or a custom domain:
 
 ```sh
 npx wrangler login
@@ -322,9 +304,21 @@ npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
 printf '%s' "$OYSTER_OWNER_KEY" | npx wrangler secret put OYSTER_OWNER_KEY
 ```
 
-Expected output: `wrangler deploy` prints the deployed `https://` URL, and
-`wrangler secret put` reports the secret uploaded. Then install Hello exactly as
-in step 4, with `OYSTER_URL` set to the deployed address.
+Expected output: `wrangler deploy` builds the Computer image, uploads it and
+prints the deployed `https://` URL, and `wrangler secret put` reports the secret
+uploaded.
+
+Then install Fungi's seven starter Apps, each built on this Oyster's Computer
+from its own repository:
+
+```sh
+npx oyster install-apps
+```
+
+Expected output: a `source recorded` line per App, `Building … on the Computer`
+and `Installed …` lines (two builds at a time, Tourtois first), a timing table,
+and `Installed 7 Apps`. Open `$OYSTER_URL/login` with the owner key to see the
+Tourtois desktop.
 
 To keep `OYSTER_ORIGIN` across later deploys, set `vars.OYSTER_ORIGIN` in
 `wrangler.jsonc`; every deploy replaces the Worker's variables.
@@ -336,14 +330,17 @@ If it fails:
 - A secret prompt on stdin: pipe the key as shown; never type it into a log.
 - Bindings or migrations refused: deploy the copied `wrangler.jsonc` unchanged
   except for `vars` and the bucket name.
+- `docker` not found or not running: start Docker; Wrangler builds the Computer
+  image from `node_modules/@fungi.computer/computer/Dockerfile`.
+- A build `failed` in `install-apps`: run it again; finished Apps are kept and
+  replaced in place.
 
 ## Where to go next
 
 - The Oyster README (`node_modules/@fungi.computer/oyster/README.md`) explains
   the host, Apps, capabilities, MCP and the shell in depth.
-- [oyster.shiit.app](https://oyster.shiit.app/) is a complete deployment of the
-  Git worker with Fungi's App set: Bonsai, Workflows, Computers, Agents and
-  media.
+- [oyster.shiit.app](https://oyster.shiit.app/) runs this same host with the
+  seven starter Apps.
 - Oyster is built from the other Fungi packages, each its own repository under
   [github.com/fungi-computer](https://github.com/fungi-computer) and on npm as
   `@fungi.computer/<name>`. The README's "Part of Fungi" section lists them.

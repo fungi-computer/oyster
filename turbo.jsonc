@@ -4,5 +4,24 @@
   "tasks": {
     // Typed stranger consumers import this package's built public declarations.
     "lint": { "dependsOn": ["build"] },
+    // The standalone host's tests install the starter Apps from their sources
+    // and read their built pages, and its worker tests load the celld runtime
+    // adapters.
+    "test": {
+      "dependsOn": [
+        "build",
+        "@fungi.computer/shed#build",
+        "@fungi.computer/grove#build",
+        "@fungi.computer/inkcap#build",
+        "@fungi.computer/prints#build",
+        "@fungi.computer/trellis#build",
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tooling/repository/scripts/{test-file-pool,proof-budget}.{mjs,d.mts}",
+        "$TURBO_ROOT$/.agents/skills/orchestrate-multi-lane-work/scripts/proof-time-bound.sh",
+        "$TURBO_ROOT$/tooling/celld-platform/runtime/**",
+      ],
+    },
   },
 }

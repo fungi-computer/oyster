@@ -1,0 +1,97 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  // The config behind the live https://oyster.shiit.app/ contest demo: the
+  // same standalone Worker as wrangler.jsonc, deployed under its own name so
+  // it answers on two origins — the custom domain below (OYSTER_ORIGIN, what
+  // the owner signs in on) and this Worker's own workers.dev address
+  // (OYSTER_PREVIEW_ORIGIN, the passive Ports-preview tunnel; see
+  // standalone/preview.ts). Without a second, distinct origin configured,
+  // Ports previews stay disabled — that's wrangler.jsonc's situation today,
+  // and is not a bug: a single-domain deploy has nowhere to isolate preview
+  // traffic from the owner's own session. Deploy with
+  // `npx wrangler deploy --config wrangler.contest.jsonc`; this still needs
+  // the "oyster.shiit.app" custom domain attached to the "oyster-contest"
+  // Worker name in the account that owns it, and OYSTER_OWNER_KEY set with
+  // `wrangler secret put`, same as wrangler.jsonc's quick start.
+  "name": "oyster-contest",
+  "main": "../examples/standalone/worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "workflows": [
+    {
+      "binding": "GRAPH_WORKFLOWS",
+      "name": "oyster-contest-graphs",
+      "class_name": "StandaloneGraphWorkflow",
+    },
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "containers": [
+    {
+      "class_name": "ComputerDO",
+      "image": "../../../packages/computer/Dockerfile",
+      "instance_type": "standard-4",
+      "max_instances": 1,
+      "rollout_active_grace_period": 0,
+      "rollout_step_percentage": [100],
+    },
+  ],
+  "ai": { "binding": "AI" },
+  "images": { "binding": "IMAGES" },
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "oyster-contest-releases" },
+    { "binding": "APP_ARTIFACTS", "bucket_name": "oyster-contest-releases" },
+  ],
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "oyster-contest" }],
+  "vars": {
+    "OYSTER_COMPUTER_ID": "workspace",
+    "OYSTER_HOME_INSTALLATION": "tourtois",
+    "OYSTER_ORIGIN": "https://oyster.shiit.app",
+    "OYSTER_PREVIEW_ORIGIN": "https://oyster-contest.levi-fe0.workers.dev",
+    "OYSTER_OWNER_NAME": "levi",
+    // The authenticated AI Gateway every model call routes through (Luna, Prints'
+    // Workers AI and third-party models). It must be a gateway configured in the
+    // account that AI_GATEWAY_AUTH_TOKEN authenticates; an unconfigured id fails
+    // every call with AiGatewayError 2001 "Please configure AI Gateway".
+    "AI_GATEWAY_ID": "fungi-gateway",
+  },
+  "routes": [{ "pattern": "oyster.shiit.app", "custom_domain": true }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANTS", "class_name": "StandaloneTenants" },
+      { "name": "MCP", "class_name": "OysterMcp" },
+
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "WORKFLOW_RUNS", "class_name": "StandaloneWorkflowRuns" },
+      { "name": "INSTANCES", "class_name": "StandaloneInstance" },
+      { "name": "COMPUTER", "class_name": "ComputerDO" },
+      { "name": "KEYS", "class_name": "OysterKeys" },
+      { "name": "WEBHOOKS", "class_name": "OysterWebhooks" },
+      { "name": "AGENTS", "class_name": "StandaloneAgent" },
+      { "name": "AGENT_DIRECTORY", "class_name": "AgentDirectory" },
+      { "name": "MEDIA_OPERATION", "class_name": "MediaOperationDO" },
+    ],
+  },
+  // One initial tag: pre-launch history was collapsed (Levi 10-14, data wipe
+  // authorized), so a fresh Worker creates every bound class at once.
+  "migrations": [
+    {
+      "tag": "oyster-v1",
+      "new_sqlite_classes": [
+        "StandaloneTenants",
+        "OysterMcp",
+        "OysterRegistry",
+        "StandaloneWorkflowRuns",
+        "StandaloneInstance",
+        "ComputerDO",
+        "OysterKeys",
+        "OysterWebhooks",
+        "StandaloneAgent",
+        "AgentDirectory",
+        "MediaOperationDO",
+      ],
+    },
+  ],
+}

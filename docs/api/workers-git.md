@@ -234,38 +234,74 @@ unknown, revoked, expired or suspended key.
 
 ### OysterWebhooks
 
-Webhook subscriptions, their secrets and signed, retried deliveries.
+The tenant's App event delivery owner: webhook subscriptions with signed,
+retried deliveries, and host recipients with durable per-recipient records. An
+emit commits here and returns; every delivery happens on the alarm.
 
 #### Extends
 
-- `DurableObject`\<[`OysterKeysEnv`](#oysterkeysenv)\>
+- `DurableObject`\<`Env`\>
+
+#### Type Parameters
+
+| Type Parameter                                    | Default type                      |
+| ------------------------------------------------- | --------------------------------- |
+| `Env` _extends_ [`OysterKeysEnv`](#oysterkeysenv) | [`OysterKeysEnv`](#oysterkeysenv) |
 
 #### Constructors
 
 ##### Constructor
 
 ```ts
-new OysterWebhooks(ctx, env): OysterWebhooks;
+new OysterWebhooks<Env>(ctx, env): OysterWebhooks<Env>;
 ```
 
 ###### Parameters
 
-| Parameter | Type                              |
-| --------- | --------------------------------- |
-| `ctx`     | `DurableObjectState`              |
-| `env`     | [`OysterKeysEnv`](#oysterkeysenv) |
+| Parameter | Type                 |
+| --------- | -------------------- |
+| `ctx`     | `DurableObjectState` |
+| `env`     | `Env`                |
 
 ###### Returns
 
-[`OysterWebhooks`](#oysterwebhooks)
+[`OysterWebhooks`](#oysterwebhooks)\<`Env`\>
 
 ###### Overrides
 
 ```ts
-DurableObject<OysterKeysEnv>.constructor
+DurableObject<Env>.constructor
 ```
 
 #### Methods
+
+##### recipientDeliveries()
+
+```ts
+recipientDeliveries(recipient): Readonly<{
+  recipient: string;
+  eventId: string;
+  type: string;
+  state: "pending" | "failed" | "delivered";
+  attempts: number;
+  lastError: string | null;
+  updatedAt: number;
+}>[];
+```
+
+Recent deliveries to one host recipient, newest first.
+
+###### Parameters
+
+| Parameter   | Type     |
+| ----------- | -------- |
+| `recipient` | `string` |
+
+###### Returns
+
+`Readonly`\<\{ `recipient`: `string`; `eventId`: `string`; `type`: `string`;
+`state`: `"pending"` \| `"failed"` \| `"delivered"`; `attempts`: `number`;
+`lastError`: `string` \| `null`; `updatedAt`: `number`; \}\>[]
 
 ##### subscribe()
 
@@ -358,25 +394,29 @@ Recent deliveries for one subscription, newest first.
 
 ```ts
 enqueue(
-   installationId,
+   source,
    payload,
-   eventId
-): number;
+   eventId,
+   recipients
+): Promise<number>;
 ```
 
-Queue an event for every matching subscription (idempotent per event id).
+Accept an emitted event: queue it for every matching subscription and every
+named host recipient (idempotent per event id). Nothing is delivered before this
+returns, so no recipient can fail the emitter's write.
 
 ###### Parameters
 
-| Parameter        | Type                                                      |
-| ---------------- | --------------------------------------------------------- |
-| `installationId` | `string`                                                  |
-| `payload`        | [`StandardWebhookPayload`](git.md#standardwebhookpayload) |
-| `eventId`        | `string`                                                  |
+| Parameter    | Type                                                      |
+| ------------ | --------------------------------------------------------- |
+| `source`     | [`HostEventSource`](#hosteventsource)                     |
+| `payload`    | [`StandardWebhookPayload`](git.md#standardwebhookpayload) |
+| `eventId`    | `string`                                                  |
+| `recipients` | readonly `string`[]                                       |
 
 ###### Returns
 
-`number`
+`Promise`\<`number`\>
 
 ##### alarm()
 
@@ -384,7 +424,7 @@ Queue an event for every matching subscription (idempotent per event id).
 alarm(): Promise<void>;
 ```
 
-Deliver due webhooks, then schedule the next retry.
+Deliver due webhooks and recipient rows, then schedule the next retry.
 
 ###### Returns
 
@@ -1015,6 +1055,57 @@ host handle decodes.
 
 ## Type Aliases
 
+### HostEventSource
+
+```ts
+type HostEventSource = Readonly<{
+  installationId: string;
+  appId: string;
+  releaseId: string;
+}>;
+```
+
+The emitting installation as the host attested it on the emit's frame.
+
+---
+
+### HostRecipientEvent
+
+```ts
+type HostRecipientEvent = Readonly<{
+  source: HostEventSource;
+  type: string;
+  eventId: string;
+  payload: Readonly<{
+    type: string;
+    timestamp: string;
+    data: unknown;
+  }>;
+}>;
+```
+
+One accepted event, as a host recipient receives it.
+
+---
+
+### RecipientDelivery
+
+```ts
+type RecipientDelivery = Readonly<{
+  recipient: string;
+  eventId: string;
+  type: string;
+  state: "pending" | "delivered" | "failed";
+  attempts: number;
+  lastError: string | null;
+  updatedAt: number;
+}>;
+```
+
+One recipient's delivery record for one event.
+
+---
+
 ### ArtifactsGit
 
 ```ts
@@ -1288,7 +1379,7 @@ One live guest frame's Git custody; never a guest argument.
 const eventsBinding: OysterBindingRow<OysterGitWorkerEnv>;
 ```
 
-EVENTS: signed webhook delivery in this Instance's tenant namespace.
+EVENTS for a host with webhook subscribers only.
 
 ---
 
@@ -1344,6 +1435,34 @@ The Artifacts namespace: the binding when present, else the REST API.
 #### Returns
 
 `ArtifactsNamespace`
+
+---
+
+### eventsBindingFor()
+
+```ts
+function eventsBindingFor<Env>(recipients): OysterBindingRow<Env>;
+```
+
+EVENTS: commit the emit to this tenant's delivery owner and return. Webhook
+subscribers and the host recipients a root names are delivered afterwards, so a
+subscriber outage never fails the emitting App's write.
+
+#### Type Parameters
+
+| Type Parameter                                              |
+| ----------------------------------------------------------- |
+| `Env` _extends_ [`OysterGitWorkerEnv`](#oystergitworkerenv) |
+
+#### Parameters
+
+| Parameter    | Type                                                     |
+| ------------ | -------------------------------------------------------- |
+| `recipients` | (`context`, `frame`) => `Promise`\<readonly `string`[]\> |
+
+#### Returns
+
+[`OysterBindingRow`](workers.md#oysterbindingrow)\<`Env`\>
 
 ---
 

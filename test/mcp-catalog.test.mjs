@@ -916,7 +916,7 @@ const toolOutput = {
   required: ["runId"],
 };
 /** One installed App declaring the same `{name:"flows", list, call}` tool
- * family shape the real Workflows App declares, for a fake Instance to
+ * family shape the real Trellis App declares, for a fake Instance to
  * answer. Each test supplies its own `instances.get` behavior. */
 async function flowsRow(installationId, visibility = "private") {
   const backend = await put(
@@ -1292,7 +1292,7 @@ test("a team key is listed a tool family tool, but the declaring App's own refus
   // any team-key actor outright), never Oyster's own policy gate -- a
   // worked example that an App's own rule is distinct from Oyster's, not a
   // claim about any particular App (Bonsai's Workflows admits a
-  // sufficiently-granted key's run; see apps/bonsai/standalone/workflow-host.ts).
+  // sufficiently-granted key's run; see packages/oyster/src/standalone/workflow-host.ts).
   const fixtureKey = {
     keyId: "ci-key",
     owner: "owner",

@@ -3,8 +3,9 @@
 // snapshot's own pinned Node toolchain. Every filesystem access is guarded so no
 // input outside the captured snapshot can reach a compiler.
 //
-// argv: snapshot, App directory, format, and one JSON array of steps: either
-// consecutive TypeScript configs sharing a compiler, or one stylesheet.
+// argv: snapshot, App directory, format, one JSON array of steps (either
+// consecutive TypeScript configs sharing a compiler, or one stylesheet), and
+// the directory whose dependencies hold the pinned Tailwind compiler.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -26,26 +27,28 @@ import {
 } from "../build-step.js";
 
 function programArguments() {
-  const [snapshot, appDirectory, format, steps, ...rest] =
+  const [snapshot, appDirectory, format, steps, toolchain, ...rest] =
     process.argv.slice(2);
   if (
     snapshot === undefined ||
     appDirectory === undefined ||
     format === undefined ||
     steps === undefined ||
+    toolchain === undefined ||
     rest.length > 0
   )
     throw new Error(
-      "Dependency build requires a snapshot, App directory, format and steps",
+      "Dependency build requires a snapshot, App directory, format, steps and toolchain directory",
     );
   return {
     snapshot,
     appDirectory,
     format,
     steps: Schema.decodeUnknownSync(workspaceBuildStepsJsonSchema)(steps),
+    toolchain,
   };
 }
-const { snapshot, appDirectory, format, steps } = programArguments();
+const { snapshot, appDirectory, format, steps, toolchain } = programArguments();
 
 function inSnapshot(path: string): boolean {
   return isInsideSnapshot(snapshot, path);
@@ -259,7 +262,7 @@ async function compileTailwind(stylesheet: {
 }): Promise<void> {
   // The fixed pnpm virtual store puts CLI dependencies in this node_modules.
   const cli = contained(
-    join(snapshot, "packages/caps/node_modules/@tailwindcss/cli"),
+    join(snapshot, toolchain, "node_modules/@tailwindcss/cli"),
   );
   const modules = contained(resolve(cli, "../.."));
   // The publisher pins @tailwindcss/cli 4.2.1 before this program runs; these
@@ -367,6 +370,8 @@ async function compileTailwind(stylesheet: {
 const [first, ...following] = steps;
 if (first === undefined) throw new Error("Dependency build has no steps");
 if (first.kind === "typescript") compileTypeScript(steps);
+else if (first.kind === "script")
+  throw new Error("A package script runs outside the contained build program");
 else {
   if (following.length)
     throw new Error("Only TypeScript steps can share a compiler process");

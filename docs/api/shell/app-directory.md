@@ -55,6 +55,73 @@ An App directory row before host-specific permissions are attached.
 
 ---
 
+### AppComputerOperation
+
+```ts
+type AppComputerOperation = Extract<
+  z.output<typeof appComputerPermissionSchema>,
+  {
+    kind: "all-team-computers";
+  }
+>["operations"][number];
+```
+
+One operation an App may request for a Computer.
+
+---
+
+### AppComputerPermission
+
+```ts
+type AppComputerPermission = z.output<typeof appComputerPermissionSchema>;
+```
+
+Decoded Computer permission scope attached to an App directory entry.
+
+---
+
+### AppAgentPermission
+
+```ts
+type AppAgentPermission = z.output<typeof appAgentPermissionSchema>;
+```
+
+Decoded Agent permission scope attached to an App directory entry.
+
+---
+
+### AppGenerationPermissions
+
+```ts
+type AppGenerationPermissions = z.output<typeof appGenerationPermissionsSchema>;
+```
+
+Decoded generation permissions attached to an App directory entry.
+
+---
+
+### AppMarketplacePermissions
+
+```ts
+type AppMarketplacePermissions = z.output<
+  typeof appMarketplacePermissionsSchema
+>;
+```
+
+Decoded marketplace permissions attached to an App directory entry.
+
+---
+
+### AppDirectory
+
+```ts
+type AppDirectory = z.output<typeof appDirectoryResponseSchema>;
+```
+
+The host-resolved Team App directory and its permission projections.
+
+---
+
 ### AppCatalog
 
 ```ts
@@ -217,6 +284,206 @@ const appRoleSelectionSchema: ZodObject<
 ```
 
 A host-resolved role selection; a surface address is not launch authority.
+
+---
+
+### appComputerPermissionSchema
+
+```ts
+const appComputerPermissionSchema: ZodDiscriminatedUnion<[ZodObject<{
+  kind: ZodLiteral<"selected-computers">;
+  computers: ZodArray<ZodObject<{
+     computerId: ZodString;
+     operations: ZodArray<ZodEnum<{
+        computer.list: "computer.list";
+        computer.readFile: "computer.readFile";
+        computer.writeFile: "computer.writeFile";
+        computer.execute: "computer.execute";
+     }>>;
+  }, $strict>>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"all-team-computers">;
+  operations: ZodArray<ZodEnum<{
+     computer.list: "computer.list";
+     computer.readFile: "computer.readFile";
+     computer.writeFile: "computer.writeFile";
+     computer.execute: "computer.execute";
+  }>>;
+}, $strict>], "kind">;
+```
+
+App Computer permissions limited to selected Computers or the Team's Computers.
+
+---
+
+### appAgentPermissionSchema
+
+```ts
+const appAgentPermissionSchema: ZodDiscriminatedUnion<[ZodObject<{
+  kind: ZodLiteral<"all-team-agents">;
+  directoryOperations: ZodArray<ZodEnum<{
+     agent.list: "agent.list";
+  }>>;
+  sessionOperations: ZodArray<ZodEnum<{
+     agent.manage: "agent.manage";
+     agent.read: "agent.read";
+     agent.send: "agent.send";
+  }>>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"selected-agents">;
+  directoryOperations: ZodArray<ZodEnum<{
+     agent.list: "agent.list";
+  }>>;
+  agents: ZodArray<ZodObject<{
+     agentId: ZodString;
+     sessionOperations: ZodArray<ZodEnum<{
+        agent.manage: "agent.manage";
+        agent.read: "agent.read";
+        agent.send: "agent.send";
+     }>>;
+  }, $strict>>;
+}, $strict>], "kind">;
+```
+
+Agent directory and session operations an App may request from its host.
+
+---
+
+### appGenerationPermissionsSchema
+
+```ts
+const appGenerationPermissionsSchema: ZodObject<
+  {
+    llm: ZodBoolean;
+    media: ZodBoolean;
+  },
+  $strict
+>;
+```
+
+Whether an App may use language-model and media generation services.
+
+---
+
+### appMarketplacePermissionsSchema
+
+```ts
+const appMarketplacePermissionsSchema: ZodObject<
+  {
+    browse: ZodBoolean;
+    purchase: ZodBoolean;
+    installFree: ZodBoolean;
+  },
+  $strict
+>;
+```
+
+Whether an App may browse, buy, or install free marketplace entries.
+
+---
+
+### appDirectoryResponseSchema
+
+```ts
+const appDirectoryResponseSchema: ZodObject<{
+  actorIsTeamOwner: ZodBoolean;
+  needsUpdate: ZodOptional<ZodArray<ZodObject<{
+     installationId: ZodNullable<ZodString>;
+     appId: ZodNullable<ZodString>;
+     displayName: ZodString;
+  }, $strict>>>;
+  apps: ZodArray<ZodObject<{
+     address: ZodUnion<readonly [ZodObject<{
+        kind: ZodLiteral<"default">;
+        appId: ZodString;
+      }, $strict>, ZodObject<{
+        kind: ZodLiteral<"installation">;
+        installationId: ZodString;
+     }, $strict>]>;
+     installationId: ZodNullable<ZodString>;
+     surfaceId: ZodString;
+     appId: ZodString;
+     displayName: ZodOptional<ZodString>;
+     icon: ZodOptional<ZodNullable<ZodString>>;
+     releaseId: ZodNullable<ZodString>;
+     authorityVersion: ZodNumber;
+     enforcement: ZodNullable<ZodObject<{
+        requestId: ZodString;
+        address: ZodUnion<readonly [ZodObject<..., ...>, ZodObject<..., ...>]>;
+        authorityVersion: ZodNumber;
+        state: ZodEnum<{
+           pending: "pending";
+           expired: "expired";
+           unaffected: "unaffected";
+           applied: "applied";
+        }>;
+        outstanding: ZodNumber;
+     }, $strict>>;
+     handlers: ZodArray<ZodLiteral<"file.open">>;
+     roles: ZodArray<ZodString>;
+     declaredCapabilities: ZodArray<ZodString>;
+     calls: ZodOptional<ZodPipe<ZodUnknown, ZodTransform<readonly object[], unknown>>>;
+     commands: ZodPipe<ZodArray<ZodUnknown>, ZodTransform<Readonly<{
+        id: string;
+        title: string;
+        category: string;
+        description?: ... | ...;
+        sigil?: ... | ...;
+        projections?: ... | ...;
+     }>[], unknown[]>>;
+     gills: ZodPipe<ZodArray<ZodUnknown>, ZodTransform<AppDirectoryGill[], unknown[]>>;
+     availability: ZodEnum<{
+        unavailable: "unavailable";
+        available: "available";
+     }>;
+     surface: ZodNullable<ZodObject<{
+        stableRoute: ZodString;
+     }, $strict>>;
+     surfacePath: ZodString;
+     override: ZodNullable<ZodObject<{
+        appId: ZodOptional<ZodString>;
+        releaseId: ZodString;
+        surfaceRoute: ZodNullable<ZodString>;
+     }, $strict>>;
+     grants: ZodArray<ZodObject<{
+        operation: ZodString;
+        resourceId: ZodString;
+     }, $strict>>;
+     computerPermission: ZodOptional<ZodNullable<ZodDiscriminatedUnion<[ZodObject<{
+        kind: ...;
+        computers: ...;
+      }, $strict>, ZodObject<{
+        kind: ...;
+        operations: ...;
+     }, $strict>], "kind">>>;
+     generationPermissions: ZodObject<{
+        llm: ZodBoolean;
+        media: ZodBoolean;
+     }, $strict>;
+     marketplacePermissions: ZodObject<{
+        browse: ZodBoolean;
+        purchase: ZodBoolean;
+        installFree: ZodBoolean;
+     }, $strict>;
+     agentPermission: ZodDiscriminatedUnion<[ZodObject<{
+        kind: ZodLiteral<"all-team-agents">;
+        directoryOperations: ZodArray<ZodEnum<...>>;
+        sessionOperations: ZodArray<ZodEnum<...>>;
+      }, $strict>, ZodObject<{
+        kind: ZodLiteral<"selected-agents">;
+        directoryOperations: ZodArray<ZodEnum<...>>;
+        agents: ZodArray<ZodObject<..., ...>>;
+     }, $strict>], "kind">;
+  }, $strict>>;
+  roles: ZodRecord<ZodString, ZodObject<{
+     surfaceId: ZodNullable<ZodString>;
+     chosen: ZodBoolean;
+  }, $strict>>;
+}, $strict>;
+```
+
+A host's Team App directory with its permission projection, parsed strictly by
+every consumer: an unknown field is a contract change both sides make.
 
 ---
 

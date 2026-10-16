@@ -1557,7 +1557,16 @@ Files in an R2 bucket under `prefix` (one workspace per prefix).
 ### r2ArtifactStore()
 
 ```ts
-function r2ArtifactStore(bucket): ArtifactStore;
+function r2ArtifactStore(bucket): Readonly<{
+  get: (artifactRef) => Promise<Uint8Array<ArrayBufferLike> | null>;
+  put: (artifactRef, bytes) => Promise<void>;
+}> &
+  Readonly<{
+    head: (artifactRef) => Promise<Readonly<{
+      byteLength: number;
+      digest: Sha256Digest | null;
+    }> | null>;
+  }>;
 ```
 
 Store Release artifacts in an R2 bucket.
@@ -1570,7 +1579,11 @@ Store Release artifacts in an R2 bucket.
 
 #### Returns
 
-[`ArtifactStore`](host.md#artifactstore)
+`Readonly`\<\{ `get`: (`artifactRef`) =>
+`Promise`\<`Uint8Array`\<`ArrayBufferLike`\> \| `null`\>; `put`: (`artifactRef`,
+`bytes`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `head`: (`artifactRef`)
+=> `Promise`\< \| `Readonly`\<\{ `byteLength`: `number`; `digest`:
+`Sha256Digest` \| `null`; \}\> \| `null`\>; \}\>
 
 ---
 

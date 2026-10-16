@@ -149,7 +149,7 @@ try {
   const bodies = [pushBody, resetBody, pushBody];
   for (let attempt = 0; attempt < bodies.length; attempt++) {
     const response = await door.request(
-      "/git/fixture/workflows.git/git-receive-pack",
+      "/git/fixture/trellis.git/git-receive-pack",
       {
         method: "POST",
         body: bodies[attempt],
@@ -169,7 +169,7 @@ try {
   );
   assert.equal(pushes[0].installationId, "fixture");
   assert.deepEqual(pushes[0].fact, {
-    repository: "workflows",
+    repository: "trellis",
     writer: memberWriter,
     updates: [
       { ref: "refs/heads/main", before: "0".repeat(40), after: "a".repeat(40) },
@@ -364,7 +364,7 @@ try {
     throw cause;
   });
   const accepted = await standalone.request(
-    "/git/fixture/workflows.git/git-receive-pack",
+    "/git/fixture/trellis.git/git-receive-pack",
     { method: "POST", body: pushBody },
     {},
     execution,
@@ -412,7 +412,7 @@ try {
   };
   const composed = createOyster({ ...standaloneHost, git: composedGit });
   const queued = await composed.request(
-    "/git/fixture/workflows.git/git-receive-pack",
+    "/git/fixture/trellis.git/git-receive-pack",
     { method: "POST", body: pushBody },
     {},
     execution,

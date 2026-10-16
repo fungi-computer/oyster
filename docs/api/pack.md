@@ -123,9 +123,12 @@ its state; both go through its one install-or-select owner.
 function publishSource(input): Promise<Response>;
 ```
 
-Project one exact first-party commit's editable source and seed it into an
-Oyster's own template, so `APPS.fork` can later fork it. The operator owner key
-authenticates; no provider credential ever leaves this call.
+Project one exact first-party commit's editable source, `git push` it to an
+Oyster's own template for that App, and claim the pushed head, so `APPS.fork`
+and Computer builds can later read it. The operator owner key authenticates
+both; it reaches Git only through its config environment and no provider
+credential ever leaves the Oyster. Answers the claim response:
+`{ kind: "recorded" | "existing", receipt }` on success.
 
 #### Parameters
 

@@ -314,3 +314,158 @@ void [
   oysterPrincipalIsVisitor(agentPrincipal),
   oysterPrincipalId(keyPrincipal),
 ];
+
+// Tenancy: resolve provisioned tenants, verify identities, apply membership.
+import {
+  createTenancy,
+  type AuthAdapter,
+  type ManagedTenancy,
+  type ReadonlyTenancy,
+  type ReadonlyTenantRegistry,
+} from "@fungi.computer/oyster/tenancy";
+import { subdomain, path } from "@fungi.computer/oyster/tenancy/resolve";
+import { memoryRegistry } from "@fungi.computer/oyster/tenancy/registry";
+import {
+  ownerKey,
+  type OwnerKeyRecord,
+} from "@fungi.computer/oyster/tenancy/owner-key";
+import {
+  auth0,
+  type Auth0Transaction,
+  type Auth0Session,
+} from "@fungi.computer/oyster/tenancy/auth0";
+import {
+  durableObjectRegistry,
+  rateLimit,
+  TenancyRegistryDO,
+  type DurableRegistry,
+  type DurableReadonlyRegistry,
+} from "@fungi.computer/oyster/tenancy/cloudflare";
+import {
+  subdomain as originResolver,
+  path as pathResolver,
+} from "@fungi.computer/oyster/tenancy/resolve";
+import { memoryRegistry as adapterRegistry } from "@fungi.computer/oyster/tenancy/registry";
+import {
+  coldTenantDirectory,
+  type ColdTenantDirectory,
+} from "@fungi.computer/oyster/tenancy/cold-directory";
+declare const namespace: DurableObjectNamespace<TenancyRegistryDO>;
+declare const limiterBinding: RateLimit;
+declare const capturedScope: TenantScope;
+{
+  const registry = memoryRegistry();
+  const identity = { provider: "fixture", subject: "owner" };
+  const auth: AuthAdapter = {
+    id: "identity",
+    authenticate: () => Promise.resolve({ kind: "identity", identity }),
+  };
+  const managed: ManagedTenancy = createTenancy({
+    resolve: subdomain("example.test"),
+    registry,
+    auth: [auth],
+  });
+  const read: ReadonlyTenantRegistry = {
+    get: registry.get,
+    byHandle: registry.byHandle,
+    status: registry.status,
+    membershipOf: registry.membershipOf,
+    memberById: registry.memberById,
+  };
+  const readonly: ReadonlyTenancy = createTenancy({
+    resolve: path("/t/:tenant"),
+    registry: read,
+    auth: [auth],
+  });
+  type HasCreate = "create" extends keyof typeof readonly ? true : false;
+  const hasCreate: HasCreate = false;
+  void [managed, readonly, hasCreate];
+  const records = new Map<string, OwnerKeyRecord>();
+  const ownerAdapter: AuthAdapter = ownerKey({
+    registry,
+    keys: { get: (id) => Promise.resolve(records.get(id) ?? null) },
+  });
+  const issuerAdapter: AuthAdapter = auth0({
+    domain: "identity.example.test",
+    clientId: "application",
+    audience: "https://api.example.test",
+  });
+  const transactions = new Map<string, Auth0Transaction>();
+  const sessions = new Map<string, Auth0Session>();
+  const browserAdapter: AuthAdapter = auth0({
+    domain: "identity.example.test",
+    clientId: "application",
+    audience: "https://api.example.test",
+    browser: {
+      callbackPath: "/auth/callback",
+      resolveTenant: managed.resolve,
+      registry,
+      transactions: {
+        put: (id, value) => {
+          transactions.set(id, value);
+          return Promise.resolve();
+        },
+        take: (id) => {
+          const value = transactions.get(id) ?? null;
+          transactions.delete(id);
+          return Promise.resolve(value);
+        },
+      },
+      sessions: {
+        put: (id, value) => {
+          sessions.set(id, value);
+          return Promise.resolve();
+        },
+        get: (id) => Promise.resolve(sessions.get(id) ?? null),
+      },
+    },
+  });
+  void [ownerAdapter, issuerAdapter, browserAdapter];
+  const durableManaged: DurableRegistry = durableObjectRegistry(namespace);
+  const durableRead: DurableReadonlyRegistry = durableObjectRegistry(
+    namespace,
+    {
+      readonly: true,
+    },
+  );
+  type DurableReadHasCreate = "create" extends keyof typeof durableRead
+    ? true
+    : false;
+  type DurableReadHasDelete = "delete" extends keyof typeof durableRead
+    ? true
+    : false;
+  const noDurableCreate: DurableReadHasCreate = false;
+  const noDurableDelete: DurableReadHasDelete = false;
+  const policy = rateLimit(limiterBinding, { retryAfterSeconds: 60 });
+  void [
+    TenancyRegistryDO,
+    durableManaged,
+    durableRead,
+    noDurableCreate,
+    noDurableDelete,
+    policy,
+  ];
+  const originApi = createTenancy({
+    resolve: originResolver("oyster.test"),
+    registry: adapterRegistry(),
+    auth: [],
+  });
+  const pathApi = createTenancy({
+    resolve: pathResolver("/t/:tenant"),
+    registry: adapterRegistry(),
+    auth: [],
+  });
+  const originCanHost: "oyster" extends keyof typeof originApi ? true : false =
+    true;
+  const pathCannotHost: "oyster" extends keyof typeof pathApi ? false : true =
+    true;
+  void [originCanHost, pathCannotHost, originApi.oyster(), pathApi];
+  const cold: ColdTenantDirectory = coldTenantDirectory(read);
+  const selectedCold: Promise<ResolvedTenant | null> =
+    cold.resolve(capturedScope);
+  type ColdHasCreate = "create" extends keyof ColdTenantDirectory
+    ? true
+    : false;
+  const coldHasCreate: ColdHasCreate = false;
+  void [selectedCold, coldHasCreate];
+}

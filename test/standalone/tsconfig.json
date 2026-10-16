@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "*.ts",
+    "workflow-probe/*.ts",
+    "../../src/standalone/exports.d.ts"
+  ]
+}

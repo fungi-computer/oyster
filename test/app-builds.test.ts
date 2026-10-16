@@ -11,28 +11,48 @@ import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import * as Schema from "effect/Schema";
 import {
   parseAppId,
+  parseArtifactRef,
   parseReleaseId,
   parseSha256Digest,
   parseSourceRevision,
   type ArtifactRef,
+  type Sha256Digest,
 } from "@fungi.computer/puffball";
 import {
+  capturedPinnedRecipeSchema,
   createCapturedCandidatePreparer,
   normalizeAppPublisherRecipe,
+  type AppPublisherCoreConfigInput,
+  type BuildOutput,
 } from "../src/build/effect.js";
 import {
   createLocalBuildExecutor,
   createLocalCommitSourceCapture,
 } from "../src/build/local-build.js";
 import {
-  teamAppCandidateSubmissionSchema,
-  type TeamAppCandidateSubmission,
+  encodeTeamAppCandidateManifest,
+  teamAppCandidateManifestSchema,
+  type TeamAppCandidateManifest,
 } from "../src/build/submission-contract.js";
 import {
+  contentObjectRef,
+  putContentObject,
+  type ContentObjectBucket,
+} from "../src/build/content-objects.js";
+import { stageBuildOutput } from "../src/build/artifact-writer.js";
+import { backendJsonSchema } from "@fungi.computer/puffball/backend";
+import {
   createOysterAppBuilds,
+  migrateOysterAppBuilds,
+  oysterAppBuildTimeoutMs,
+  type OysterAppBuildOptions,
   type OysterBuildComputer,
 } from "../src/app-builds.js";
-import { verifyRelease, type ArtifactStore } from "../src/release.js";
+import {
+  verifyRelease,
+  type ArtifactHeads,
+  type ArtifactStore,
+} from "../src/release.js";
 
 const assets = {
   maxManifestBytes: 65_536,
@@ -45,7 +65,9 @@ const computerObjectId = "computer-object-1";
 
 let work: string;
 let sourceRevision: string;
-let candidate: TeamAppCandidateSubmission;
+/** The fixture build's output, as the Computer's builder holds it. */
+let built: BuildOutput;
+let candidate: TeamAppCandidateManifest;
 let normalized: ReturnType<typeof normalizeAppPublisherRecipe>;
 
 beforeAll(async () => {
@@ -101,84 +123,119 @@ beforeAll(async () => {
       },
     ).prepareCandidate(parseReleaseId("rel_build")),
   );
-  candidate = Schema.decodeUnknownSync(
-    Schema.toType(teamAppCandidateSubmissionSchema),
-  )({
+  built = prepared.output;
+  candidate = {
     appId: prepared.appId,
-    output: prepared.output,
+    output: stageBuildOutput(built).manifest,
     provenance: prepared.provenance,
-  });
+  };
 }, 60_000);
 
 afterAll(async () => {
   await rm(work, { recursive: true, force: true });
 });
 
-/** The R2 surface the writer and reader use, over memory, with R2's conditional put. */
-function memoryBucket() {
-  const objects = new Map<
-    string,
-    { bytes: Uint8Array; contentType: string; version: string }
-  >();
-  const metadata = (object: { bytes: Uint8Array; version: string }) => ({
-    version: object.version,
-    size: object.bytes.byteLength,
-    checksums: {
-      sha256: new Uint8Array(createHash("sha256").update(object.bytes).digest())
-        .buffer,
-    },
-  });
+/** One stored object and the SHA-256 its writer had the store verify. */
+type StoredObject = { bytes: Uint8Array; digest: Sha256Digest | null };
+
+const digestOf = (bytes: Uint8Array) =>
+  parseSha256Digest(
+    `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  );
+
+/** The host artifact store over memory, as R2 keeps it: `put` overwrites and
+ * verifies nothing (as `r2ArtifactStore` writes a root), `head` reports the
+ * size and any SHA-256 a streamed upload had the store check. */
+function memoryStore(): ArtifactStore &
+  ArtifactHeads & { objects: Map<string, StoredObject> } {
+  const objects = new Map<string, StoredObject>();
   return {
-    head: (key: string) => {
-      const object = objects.get(key);
-      return Promise.resolve(object === undefined ? null : metadata(object));
+    objects,
+    get: (artifactRef: ArtifactRef) =>
+      Promise.resolve(objects.get(artifactRef)?.bytes.slice() ?? null),
+    put: (artifactRef: ArtifactRef, bytes: Uint8Array) => {
+      objects.set(artifactRef, { bytes: bytes.slice(), digest: null });
+      return Promise.resolve();
     },
-    get: (key: string) => {
-      const object = objects.get(key);
-      if (object === undefined) return Promise.resolve(null);
-      return Promise.resolve({
-        ...metadata(object),
-        httpMetadata: { contentType: object.contentType },
-        body: new Blob([object.bytes]).stream(),
-        arrayBuffer: () => Promise.resolve(object.bytes.slice().buffer),
-      });
-    },
-    put: (
-      key: string,
-      value: Uint8Array,
-      options: {
-        onlyIf: { etagDoesNotMatch: string };
-        httpMetadata: { contentType: string };
-      },
-    ) => {
-      if (options.onlyIf.etagDoesNotMatch === "*" && objects.has(key))
-        return Promise.resolve(null);
-      const object = {
-        bytes: value.slice(),
-        contentType: options.httpMetadata.contentType,
-        version: String(objects.size + 1),
-      };
-      objects.set(key, object);
-      return Promise.resolve(metadata(object));
+    head: (artifactRef: ArtifactRef) => {
+      const object = objects.get(artifactRef);
+      return Promise.resolve(
+        object === undefined
+          ? null
+          : { byteLength: object.bytes.byteLength, digest: object.digest },
+      );
     },
   };
 }
 
+/** The same memory as an R2 bucket the egress streams into: a put whose
+ * body's SHA-256 differs from the one it names is refused. */
+function bucketOver(
+  store: ReturnType<typeof memoryStore>,
+): ContentObjectBucket {
+  return {
+    head: (key) => {
+      const object = store.objects.get(key);
+      return Promise.resolve(
+        object === undefined
+          ? null
+          : {
+              size: object.bytes.byteLength,
+              checksums:
+                object.digest === null
+                  ? {}
+                  : {
+                      sha256: Uint8Array.from(
+                        object.digest.slice("sha256:".length).match(/../gu) ??
+                          [],
+                        (pair) => Number.parseInt(pair, 16),
+                      ).buffer,
+                    },
+            },
+      );
+    },
+    async put(key, value, { sha256 }) {
+      const bytes =
+        value instanceof Uint8Array
+          ? value
+          : new Uint8Array(await new Response(value).arrayBuffer());
+      const digest = digestOf(bytes);
+      if (digest !== `sha256:${sha256}`) throw new Error("Checksum mismatch");
+      store.objects.set(key, { bytes, digest });
+      return null;
+    },
+  };
+}
+
+/** What the Computer's builder uploads through the egress before its manifest. */
+async function upload(
+  store: ReturnType<typeof memoryStore>,
+  output: BuildOutput = built,
+) {
+  for (const object of stageBuildOutput(output).objects)
+    expect(
+      await putContentObject(
+        bucketOver(store),
+        { digest: object.digest, byteLength: object.bytes.byteLength },
+        new Response(object.bytes).body,
+        "application/octet-stream",
+      ),
+    ).toBe("stored");
+}
+
 function fixture(
   simulate: (job: { jobId: string; command: string }) => Promise<number>,
+  source: ReturnType<typeof normalizeAppPublisherRecipe> = normalized,
+  templates: OysterAppBuildOptions["templates"] = {
+    read: () => Promise.resolve(null),
+  },
+  /** The output whose objects the builder uploads before it reports. */
+  uploaded: BuildOutput | null = built,
 ) {
-  const bucket = memoryBucket();
-  const store: ArtifactStore = {
-    async get(artifactRef: ArtifactRef) {
-      const object = await bucket.get(artifactRef);
-      return object === null
-        ? null
-        : new Uint8Array(await object.arrayBuffer());
-    },
-    put: () => Promise.reject(new Error("Builds write through the R2 writer")),
-  };
+  const store = memoryStore();
   const port: OysterBuildComputer = {
     async runBuild(input) {
+      if (uploaded !== null) await upload(store, uploaded);
       return { output: { exitCode: await simulate(input) } };
     },
   };
@@ -186,15 +243,18 @@ function fixture(
     owner: fromNodeSqlite(new DatabaseSync(":memory:")),
     tenantId: "tenant-1",
     computer: { name: "workspace", objectId: computerObjectId, port },
-    bucket,
     artifacts: store,
+    templates,
   });
   builds.registerSource({
     appId: parseAppId(appId),
-    installationId: "bonsai",
-    repository: "my-fixture",
-    recipe: normalized.recipe,
-    buildRecipeDigest: normalized.buildRecipeDigest,
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: source.recipe,
+    buildRecipeDigest: source.buildRecipeDigest,
   });
   return { builds, store };
 }
@@ -252,6 +312,20 @@ it("builds a registered source's exact commit on the Computer into a verified Re
     expect(admitted).not.toBeNull();
     expect(builds.admitBuild(jobId, "another-computer")).toBeNull();
     const credentialId = admitted?.credentialId ?? "";
+    // Object uploads: this job's grant on this Computer, bounded by its recipe.
+    expect(
+      await builds.admitObjectUpload(jobId, computerObjectId, grantOf(command)),
+    ).toEqual({ maxObjectBytes: assets.maxObjectBytes * 2 });
+    expect(
+      await builds.admitObjectUpload(jobId, computerObjectId, "forged"),
+    ).toBeNull();
+    expect(
+      await builds.admitObjectUpload(
+        jobId,
+        "another-computer",
+        grantOf(command),
+      ),
+    ).toBeNull();
     // A wrong grant or a candidate for another commit is refused.
     expect(
       (await builds.submitCandidate(jobId, candidate, "forged", credentialId))
@@ -310,7 +384,7 @@ it("builds a registered source's exact commit on the Computer into a verified Re
   ).toBeNull();
 }, 60_000);
 
-it("records the built Release in the bucket as an installable, verified Release", async () => {
+it("records the built Release in the artifact store as an installable, verified Release", async () => {
   const { builds, store } = fixture(async ({ jobId, command }) => {
     const credentialId =
       builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
@@ -342,6 +416,136 @@ it("records the built Release in the bucket as an installable, verified Release"
   expect(verified.ui?.kind).toBe("assets");
 }, 60_000);
 
+/** Run one build that submits the shared manifest and settles on its artifact report. */
+async function buildWith(
+  prepare: (store: ReturnType<typeof memoryStore>) => void,
+  uploaded: BuildOutput | null = built,
+) {
+  const { builds, store } = fixture(
+    async ({ jobId, command }) => {
+      const credentialId =
+        builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
+      await builds.submitCandidate(
+        jobId,
+        candidate,
+        grantOf(command),
+        credentialId,
+      );
+      builds.record({
+        kind: "build-artifact",
+        jobId,
+        credentialId,
+        digest: `sha256:${"a".repeat(64)}`,
+        bytes: 1,
+      });
+      return 0;
+    },
+    normalized,
+    undefined,
+    uploaded,
+  );
+  prepare(store);
+  const { run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "o",
+  });
+  return { done: await run(), store };
+}
+
+function firstAsset() {
+  if (built.kind === "backend" || built.ui.content.kind !== "assets")
+    throw new Error("The fixture builds an asset UI");
+  const [asset] = built.ui.content.assets;
+  if (asset === undefined) throw new Error("The fixture builds one asset");
+  return {
+    artifactRef: parseArtifactRef(
+      `artifact:sha256-${digestOf(asset.bytes).slice("sha256:".length)}`,
+    ),
+    asset,
+  };
+}
+
+it("shares an object a packed upload already stored, as one representation", async () => {
+  const { artifactRef, asset } = firstAsset();
+  const { done, store } = await buildWith((memory) => {
+    memory.objects.set(artifactRef, {
+      bytes: asset.bytes.slice(),
+      digest: null,
+    });
+  });
+  expect(done.status).toBe("succeeded");
+  if (done.release === null) throw new Error("The build recorded no Release");
+  expect((await verifyRelease(store, done.release)).ui?.kind).toBe("assets");
+});
+
+it("fails a manifest whose object was never uploaded", async () => {
+  const { done, store } = await buildWith(() => undefined, null);
+  expect(done.status).toBe("failed");
+  expect(done.release).toBeNull();
+  // Nothing was written for it: no asset manifest, no root.
+  expect(store.objects.size).toBe(0);
+});
+
+it("fails a manifest whose stored object has another size or an unverified digest", async () => {
+  const { artifactRef, asset } = firstAsset();
+  // Bytes some other writer left at the address, never checked by the store.
+  const unverified = await buildWith((memory) => {
+    memory.objects.set(artifactRef, {
+      bytes: new TextEncoder().encode("other"),
+      digest: null,
+    });
+  }, null);
+  expect(unverified.done.status).toBe("failed");
+  expect(unverified.done.release).toBeNull();
+  const resized = await buildWith((memory) => {
+    memory.objects.set(artifactRef, {
+      bytes: asset.bytes.slice(1),
+      digest: digestOf(asset.bytes),
+    });
+  }, null);
+  expect(resized.done.status).toBe("failed");
+  expect(resized.done.release).toBeNull();
+});
+
+it("refuses an uploaded object whose bytes are not its digest, keeping a verified one", async () => {
+  const store = memoryStore();
+  const { asset } = firstAsset();
+  const named = {
+    digest: digestOf(asset.bytes),
+    byteLength: asset.bytes.byteLength,
+  };
+  expect(
+    await putContentObject(
+      bucketOver(store),
+      named,
+      new Response(new TextEncoder().encode("forged")).body,
+      "application/octet-stream",
+    ),
+  ).toBe("refused");
+  expect(store.objects.size).toBe(0);
+  expect(
+    await putContentObject(
+      bucketOver(store),
+      named,
+      new Response(asset.bytes).body,
+      "application/octet-stream",
+    ),
+  ).toBe("stored");
+  // Write-once: the verified object is kept; another body is read through
+  // and discarded (cancelling it would reset the uploader's connection).
+  const before = store.objects.get(contentObjectRef(named.digest));
+  expect(
+    await putContentObject(
+      bucketOver(store),
+      named,
+      new Response(asset.bytes).body,
+      "application/octet-stream",
+    ),
+  ).toBe("stored");
+  expect(store.objects.get(contentObjectRef(named.digest))).toBe(before);
+});
+
 it("fails a build whose Computer exits without a Release", async () => {
   const { builds } = fixture(() => Promise.resolve(1));
   const { run } = await builds.start({
@@ -354,6 +558,213 @@ it("fails a build whose Computer exits without a Release", async () => {
   expect(done.release).toBeNull();
 });
 
+/** Two build owners over one durable store, as a Durable Object restart
+ * leaves them: the first started the job, the second serves the reports. */
+function restartedOwners(clock: { now: number }) {
+  const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
+  const store = memoryStore();
+  const commands: string[] = [];
+  const create = () =>
+    createOysterAppBuilds({
+      owner,
+      tenantId: "tenant-1",
+      now: () => clock.now,
+      computer: {
+        name: "workspace",
+        objectId: computerObjectId,
+        // The Computer keeps building after the owner that called it is gone.
+        port: {
+          runBuild: ({ command }) => {
+            commands.push(command);
+            return new Promise(() => undefined);
+          },
+        },
+      },
+      artifacts: store,
+      templates: { read: () => Promise.resolve(null) },
+    });
+  return { create, store, commands };
+}
+
+it("completes a build from the Computer's reports after its owner restarted mid-run", async () => {
+  // Live: the registry Durable Object restarted while Tourtois built; the
+  // Computer kept building and its object uploads must still be admitted.
+  const clock = { now: Date.now() };
+  const { create, store, commands } = restartedOwners(clock);
+  const before = create();
+  before.registerSource({
+    appId: parseAppId(appId),
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
+  });
+  const { build, run } = await before.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  void run();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const [command = ""] = commands;
+  const after = create();
+  expect(after.read(build.jobId)?.status).toBe("running");
+  const credentialId =
+    after.admitBuild(build.jobId, computerObjectId)?.credentialId ?? "";
+  expect(credentialId).not.toBe("");
+  expect(
+    await after.admitObjectUpload(
+      build.jobId,
+      computerObjectId,
+      grantOf(command),
+    ),
+  ).not.toBeNull();
+  await upload(store);
+  expect(
+    (
+      await after.submitCandidate(
+        build.jobId,
+        received(built, normalized),
+        grantOf(command),
+        credentialId,
+      )
+    ).status,
+  ).toBe(200);
+  after.record({
+    kind: "build-status",
+    jobId: build.jobId,
+    credentialId,
+    status: "succeeded",
+    detail: null,
+  });
+  const done = after.read(build.jobId);
+  expect(done?.status).toBe("succeeded");
+  expect(done?.release).not.toBeNull();
+});
+
+it("keeps a build running when the Computer loses its result, and completes it from the reports", async () => {
+  // Live: Prints's build kept running after the Computer's connection to its
+  // container dropped; reading that unknown outcome as "exited with null"
+  // failed the job and refused the build's own object uploads.
+  const store = memoryStore();
+  let command = "";
+  const builds = createOysterAppBuilds({
+    owner: fromNodeSqlite(new DatabaseSync(":memory:")),
+    tenantId: "tenant-1",
+    computer: {
+      name: "workspace",
+      objectId: computerObjectId,
+      port: {
+        runBuild: (input) => {
+          command = input.command;
+          return Promise.resolve({ output: null });
+        },
+      },
+    },
+    artifacts: store,
+    templates: { read: () => Promise.resolve(null) },
+  });
+  builds.registerSource({
+    appId: parseAppId(appId),
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
+  });
+  const { build, run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  expect((await run()).status).toBe("running");
+  const credentialId =
+    builds.admitBuild(build.jobId, computerObjectId)?.credentialId ?? "";
+  expect(
+    await builds.admitObjectUpload(
+      build.jobId,
+      computerObjectId,
+      grantOf(command),
+    ),
+  ).not.toBeNull();
+  await upload(store);
+  expect(
+    (
+      await builds.submitCandidate(
+        build.jobId,
+        received(built, normalized),
+        grantOf(command),
+        credentialId,
+      )
+    ).status,
+  ).toBe(200);
+  builds.record({
+    kind: "build-status",
+    jobId: build.jobId,
+    credentialId,
+    status: "succeeded",
+    detail: null,
+  });
+  expect(builds.read(build.jobId)?.status).toBe("succeeded");
+});
+
+it("fails a build that reaches its expiry without a result, and refuses its late reports", async () => {
+  const clock = { now: Date.now() };
+  const { create, commands } = restartedOwners(clock);
+  const before = create();
+  before.registerSource({
+    appId: parseAppId(appId),
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
+  });
+  const { build, run } = await before.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  void run();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const credentialId =
+    before.admitBuild(build.jobId, computerObjectId)?.credentialId ?? "";
+  const after = create();
+  expect(after.read(build.jobId)?.status).toBe("running");
+  // Past the build timeout and the job's grace, no result can arrive.
+  clock.now += oysterAppBuildTimeoutMs + 5 * 60_000;
+  expect(after.read(build.jobId)).toMatchObject({
+    status: "failed",
+    detail: "Build expired without a result",
+    release: null,
+  });
+  expect(after.admitBuild(build.jobId, computerObjectId)).toBeNull();
+  expect(
+    (
+      await after.submitCandidate(
+        build.jobId,
+        received(built, normalized),
+        grantOf(commands[0] ?? ""),
+        credentialId,
+      )
+    ).status,
+  ).toBe(403);
+  // A fresh build of the same commit can start.
+  const retried = await after.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  expect(retried.build.status).toBe("running");
+});
+
 it("refuses a build for an App without a registered source or with a mismatched recipe digest", async () => {
   const { builds } = fixture(() => Promise.resolve(0));
   await expect(
@@ -362,10 +773,401 @@ it("refuses a build for an App without a registered source or with a mismatched 
   expect(() =>
     builds.registerSource({
       appId: parseAppId(appId),
-      installationId: "bonsai",
-      repository: "my-fixture",
+      location: {
+        kind: "installation",
+        installationId: "bonsai",
+        repository: "my-fixture",
+      },
       recipe: normalized.recipe,
       buildRecipeDigest: parseSha256Digest(`sha256:${"0".repeat(64)}`),
     }),
   ).toThrow("Build recipe digest does not match its recipe");
+});
+
+/** A Computer's manifest as the build egress receives it: serialized
+ * under the transport ceiling, then decoded by the manifest schema. */
+function received(
+  output: BuildOutput,
+  source: ReturnType<typeof normalizeAppPublisherRecipe>,
+): TeamAppCandidateManifest {
+  return Schema.decodeUnknownSync(teamAppCandidateManifestSchema, {
+    onExcessProperty: "error",
+  })(
+    JSON.parse(
+      encodeTeamAppCandidateManifest({
+        appId: candidate.appId,
+        output: stageBuildOutput(output).manifest,
+        provenance: {
+          ...candidate.provenance,
+          buildRecipeDigest: source.buildRecipeDigest,
+        },
+      }),
+    ),
+  );
+}
+
+/** Build under `recipe`, with the Computer uploading and submitting `output`. */
+async function submitUnder(
+  recipe: AppPublisherCoreConfigInput["recipe"],
+  output: BuildOutput,
+) {
+  const source = normalizeAppPublisherRecipe({ appId, recipe });
+  let submitted = 0;
+  const { builds, store } = fixture(
+    async ({ jobId, command }) => {
+      const credentialId =
+        builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
+      submitted = (
+        await builds.submitCandidate(
+          jobId,
+          received(output, source),
+          grantOf(command),
+          credentialId,
+        )
+      ).status;
+      if (submitted === 200)
+        builds.record({
+          kind: "build-status",
+          jobId,
+          credentialId,
+          status: "succeeded",
+          detail: null,
+        });
+      return 0;
+    },
+    source,
+    undefined,
+    output,
+  );
+  const { run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "o",
+  });
+  const done = await run();
+  return { submitted, done, store };
+}
+
+/** An over-policy manifest writes nothing beyond its uploaded objects and
+ * settles failed; the bound itself builds. */
+async function expectBound(
+  recipe: (limit: number) => AppPublisherCoreConfigInput["recipe"],
+  output: BuildOutput,
+  limit: number,
+) {
+  const over = await submitUnder(recipe(limit - 1), output);
+  expect(over.submitted).toBe(422);
+  expect(over.done.status).toBe("failed");
+  expect(over.done.release).toBeNull();
+  expect(over.store.objects.size).toBe(stageBuildOutput(output).objects.length);
+  const at = await submitUnder(recipe(limit), output);
+  expect(at.submitted).toBe(200);
+  expect(at.done.status).toBe("succeeded");
+  if (at.done.release === null)
+    throw new Error("The build recorded no Release");
+  await verifyRelease(at.store, at.done.release);
+}
+
+it("holds a submitted HTML document to its recipe's maxOutputBytes", async () => {
+  const bytes = new TextEncoder().encode(
+    "<!doctype html><title>Exactly this long</title>",
+  );
+  await expectBound(
+    (maxOutputBytes) => ({
+      entry: "bundle/index.html",
+      backend: null,
+      maxOutputBytes,
+    }),
+    {
+      kind: "ui",
+      ui: {
+        mediaType: "text/html; charset=utf-8",
+        content: { kind: "html", bytes },
+      },
+    },
+    bytes.byteLength,
+  );
+});
+
+it("holds a submitted backend to its recipe's maxOutputBytes", async () => {
+  const backend = {
+    runtime: { kind: "durable-facet", stateSchema: 1 },
+    compatibilityDate: "2026-09-04",
+    exportName: "Fixture",
+  } as const;
+  const bytes = new TextEncoder().encode(
+    Schema.encodeUnknownSync(backendJsonSchema)({
+      ...backend,
+      code: "export class Fixture {}",
+    }),
+  );
+  await expectBound(
+    (maxOutputBytes) => ({ entry: "backend.ts", backend, maxOutputBytes }),
+    { kind: "backend", backend: bytes },
+    bytes.byteLength,
+  );
+});
+
+it("holds submitted assets to their recipe's asset policy before writing a root", async () => {
+  const output = built;
+  if (output.kind === "backend" || output.ui.content.kind !== "assets")
+    throw new Error("The fixture builds an asset UI");
+  const largest = Math.max(
+    ...output.ui.content.assets.map((asset) => asset.bytes.byteLength),
+  );
+  await expectBound(
+    (maxObjectBytes) => ({
+      kind: "bundled-html",
+      entry: "bundle/index.html",
+      assets: { ...assets, maxObjectBytes },
+      assetBase: "./",
+      backend: null,
+      maxOutputBytes: assets.maxTotalBytes,
+    }),
+    output,
+    largest,
+  );
+});
+
+/** The App's published template as its build source, with one recorded seed. */
+function templateFixture(
+  simulate: Parameters<typeof fixture>[0],
+  recorded: Readonly<{ revision: string; digest: string }> = {
+    revision: sourceRevision,
+    digest: normalized.buildRecipeDigest,
+  },
+) {
+  const reads: string[] = [];
+  const built = fixture(simulate, normalized, {
+    read: (readAppId, revision) => {
+      reads.push(revision);
+      return Promise.resolve(
+        readAppId === appId && revision === recorded.revision
+          ? {
+              appId: parseAppId(appId),
+              repository: "template-fixture",
+              sourceRevision: parseSourceRevision(`git:${"e".repeat(40)}`),
+              sourceTreeDigest: parseSha256Digest(`sha256:${"f".repeat(64)}`),
+              seedRevision: parseSourceRevision(revision),
+              recipe: normalized.recipe,
+              buildRecipeDigest: parseSha256Digest(recorded.digest),
+            }
+          : null,
+      );
+    },
+  });
+  built.builds.registerSource({
+    appId: parseAppId(appId),
+    location: { kind: "template" },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
+  });
+  return { ...built, reads };
+}
+
+it("builds a template's recorded seed revision, cloning only that template while the job lives", async () => {
+  const { builds, reads } = templateFixture(async ({ jobId, command }) => {
+    expect(command).toContain(
+      "TEAM_BUILD_REMOTE=https://git.team.internal/template-fixture.git",
+    );
+    expect(
+      builds.admitTemplateClone(computerObjectId, "template-fixture"),
+    ).toBe(true);
+    expect(
+      builds.admitTemplateClone("another-computer", "template-fixture"),
+    ).toBe(false);
+    expect(builds.admitTemplateClone(computerObjectId, "template-other")).toBe(
+      false,
+    );
+    // A template job grants no Git door pass.
+    expect(
+      builds.gitPassFor(computerObjectId, {
+        installationId: "bonsai",
+        repository: "template-fixture",
+        scope: "read",
+      }),
+    ).toBeNull();
+    const credentialId =
+      builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
+    expect(
+      (
+        await builds.submitCandidate(
+          jobId,
+          candidate,
+          grantOf(command),
+          credentialId,
+        )
+      ).status,
+    ).toBe(200);
+    builds.record({
+      kind: "build-status",
+      jobId,
+      credentialId,
+      status: "succeeded",
+      detail: null,
+    });
+    return 0;
+  });
+  const { run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  const done = await run();
+  expect(reads).toEqual([sourceRevision]);
+  expect(done.status).toBe("succeeded");
+  expect(done.release?.artifact.provenance.sourceRevision).toBe(sourceRevision);
+  // The template clone ends with the job.
+  expect(builds.admitTemplateClone(computerObjectId, "template-fixture")).toBe(
+    false,
+  );
+}, 60_000);
+
+it("refuses a template build at a revision that is not a seed of its pinned recipe", async () => {
+  const unseeded = templateFixture(() => Promise.resolve(0));
+  await expect(
+    unseeded.builds.start({
+      appId,
+      sourceRevision: `git:${"d".repeat(40)}`,
+      requestedBy: "o",
+    }),
+  ).rejects.toThrow("Revision is not a seed of this App's template");
+  const otherRecipe = templateFixture(() => Promise.resolve(0), {
+    revision: sourceRevision,
+    digest: `sha256:${"0".repeat(64)}`,
+  });
+  await expect(
+    otherRecipe.builds.start({ appId, sourceRevision, requestedBy: "o" }),
+  ).rejects.toThrow("Revision is not a seed of this App's template");
+});
+
+/** Storage as recorded before the location union: an installation source
+ * and a settled job naming its installation repository in two columns. */
+function retainedOwner() {
+  const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
+  owner.sql.exec(
+    "CREATE TABLE oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",
+  );
+  owner.sql.exec(
+    `CREATE TABLE oyster_build_jobs (
+      job_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, release_id TEXT NOT NULL UNIQUE,
+      source_revision TEXT NOT NULL, installation_id TEXT NOT NULL, repository TEXT NOT NULL,
+      recipe TEXT NOT NULL, recipe_digest TEXT NOT NULL, requested_by TEXT NOT NULL,
+      credential_id TEXT NOT NULL, upload_grant_digest TEXT NOT NULL,
+      status TEXT NOT NULL, artifact_digest TEXT, artifact_bytes INTEGER, detail TEXT,
+      issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, executable_until INTEGER NOT NULL
+    ) STRICT`,
+  );
+  owner.sql.exec(
+    `INSERT INTO oyster_build_jobs VALUES(?, ?, ?, ?, 'bonsai', 'my-fixture', ?, ?, 'o', ?, ?,
+      'failed', NULL, NULL, 'Build exited with 1', 1, 2, 0)`,
+    `build_${"1".repeat(32)}`,
+    appId,
+    "rel_old",
+    sourceRevision,
+    Schema.encodeUnknownSync(Schema.fromJsonString(capturedPinnedRecipeSchema))(
+      normalized.recipe,
+    ),
+    normalized.buildRecipeDigest,
+    "c".repeat(64),
+    "d".repeat(64),
+  );
+  owner.sql.exec(
+    "INSERT INTO oyster_build_sources(app_id, source) VALUES(?, ?)",
+    appId,
+    JSON.stringify({
+      appId,
+      installationId: "bonsai",
+      repository: "my-fixture",
+      recipe: Schema.encodeUnknownSync(capturedPinnedRecipeSchema)(
+        normalized.recipe,
+      ),
+      buildRecipeDigest: normalized.buildRecipeDigest,
+    }),
+  );
+  return owner;
+}
+
+it("keeps retained facts unchanged when the conversion is interrupted, and retries", () => {
+  const owner = retainedOwner();
+  const facts = () => ({
+    sources: owner.sql.exec("SELECT * FROM oyster_build_sources").toArray(),
+    jobs: owner.sql.exec("SELECT * FROM oyster_build_jobs").toArray(),
+    tables: owner.sql
+      .exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .toArray(),
+  });
+  const before = facts();
+  // The storage fails mid-conversion, after the copy and before the swap.
+  let failed = false;
+  expect(() => {
+    migrateOysterAppBuilds({
+      sql: {
+        exec: (statement, ...bindings) => {
+          if (statement === "DROP TABLE oyster_build_jobs" && !failed) {
+            failed = true;
+            throw new Error("Storage interrupted");
+          }
+          return owner.sql.exec(statement, ...bindings);
+        },
+      },
+      transactionSync: (operation) => owner.transactionSync(operation),
+    });
+  }).toThrow("Storage interrupted");
+  expect(failed).toBe(true);
+  expect(facts()).toEqual(before);
+  migrateOysterAppBuilds(owner);
+  const [job] = owner.sql
+    .exec("SELECT job_id, status, location FROM oyster_build_jobs")
+    .toArray();
+  expect(job).toEqual({
+    job_id: `build_${"1".repeat(32)}`,
+    status: "failed",
+    location: JSON.stringify({
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    }),
+  });
+});
+
+it("carries an installation source and job recorded before the location union forward once", () => {
+  const owner = retainedOwner();
+  const builds = createOysterAppBuilds({
+    owner,
+    tenantId: "tenant-1",
+    computer: {
+      name: "workspace",
+      objectId: computerObjectId,
+      port: { runBuild: () => Promise.resolve({ output: null }) },
+    },
+    artifacts: memoryStore(),
+    templates: { read: () => Promise.resolve(null) },
+  });
+  expect(builds.readSource(appId)?.location).toEqual({
+    kind: "installation",
+    installationId: "bonsai",
+    repository: "my-fixture",
+  });
+  // The retained job keeps its facts under the one location column.
+  expect(builds.read(`build_${"1".repeat(32)}`)).toMatchObject({
+    status: "failed",
+    detail: "Build exited with 1",
+    sourceRevision,
+  });
+  const [row] = owner.sql
+    .exec("SELECT location FROM oyster_build_jobs")
+    .toArray();
+  expect(row).toEqual({
+    location: JSON.stringify({
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    }),
+  });
+  // Migrating again finds nothing left to carry.
+  migrateOysterAppBuilds(owner);
+  expect(
+    owner.sql.exec("SELECT * FROM oyster_build_jobs").toArray(),
+  ).toHaveLength(1);
 });

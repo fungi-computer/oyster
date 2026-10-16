@@ -5,8 +5,11 @@ export function repositoryEnvironment(): NodeJS.ProcessEnv {
   );
 }
 
-/** Git environment for one authenticated Artifacts fetch; caller validates token. */
-export function artifactsGitEnvironment(token: string): NodeJS.ProcessEnv {
+/** Git environment carrying host-held request headers (credentials) only in
+ * Git's own config environment: never argv, a URL or a trace. */
+export function authenticatedGitEnvironment(
+  headers: Readonly<Record<string, string>>,
+): NodeJS.ProcessEnv {
   const excludedEnvironmentNames = new Set([
     "GIT_CURL_VERBOSE",
     "CLOUDFLARE_API_TOKEN",
@@ -20,18 +23,34 @@ export function artifactsGitEnvironment(token: string): NodeJS.ProcessEnv {
         !name.startsWith("GIT_TRACE") && !excludedEnvironmentNames.has(name),
     ),
   );
+  for (const [name, value] of Object.entries(headers))
+    if (!/^[A-Za-z0-9-]+$/u.test(name) || /[\r\n\0]/u.test(value))
+      throw new Error("Git request header is invalid");
+  // An empty first value resets any inherited extra headers.
+  const config: (readonly [string, string])[] = [
+    ["http.extraHeader", ""],
+    ...Object.entries(headers).map(
+      ([name, value]) => ["http.extraHeader", `${name}: ${value}`] as const,
+    ),
+    ["http.followRedirects", "false"],
+  ];
   return {
     ...environment,
-    GIT_CONFIG_KEY_0: "http.extraHeader",
-    GIT_CONFIG_VALUE_0: "",
-    GIT_CONFIG_KEY_1: "http.extraHeader",
-    GIT_CONFIG_VALUE_1: `Authorization: Bearer ${token}`,
-    GIT_CONFIG_KEY_2: "http.followRedirects",
-    GIT_CONFIG_VALUE_2: "false",
-    GIT_CONFIG_COUNT: "3",
+    ...Object.fromEntries(
+      config.flatMap(([key, value], index) => [
+        [`GIT_CONFIG_KEY_${String(index)}`, key],
+        [`GIT_CONFIG_VALUE_${String(index)}`, value],
+      ]),
+    ),
+    GIT_CONFIG_COUNT: String(config.length),
     GIT_TRACE: "0",
     GIT_TRACE_CURL: "0",
   };
+}
+
+/** Git environment for one authenticated Artifacts fetch; caller validates token. */
+export function artifactsGitEnvironment(token: string): NodeJS.ProcessEnv {
+  return authenticatedGitEnvironment({ Authorization: `Bearer ${token}` });
 }
 
 /** Credential-free private route used by the hosted Publisher Git client. */

@@ -44,7 +44,7 @@ const apps = {
   inkcap: ["apps/inkcap/index.html", "Inkcap"],
   shed: ["apps/shed/index.html", "Shed"],
   prints: ["apps/prints/index.html", "Prints"],
-  workflows: ["apps/workflows/index.html", "Workflows"],
+  trellis: ["apps/trellis/index.html", "Trellis"],
 };
 const names = Object.keys(apps);
 const selected =

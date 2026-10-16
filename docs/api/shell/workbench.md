@@ -169,6 +169,25 @@ Re-exports [appOpenRequestSchema](../shell.md#appopenrequestschema)
 
 ---
 
+### teamComputerSchema
+
+Re-exports [teamComputerSchema](../shell.md#teamcomputerschema)
+
+---
+
+### TeamComputer
+
+Re-exports [TeamComputer](../shell.md#teamcomputer)
+
+---
+
+### teamComputerDirectorySchema
+
+Re-exports
+[teamComputerDirectorySchema](../shell.md#teamcomputerdirectoryschema)
+
+---
+
 ### TeamWorkbenchHostHandle
 
 Re-exports [TeamWorkbenchHostHandle](../shell.md#teamworkbenchhosthandle)

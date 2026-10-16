@@ -28,10 +28,15 @@ import {
   createLocalArtifactWriter,
   createLocalBuildExecutor,
   createLocalCommitSourceCapture,
+  normalizeAppPublisherRecipe,
   type AppPublisherCoreConfigInput,
   type SourceCapture,
 } from "./build.js";
-import { templateWriteInputSchema } from "./source/template-write.js";
+import {
+  templateSeedClaimSchema,
+  type TemplateSeedClaim,
+} from "./source/template-seed.js";
+import { pushTemplateSource } from "./source/template-push.js";
 import { sha256 } from "./release.js";
 
 /** One committed repository and its canonical App build recipe. */
@@ -222,9 +227,12 @@ export async function installRelease(
   });
 }
 
-/** Project one exact first-party commit's editable source and seed it into
- * an Oyster's own template, so `APPS.fork` can later fork it. The operator
- * owner key authenticates; no provider credential ever leaves this call. */
+/** Project one exact first-party commit's editable source, `git push` it to
+ * an Oyster's own template for that App, and claim the pushed head, so
+ * `APPS.fork` and Computer builds can later read it. The operator owner key
+ * authenticates both; it reaches Git only through its config environment and
+ * no provider credential ever leaves the Oyster. Answers the claim response:
+ * `{ kind: "recorded" | "existing", receipt }` on success. */
 export async function publishSource(
   input: Readonly<{
     appId: string;
@@ -252,22 +260,34 @@ export async function publishSource(
       }),
     ),
   );
-  const body = Schema.encodeUnknownSync(templateWriteInputSchema)({
+  const app = encodeURIComponent(input.appId);
+  const authorization = `Bearer ${input.key}`;
+  const { seedRevision } = await pushTemplateSource({
     appId: input.appId,
     sourceRevision: revision,
-    sourceTreeDigest: distribution.sourceTreeDigest,
-    recipe: input.recipe,
     files: distribution.files,
+    remote: new URL(`/api/apps/${app}/source.git`, input.url).href,
+    headers: { Authorization: authorization },
   });
-  return fetch(
-    new URL(`/api/apps/${encodeURIComponent(input.appId)}/source`, input.url),
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${input.key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+  const claim: TemplateSeedClaim = {
+    appId: distribution.appId,
+    sourceRevision: revision,
+    sourceTreeDigest: distribution.sourceTreeDigest,
+    seedRevision,
+    // The template pins the same captured recipe its forks build with.
+    recipe: normalizeAppPublisherRecipe({
+      appId: input.appId,
+      recipe: input.recipe,
+    }).recipe,
+  };
+  return fetch(new URL(`/api/apps/${app}/source`, input.url), {
+    method: "PUT",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify(
+      Schema.encodeUnknownSync(templateSeedClaimSchema)(claim),
+    ),
+  });
 }

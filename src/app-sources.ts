@@ -26,10 +26,8 @@ import {
   type PublisherTemplateSeedReceipt,
   type PublisherTemplateSeedReceipts,
 } from "./source/index.js";
-import {
-  seedPublisherTemplate,
-  type TemplateSourceTransport,
-} from "./source/template-write.js";
+import { smartHttpExchange } from "./git-door.js";
+import { parseAppId } from "@fungi.computer/puffball";
 
 /**
  * Oyster's own storage for App source templates, Team-owned fork
@@ -300,10 +298,10 @@ export function createOysterArtifactsRepositoryMetadataStore(
       }),
     );
   };
-  const read = async (
+  /** The active row alone; activation checks its own promotion with this. */
+  const readActive = (
     name: string,
   ): Promise<CloudflareArtifactsRepositoryMetadata | null> => {
-    if ((await readPending(name)) !== null) return null;
     const row = sql
       .exec(
         `SELECT repository_name, provider_id, default_branch, remote,
@@ -312,14 +310,21 @@ export function createOysterArtifactsRepositoryMetadataStore(
         name,
       )
       .toArray()[0];
-    return row === undefined
-      ? null
-      : metadataFromRow(
-          Schema.decodeUnknownSync(repositoryRowSchema, {
-            onExcessProperty: "error",
-          })(row),
-        );
+    return Promise.resolve(
+      row === undefined
+        ? null
+        : metadataFromRow(
+            Schema.decodeUnknownSync(repositoryRowSchema, {
+              onExcessProperty: "error",
+            })(row),
+          ),
+    );
   };
+  /** Public reads hide a repository while its initial token is pending. */
+  const read = async (
+    name: string,
+  ): Promise<CloudflareArtifactsRepositoryMetadata | null> =>
+    (await readPending(name)) === null ? readActive(name) : null;
   return Object.freeze({
     read,
     readPending,
@@ -370,7 +375,7 @@ export function createOysterArtifactsRepositoryMetadataStore(
         metadata.parentRepository,
         initialToken,
       );
-      const active = await read(metadata.name);
+      const active = await readActive(metadata.name);
       if (active === null || !sameMetadata(active, metadata))
         throw new Error("Oyster Artifacts metadata conflicts");
       sql.exec(
@@ -457,24 +462,55 @@ export async function exchangeOysterTemplateGit(
   });
 }
 
-/** Seed Oyster's own template source from the operator owner route, over the
- * durable receipts and the Artifacts composition for this Oyster. */
-export function publishOysterAppSource(
-  receipts: PublisherTemplateSeedReceipts,
+/** The operator's smart-HTTP door to one App's template repository: an
+ * ordinary `git push` (or the fetch before it) to
+ * `<base>/<suffix>` reaches `template-<app>` through the same admitted
+ * Artifacts exchange, which streams both bodies and holds every provider
+ * credential. An advertisement first opens the repository, so a fresh Oyster's
+ * first seed creates it. Admission (the owner) is the caller's. */
+export async function exchangeOysterTemplateSource(
   artifacts: Pick<Artifacts, "ensureRepository" | "exchangeGit">,
   rawAppId: string,
+  suffix: string,
   request: Request,
-) {
-  const transport: TemplateSourceTransport = {
-    ensureRepository: (name) => artifacts.ensureRepository(name),
-    exchangeTemplateGit: (repository, templateRequest) =>
-      exchangeOysterTemplateGit(
-        artifacts,
-        `https://git.team.internal/${repository}.git`,
-        repository,
-        templateRequest,
-        "write",
-      ),
+): Promise<Response> {
+  let appId: string;
+  try {
+    appId = parseAppId(rawAppId);
+  } catch {
+    return new Response("Not an App", { status: 404 });
+  }
+  const url = new URL(request.url);
+  const exchange = smartHttpExchange(request.method, url, suffix);
+  if (exchange === null)
+    return new Response("Not a git route", { status: 404 });
+  // The provider exchange carries no content coding; refuse rather than corrupt.
+  if (request.headers.has("content-encoding"))
+    return new Response("Compressed Git requests are not supported", {
+      status: 400,
+    });
+  const repository = templateRepositoryForApp(appId);
+  if (exchange.advertise) await artifacts.ensureRepository(repository);
+  const headers = new Headers();
+  for (const name of ["content-type", "accept", "git-protocol"]) {
+    const value = request.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  const init: RequestInit = {
+    method: request.method,
+    headers,
+    body: exchange.advertise ? null : request.body,
+    signal: request.signal,
   };
-  return seedPublisherTemplate(receipts, transport, rawAppId, request);
+  if (init.body !== null) Object.assign(init, { duplex: "half" });
+  return exchangeOysterTemplateGit(
+    artifacts,
+    `https://git.team.internal/${repository}.git`,
+    repository,
+    new Request(
+      `https://git.team.internal/${repository}.git/${suffix}${url.search}`,
+      init,
+    ),
+    "write",
+  );
 }

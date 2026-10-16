@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { base64url } from "jose";
 import type { Sha256Digest } from "@fungi.computer/puffball";
 import type { PinnedRecipe } from "./effect.js";
+import { workspaceBuildPolicy } from "./build-policy.js";
 
 /** The secret-free Team job; no provider token enters publication. */
 const jobSchema = Schema.Struct({
@@ -207,6 +208,8 @@ export function teamAppBuildCommand(
   const encoded = base64url.encode(
     JSON.stringify({
       uploadGrant,
+      // A builder that predates this policy refuses the whole request.
+      buildPolicy: workspaceBuildPolicy,
       appId: configuration.appId,
       sourceRevision: configuration.sourceRevision,
       recipe: configuration.source.recipe,
@@ -222,7 +225,10 @@ export function teamAppBuildCommand(
     `trap 'rm -rf "$work"' EXIT`,
     'mkdir "$work/tmp"',
     'export TMPDIR="$work/tmp"',
+    "clone_started=$(date +%s%3N)",
     'git clone -q --no-checkout -- "$TEAM_BUILD_REMOTE" "$work/source" 2>/dev/null',
-    `node /opt/fungi/team-candidate-builder.mjs '${encoded}' "$work/source" "$work/candidate.json"`,
+    // The builder reports each phase's duration with its outcome.
+    "export TEAM_BUILD_CLONE_MS=$(( $(date +%s%3N) - clone_started ))",
+    `node /opt/fungi/team-candidate-builder.mjs '${encoded}' "$work/source" "$work/candidate"`,
   ].join("\n");
 }

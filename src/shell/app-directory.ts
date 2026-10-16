@@ -106,7 +106,6 @@ const appComputerOperationSchema = z.enum([
   "computer.writeFile",
   "computer.execute",
 ]);
-export type AppComputerOperation = z.output<typeof appComputerOperationSchema>;
 
 const selectedComputerPermissionSchema = z.strictObject({
   kind: z.literal("selected-computers"),
@@ -121,10 +120,17 @@ const allTeamComputersPermissionSchema = z.strictObject({
   kind: z.literal("all-team-computers"),
   operations: z.array(appComputerOperationSchema),
 });
+/** App Computer permissions limited to selected Computers or the Team's Computers. */
 export const appComputerPermissionSchema = z.discriminatedUnion("kind", [
   selectedComputerPermissionSchema,
   allTeamComputersPermissionSchema,
 ]);
+/** One operation an App may request for a Computer. */
+export type AppComputerOperation = Extract<
+  z.output<typeof appComputerPermissionSchema>,
+  { kind: "all-team-computers" }
+>["operations"][number];
+/** Decoded Computer permission scope attached to an App directory entry. */
 export type AppComputerPermission = z.output<
   typeof appComputerPermissionSchema
 >;
@@ -135,6 +141,7 @@ const agentSessionOperationSchema = z.enum([
   "agent.send",
   "agent.manage",
 ]);
+/** Agent directory and session operations an App may request from its host. */
 export const appAgentPermissionSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("all-team-agents"),
@@ -152,21 +159,26 @@ export const appAgentPermissionSchema = z.discriminatedUnion("kind", [
     ),
   }),
 ]);
+/** Decoded Agent permission scope attached to an App directory entry. */
 export type AppAgentPermission = z.output<typeof appAgentPermissionSchema>;
 
+/** Whether an App may use language-model and media generation services. */
 export const appGenerationPermissionsSchema = z.strictObject({
   llm: z.boolean(),
   media: z.boolean(),
 });
+/** Decoded generation permissions attached to an App directory entry. */
 export type AppGenerationPermissions = z.output<
   typeof appGenerationPermissionsSchema
 >;
 
+/** Whether an App may browse, buy, or install free marketplace entries. */
 export const appMarketplacePermissionsSchema = z.strictObject({
   browse: z.boolean(),
   purchase: z.boolean(),
   installFree: z.boolean(),
 });
+/** Decoded marketplace permissions attached to an App directory entry. */
 export type AppMarketplacePermissions = z.output<
   typeof appMarketplacePermissionsSchema
 >;
@@ -211,6 +223,7 @@ export const appDirectoryResponseSchema = z.strictObject({
   roles: z.record(z.string().min(1), appRoleSelectionSchema),
 });
 
+/** The host-resolved Team App directory and its permission projections. */
 export type AppDirectory = z.output<typeof appDirectoryResponseSchema>;
 
 /** Desktop metadata is a method result, distinct from the full Release Gill declaration. */

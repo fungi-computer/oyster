@@ -1,39 +1,185 @@
 # Oyster (`@fungi.computer/oyster`)
 
-Oyster is an open-source host for Apps: deploy one Worker to your Cloudflare
-account and install Apps into it, such as a git platform, workflows, terminals,
-files and agents, each built from a git commit and each with its own database.
+Oyster puts a desktop of Apps on your own Cloudflare account: a git platform,
+agents, a terminal, an editor, workflows and image generation, each built from a
+git commit on your own Computer.
 
-![Bonsai running on Oyster: three agents work in their own forks while the network graph shows their commits folding back into main](docs/media/bonsai-network.png)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/desktop-light.png">
+  <img alt="The Tourtois desktop on Oyster with three Apps tiled: Trellis editing the Bonsai checks graph, Bonsai drawing a repository's network of agent forks, and Shed's terminal on the Computer" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/desktop-dark.png">
+</picture>
 
-Install it from npm as `@fungi.computer/oyster`, copy one example Worker and
-deploy. Try a live Oyster first at <https://oyster.shiit.app/>: it runs Bonsai,
-Fungi's git platform for many agents at once, and
+Deploy one Worker, run `npx oyster install-apps`, and your Oyster builds seven
+Apps on its own Computer and opens on the Tourtois desktop. A live Oyster runs
+at <https://oyster.shiit.app/>, and
 [CONTEST.md](https://github.com/fungi-computer/oyster/blob/main/CONTEST.md) is
-the five-minute tour and the comparison with GitHub.
+the five-minute tour of it.
 
-An Oyster is one Worker. Every App installed on it is an immutable Release built
-from an exact git commit. Its UI runs in a sandboxed frame, its backend runs in
-its own Durable Object with its own SQLite, and it receives only the bindings it
-declares. Agents reach every installed App through one MCP endpoint. The same
-Worker runs on Cloudflare Workers and on celld, a Workers-compatible runtime you
-can host yourself.
+## What you get
 
-The live demo opens into Tourtois, a desktop with a launcher, windows and
-settings, and runs Fungi's own App set:
+`oyster install-apps` installs these Apps. Each one lives in its own repository
+under [github.com/fungi-computer](https://github.com/fungi-computer), and each
+installed App is also a template your agents can fork and rebuild on the same
+Computer.
 
-- **Bonsai** hosts git repositories on Cloudflare Artifacts. Each agent gets its
-  own fork and pushes with ordinary `git`.
-- **Workflows** runs typed graphs of App methods on Cloudflare Workflows,
-  started by a push, a webhook or a schedule.
-- **Shed** opens a terminal on a Computer, a Linux workspace in a Cloudflare
-  Container.
-- **Inkcap** edits files on a Computer, **Grove** holds conversations with
-  agents and **Prints** generates images and video with Workers AI.
+- [Tourtois](https://github.com/fungi-computer/tourtois) is the desktop: a
+  launcher, tiled or floating windows, menus and settings.
+- [Bonsai](https://github.com/fungi-computer/bonsai) hosts git repositories on
+  Cloudflare Artifacts. Each agent pushes to its own fork with ordinary `git`,
+  and the network graph shows the forks folding back into main.
+- [Grove](https://github.com/fungi-computer/grove) holds conversations with
+  agents that call every installed App as code.
+- [Shed](https://github.com/fungi-computer/shed) opens a terminal on the
+  Computer, with its ports and processes.
+- [Inkcap](https://github.com/fungi-computer/inkcap) edits the Computer's files.
+- [Trellis](https://github.com/fungi-computer/trellis) runs typed graphs of App
+  methods on Cloudflare Workflows, started by a push, a webhook or a schedule.
+- [Prints](https://github.com/fungi-computer/prints) generates images and video
+  with Workers AI.
 
-Those Apps belong to [Fungi](https://fungi.computer/) and are not part of this
-package. Your own Oyster installs the Apps you pack from your own git
-repositories.
+<table>
+  <tr>
+    <td width="50%"><img alt="Bonsai's koi-pond repository: a network graph with one lane per agent fork, its three open Changes and the live activity feed" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/bonsai-koi-pond.png"><br><b>Bonsai</b>: a repository three agents build together</td>
+    <td width="50%"><img alt="Grove: the conversation list beside a finished conversation in which the agent ran three scripts against Bonsai and listed the repositories with open changes" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/grove-conversation.png"><br><b>Grove</b>: an agent answers by calling Bonsai</td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="Trellis editor with the Bonsai checks graph: Workflow input, a Change script node and a Bonsai Checks.report step, between the Palette and the Inspector" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/workflows-editor.png"><br><b>Trellis</b>: a graph of App methods</td>
+    <td width="50%"><img alt="Inkcap with the koi-pond workspace in the explorer and src/fish.ts open beside README.md" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/inkcap-editor.png"><br><b>Inkcap</b>: the Computer's files</td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="The Tourtois desktop: Grove's inbox of agent conversations and a launcher for Bonsai, Grove, Inkcap, Prints, Shed and Trellis" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/tourtois-desktop.png"><br><b>Tourtois</b>: the inbox and the launcher</td>
+    <td width="50%"><img alt="Prints: a gallery of five generated images, two koi ponds, a knight dunking a basketball, an elf holding a basketball and a sunrise over water, above the prompt bar" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/prints-gallery.png"><br><b>Prints</b>: images from Workers AI</td>
+  </tr>
+</table>
+
+Shed is in the desktop picture at the top. Oyster itself is the host underneath:
+git through Cloudflare Artifacts, a Computer (a Linux workspace in a Cloudflare
+Container) that builds Apps and runs their terminals and files, Agents on
+Workers AI, Workflows and media.
+
+## Quick start: deploy your own Oyster
+
+You need:
+
+- a Cloudflare account on Workers Paid, with Containers, Artifacts, Workers AI
+  and Workflows enabled;
+- Docker, which Wrangler uses to build the Computer's container image;
+- Node 24, pnpm (npm works the same way) and Git.
+
+The first install takes about 15 to 20 minutes, most of it the seven App builds
+on the Computer, one after another. Start a project, add Oyster, its Computer
+and Wrangler, and copy the example Worker out of the package:
+
+```sh
+mkdir my-oyster && cd my-oyster
+pnpm add @fungi.computer/oyster @fungi.computer/computer
+pnpm add -D wrangler
+cp node_modules/@fungi.computer/oyster/examples/standalone/{worker.ts,wrangler.jsonc} .
+```
+
+pnpm 11 may end an `add` with `ERR_PNPM_IGNORED_BUILDS` for packages such as
+`esbuild` or `workerd`; they are installed, and Oyster needs none of their
+install scripts.
+
+`worker.ts` re-exports the whole host:
+
+```ts title="worker.ts"
+export * from "@fungi.computer/oyster/standalone";
+export { default } from "@fungi.computer/oyster/standalone";
+```
+
+`wrangler.jsonc` names the Worker `oyster`, its Release bucket `oyster-releases`
+and its Artifacts namespace `oyster`, and runs the Computer from
+`node_modules/@fungi.computer/computer/Dockerfile`. Create the bucket and
+deploy. Your Worker's address is `https://oyster.<your-subdomain>.workers.dev`;
+your workers.dev subdomain is on the Workers & Pages overview in the Cloudflare
+dashboard.
+
+```sh
+npx wrangler login
+npx wrangler r2 bucket create oyster-releases
+export OYSTER_URL=https://oyster.<your-subdomain>.workers.dev
+npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
+```
+
+Set `OYSTER_ORIGIN` in `wrangler.jsonc` instead if you deploy again later; every
+deploy replaces the Worker's variables.
+
+Choose an owner key and store it as a secret:
+
+```sh
+export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
+printf '%s' "$OYSTER_OWNER_KEY" | npx wrangler secret put OYSTER_OWNER_KEY
+```
+
+### Install the starter Apps
+
+```sh
+npx oyster install-apps
+```
+
+The installer clones each App's repository, seeds it on your Oyster with
+`git push`, and builds the Apps on your Computer, Tourtois first, installing
+each as its build succeeds. It prints a line per step and then where the time
+went:
+
+```
+tourtois source recorded at git:…
+…
+Building tourtois on the Computer (build_…)
+Installed tourtois from its build build_…
+Building bonsai on the Computer (build_…)
+…
+Installed grove from its build build_…
+
+App	fetch	seed	queue	build	clone	deps	compile	upload	install
+tourtois	…
+…
+Installed 7 Apps in …. Open https://oyster.<your-subdomain>.workers.dev/ to use Tourtois and the installed Apps.
+```
+
+Open `$OYSTER_URL/login` and sign in with the owner key: your Oyster opens on
+the Tourtois desktop with all seven Apps, as in the pictures above.
+
+Run `install-apps` again to update them; a replaced Release keeps each App's
+data. `--ref` picks a branch or tag of the App repositories, `--repositories`
+another host for them, and `--timings <file>` writes the timing table as JSON.
+Builds run two at a time on the example's `standard-4` Computer (12 GiB).
+`--concurrency 1` runs them one at a time and `--concurrency 3` three at once.
+
+### Git, keys and MCP
+
+People and agents `clone`, `fetch` and `push` App repositories with ordinary
+`git` at `/git/<installation>/<repo>.git`. Give each agent its own key; Oyster
+shows each key once:
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $OYSTER_OWNER_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"morel","grants":[{"capability":"apps.use","targets":{"kind":"all"}}]}' \
+  $OYSTER_URL/api/keys
+```
+
+The answer's `plaintext` field, starting `oyk_`, signs in to `git` and to
+`/mcp`. That key can read and write every App on this Oyster, including Apps
+installed later, without asking each time; anyone holding it can act as the
+owner in those Apps, and revoking it stops it immediately.
+
+Any MCP client can call every installed App with a key. For Claude Code:
+
+```sh
+claude mcp add --transport http oyster "$OYSTER_URL/mcp" \
+  --header "Authorization: Bearer <the agent's key>"
+```
+
+### What the live demo runs
+
+<https://oyster.shiit.app/> runs this same host with the same seven Apps. Its
+`koi-pond` repository is a small canvas game three coding agents built together,
+each in its own fork with its own key, with Bonsai drawing a lane per agent as
+they pushed and merged.
+[CONTEST.md](https://github.com/fungi-computer/oyster/blob/main/CONTEST.md)
+tours it.
 
 ## Part of Fungi
 
@@ -154,7 +300,7 @@ that an agent discovers and calls from code; a dotted method is a nested
 property, e.g. `env.BONSAI.repos.list({})`. Writes need explicit approval. Each
 agent has its own key, so every push and call is attributed.
 
-**Workflows compose Apps.** Workflows stores each graph in git, so a commit is a
+**Workflows compose Apps.** Trellis stores each graph in git, so a commit is a
 version. Each graph compiles to a plan with a digest and runs on Cloudflare
 Workflows. Steps call App methods and can run a sandboxed Code node or a step in
 a Computer.
@@ -172,7 +318,14 @@ anything you can.
 
 ## Architecture
 
-![Oyster architecture: one Worker routes browsers, git clients and MCP agents to a registry, per-App Durable Objects, the git door and the Tourtois home, over R2, Artifacts and platform bindings](docs/media/architecture.png)
+An Oyster is one Worker. Every App installed on it is an immutable Release built
+from an exact git commit. Its UI runs in a sandboxed frame, its backend runs in
+its own Durable Object with its own SQLite, and it receives only the bindings it
+declares. Agents reach every installed App through one MCP endpoint. The same
+Worker runs on Cloudflare Workers and on celld, a Workers-compatible runtime you
+can host yourself.
+
+![Oyster architecture: one Worker routes browsers, git clients and MCP agents to a registry, per-App Durable Objects, the git door and the Tourtois home, over R2, Artifacts and platform bindings](https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/architecture.png)
 
 | Piece             | Owns                                                                                      |
 | ----------------- | ----------------------------------------------------------------------------------------- |
@@ -186,118 +339,7 @@ anything you can.
 | Platform bindings | Workflows, Computers, Agents and Workers AI, offered only to Apps that declare them.      |
 
 The diagram source is
-[`docs/media/architecture.mmd`](docs/media/architecture.mmd).
-
-## Quick start: deploy your own Oyster
-
-You need a Cloudflare account on Workers Paid, Node 24 and pnpm (npm works the
-same way). Start a project, add Oyster and Wrangler, and copy the standalone
-example Worker out of the package:
-
-```sh
-mkdir my-oyster && cd my-oyster
-pnpm add @fungi.computer/oyster
-pnpm add -D wrangler
-cp node_modules/@fungi.computer/oyster/examples/standalone/{worker.ts,wrangler.jsonc} .
-```
-
-pnpm 11 may end an `add` with `ERR_PNPM_IGNORED_BUILDS` for packages such as
-`esbuild` or `workerd`; they are installed, and Oyster needs none of their
-install scripts.
-
-`worker.ts` is the whole Worker: the default handler plus four classes.
-`OysterRegistry`, `OysterInstance` and `OysterMcp` are the Durable Objects its
-`wrangler.jsonc` binds; `OysterBinding` is the one entrypoint every App binding
-in every invocation frame is minted from (`env.APP_STORAGE`, `env.BACKGROUND`,
-`env.APPS` and the rest).
-
-```ts title="worker.ts"
-import { createOysterWorker } from "@fungi.computer/oyster/workers";
-
-export {
-  OysterBinding,
-  OysterInstance,
-  OysterRegistry,
-  OysterMcp,
-} from "@fungi.computer/oyster/workers";
-
-export default createOysterWorker();
-```
-
-`wrangler.jsonc` names the Worker `oyster` and its Release bucket
-`oyster-releases`. Create the bucket and deploy. Your Worker's address is
-`https://oyster.<your-subdomain>.workers.dev`; your workers.dev subdomain is on
-the Workers & Pages overview in the Cloudflare dashboard.
-
-```sh
-npx wrangler login
-npx wrangler r2 bucket create oyster-releases
-export OYSTER_URL=https://oyster.<your-subdomain>.workers.dev
-npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
-```
-
-Set `OYSTER_ORIGIN` in `wrangler.jsonc` instead if you deploy again later; every
-deploy replaces the Worker's variables.
-
-Choose an owner key and store it as a secret:
-
-```sh
-export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
-printf '%s' "$OYSTER_OWNER_KEY" | npx wrangler secret put OYSTER_OWNER_KEY
-```
-
-Open `$OYSTER_URL/login` and sign in with the owner key. Your Oyster starts with
-no Apps; "Pack an App" under Run your own Oyster builds one from a git commit
-and installs it, and the
-[agent quick start](https://github.com/fungi-computer/oyster/blob/main/docs/site/agent-quickstart.mdx)
-walks through a first App step by step.
-
-### Add Git
-
-For git, copy `examples/git` instead of `examples/standalone`:
-
-```sh
-cp node_modules/@fungi.computer/oyster/examples/git/{worker.ts,wrangler.jsonc} .
-```
-
-It is the same Oyster with Oyster's git door: people and agents `clone`, `fetch`
-and `push` App repositories with ordinary `git` at
-`/git/<installation>/<repo>.git`. Its `wrangler.jsonc` names the Worker
-`oyster-git` and adds the `ARTIFACTS` binding and the `KEYS` and `WEBHOOKS`
-Durable Objects. Repositories live in Cloudflare Artifacts, so the account needs
-Artifacts enabled. Deploy it the same way, with `OYSTER_URL` set to
-`https://oyster-git.<your-subdomain>.workers.dev`, then give each agent its own
-key; Oyster shows each key once:
-
-```sh
-curl -s -X POST -H "Authorization: Bearer $OYSTER_OWNER_KEY" \
-  -H 'content-type: application/json' \
-  -d '{"name":"morel","grants":[{"capability":"apps.use","targets":{"kind":"all"}}]}' \
-  $OYSTER_URL/api/keys
-```
-
-The answer's `plaintext` field, starting `oyk_`, signs in to `git` and to
-`/mcp`. That key can read and write every App on this Oyster, including Apps
-installed later, without asking each time; anyone holding it can act as the
-owner in those Apps, and revoking it stops it immediately.
-
-Any MCP client can call every installed App with a key. For Claude Code:
-
-```sh
-claude mcp add --transport http oyster "$OYSTER_URL/mcp" \
-  --header "Authorization: Bearer <the agent's key>"
-```
-
-### What the live demo runs
-
-<https://oyster.shiit.app/> is this package's git root with more filled in: it
-installs Fungi's App set (Tourtois, Bonsai, Shed, Inkcap, Workflows, Prints and
-Grove), selects Tourtois as its home installation, and composes Computers,
-Agents and media. Its `koi-pond` repository is a small canvas game three coding
-agents built together, each in its own fork with its own key, with Bonsai
-drawing a lane per agent as they pushed and merged.
-[CONTEST.md](https://github.com/fungi-computer/oyster/blob/main/CONTEST.md)
-tours it.
+[`docs/media/architecture.mmd`](https://github.com/fungi-computer/oyster/blob/main/docs/media/architecture.mmd).
 
 ## Install or set up
 
@@ -320,19 +362,19 @@ door. "Part of Fungi" above lists them all.
 
 ## Run your own Oyster
 
-Agent runtime composition belongs to the deployable host. The live demo's root
-composes stock [Shiitake](https://github.com/fungi-computer/shiitake) Durable
-Objects and its Agent fleet, with `oysterAppMethods` supplying the installed App
-catalog. Oyster exports that catalog and its capability slots without an Agent
-runtime dependency.
+`@fungi.computer/oyster/standalone` is the whole host the quick start deploys:
+the git root below plus tenancy, a Computer (`ComputerDO`, a Cloudflare
+Container or an on-box VM), Agents on Workers AI composed from stock
+[Shiitake](https://github.com/fungi-computer/shiitake) Durable Objects,
+Workflows, media, and the owner routes that seed App templates and build them on
+the Computer. `examples/standalone/wrangler.jsonc` declares every binding it
+uses. Set the owner key as a secret (`OYSTER_OWNER_KEY`, 24+ characters) and
+deploy with `wrangler deploy`. Sign in at `/login`.
 
-`@fungi.computer/oyster/workers` is a complete single-owner App server; its
-Worker entry is the `worker.ts` in the quick start.
-`examples/standalone/wrangler.jsonc` declares its bindings: a Worker Loader, an
-R2 bucket for Releases and three SQLite Durable Objects (`REGISTRY`, `INSTANCES`
-and `MCP`). Set the owner key as a secret (`OYSTER_OWNER_KEY`, 24+ characters)
-and deploy with `wrangler deploy`; the same config runs under `celld dev`. Sign
-in at `/login`.
+The layers it is built from stay exported for hosts that compose their own:
+`@fungi.computer/oyster/workers` (Releases, Instances, MCP and App storage) and
+`@fungi.computer/oyster/workers-git` (the git door), with `oysterAppMethods`
+supplying the installed App catalog to an Agent runtime.
 
 Pack and install an App with `@fungi.computer/oyster/pack`: `packRelease` turns
 an exact Git commit and a canonical build recipe into a Release with immutable
@@ -365,10 +407,9 @@ There are two ways to get it:
   return `root.hostFor(this.env, scope)` from your `OysterGitInstance` subclass,
   so HTTP, MCP and background wakes share one composition. `tenancy` is
   required; a single-owner root passes `ownerOrKeyTenancy`, so the owner key and
-  named keys sign git in. `examples/git/worker.ts` is that root in one short
-  file, and the live demo's root is a real multi-door caller. Its
-  `wrangler.jsonc` adds the `ARTIFACTS` binding and the `KEYS` and `WEBHOOKS`
-  Durable Objects.
+  named keys sign git in. `@fungi.computer/oyster/standalone` is a real
+  multi-door caller. Its `wrangler.jsonc` adds the `ARTIFACTS` binding and the
+  `KEYS` and `WEBHOOKS` Durable Objects.
 - **Set `host.git` on your own host.** Keep your own `createOyster(host)`
   composition and set `git: oysterWorkerGit(env, { scope })` and
   `ownerRoutes: gitAdminRoutes(env, scope)` for `/api/keys` and `/api/webhooks`,
@@ -400,12 +441,12 @@ export class OysterInstance extends OysterGitInstance {
 export default createOysterGitWorker(root);
 ```
 
-`examples/git/worker.ts` adds the Durable Object exports and the git
-`OysterBinding` entrypoint, whose table also serves `env.GIT` and `env.EVENTS`.
-The package's `test:git-door` check runs that exact file on workerd against real
-bare repositories: the owner pushes with `git`, a named agent key's push is
-refused by the App's policy with Git's own `ng` report, both keys clone, and the
-accepted push reaches the App's `onGitPush`.
+A host also exports the Durable Objects and the git `OysterBinding` entrypoint,
+whose table also serves `env.GIT` and `env.EVENTS`. The package's
+`test:git-door` check runs that root (`test/git-root.fixture.ts`) on workerd
+against real bare repositories: the owner pushes with `git`, a named agent key's
+push is refused by the App's policy with Git's own `ng` report, both keys clone,
+and the accepted push reaches the App's `onGitPush`.
 
 Each layer owns one decision:
 
@@ -445,8 +486,8 @@ flowchart LR
   selected Instance's `onGitPush` when the Release declares
   `receives: ["git.push"]` and `git.repository`. The App emits typed events
   through `env.EVENTS`: Oyster delivers them as signed Standard Webhooks, and a
-  host with Workflows (the Hub, or the live demo's root) starts the Workflow
-  triggers armed on that event.
+  host with Cloudflare Workflows (the Hub, or the live demo's root) starts the
+  Workflow triggers armed on that event.
 
 Agent approval stays owner-direct in both compositions: the approval routes are
 owner routes, refuse App-origin requests, and are never an `OysterCapability` an
@@ -870,15 +911,12 @@ The core is `@fungi.computer/oyster`; the Durable Object adapter is
 
 ## Examples
 
-`examples/standalone` and `examples/git` ship in the npm package, ready to copy
-as in the quick start. The generated API reference and the in-memory example
-below ship with them. The rest live in the
+`examples/standalone` ships in the npm package, ready to copy as in the quick
+start. The generated API reference and the in-memory example below ship with
+them. The rest live in the
 [Oyster repository](https://github.com/fungi-computer/oyster):
 
-- `examples/standalone` is the complete single-owner Oyster from the quick
-  start.
-- `examples/git` adds the git door to an Oyster host on Workers, as described in
-  "Add Git to your host" under Run your own Oyster.
+- `examples/standalone` is the whole host from the quick start.
 - `examples/notes-app` is a full App: UI, backend methods and SQLite. Copy it to
   start an App with a backend. `test/standalone.native.mjs` packs it, installs
   it on the standalone Oyster and drives its UI in a browser, on workerd and on
@@ -890,8 +928,8 @@ below ship with them. The rest live in the
   `wrangler dev` (workerd) and `celld dev`.
 - `test/core.mjs` exercises replay, state transitions and owner fences in plain
   Node.
-- <https://oyster.shiit.app/> is the complete deployment: the git root with
-  Fungi's App set, Workflows, Computers, Agents and media in one Worker.
+- <https://oyster.shiit.app/> runs that same host with Fungi's seven starter
+  Apps.
 
 ### Drive one Instance in memory
 
@@ -1029,11 +1067,25 @@ projects, compiles declared stylesheets, and builds the source HTML with Vite.
 Notes uses plain TypeScript; Bonsai uses React and Tailwind. Neither reads
 prebuilt workspace `dist` directories or an external UI output directory.
 
+A workspace dependency that cannot build from its `tsconfig.build.json` names
+the one `package.json` script that builds it, in place of TypeScript configs:
+`"fungi": { "build": { "script": "build" } }`. The compiler runs exactly that
+script, at the dependency's place in the build order, with
+`pnpm run -- <script>` in the package directory and no `pre`/`post` hooks or
+implicit install. Only the Computer build (`buildTeamCandidate`, composed with
+`createLocalBuildExecutor({ packageScripts: "run" })`) runs it; the script is
+arbitrary package code, isolated by that admitted Computer. Every other
+composition, including `packRelease` and `create-fungi-app`, refuses such a
+source before installing. Unknown `fungi.build` fields are refused. The policy
+is pinned as `package-json-fungi-build-v2` in the recipe toolchain; an executor
+refuses a recipe pinned under another policy.
+
 `createLocalArtifactWriter(directory, recipe.assets)` writes the App root and
 all referenced UI/backend objects. It uses the supplied asset bounds and
 maintained MIME metadata. Bundled UI plus a backend may hydrate a captured
 `pnpm-lock.yaml` with the pinned `pnpm@11.24.0`, frozen lockfile and no
-lifecycle scripts or pnpmfile; it does not run arbitrary package build scripts.
+lifecycle scripts or pnpmfile. Installs never run lifecycle scripts; the only
+package script a build runs is a declared `fungi.build.script`, on a Computer.
 
 For Artifacts, `createArtifactsSourceCapture({ remote, token, sourceRevision })`
 accepts the host's Git URL and a `git:<commit>` revision. Native Git receives

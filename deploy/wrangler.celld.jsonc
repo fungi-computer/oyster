@@ -1,0 +1,65 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  // The same standalone Oyster for runtimes without the Artifacts binding
+  // (celld): git goes to the Artifacts REST API. Pass ARTIFACTS_ACCOUNT_ID,
+  // ARTIFACTS_NAMESPACE, ARTIFACTS_API_TOKEN, OYSTER_ORIGIN and
+  // OYSTER_OWNER_KEY as vars or secrets.
+  "name": "bonsai-celld",
+  "main": "../examples/standalone/worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "workflows": [
+    {
+      "binding": "GRAPH_WORKFLOWS",
+      "name": "bonsai-graphs",
+      "class_name": "StandaloneGraphWorkflow",
+    },
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "bonsai-releases" },
+    // celld binds one bucket per binding; media retention keeps its own.
+    { "binding": "APP_ARTIFACTS", "bucket_name": "bonsai-media" },
+  ],
+  "vars": {
+    "OYSTER_COMPUTER_ID": "workspace",
+    "OYSTER_HOME_INSTALLATION": "tourtois",
+    "OYSTER_OWNER_NAME": "owner",
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANTS", "class_name": "StandaloneTenants" },
+      { "name": "MCP", "class_name": "OysterMcp" },
+
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "WORKFLOW_RUNS", "class_name": "StandaloneWorkflowRuns" },
+      { "name": "INSTANCES", "class_name": "StandaloneInstance" },
+      { "name": "COMPUTER", "class_name": "ComputerDO" },
+      { "name": "KEYS", "class_name": "OysterKeys" },
+      { "name": "WEBHOOKS", "class_name": "OysterWebhooks" },
+      { "name": "AGENTS", "class_name": "StandaloneAgent" },
+      { "name": "AGENT_DIRECTORY", "class_name": "AgentDirectory" },
+      { "name": "MEDIA_OPERATION", "class_name": "MediaOperationDO" },
+    ],
+  },
+  // One initial tag: pre-launch history was collapsed (Levi 10-14, data wipe
+  // authorized), so a fresh Worker creates every bound class at once.
+  "migrations": [
+    {
+      "tag": "oyster-v1",
+      "new_sqlite_classes": [
+        "StandaloneTenants",
+        "OysterMcp",
+        "OysterRegistry",
+        "StandaloneWorkflowRuns",
+        "StandaloneInstance",
+        "ComputerDO",
+        "OysterKeys",
+        "OysterWebhooks",
+        "StandaloneAgent",
+        "AgentDirectory",
+        "MediaOperationDO",
+      ],
+    },
+  ],
+}

@@ -47,13 +47,13 @@ credentials.
 ## Where the code lives
 
 This repository is Oyster, the host package, split with its history from the
-Fungi monorepo. Oyster's own Worker entry and Notes example App are here
-(`examples/standalone`, `examples/notes-app`), and its `@fungi.computer`
-dependencies are their own repositories under
-[github.com/fungi-computer](https://github.com/fungi-computer). Bonsai and the
-rest of the App set (Tourtois, Shed, Inkcap, Workflows, Prints and Grove) and
-their standalone deployment config (`apps/bonsai`) live in the Fungi monorepo;
-the commands under "Run your own Oyster" below run from that monorepo.
+Fungi monorepo: the whole host the demo runs (`src/standalone`), its example
+Worker (`examples/standalone`) and the Notes example App (`examples/notes-app`).
+Its `@fungi.computer` dependencies are their own repositories under
+[github.com/fungi-computer](https://github.com/fungi-computer), and so is each
+App: Bonsai, Tourtois, Shed, Inkcap, Workflows, Prints and Grove.
+`npx oyster install-apps` builds all seven on your own Oyster's Computer; the
+README's quick start walks through it.
 
 ## Built by many agents at once
 
@@ -170,7 +170,7 @@ requires.
 **Bindings** the shipped `apps/bonsai/wrangler.jsonc` declares: a
 `worker_loaders` entry (`LOADER`, one isolate per installed App backend); a
 `workflows` binding (`GRAPH_WORKFLOWS`, Braid); a `containers` entry
-(`ComputerDO`, built from `runtimes/computer/Dockerfile`, for Shed and Inkcap);
+(`ComputerDO`, built from `packages/computer/Dockerfile`, for Shed and Inkcap);
 an `ai` binding (`AI`, Workers AI, for Prints); two `r2_buckets` (`RELEASES` and
 `APP_ARTIFACTS`, both the same bucket by default); an `artifacts` binding
 (`ARTIFACTS`, the git store); and eleven `durable_objects` bindings (`TENANTS`,

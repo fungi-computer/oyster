@@ -1,21 +1,26 @@
 import { DurableObject } from "cloudflare:workers";
 import { nanoid } from "@fungi.computer/cairn";
-import {
-  createMcp,
-  createMcpCatalog,
-  type Mcp,
-  type McpPersistence,
-} from "@fungi.computer/mycelium/mcp";
+import type { Mcp, McpPersistence } from "@fungi.computer/mycelium/mcp";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
-import {
-  parseJSONRPCMessage,
-  serializeMessage,
-  type EventStore,
-} from "@modelcontextprotocol/server";
+import type { EventStore } from "@modelcontextprotocol/server";
 import * as Schema from "effect/Schema";
 import { oysterMcpCatalogLoad } from "./mcp.js";
 import type { OysterHost, OysterMcp } from "./host.js";
 import { tenantIdSchema, tenantScope, type TenantScope } from "./tenant.js";
+
+/**
+ * The MCP protocol SDK builds hundreds of schemas when it loads. Only the first
+ * MCP request needs them, so the owner loads it then and the Worker's startup
+ * (which every request and every deploy pays) never does.
+ */
+const loadMcpProtocol = async () => {
+  const [mycelium, sdk] = await Promise.all([
+    import("@fungi.computer/mycelium/mcp"),
+    import("@modelcontextprotocol/server"),
+  ]);
+  return { mycelium, sdk };
+};
+type McpProtocol = Awaited<ReturnType<typeof loadMcpProtocol>>;
 
 /** Worker Loader used by the existing Mycelium sandbox. */
 export type OysterMcpOwnerEnv = Readonly<{ LOADER: WorkerLoader }>;
@@ -66,7 +71,7 @@ export class OysterMcpOwner<
     });
   }
 
-  #eventStore(catalogId: string): EventStore {
+  #eventStore(catalogId: string, { sdk }: McpProtocol): EventStore {
     const sql = this.ctx.storage.sql;
     const find = (eventId: string) => {
       const row = sql
@@ -88,7 +93,7 @@ export class OysterMcpOwner<
           catalogId,
           id,
           streamId,
-          serializeMessage(message),
+          sdk.serializeMessage(message),
         );
         return Promise.resolve(id);
       },
@@ -108,7 +113,7 @@ export class OysterMcpOwner<
           const row = Schema.decodeUnknownSync(eventSchema)(raw);
           await send(
             row.event_id,
-            parseJSONRPCMessage(JSON.parse(row.message)),
+            sdk.parseJSONRPCMessage(JSON.parse(row.message)),
           );
         }
         return after.stream_id;
@@ -142,10 +147,12 @@ export class OysterMcpOwner<
         scope.origin,
       );
     }
+    // Loaded before the check so the session map is still created exactly once.
+    const protocol = await loadMcpProtocol();
     if (this.#mcp === undefined) {
       const host = this.#createHost(this.env, scope);
       const persistence: McpPersistence = {
-        eventStore: (id) => this.#eventStore(id),
+        eventStore: (id) => this.#eventStore(id, protocol),
         initialized: (id, session) => {
           sql.exec(
             "INSERT INTO oyster_mcp_sessions (protocol_id, catalog_id, principal) VALUES (?,?,?)",
@@ -166,9 +173,9 @@ export class OysterMcpOwner<
           return Promise.resolve();
         },
       };
-      this.#mcp = createMcp({
+      this.#mcp = protocol.mycelium.createMcp({
         persistence,
-        catalog: createMcpCatalog({
+        catalog: protocol.mycelium.createMcpCatalog({
           load: oysterMcpCatalogLoad(host),
           sandbox: createCodemodeSandbox(this.env.LOADER),
         }),

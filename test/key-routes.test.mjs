@@ -218,7 +218,8 @@ test("an expired key is refused 401 on its very next authenticated request", asy
     body: JSON.stringify({
       name: "sunchoke",
       grants: allAppsGrant,
-      expiresAt: Date.now() + 20,
+      // Wide enough that the first request is admitted on a loaded gate host.
+      expiresAt: Date.now() + 1_000,
     }),
   });
   assert.equal(issued.status, 201);
@@ -234,7 +235,7 @@ test("an expired key is refused 401 on its very next authenticated request", asy
     kind: "admitted",
     principal: { actor: { kind: "team-key", keyId: "sunchoke" } },
   });
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
   assert.deepEqual(await auth.authenticate(request()), {
     kind: "refused",
     status: 401,

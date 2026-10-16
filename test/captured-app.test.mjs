@@ -32,7 +32,7 @@ test("a joined workspace backend pins browser resolution without changing the UI
   const ui = normalizeAppPublisherRecipe(input);
   assert.equal(
     ui.buildRecipeDigest,
-    "sha256:b3f44a293f1a78c38e2ae0fcf4b24443a0e7fd31db492bbf06ef18d297976137",
+    "sha256:c048fef0b3d2a314105425bd20b7b5a71ee002e181d113737cb648c9f791ac1b",
   );
   const joined = normalizeAppPublisherRecipe({
     ...input,

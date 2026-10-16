@@ -17,9 +17,7 @@ await mkdir(destination, { recursive: true });
 for (const path of [
   "dist",
   "docs/api",
-  "docs/media",
   "examples/standalone",
-  "examples/git",
   "docs/site/agent-quickstart.mdx",
   "README.md",
   "LICENSE",

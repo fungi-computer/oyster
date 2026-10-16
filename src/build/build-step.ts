@@ -4,7 +4,10 @@ import * as Schema from "effect/Schema";
  * One captured dependency build step. Paths are relative to the captured
  * snapshot root. A TypeScript step compiles one config; a Tailwind step
  * compiles one stylesheet input into its output (the same path for an App's
- * own stylesheet, which compiles in place).
+ * own stylesheet, which compiles in place). A script step runs the one
+ * `package.json` script a workspace dependency names as its build
+ * (`fungi.build.script`), with pnpm, in that package's directory; only an
+ * admitted Computer build executes it.
  */
 export const workspaceBuildStepSchema = Schema.Union([
   Schema.Struct({
@@ -15,6 +18,11 @@ export const workspaceBuildStepSchema = Schema.Union([
     kind: Schema.Literal("tailwind"),
     input: Schema.String,
     output: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("script"),
+    directory: Schema.String,
+    script: Schema.String,
   }),
 ]);
 

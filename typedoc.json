@@ -32,7 +32,15 @@
     "src/page/mount.ts",
     "src/tenant.ts",
     "src/auth.ts",
-    "src/apps/index.ts"
+    "src/apps/index.ts",
+    "src/tenancy/index.ts",
+    "src/tenancy/resolve.ts",
+    "src/tenancy/registry.ts",
+    "src/tenancy/owner-key.ts",
+    "src/tenancy/auth0.ts",
+    "src/tenancy/cold-directory.ts",
+    "src/tenancy/cloudflare.ts",
+    "src/shell/workbench-directory.ts"
   ],
   "tsconfig": "tsconfig.docs.json",
   "out": "docs/api",

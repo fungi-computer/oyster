@@ -24,8 +24,11 @@ const manifestPathSchema = Schema.String.pipe(
  * packages whose declared stylesheets compile first (`packageStylesheets`)
  * and its own `stylesheets`, compiled in place, in order. A workspace
  * package declares its build products: extra TypeScript configs compiled
- * after its `tsconfig.build.json`, and its stylesheet input and output.
- * Every path is relative to the manifest that declares it.
+ * after its `tsconfig.build.json`, and its stylesheet input and output; or,
+ * instead of TypeScript configs, the one `package.json` script that builds
+ * it (`script`), which only an admitted Computer build runs. Every path is
+ * relative to the manifest that declares it. Unknown build fields are
+ * refused, so a builder never silently ignores a policy it does not know.
  */
 export const workspaceBuildPolicySchema = Schema.Struct({
   react: Schema.optional(Schema.Boolean),
@@ -33,6 +36,8 @@ export const workspaceBuildPolicySchema = Schema.Struct({
   packageStylesheets: Schema.optional(Schema.Array(Schema.String)),
   stylesheets: Schema.optional(Schema.Array(manifestPathSchema)),
   typescript: Schema.optional(Schema.Array(manifestPathSchema)),
+  /** A script name in this manifest's own `scripts`. */
+  script: Schema.optional(Schema.NonEmptyString),
   stylesheet: Schema.optional(
     Schema.Struct({ input: manifestPathSchema, output: manifestPathSchema }),
   ),
@@ -47,13 +52,24 @@ const manifestSchema = Schema.fromJsonString(
   Schema.Struct({
     name: Schema.optional(Schema.String),
     dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+    scripts: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     fungi: Schema.optional(
-      Schema.Struct({ build: Schema.optional(workspaceBuildPolicySchema) }),
+      Schema.Struct({ build: Schema.optional(Schema.Unknown) }),
     ),
   }),
 );
 
 type Manifest = Schema.Schema.Type<typeof manifestSchema>;
+
+/** A manifest's build policy; only `fungi.build` itself is held strict. */
+function policyOf(manifest: Manifest): WorkspaceBuildPolicy {
+  const build = manifest.fungi?.build;
+  return build === undefined
+    ? {}
+    : Schema.decodeUnknownSync(workspaceBuildPolicySchema, {
+        onExcessProperty: "error",
+      })(build);
+}
 
 /** One pnpm workspace project, as `pnpm ls -r --depth -1 --json` lists it. */
 const workspaceProjectsSchema = Schema.fromJsonString(
@@ -131,11 +147,15 @@ export async function resolveWorkspaceBuild(options: {
   };
 
   const projects = new Map<string, string>();
+  let rootProject: string | null = null;
   for (const project of Schema.decodeUnknownSync(workspaceProjectsSchema)(
     options.projects,
   )) {
     const directory = within(root, project.path);
-    if (directory === "") continue;
+    if (directory === "") {
+      rootProject = project.name;
+      continue;
+    }
     if (projects.has(project.name))
       throw new Error(`Workspace package name repeats: ${project.name}`);
     projects.set(project.name, directory);
@@ -144,17 +164,31 @@ export async function resolveWorkspaceBuild(options: {
   const owners = [...projects]
     .filter(([, directory]) => entry.startsWith(`${directory}/`))
     .sort(([, left], [, right]) => right.length - left.length);
-  const owner = owners[0];
+  // A workspace member owns its entry; with none, an App's own repository
+  // (one package, the App itself at the root) owns it.
+  const owner: readonly [string, string] | undefined =
+    owners[0] ??
+    (projects.size === 0 && rootProject !== null
+      ? [rootProject, ""]
+      : undefined);
   if (!owner) throw new Error(`No workspace package owns ${entry}`);
   const [packageName, directory] = owner;
 
-  let appDirectory = dirname(entry);
+  const parent = (path: string) => {
+    const up = dirname(path);
+    return up === "." ? "" : up;
+  };
+  let appDirectory = parent(entry);
   while (
     appDirectory !== directory &&
     !(await exists(join(root, appDirectory, "package.json")))
   )
-    appDirectory = dirname(appDirectory);
-  const policy = (await manifest(appDirectory)).fungi?.build ?? {};
+    appDirectory = parent(appDirectory);
+  const policy = policyOf(await manifest(appDirectory));
+  if (policy.script !== undefined)
+    throw new Error(
+      `${appDirectory} is the App; its page builds with the recipe, not a script`,
+    );
 
   const dependencies: string[] = [];
   const visiting = new Set<string>([directory]);
@@ -179,22 +213,41 @@ export async function resolveWorkspaceBuild(options: {
 
   const steps: WorkspaceBuildStep[] = [];
   for (const dependency of dependencies) {
+    const declared = await manifest(dependency);
+    const own = policyOf(declared);
+    if (own.script !== undefined) {
+      if (own.typescript !== undefined)
+        throw new Error(
+          `${dependency} declares both a build script and TypeScript configs`,
+        );
+      if (
+        declared.scripts === undefined ||
+        !Object.hasOwn(declared.scripts, own.script)
+      )
+        throw new Error(`${dependency} has no script named ${own.script}`);
+      steps.push({ kind: "script", directory: dependency, script: own.script });
+      continue;
+    }
     if (await exists(join(root, dependency, "tsconfig.build.json")))
       steps.push({
         kind: "typescript",
         config: `${dependency}/tsconfig.build.json`,
       });
-    for (const config of (await manifest(dependency)).fungi?.build
-      ?.typescript ?? [])
+    for (const config of own.typescript ?? [])
       steps.push({ kind: "typescript", config: `${dependency}/${config}` });
   }
+  const appManifest = await manifest(appDirectory);
   for (const name of policy.packageStylesheets ?? []) {
     const owner = projects.get(name);
+    // A package installed from a registry ships its built stylesheet; only a
+    // workspace package's stylesheet compiles here.
+    if (owner === undefined && appManifest.dependencies?.[name] !== undefined)
+      continue;
     if (owner === undefined || !dependencies.includes(owner))
       throw new Error(
         `Stylesheet package ${name} is not a workspace dependency`,
       );
-    const declared = (await manifest(owner)).fungi?.build?.stylesheet;
+    const declared = policyOf(await manifest(owner)).stylesheet;
     if (!declared) throw new Error(`${name} declares no stylesheet`);
     steps.push({
       kind: "tailwind",

@@ -1,4 +1,4 @@
-// Ordinary `git push` and `git clone` through examples/git on workerd: owner
+// Ordinary `git push` and `git clone` through the git root (test/git-root.fixture.ts) on workerd: owner
 // key and named key sign in, the App's push policy refuses a non-member with
 // Git's own `ng`, and the accepted push reaches the App's `onGitPush`.
 /* global URL, fetch, setTimeout, console, process, AbortSignal */
@@ -107,7 +107,7 @@ for (const [name, value] of [
 ])
   await writeFile(`${work}/release/artifacts/${name}`, value);
 
-// 2. examples/git/wrangler.jsonc, with Artifacts on the local provider.
+// 2. The git root's bindings, with Artifacts on the local provider.
 const classes = [
   "OysterMcp",
   "OysterRegistry",
@@ -303,7 +303,7 @@ try {
   assert.equal(pushes[0].repository, "pond");
   assert.deepEqual(pushes[0].refs, ["refs/heads/main"]);
   console.log(
-    "PASS examples/git on workerd: owner git push, agent push refused by App policy, clone, onGitPush delivered",
+    "PASS git root on workerd: owner git push, agent push refused by App policy, clone, onGitPush delivered",
   );
 } catch (cause) {
   console.error(redact(output));

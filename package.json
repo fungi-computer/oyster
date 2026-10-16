@@ -1,17 +1,18 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "oyster": "./dist/standalone/install-apps-cli.js"
+  },
   "files": [
     "dist",
     "docs/api",
-    "docs/media",
     "examples/standalone",
-    "examples/git",
     "docs/site/agent-quickstart.mdx",
     "README.md",
     "LICENSE"
@@ -63,6 +64,18 @@
       "types": "./dist/workers-git.d.ts",
       "import": "./dist/workers-git.js"
     },
+    "./standalone": {
+      "types": "./dist/standalone/worker.d.ts",
+      "import": "./dist/standalone/worker.js"
+    },
+    "./standalone/app-set": {
+      "types": "./dist/standalone/app-set.d.ts",
+      "import": "./dist/standalone/app-set.js"
+    },
+    "./standalone/media": {
+      "types": "./dist/standalone/media.d.ts",
+      "import": "./dist/standalone/media.js"
+    },
     "./event-recipients": {
       "types": "./dist/event-recipients.d.ts",
       "import": "./dist/event-recipients.js"
@@ -99,6 +112,10 @@
       "types": "./dist/shell/app-directory.d.ts",
       "import": "./dist/shell/app-directory.js"
     },
+    "./shell/workbench-directory": {
+      "types": "./dist/shell/workbench-directory.d.ts",
+      "import": "./dist/shell/workbench-directory.js"
+    },
     "./app-storage": {
       "types": "./dist/app-storage.d.ts",
       "import": "./dist/app-storage.js"
@@ -127,13 +144,13 @@
       "types": "./dist/app-builds.d.ts",
       "import": "./dist/app-builds.js"
     },
-    "./r2-artifact-writer": {
-      "types": "./dist/build/r2-artifact-writer.d.ts",
-      "import": "./dist/build/r2-artifact-writer.js"
-    },
     "./build-contract": {
       "types": "./dist/build-contract.d.ts",
       "import": "./dist/build-contract.js"
+    },
+    "./build-egress": {
+      "types": "./dist/build-egress.d.ts",
+      "import": "./dist/build-egress.js"
     },
     "./build-jobs": {
       "types": "./dist/build-jobs.d.ts",
@@ -143,9 +160,9 @@
       "types": "./dist/source/index.d.ts",
       "import": "./dist/source/index.js"
     },
-    "./source/template-write": {
-      "types": "./dist/source/template-write.d.ts",
-      "import": "./dist/source/template-write.js"
+    "./source/template-push": {
+      "types": "./dist/source/template-push.d.ts",
+      "import": "./dist/source/template-push.js"
     },
     "./app-sources": {
       "types": "./dist/app-sources.d.ts",
@@ -170,6 +187,34 @@
     "./tenant": {
       "types": "./dist/tenant.d.ts",
       "import": "./dist/tenant.js"
+    },
+    "./tenancy": {
+      "types": "./dist/tenancy/index.d.ts",
+      "import": "./dist/tenancy/index.js"
+    },
+    "./tenancy/resolve": {
+      "types": "./dist/tenancy/resolve.d.ts",
+      "import": "./dist/tenancy/resolve.js"
+    },
+    "./tenancy/cold-directory": {
+      "types": "./dist/tenancy/cold-directory.d.ts",
+      "import": "./dist/tenancy/cold-directory.js"
+    },
+    "./tenancy/registry": {
+      "types": "./dist/tenancy/registry.d.ts",
+      "import": "./dist/tenancy/registry.js"
+    },
+    "./tenancy/owner-key": {
+      "types": "./dist/tenancy/owner-key.d.ts",
+      "import": "./dist/tenancy/owner-key.js"
+    },
+    "./tenancy/auth0": {
+      "types": "./dist/tenancy/auth0.d.ts",
+      "import": "./dist/tenancy/auth0.js"
+    },
+    "./tenancy/cloudflare": {
+      "types": "./dist/tenancy/cloudflare.d.ts",
+      "import": "./dist/tenancy/cloudflare.js"
     },
     "./auth": {
       "types": "./dist/auth.d.ts",
@@ -197,10 +242,10 @@
     }
   },
   "scripts": {
-    "build": "pnpm run clean && tsc -p tsconfig.build.json && tsc -p src/shell/tsconfig.build.json && tsc -p src/page/tsconfig.build.json && node scripts/build-page.mjs",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json && tsc -p src/shell/tsconfig.build.json && tsc -p src/page/tsconfig.build.json && node scripts/build-page.mjs && node scripts/build-candidate-cli.mjs",
     "clean": "node --input-type=module --eval \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
-    "typecheck": "tsc --noEmit && tsc -p src/page/tsconfig.json && tsc -p examples/tsconfig.json && tsc -p examples/notes-app/ui/tsconfig.json && tsc -p src/shell/tsconfig.json && tsc -p test/shell/tsconfig.json && tsc -p src/build/tsconfig.json && tsc -p src/build/snapshot-programs/tsconfig.json",
-    "test": "node test/core.mjs && vitest run --config vitest.config.mjs && node --test test/mcp-catalog.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/guest-security.test.mjs test/host-routes.test.mjs test/visibility-authority-resync.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs && node --import tsx --test test/page-capabilities.test.mjs test/external-app.test.mjs && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs",
+    "typecheck": "tsc --noEmit && tsc -p src/page/tsconfig.json && tsc -p examples/tsconfig.json && tsc -p examples/notes-app/ui/tsconfig.json && tsc -p src/shell/tsconfig.json && tsc -p test/shell/tsconfig.json && tsc -p src/build/tsconfig.json && tsc -p src/build/snapshot-programs/tsconfig.json && tsc -p test/build/tsconfig.json && tsc -p test/page/tsconfig.json && tsc -p test/standalone/tsconfig.json",
+    "test": "node test/core.mjs && vitest run --config vitest.config.mjs && node --test test/mcp-catalog.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/startup-graph.test.mjs test/guest-security.test.mjs test/host-routes.test.mjs test/visibility-authority-resync.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs && node --import tsx --test test/page-capabilities.test.mjs test/external-app.test.mjs && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs && vitest run --config vitest.tenancy-node.config.mjs && vitest run --config vitest.tenancy-cloudflare.config.mjs && vitest run --config vitest.tenancy-cloudflare-eviction.config.mjs && vitest run --config vitest.tenancy-cold-directory.config.mjs && pnpm run test:standalone",
     "lint": "eslint src test examples --max-warnings=0 && oxlint --config ../../oxlint.config.ts --deny-warnings src test examples",
     "format:check": "node ../../tooling/repository/scripts/format-package-check.mjs",
     "lint:anti-slop": "node ../../tooling/repository/scripts/lint-package-anti-slop.mjs",
@@ -211,7 +256,7 @@
     "stranger": "tsx ../../tooling/repository/src/artifacts/cli.ts --repo-root ../.. .",
     "test:packed-native": "node --import tsx test/stranger/qualify-packed.mjs",
     "test:background-replay": "node test/background-replay.native.mjs",
-    "test:standalone": "node test/standalone.native.mjs",
+    "test:standalone": "vitest run --config vitest.standalone.config.mjs && node --import tsx --test test/standalone/agent-caller.test.mjs test/standalone/workers-media.test.mjs test/standalone/workers-computer.test.mjs test/standalone/workflow-git-pass-frame.test.mjs test/standalone/workers-workflows.test.mjs test/standalone/workflow-provider.test.mjs test/standalone/standalone-tenancy.test.mjs test/standalone/standalone-registry.test.mjs",
     "test:source-builds": "node test/source-distribution-build.native.mjs",
     "test:git-door": "node test/git-example.native.mjs",
     "test:page-launch": "node --test test/page-launch.browser.mjs",
@@ -224,10 +269,32 @@
     "test:grant-consent:native": "node --import tsx test/grant-consent.native.mjs",
     "test:grant-consent:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs --import tsx test/grant-consent.native.mjs",
     "test:mcp-owner:native": "node test/mcp-owner.native.mjs",
-    "test:mcp-owner:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/mcp-owner.native.mjs"
+    "test:mcp-owner:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/mcp-owner.native.mjs",
+    "dev": "wrangler dev --config deploy/wrangler.jsonc --ip 127.0.0.1 --port 8797",
+    "check:startup": "node scripts/check-startup.mjs",
+    "test:provider": "node --import tsx test/standalone/workflow-provider.native.mjs",
+    "test:app-fork": "node --import tsx test/standalone/app-fork.native.mjs",
+    "test:landed-push": "node --import tsx test/standalone/landed-push.native.mjs",
+    "test:computer-egress": "node --import tsx test/standalone/computer-egress.native.mjs",
+    "test:loader-workflows": "node --import tsx test/standalone/loader-workflows.native.mjs",
+    "test:workflows": "node --import tsx test/standalone/workflows.native.mjs",
+    "test:workflows:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs --import tsx test/standalone/workflows.native.mjs",
+    "test:agents": "node test/standalone/agents-sandbox.native.mjs",
+    "test:mcp-computer": "node test/standalone/mcp-computer.native.mjs",
+    "test:agents:celld": "CELLD_PLATFORM_CELLD=$(../../tooling/celld-platform/runtime/pinned-celld.sh) node --import ../../tooling/celld-platform/runtime/wrangler-on-celld.mjs test/standalone/agents-sandbox.native.mjs",
+    "test:tourtois-home": "node test/standalone/tourtois-home.browser.mjs",
+    "test:tourtois-agent-layout": "node test/standalone/tourtois-desktop-agent.live.mjs",
+    "test:shell-fork": "OYSTER_PROOF_SHELL_FORK=1 node test/standalone/tourtois-home.browser.mjs",
+    "test:gills": "OYSTER_PROOF_GILLS=1 node --import tsx test/standalone/tourtois-home.browser.mjs",
+    "test:app-set": "OYSTER_PROOF_APP_SET=1 node test/standalone/tourtois-home.browser.mjs",
+    "test:starter-apps": "node --import tsx test/standalone/starter-apps.native.mjs",
+    "test:mcp": "BONSAI_PROOF=mcp node --import tsx test/standalone/seed-demo.browser.mjs",
+    "test:seed-demo": "node --import tsx test/standalone/seed-demo.browser.mjs",
+    "test:edit-in-inkcap": "node --import tsx test/standalone/edit-in-inkcap-live.browser.mjs",
+    "install:apps": "node --import tsx src/standalone/install-apps-cli.ts install-apps --from ../..",
+    "check:deploy": "wrangler deploy --dry-run --config deploy/wrangler.jsonc --containers-rollout=none --outdir=.botanical/worker"
   },
   "dependencies": {
-    "@fungi.computer/cloudflare-worker-bundler": "workspace:*",
     "@fungi.computer/agar": "workspace:*",
     "@fungi.computer/burrow": "workspace:*",
     "@fungi.computer/cairn": "workspace:*",
@@ -250,12 +317,19 @@
     "esbuild": "0.28.2",
     "fast-json-stable-stringify": "2.1.0",
     "hono": "4.13.5",
-    "isomorphic-git": "1.42.2",
     "jose": "6.2.11",
-    "memfs": "4.80.0",
     "mime": "4.1.0",
     "path-to-regexp": "8.4.2",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "oauth4webapi": "3.8.8",
+    "@cfworker/json-schema": "4.1.1",
+    "@earendil-works/pi-ai": "0.99.2",
+    "@fungi.computer/braid": "workspace:*",
+    "@fungi.computer/computer": "workspace:*",
+    "@fungi.computer/darkroom": "workspace:*",
+    "@fungi.computer/shiitake": "workspace:*",
+    "@fungi.computer/veil": "workspace:*",
+    "@fungi.computer/workflows-wire": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260828.1",
@@ -275,10 +349,14 @@
     "vite": "8.2.2",
     "vite-plugin-singlefile": "2.3.3",
     "vitest": "4.1.11",
-    "wrangler": "4.127.1",
+    "wrangler": "4.135.0",
     "eslint": "10.9.1",
     "oxlint": "1.78.0",
-    "tsx": "4.23.12"
+    "tsx": "4.23.12",
+    "@cloudflare/vitest-plugin": "1.1.2",
+    "jsonc-parser": "3.3.1",
+    "esbuild": "0.28.2",
+    "jsdom": "29.0.1"
   },
   "license": "MIT",
   "botanical": {

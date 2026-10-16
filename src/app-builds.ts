@@ -5,11 +5,17 @@
  * A build runs the shared job lifecycle (`build/build-jobs.ts`) and the fixed
  * captured builder command on one Computer. The Computer holds no key: its
  * clone is admitted at egress for exactly the job's one repository (read
- * only), and its candidate upload for exactly the job. The candidate is
- * written to the Release bucket by the shared R2 writer, verified like any
- * installed Release, and recorded here; installing it is a separate owner act.
+ * only), and its candidate upload for exactly the job. A source is either a
+ * repository in an installation's Git (a fork, through the Git door) or the
+ * App's own published template, built only at a recorded seed revision of
+ * its pinned recipe (no installed App is needed). The build streams each
+ * built object into the host's artifact store itself, through the egress, and
+ * then submits a small manifest naming them. This owner only records facts:
+ * it checks each named object's stored size and digest, writes the asset
+ * manifest and App root in Oyster's one immutable artifact representation
+ * (the same objects a packed upload writes), verifies the Release like any
+ * installed one, and records it; installing it is a separate owner act.
  */
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
@@ -25,27 +31,42 @@ import {
 } from "@fungi.computer/puffball/effect";
 import {
   capturedPinnedRecipeSchema,
-  commitPreparedCandidate,
   digestPinnedRecipe,
+  fitsPinnedRecipe,
+  pinnedRecipeObjectBound,
   type PinnedRecipe,
 } from "./build/effect.js";
 import {
-  encodeTeamAppCandidateSubmission,
-  type TeamAppCandidateSubmission,
+  candidateManifestObjects,
+  decodeCandidateBackend,
+  digestTeamAppCandidateManifest,
+  type TeamAppCandidateManifest,
 } from "./build/submission-contract.js";
+import { contentObjectRef } from "./build/content-objects.js";
 import {
   createTeamBuildPublisher,
   teamAppBuildCommand,
   type TeamBuildJob,
 } from "./build/build-jobs.js";
 import {
-  createR2ArtifactWriter,
-  type PublisherR2Bucket,
-} from "./build/r2-artifact-writer.js";
+  writeArtifactRoot,
+  type ImmutableArtifactObjects,
+} from "./build/artifact-writer.js";
 import { buildGitPassPrefix } from "./git-auth.js";
-import { verifyRelease, type ArtifactStore } from "./release.js";
+import {
+  defaultAssetPolicy,
+  readVerified,
+  verifyRelease,
+  type ArtifactHeads,
+  type ArtifactStore,
+} from "./release.js";
+import {
+  appForTemplateRepository,
+  templateRepositoryForApp,
+} from "./source/template-repository.js";
+import type { PublisherTemplateSeedReceipts } from "./source/seed-receipt.js";
 
-/** A Computer's whole-build budget: a cold standard-2 build measured 185-270 s. */
+/** A Computer's whole-build budget: a cold build on a 6 GiB Computer measured 185-270 s. */
 export const oysterAppBuildTimeoutMs = 900_000;
 /** The job, its clone admission and its upload grant end together. */
 const jobTtlMs = oysterAppBuildTimeoutMs + 5 * 60_000;
@@ -53,14 +74,29 @@ const jobTtlMs = oysterAppBuildTimeoutMs + 5 * 60_000;
 export const oysterBuildGitHost = "git.team.internal";
 export const oysterBuildReportHost = "build.team.internal";
 
-/** An App's registered build source: one repository and its pinned recipe. */
+/** Where an App's source is cloned from. */
+export const oysterBuildLocationSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("installation"),
+    /** The installation whose Git holds the repository (Bonsai for a fork). */
+    installationId: Schema.String.check(
+      Schema.isPattern(/^[a-zA-Z0-9_-]{1,256}$/u),
+    ),
+    repository: Schema.String.check(
+      Schema.isPattern(/^[a-zA-Z0-9._-]{1,128}$/u),
+    ),
+  }),
+  /** The App's own published template (`templateRepositoryForApp`). */
+  Schema.Struct({ kind: Schema.Literal("template") }),
+]);
+export type OysterBuildLocation = Schema.Schema.Type<
+  typeof oysterBuildLocationSchema
+>;
+
+/** An App's registered build source: where it is cloned and its pinned recipe. */
 export const oysterBuildSourceSchema = Schema.Struct({
   appId: appIdSchema,
-  /** The installation whose Git holds the repository (Bonsai for a fork). */
-  installationId: Schema.String.check(
-    Schema.isPattern(/^[a-zA-Z0-9_-]{1,256}$/u),
-  ),
-  repository: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9._-]{1,128}$/u)),
+  location: oysterBuildLocationSchema,
   recipe: capturedPinnedRecipeSchema,
   buildRecipeDigest: sha256DigestSchema,
 });
@@ -80,8 +116,18 @@ export type OysterBuildView = Readonly<{
 }>;
 
 /** One Computer as the build owner reaches it. */
+/** The Computer established no terminal result for a build command, for
+ * example because its connection to the container dropped mid-command. */
+class BuildOutcomeUnknown extends Error {
+  constructor() {
+    super("Build outcome unknown");
+  }
+}
+
 export type OysterBuildComputer = Readonly<{
-  /** Run the fixed build command; the Computer re-admits the job first. */
+  /** Run the fixed build command; the Computer re-admits the job first.
+   * A missing `output` means no terminal result was established: the
+   * command may still be running, so it is never read as an exit. */
   runBuild(input: {
     jobId: string;
     command: string;
@@ -103,18 +149,26 @@ export type OysterAppBuildOptions = Readonly<{
     objectId: string;
     port: OysterBuildComputer;
   }>;
-  bucket: PublisherR2Bucket;
-  artifacts: ArtifactStore;
+  /** The host's artifact store; a build's objects are already in it. */
+  artifacts: ArtifactStore & ArtifactHeads;
+  /** The seed receipts a template build must match. */
+  templates: Pick<PublisherTemplateSeedReceipts, "read">;
   now?: () => number;
 }>;
+
+/** The repository a job clones: its installation repository, or its App's template. */
+const cloneRepository = (job: Pick<JobRow, "app_id" | "location">) =>
+  job.location.kind === "installation"
+    ? job.location.repository
+    : templateRepositoryForApp(job.app_id);
 
 const jobRow = Schema.Struct({
   job_id: Schema.String,
   app_id: Schema.String,
   release_id: Schema.String,
   source_revision: Schema.String,
-  installation_id: Schema.String,
-  repository: Schema.String,
+  /** The job's clone location, as its source named it when the job started. */
+  location: Schema.fromJsonString(oysterBuildLocationSchema),
   recipe: Schema.String,
   recipe_digest: Schema.String,
   requested_by: Schema.String,
@@ -135,6 +189,7 @@ const releaseRow = Schema.Struct({ release: Schema.String });
 const sourceCodec = Schema.fromJsonString(oysterBuildSourceSchema);
 const releaseCodec = Schema.fromJsonString(releaseSchema);
 const recipeCodec = Schema.fromJsonString(capturedPinnedRecipeSchema);
+const locationCodec = Schema.fromJsonString(oysterBuildLocationSchema);
 
 /** Unguessable hex identity from the platform CSPRNG. */
 function randomHex(bytes: number): string {
@@ -159,34 +214,102 @@ function sameDigest(left: string, right: string): boolean {
   return difference === 0;
 }
 
-/** The SQLite tables one Oyster build owner keeps. */
-export function migrateOysterAppBuilds(
-  owner: WatchdogSqliteOwner["sql"],
-): void {
-  owner.exec(
-    "CREATE TABLE IF NOT EXISTS oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",
-  );
-  owner.exec(
-    `CREATE TABLE IF NOT EXISTS oyster_build_jobs (
+/**
+ * The SQLite tables one Oyster build owner keeps. Creation and any carrying
+ * forward of retained facts run as one transaction of the owner's storage, so
+ * an interrupted conversion leaves the facts as they were for a retry.
+ */
+export function migrateOysterAppBuilds(owner: WatchdogSqliteOwner): void {
+  const { sql } = owner;
+  owner.transactionSync(() => {
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",
+    );
+    // Sources recorded before the location union named only an installation
+    // repository; carry each forward once, in place.
+    sql.exec(
+      `UPDATE oyster_build_sources SET source = json_set(
+       json_remove(source, '$.installationId', '$.repository'), '$.location',
+       json_object('kind', 'installation',
+         'installationId', json_extract(source, '$.installationId'),
+         'repository', json_extract(source, '$.repository')))
+     WHERE json_type(source, '$.location') IS NULL`,
+    );
+    const jobColumns = `
       job_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, release_id TEXT NOT NULL UNIQUE,
-      source_revision TEXT NOT NULL, installation_id TEXT NOT NULL, repository TEXT NOT NULL,
+      source_revision TEXT NOT NULL, location TEXT NOT NULL,
       recipe TEXT NOT NULL, recipe_digest TEXT NOT NULL, requested_by TEXT NOT NULL,
       credential_id TEXT NOT NULL, upload_grant_digest TEXT NOT NULL,
       status TEXT NOT NULL, artifact_digest TEXT, artifact_bytes INTEGER, detail TEXT,
-      issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, executable_until INTEGER NOT NULL
-    ) STRICT`,
-  );
-  owner.exec(
-    "CREATE TABLE IF NOT EXISTS oyster_build_releases (release_id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE, release TEXT NOT NULL) STRICT",
-  );
+      issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, executable_until INTEGER NOT NULL`;
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS oyster_build_jobs (${jobColumns}) STRICT`,
+    );
+    // Jobs recorded before the location union named an installation repository
+    // in two columns; carry each into the one location column, once.
+    if (
+      sql
+        .exec(
+          "SELECT name FROM pragma_table_info('oyster_build_jobs') WHERE name='installation_id'",
+        )
+        .toArray().length > 0
+    ) {
+      sql.exec(`CREATE TABLE oyster_build_jobs_current (${jobColumns}) STRICT`);
+      sql.exec(
+        `INSERT INTO oyster_build_jobs_current SELECT job_id, app_id, release_id,
+         source_revision,
+         json_object('kind', 'installation', 'installationId', installation_id,
+           'repository', repository),
+         recipe, recipe_digest, requested_by, credential_id, upload_grant_digest,
+         status, artifact_digest, artifact_bytes, detail, issued_at, expires_at,
+         executable_until
+       FROM oyster_build_jobs`,
+      );
+      sql.exec("DROP TABLE oyster_build_jobs");
+      sql.exec(
+        "ALTER TABLE oyster_build_jobs_current RENAME TO oyster_build_jobs",
+      );
+    }
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS oyster_build_releases (release_id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE, release TEXT NOT NULL) STRICT",
+    );
+  });
 }
 
-/** The build owner over one tenant's SQLite, Computer and Release bucket. */
+/** The build owner over one tenant's SQLite, Computer and artifact store. */
 export function createOysterAppBuilds(options: OysterAppBuildOptions) {
   const { owner } = options;
   const now = options.now ?? Date.now;
-  migrateOysterAppBuilds(owner.sql);
+  // The host store overwrites on put, so write-once is checked here first.
+  const storeObjects: ImmutableArtifactObjects = {
+    async create(artifactRef, bytes) {
+      if ((await options.artifacts.get(artifactRef)) !== null) return "exists";
+      await options.artifacts.put(artifactRef, bytes);
+      return "created";
+    },
+    read: (artifactRef) => options.artifacts.get(artifactRef),
+  };
+  migrateOysterAppBuilds(owner);
+  // A job outlives the owner instance that started it: the Computer keeps
+  // building and its own reports (objects, candidate, status) settle the
+  // job, so an owner restart must not fail it. A job that reaches its expiry
+  // without a result can never settle, so it fails then instead of reading
+  // as running for as long as anyone asks.
+  const expire = () =>
+    owner.sql.exec(
+      "UPDATE oyster_build_jobs SET status='failed', detail=? WHERE status='running' AND expires_at<=?",
+      "Build expired without a result",
+      now(),
+    );
+  expire();
 
+  const decodeRecipe = (recipe: string): PinnedRecipe =>
+    Schema.decodeUnknownSync(recipeCodec)(recipe);
+  const grantAdmits = async (job: JobRow, grant: string) =>
+    sameDigest(
+      job.upload_grant_digest,
+      await sha256Hex(new TextEncoder().encode(grant)),
+    );
   const readJob = (jobId: string): JobRow | null => {
     const [row] = owner.sql
       .exec("SELECT * FROM oyster_build_jobs WHERE job_id=?", jobId)
@@ -210,9 +333,12 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     computerId: options.computer.name,
     credentialId: job.credential_id,
     issuedAt: job.issued_at,
-    repository: job.repository,
+    repository: cloneRepository(job),
     expiresAt: job.expires_at,
-    remote: `https://${oysterBuildGitHost}/git/${job.installation_id}/${job.repository}.git`,
+    remote:
+      job.location.kind === "installation"
+        ? `https://${oysterBuildGitHost}/git/${job.location.installationId}/${job.location.repository}.git`
+        : `https://${oysterBuildGitHost}/${cloneRepository(job)}.git`,
     reportUrl: `https://${oysterBuildReportHost}/jobs/${job.job_id}`,
     status: job.status,
     artifact:
@@ -282,12 +408,16 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         );
         return Promise.resolve();
       },
-      execute: (input) =>
-        options.computer.port.runBuild({
+      execute: async (input) => {
+        const result = await options.computer.port.runBuild({
           jobId: input.jobId,
           command: input.command,
           timeoutMs: input.timeoutMs,
-        }),
+        });
+        if (result.output === undefined || result.output === null)
+          throw new BuildOutcomeUnknown();
+        return result;
+      },
       deliverTeamGitEvents: () => Promise.resolve(0),
     }),
   });
@@ -310,11 +440,14 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         timeoutMs: oysterAppBuildTimeoutMs,
       });
     } catch (cause) {
-      settle(
-        jobId,
-        "failed",
-        cause instanceof Error ? cause.message : "Build failed",
-      );
+      // Without a terminal result the build may still be running on the
+      // Computer; its own reports settle the job, or its expiry fails it.
+      if (!(cause instanceof BuildOutcomeUnknown))
+        settle(
+          jobId,
+          "failed",
+          cause instanceof Error ? cause.message : "Build failed",
+        );
     }
     return view(required(jobId));
   };
@@ -343,6 +476,8 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     readSource,
     /**
      * Mint one build job for an App's registered source at one exact commit.
+     * A template source builds only a seed revision recorded for its pinned
+     * recipe.
      * Answers the job and its one run, which the caller keeps alive (the
      * upload grant exists only inside that run's fixed command).
      */
@@ -358,6 +493,14 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       );
       const source = readSource(input.appId);
       if (source === null) throw new Error("App has no build source");
+      if (source.location.kind === "template") {
+        const receipt = await options.templates.read(
+          source.appId,
+          sourceRevision,
+        );
+        if (receipt?.buildRecipeDigest !== source.buildRecipeDigest)
+          throw new Error("Revision is not a seed of this App's template");
+      }
       const jobId = `build_${randomHex(16)}`;
       const releaseId = parseReleaseId(
         `rel_${sourceRevision.slice("git:".length, "git:".length + 12)}${randomHex(4)}`,
@@ -365,16 +508,15 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       const uploadGrant = randomHex(32);
       const issuedAt = now();
       owner.sql.exec(
-        `INSERT INTO oyster_build_jobs(job_id, app_id, release_id, source_revision, installation_id,
-          repository, recipe, recipe_digest, requested_by, credential_id, upload_grant_digest,
+        `INSERT INTO oyster_build_jobs(job_id, app_id, release_id, source_revision, location,
+          recipe, recipe_digest, requested_by, credential_id, upload_grant_digest,
           status, artifact_digest, artifact_bytes, detail, issued_at, expires_at, executable_until)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL, ?, ?, 0)`,
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL, ?, ?, 0)`,
         jobId,
         source.appId,
         releaseId,
         sourceRevision,
-        source.installationId,
-        source.repository,
+        Schema.encodeUnknownSync(locationCodec)(source.location),
         Schema.encodeUnknownSync(recipeCodec)(source.recipe),
         source.buildRecipeDigest,
         input.requestedBy,
@@ -391,6 +533,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       return { build: view(required(jobId)), run: () => run(jobId, command) };
     },
     read(jobId: string): OysterBuildView | null {
+      expire();
       const job = readJob(jobId);
       return job === null ? null : view(job);
     },
@@ -446,7 +589,9 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         return null;
       const job = owner.sql
         .exec(
-          "SELECT * FROM oyster_build_jobs WHERE installation_id=? AND repository=? AND status='running' AND expires_at>? ORDER BY issued_at DESC LIMIT 1",
+          `SELECT * FROM oyster_build_jobs WHERE json_extract(location, '$.kind')='installation'
+            AND json_extract(location, '$.installationId')=? AND json_extract(location, '$.repository')=?
+            AND status='running' AND expires_at>? ORDER BY issued_at DESC LIMIT 1`,
           target.installationId,
           target.repository,
           now(),
@@ -470,11 +615,32 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       if (match === null || target.scope !== "read") return null;
       const job = readJob(match[1] ?? "");
       return live(job) &&
+        job.location.kind === "installation" &&
         sameDigest(job.credential_id, match[2] ?? "") &&
-        job.installation_id === target.installationId &&
-        job.repository === target.repository
+        job.location.installationId === target.installationId &&
+        job.location.repository === target.repository
         ? { requestedBy: job.requested_by }
         : null;
+    },
+    /**
+     * May this Computer's clone read this template repository now? Only while
+     * a live template job on this Computer names it.
+     */
+    admitTemplateClone(computerObjectId: string, repository: string): boolean {
+      if (computerObjectId !== options.computer.objectId) return false;
+      // The template repository names exactly one App (templateRepositoryForApp).
+      const appId = appForTemplateRepository(repository);
+      if (appId === null) return false;
+      return (
+        owner.sql
+          .exec(
+            `SELECT 1 FROM oyster_build_jobs WHERE app_id=? AND json_extract(location, '$.kind')='template'
+              AND status='running' AND expires_at>? LIMIT 1`,
+            appId,
+            now(),
+          )
+          .toArray().length > 0
+      );
     },
     /** A reported artifact or status for a live job. */
     record(
@@ -508,12 +674,37 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         settle(event.jobId, event.status, event.detail);
     },
     /**
-     * The Computer's candidate for a live job: checked against the job, written
-     * by the shared R2 writer, verified as an installable Release and recorded.
+     * May this live job's build upload one object now, and how large? The
+     * grant is the one inside the job's fixed command; the bound is its
+     * recipe's (`pinnedRecipeObjectBound`).
+     */
+    async admitObjectUpload(
+      jobId: string,
+      computerObjectId: string,
+      grant: string,
+    ): Promise<Readonly<{ maxObjectBytes: number }> | null> {
+      const job = readJob(jobId);
+      if (
+        computerObjectId !== options.computer.objectId ||
+        !live(job) ||
+        !(await grantAdmits(job, grant))
+      )
+        return null;
+      return {
+        maxObjectBytes: pinnedRecipeObjectBound(decodeRecipe(job.recipe)),
+      };
+    },
+    /**
+     * The Computer's candidate manifest for a live job: checked against the
+     * job and its pinned recipe, each named object found stored with its
+     * size and verified digest (one at a time; only the backend descriptor
+     * is read), its asset manifest and App root written, verified as an
+     * installable Release and recorded. An over-policy candidate stores
+     * nothing.
      */
     async submitCandidate(
       jobId: string,
-      candidate: TeamAppCandidateSubmission,
+      manifest: TeamAppCandidateManifest,
       grant: string,
       credentialId: string,
     ): Promise<Response> {
@@ -521,49 +712,62 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       if (
         !live(job) ||
         job.credential_id !== credentialId ||
-        !sameDigest(
-          job.upload_grant_digest,
-          await sha256Hex(new TextEncoder().encode(grant)),
-        )
+        !(await grantAdmits(job, grant))
       )
         return new Response(null, { status: 403 });
       if (
-        candidate.appId !== job.app_id ||
-        candidate.provenance.sourceRevision !== job.source_revision ||
-        candidate.provenance.buildRecipeDigest !== job.recipe_digest
+        manifest.appId !== job.app_id ||
+        manifest.provenance.sourceRevision !== job.source_revision ||
+        manifest.provenance.buildRecipeDigest !== job.recipe_digest
       )
         return new Response(null, { status: 409 });
       if (readRelease(jobId) !== null)
         return new Response(null, { status: 409 });
-      const recipe: PinnedRecipe = Schema.decodeUnknownSync(recipeCodec)(
-        job.recipe,
-      );
-      const digest = await sha256Hex(
-        new TextEncoder().encode(encodeTeamAppCandidateSubmission(candidate)),
-      );
-      const writerOptions: Parameters<typeof createR2ArtifactWriter>[0] = {
-        bucket: options.bucket,
-        artifactRef: parseArtifactRef(`artifact:sha256-${digest}`),
-        policy: {
-          maxBytes: recipe.maxOutputBytes,
-          maxManifestBytes: recipe.assets?.maxManifestBytes ?? 1024 * 1024,
-        },
-      };
-      if (recipe.assets !== undefined) writerOptions.assets = recipe.assets;
+      const recipe = decodeRecipe(job.recipe);
       let release: Release;
       try {
-        release = await Effect.runPromise(
-          commitPreparedCandidate(
-            { ...candidate, releaseId: parseReleaseId(job.release_id) },
-            {
-              artifactWriter: createR2ArtifactWriter(writerOptions),
-              releaseCatalog: {
-                createRelease: (value) => Promise.resolve(value),
-              },
-            },
+        if (!fitsPinnedRecipe(manifest.output, recipe))
+          throw new Error("Candidate exceeds its pinned recipe");
+        for (const object of candidateManifestObjects(manifest.output)) {
+          const head = await options.artifacts.head(
+            contentObjectRef(object.digest),
+          );
+          if (
+            head?.byteLength !== object.byteLength ||
+            head.digest !== object.digest
+          )
+            throw new Error("Candidate object is not stored as named");
+        }
+        if (manifest.output.kind !== "ui")
+          decodeCandidateBackend(
+            await readVerified(
+              options.artifacts,
+              contentObjectRef(manifest.output.backend.digest),
+              manifest.output.backend.digest,
+            ),
+          );
+        const root = await writeArtifactRoot(manifest.output, storeObjects, {
+          rootArtifactRef: parseArtifactRef(
+            `artifact:sha256-${await digestTeamAppCandidateManifest(manifest)}`,
           ),
+          assetPolicy: recipe.assets,
+        });
+        release = Schema.decodeUnknownSync(releaseSchema)({
+          releaseId: job.release_id,
+          appId: manifest.appId,
+          artifact: {
+            artifactRef: root.artifactRef,
+            artifactDigest: root.artifactDigest,
+            provenance: manifest.provenance,
+          },
+        });
+        // Each object was checked by its stored digest above.
+        await verifyRelease(
+          options.artifacts,
+          release,
+          defaultAssetPolicy,
+          false,
         );
-        await verifyRelease(options.artifacts, release);
       } catch {
         settle(jobId, "failed", "Candidate could not be stored as a Release");
         return new Response(null, { status: 422 });

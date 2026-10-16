@@ -120,16 +120,75 @@ that removes it again. The shell loads its own code and styles.
 
 `Promise`\<() => `void`\>
 
+---
+
+### ShellPlatformControls
+
+```ts
+type ShellPlatformControls = Readonly<{
+  controls: WorkbenchHostControls;
+  suggestDesktopSettings: void;
+  dispose: void;
+}>;
+```
+
+Settings a shell renders for a host that has none of its own, such as a
+standalone Oyster: the shell draws them into `root`, and the host hands
+`controls` to its workbench so Apps and the dashboard can open them.
+
+---
+
+### MountPlatformControls
+
+```ts
+type MountPlatformControls = (root, input) => Promise<ShellPlatformControls>;
+```
+
+Render the shell's own Settings into `root` for the host at `teamId`.
+
+#### Parameters
+
+| Parameter | Type                                    |
+| --------- | --------------------------------------- |
+| `root`    | `HTMLElement`                           |
+| `input`   | `Readonly`\<\{ `teamId`: `string`; \}\> |
+
+#### Returns
+
+`Promise`\<[`ShellPlatformControls`](#shellplatformcontrols)\>
+
+---
+
+### ShellModule
+
+```ts
+type ShellModule = Readonly<{
+  mountShell: MountShell;
+  mountPlatformControls: MountPlatformControls | null;
+}>;
+```
+
+What a host gets from a picked shell Release's module.
+
 ## Functions
 
 ### importShellModule()
 
 ```ts
-function importShellModule(moduleUrl, hostOrigin): Promise<MountShell>;
+function importShellModule(
+  moduleUrl,
+  hostOrigin,
+): Promise<
+  Readonly<{
+    mountShell: MountShell;
+    mountPlatformControls: MountPlatformControls | null;
+  }>
+>;
 ```
 
 Import the picked shell Release's module from the host's own origin and check
-that it exports `mountShell`. The host never bundles a shell.
+that it exports `mountShell`, and `mountPlatformControls` when it offers its own
+Settings. The host never bundles a shell.
 
 #### Parameters
 
@@ -140,4 +199,6 @@ that it exports `mountShell`. The host never bundles a shell.
 
 #### Returns
 
-`Promise`\<[`MountShell`](#mountshell)\>
+`Promise`\<`Readonly`\<\{ `mountShell`: [`MountShell`](#mountshell);
+`mountPlatformControls`: [`MountPlatformControls`](#mountplatformcontrols) \|
+`null`; \}\>\>

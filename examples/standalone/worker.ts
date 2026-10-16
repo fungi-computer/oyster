@@ -1,14 +1,7 @@
-// A standalone Oyster: one owner, Apps installed from Releases, each App's
-// backend in its own Durable Object with SQLite. Runs on Cloudflare Workers
-// (`wrangler deploy`) and on celld (`celld dev`) from the same code.
-import { createOysterWorker } from "@fungi.computer/oyster/workers";
-
-// Every App binding in every invocation frame is the one `OysterBinding` entrypoint.
-export {
-  OysterBinding,
-  OysterInstance,
-  OysterRegistry,
-  OysterMcp,
-} from "@fungi.computer/oyster/workers";
-
-export default createOysterWorker();
+// The whole Oyster: Apps installed from Releases, each with its own Durable
+// Object and SQLite; git through Artifacts; a Computer in a Cloudflare
+// Container that builds App sources and runs terminals and files; Agents on
+// Workers AI; Workflows; and media. Runs on Cloudflare Workers
+// (`wrangler deploy`) and on celld from the same code.
+export * from "@fungi.computer/oyster/standalone";
+export { default } from "@fungi.computer/oyster/standalone";

@@ -117,7 +117,7 @@ await writeFile(
   config,
   JSON.stringify({
     name: "oyster-background-proof",
-    main: `${root}examples/standalone/worker.ts`,
+    main: `${root}test/plain-root.fixture.ts`,
     compatibility_date: "2026-09-04",
     compatibility_flags: ["nodejs_compat"],
     worker_loaders: [{ binding: "LOADER" }],

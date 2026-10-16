@@ -30,6 +30,19 @@ export type ArtifactStore = Readonly<{
   put: (artifactRef: ArtifactRef, bytes: Uint8Array) => Promise<void>;
 }>;
 
+/** What a store knows of one object without reading it. */
+export type ArtifactHead = Readonly<{
+  byteLength: number;
+  /** The digest the store verified when it took the bytes, if it did. */
+  digest: Sha256Digest | null;
+}>;
+
+/** A store that can describe an object without reading its bytes. */
+export type ArtifactHeads = Readonly<{
+  /** Describe the object at `artifactRef`, or `null` when absent. */
+  head: (artifactRef: ArtifactRef) => Promise<ArtifactHead | null>;
+}>;
+
 /** Why a Release could not be read; the host maps it to an HTTP refusal. */
 export class ReleaseError extends Error {
   override readonly name = "ReleaseError";
@@ -153,12 +166,11 @@ export async function verifyRelease(
       } catch (cause) {
         throw new ReleaseError("invalid_release", "Invalid assets", { cause });
       }
+      // One asset at a time: a Release's assets together can exceed an
+      // isolate's memory, each alone is bounded by its policy.
       if (readAssets)
-        await Promise.all(
-          assets.assets.map((asset) =>
-            readVerified(store, asset.artifactRef, asset.digest),
-          ),
-        );
+        for (const asset of assets.assets)
+          await readVerified(store, asset.artifactRef, asset.digest);
       ui = { kind: "assets", build: assets };
     } else
       ui = {

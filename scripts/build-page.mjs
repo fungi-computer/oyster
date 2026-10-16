@@ -29,7 +29,7 @@ const [styles, fonts] = await Promise.all([
 ]);
 
 const result = await build({
-  entryPoints: [new URL("../src/page/main.ts", import.meta.url).pathname],
+  entryPoints: [new URL("../src/page/main.tsx", import.meta.url).pathname],
   bundle: true,
   format: "esm",
   platform: "browser",

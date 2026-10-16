@@ -27,6 +27,7 @@
   "include": [
     "src/**/*.ts",
     "test/*.ts",
+    "test/tenancy/*.ts",
     "test/stranger/*.mts",
     "test/storage-app/backend/*.ts",
     "test/background-app/backend/*.ts",
