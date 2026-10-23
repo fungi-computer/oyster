@@ -8,7 +8,11 @@ import * as Schema from "effect/Schema";
 import { appBuildJsonSchema } from "@fungi.computer/puffball/app";
 import { assetBuildJsonSchema } from "@fungi.computer/puffball/assets";
 import { createServer } from "node:http";
+import { URL } from "node:url";
 import { installRelease, packRelease } from "../dist/pack.js";
+import { approvedInstallation } from "../dist/testing/index.js";
+import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
+import { instanceIds } from "../dist/instance-id.js";
 
 const assets = {
   maxManifestBytes: 65_536,
@@ -206,18 +210,57 @@ test("canonical recipe bounds reject oversized assets", async (t) => {
   );
 });
 
-test("installRelease uploads artifacts, then one install-or-select POST names the installation", async (t) => {
+test("installRelease uploads, submits once and awaits the correlated owner completion", async (t) => {
   const { options } = await fixture(t, undefined);
   const packed = await packRelease(options);
+  const installation = await approvedInstallation({
+    installationId: "fixture-app",
+    instanceId: instanceIds.instance.generate(),
+    release: packed.release,
+    declaration: emptyAppDeclaration,
+  });
   const requests = [];
+  let operation;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => (body += chunk));
     request.on("end", () => {
       requests.push({ method: request.method, url: request.url, body });
       if (request.url === "/api/installations") {
-        // The host's install-or-select switches an existing installation.
-        response.writeHead(200).end("{}");
+        operation = {
+          state: "pending",
+          requestId: request.headers["idempotency-key"],
+          requestedInstallationId: "fixture-app",
+          installationId: "fixture-app",
+          release: packed.release,
+        };
+        response
+          .writeHead(202, { "Content-Type": "application/json" })
+          .end(JSON.stringify(operation));
+      } else if (
+        request.url.startsWith("/api/installations/fixture-app/status?")
+      ) {
+        assert.equal(
+          new URL(request.url, "http://fixture.test").searchParams.get(
+            "requestId",
+          ),
+          operation.requestId,
+        );
+        response.writeHead(200, { "Content-Type": "application/json" }).end(
+          JSON.stringify({
+            ...operation,
+            state: "succeeded",
+            creation: "replacement",
+            installation,
+            reference: {
+              generation: "fixture-generation",
+              instanceId: installation.instanceId,
+              authorityVersion: installation.authority.authorityVersion,
+              status: installation.status,
+            },
+            uiCheck: { kind: "passed" },
+          }),
+        );
       } else if (request.url.startsWith("/api/artifacts/")) {
         response.writeHead(204).end();
       } else response.writeHead(200).end("{}");
@@ -225,21 +268,31 @@ test("installRelease uploads artifacts, then one install-or-select POST names th
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
+  // Observe the maintained timer interface without replacing time or waiting
+  // twenty minutes. An explicit installer budget must not be silently clamped.
+  const timeout = t.mock.method(globalThis.AbortSignal, "timeout");
   const response = await installRelease({
     directory: options.outDirectory,
     url: `http://127.0.0.1:${String(server.address().port)}`,
     key: "owner-key",
-    installationId: "fixture app",
+    installationId: "fixture-app",
+    waitMs: 20 * 60_000,
   });
   assert.equal(response.status, 200);
   const installs = requests.filter(
     (request) => !request.url.startsWith("/api/artifacts/"),
   );
-  assert.equal(installs.length, 1);
+  assert.equal(installs.length, 2);
   const [install] = installs;
   assert.equal(install.method, "POST");
   assert.equal(install.url, "/api/installations");
   const body = JSON.parse(install.body);
-  assert.equal(body.installationId, "fixture app");
+  assert.equal(body.installationId, "fixture-app");
   assert.equal(body.release.releaseId, packed.release.releaseId);
+  assert.equal(installs[1].method, "GET");
+  assert.deepEqual(await response.json(), installation);
+  assert.deepEqual(
+    timeout.mock.calls.map((call) => call.arguments[0]),
+    [20 * 60_000],
+  );
 });

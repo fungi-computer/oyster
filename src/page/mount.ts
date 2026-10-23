@@ -7,15 +7,29 @@ import {
 } from "@fungi.computer/agar/apps";
 import { appApiMethodNameSchema } from "@fungi.computer/puffball/app";
 import { appIdSchema } from "@fungi.computer/puffball/effect";
-import { createBrowserActionHandler } from "../shell/browser-actions.js";
-import { createAppSurfaceCommandHost } from "../shell/command-host.js";
+import { createBrowserActionHandler } from "@fungi.computer/nacre";
+import { createAppSurfaceCommandHost } from "@fungi.computer/nacre/command-host";
 // App page: mounts one installed App's sandboxed frame and gives it the
 // capabilities this Oyster host provides. Bundled into `shellScript`.
-import { RpcTarget } from "@fungi.computer/capnweb";
+import { RpcTarget, RpcStub } from "@fungi.computer/capnweb";
+import { EventSource } from "eventsource";
+import {
+  connectBrowser,
+  UiBrowserError,
+  type BrowserConnection,
+} from "@fungi.computer/knapsack/ui/browser";
+import type { WhistleRuntime } from "@fungi.computer/whistle";
 import { createPageLifetime } from "./lifetime.js";
+import { computerTargetUrl } from "./computer-target.js";
 import * as Schema from "effect/Schema";
-import { AppError } from "@fungi.computer/agar";
+import {
+  AppError,
+  createCapabilityRegistry,
+  type CapabilityDirectory,
+  type AgentSessionSelection,
+} from "@fungi.computer/agar";
 import { appStorage } from "@fungi.computer/agar/storage";
+import { approvals } from "@fungi.computer/agar/approvals";
 import { oysterStorageHandle } from "./storage.js";
 import { appBackend, appMethods } from "@fungi.computer/agar/backend";
 import {
@@ -31,6 +45,8 @@ import {
   agentManage,
   agentSessionRead,
   agentSessionWrite,
+  openAppAgent,
+  type AppAgentTransport,
 } from "@fungi.computer/agar/agents";
 import { mediaGeneration } from "@fungi.computer/agar/media";
 import {
@@ -60,6 +76,134 @@ import {
 
 // Embedded maintained Caps styles, plus the shell's own styles in a host build.
 declare const OYSTER_SHELL_STYLES: string;
+
+/** One page-wide selected Session, using only its reporting App's admitted view. */
+export class OysterAgentBrowserHost {
+  #active: { frame: HTMLIFrameElement; close: () => void } | undefined;
+  #disposed = false;
+
+  /** End the selected connection with the page's own lifetime. */
+  constructor(signal: AbortSignal) {
+    if (signal.aborted) this.dispose();
+    else
+      signal.addEventListener(
+        "abort",
+        () => {
+          this.dispose();
+        },
+        { once: true },
+      );
+  }
+
+  /** A departing or deselecting mount cannot close a different active mount. */
+  release(frame: HTMLIFrameElement): void {
+    if (this.#active?.frame !== frame) return;
+    const previous = this.#active;
+    this.#active = undefined;
+    previous.close();
+  }
+
+  /** Release the page's current selection; later reports cannot reconnect it. */
+  dispose(): void {
+    this.#disposed = true;
+    if (this.#active !== undefined) this.release(this.#active.frame);
+  }
+
+  /** Bind the reporting mount's current command view to its explicitly selected Session. */
+  async report(
+    frame: HTMLIFrameElement,
+    selection: AgentSessionSelection | null,
+    capabilities: CapabilityDirectory,
+    whistle: Pick<WhistleRuntime, "snapshot" | "execute">,
+  ): Promise<void> {
+    if (this.#disposed) return;
+    if (selection === null) {
+      this.release(frame);
+      return;
+    }
+    if (this.#active !== undefined) this.release(this.#active.frame);
+    // Read-only Apps may observe Sessions, but cannot claim or settle UI work.
+    if (!capabilities.has(agentSessionWrite) && !capabilities.has(agentManage))
+      return;
+    let transport: AppAgentTransport | undefined;
+    let connection: BrowserConnection | undefined;
+    const failure = () => {
+      console.warn("Oyster Agent browser connection failed");
+    };
+    const active = {
+      frame,
+      close: () => {
+        connection?.close();
+        if (transport !== undefined) void transport.close().catch(failure);
+      },
+    };
+    this.#active = active;
+    try {
+      transport = await openAppAgent(capabilities, {
+        agentId: selection.agentId,
+      });
+      if (this.#active !== active) {
+        await transport.close();
+        return;
+      }
+      const admitted = transport;
+      connection = connectBrowser({
+        baseUrl: `${admitted.baseUrl}/browser/sessions/${encodeURIComponent(selection.sessionId)}`,
+        whistle,
+        transport: {
+          fetch: admitted.fetch,
+          openEvents: (url) => new EventSource(url, { fetch: admitted.fetch }),
+        },
+      });
+      void connection.closed.catch((cause: unknown) => {
+        if (this.#active === active) this.release(frame);
+        console.warn(
+          "Oyster Agent browser connection failed",
+          cause instanceof UiBrowserError
+            ? cause.message
+            : "Transport unavailable",
+        );
+      });
+    } catch (cause) {
+      if (this.#active === active) this.release(frame);
+      throw cause;
+    }
+  }
+}
+
+function agentDirectory(
+  capabilities: AppHostLaunch["capabilities"],
+): CapabilityDirectory {
+  const directory = createCapabilityRegistry();
+  const read = capabilities.find(
+    ({ id, version }) =>
+      id === agentSessionRead.id && version === agentSessionRead.version,
+  );
+  const write = capabilities.find(
+    ({ id, version }) =>
+      id === agentSessionWrite.id && version === agentSessionWrite.version,
+  );
+  const manage = capabilities.find(
+    ({ id, version }) =>
+      id === agentManage.id && version === agentManage.version,
+  );
+  if (read !== undefined)
+    directory.provide(
+      agentSessionRead,
+      agentSessionRead.schema.parse(new RpcStub(read.handle)),
+    );
+  if (write !== undefined)
+    directory.provide(
+      agentSessionWrite,
+      agentSessionWrite.schema.parse(new RpcStub(write.handle)),
+    );
+  if (manage !== undefined)
+    directory.provide(
+      agentManage,
+      agentManage.schema.parse(new RpcStub(manage.handle)),
+    );
+  return directory;
+}
 
 /** Current server-admitted configuration for one installed App page. */
 export const oysterAppConfigSchema = Schema.Struct({
@@ -100,7 +244,10 @@ async function answer(response: Response): Promise<WhistleJsonValue> {
 /** The App's typed methods, reached through this host's method route. */
 class Methods extends RpcTarget {
   readonly #url: string;
-  constructor(url: string) {
+  constructor(
+    url: string,
+    readonly computerTarget?: string,
+  ) {
     super();
     this.#url = url;
   }
@@ -110,14 +257,17 @@ class Methods extends RpcTarget {
     )(method);
     const body = Schema.decodeUnknownSync(Schema.String)(input);
     return answer(
-      await fetch(`${this.#url}${name}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        credentials: "same-origin",
-        cache: "no-store",
-        redirect: "error",
-      }),
+      await fetch(
+        computerTargetUrl(`${this.#url}${name}`, this.computerTarget),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "error",
+        },
+      ),
     );
   }
 }
@@ -127,6 +277,7 @@ class Calls extends RpcTarget {
   constructor(
     readonly base: string,
     readonly signal: AbortSignal,
+    readonly computerTarget?: string,
   ) {
     super();
   }
@@ -146,7 +297,10 @@ class Calls extends RpcTarget {
     Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(body);
     return answer(
       await fetch(
-        `${this.base}${encodeURIComponent(target)}/${encodeURIComponent(name)}`,
+        computerTargetUrl(
+          `${this.base}${encodeURIComponent(target)}/${encodeURIComponent(name)}`,
+          this.computerTarget,
+        ),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -282,11 +436,14 @@ export async function mountOysterPage(): Promise<AppHost> {
   // The App's commands are still admitted against its Release declaration.
   const commands = createAppSurfaceCommandHost();
   const mount = commands.mount(config.installationId, config.commands);
+  const agentBrowser = new OysterAgentBrowserHost(lifetime.signal);
   lifetime.own(() => {
     commands.dispose();
   });
   return connectOysterApp({
     config,
+    agentBrowser,
+    agentCommands: mount.agentCommands,
     frame,
     signal: lifetime.signal,
     reservedChords: [],
@@ -311,6 +468,12 @@ export type OysterAppConfig = typeof oysterAppConfigSchema.Type;
 /** One isolated App connection, with the slots this host admitted for it. */
 export type OysterAppConnectionOptions = Readonly<{
   config: OysterAppConfig;
+  /** The page-wide selected Session owner shared by all child mounts. */
+  agentBrowser: OysterAgentBrowserHost;
+  /** The existing command owner's live, mount-scoped Agent view. */
+  agentCommands: Pick<WhistleRuntime, "snapshot" | "execute">;
+  /** An independently admitted per-window target; absent on fixed/default hosts. */
+  computerTarget?: string | undefined;
   frame: HTMLIFrameElement;
   signal: AbortSignal;
   handlers: AppHostHandlers;
@@ -328,6 +491,11 @@ export async function connectOysterApp(
   const { config, frame } = options;
   if (frame.contentWindow === null) throw new Error("App frame is unavailable");
   const capabilities = await oysterAppCapabilities(options);
+  const agents = agentDirectory(capabilities);
+  const releaseBrowser = () => {
+    options.agentBrowser.release(frame);
+  };
+  options.signal.addEventListener("abort", releaseBrowser, { once: true });
   const host = await connectAppHost({
     appWindow: frame.contentWindow,
     expectedAppOrigin: "null",
@@ -355,6 +523,19 @@ export async function connectOysterApp(
     },
     handlers: {
       ...options.handlers,
+      reportAgentSessionSelection: async (selection) => {
+        await options.agentBrowser.report(
+          frame,
+          selection,
+          agents,
+          options.agentCommands,
+        );
+        await options.handlers.reportAgentSessionSelection(selection);
+      },
+      onDisconnect: async () => {
+        releaseBrowser();
+        await options.handlers.onDisconnect();
+      },
       requestBrowserAction: createBrowserActionHandler({
         frame,
         hostWindow: window,
@@ -379,7 +560,10 @@ export { appSandbox } from "../app-sandbox.js";
 
 /** Resolve only the slots admitted for this installation by its current host. */
 export async function oysterAppCapabilities(
-  options: Pick<OysterAppConnectionOptions, "config" | "signal" | "appOpen">,
+  options: Pick<
+    OysterAppConnectionOptions,
+    "config" | "signal" | "appOpen" | "computerTarget"
+  >,
 ): Promise<AppHostLaunch["capabilities"]> {
   const { config } = options;
   const contracts: readonly CapabilityRegistration[] = [
@@ -406,13 +590,19 @@ export async function oysterAppCapabilities(
         let leaseExpiresAt = 0;
         return new TerminalCapability((input) => transport("open", input), {
           computerId: config.computerId,
-          terminalUrl: selected.terminalUrl,
+          terminalUrl: computerTargetUrl(
+            selected.terminalUrl,
+            options.computerTarget,
+          ),
           hostWindow: window,
           mountSignal: options.signal,
           ensureAccess: Object.assign(
             async (signal: AbortSignal) => {
               const response = await fetch(
-                `/apps/${encodeURIComponent(config.installationId)}/`,
+                computerTargetUrl(
+                  `/apps/${encodeURIComponent(config.installationId)}/`,
+                  options.computerTarget,
+                ),
                 {
                   headers: { Accept: "application/json" },
                   credentials: "same-origin",
@@ -434,13 +624,24 @@ export async function oysterAppCapabilities(
                   retryable: false,
                 });
               leaseExpiresAt = Date.now() + 60_000;
-              return terminalSelection(current);
+              const selected = terminalSelection(current);
+              return {
+                ...selected,
+                terminalUrl:
+                  selected.terminalUrl === null
+                    ? null
+                    : computerTargetUrl(
+                        selected.terminalUrl,
+                        options.computerTarget,
+                      ),
+              };
             },
             { leaseExpiresAt: () => leaseExpiresAt },
           ),
         });
       },
     },
+    { contract: approvals },
     { contract: agentList },
     { contract: agentManage },
     { contract: agentSessionRead },
@@ -478,7 +679,7 @@ export async function oysterAppCapabilities(
           return [
             Promise.resolve({
               ...appsCall,
-              handle: new Calls(base, options.signal),
+              handle: new Calls(base, options.signal, options.computerTarget),
             }),
           ];
         }
@@ -498,6 +699,7 @@ export async function oysterAppCapabilities(
             registration,
             descriptor,
             config.installationId,
+            options.computerTarget,
           ).then((handle) => ({ ...registration.contract, handle })),
         ];
       },
@@ -506,8 +708,16 @@ export async function oysterAppCapabilities(
   if (unknownCapabilities.length > 0)
     document.body.dataset.oysterCapability = unknownCapabilities.join(", ");
   const resolved: AppHostLaunch["capabilities"][number][] = [
-    { ...appBackend, handle: new Backend(config.backendUrl) },
-    { ...appMethods, handle: new Methods(config.methodsUrl) },
+    {
+      ...appBackend,
+      handle: new Backend(
+        computerTargetUrl(config.backendUrl, options.computerTarget),
+      ),
+    },
+    {
+      ...appMethods,
+      handle: new Methods(config.methodsUrl, options.computerTarget),
+    },
     ...capabilities,
     ...(config.appsOpen && options.appOpen
       ? [{ ...appsOpen, handle: new AppOpen(options.appOpen) }]

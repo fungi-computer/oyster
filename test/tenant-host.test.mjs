@@ -1,17 +1,24 @@
 import { approvedInstallation } from "../dist/testing/index.js";
-import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
+import {
+  createAppBuild,
+  emptyAppDeclaration,
+} from "@fungi.computer/puffball/app";
 import { approvedBindingGrants } from "../dist/apps/index.js";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
+import { createHash, randomBytes } from "node:crypto";
 import test from "node:test";
 import { URL } from "node:url";
 import * as Schema from "effect/Schema";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { fromNodeSqlite as fromNodeSqliteEarTag } from "@fungi.computer/ear-tag/keys/node";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
+import { backendMediaType } from "@fungi.computer/puffball/backend";
 import { instanceIds } from "../dist/index.js";
+import { BOOT_CAPABILITY_HEADER } from "../dist/boot-capability.js";
 import { defaultTenant, tenantIdSchema, tenantScope } from "../dist/tenant.js";
+import { withBackendConstruction } from "./boot-construction.fixture.ts";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -24,7 +31,7 @@ const hooks = registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { OysterRegistry, OysterInstance, oysterWorkerHost } =
+const { OysterRegistry, OysterInstance, oysterWorkerHost, r2FileSource } =
   await import("../dist/workers.js");
 const {
   createOysterGitWorker,
@@ -32,8 +39,10 @@ const {
   oysterGitWorkerHost,
   ownerOrKeyTenancy,
   OysterKeys,
-} = await import("../dist/workers-git.js");
+} = await import("../src/workers-git.ts");
 const { ownerOrKeyAuth } = await import("../dist/auth.js");
+const { standaloneComputerSelection } =
+  await import("../src/standalone/computer-fleet.ts");
 hooks.deregister();
 
 /** A real `OysterKeys` instance over real node:sqlite, for the owner-recheck proof below. */
@@ -79,7 +88,10 @@ test("two tenant hosts independently retain the same installation name", async (
           t.after(() => database.close());
           registries.set(
             name,
-            new OysterRegistry({ storage: fromNodeSqlite(database) }, env),
+            new OysterRegistry(
+              { id: { name }, storage: fromNodeSqlite(database) },
+              env,
+            ),
           );
         }
         return registries.get(name);
@@ -129,9 +141,27 @@ test("two tenant hosts independently retain the same installation name", async (
   const bob = host("bb");
   const aliceNotes = await installation();
   const bobNotes = await installation();
-  await alice.installations.put(aliceNotes);
+  assert.deepEqual(
+    await alice.installations.compareAndPut(
+      aliceNotes,
+      0,
+      await alice.installations.generation(),
+    ),
+    {
+      ok: true,
+    },
+  );
   assert.deepEqual(await alice.installations.get("notes"), aliceNotes);
-  await bob.installations.put(bobNotes);
+  assert.deepEqual(
+    await bob.installations.compareAndPut(
+      bobNotes,
+      0,
+      await bob.installations.generation(),
+    ),
+    {
+      ok: true,
+    },
+  );
   assert.deepEqual(await bob.installations.get("notes"), bobNotes);
   assert.deepEqual(await alice.installations.get("notes"), aliceNotes);
   assert.deepEqual(await alice.installations.list(), [aliceNotes]);
@@ -149,6 +179,237 @@ const scopeOf = (id) =>
     Schema.decodeUnknownSync(tenantIdSchema)(id),
     `https://${id}.oyster.test`,
   );
+
+test("per-boot tenant scope selects the exact origin and registry for backend-plus-UI prepare", async (t) => {
+  const uiBytes = new globalThis.TextEncoder().encode(
+    "<!doctype html><body>tenant UI</body>",
+  );
+  const backendBytes = new globalThis.TextEncoder().encode(
+    JSON.stringify({
+      runtime: { kind: "durable-facet", stateSchema: 1 },
+      compatibilityDate: "2026-09-04",
+      exportName: "Notes",
+      code: "export class Notes {}",
+    }),
+  );
+  const digestOf = (bytes) =>
+    `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const rootBytes = new globalThis.TextEncoder().encode(
+    JSON.stringify(
+      createAppBuild(
+        {
+          artifactRef: "artifact:tenant-boot-ui",
+          digest: digestOf(uiBytes),
+          byteLength: uiBytes.byteLength,
+          version: "tenant-ui",
+          mediaType: "text/html; charset=utf-8",
+        },
+        {
+          artifactRef: "artifact:tenant-boot-backend",
+          digest: digestOf(backendBytes),
+          byteLength: backendBytes.byteLength,
+          version: "tenant-backend",
+          mediaType: backendMediaType,
+        },
+        emptyAppDeclaration,
+      ),
+    ),
+  );
+  const rootDigest = digestOf(rootBytes);
+  const artifacts = new Map([
+    ["artifact:tenant-boot-root", rootBytes],
+    ["artifact:tenant-boot-ui", uiBytes],
+    ["artifact:tenant-boot-backend", backendBytes],
+  ]);
+  const objectFor = (reference) => {
+    const bytes = artifacts.get(reference);
+    if (bytes === undefined) return null;
+    return {
+      size: bytes.byteLength,
+      arrayBuffer: async () =>
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ),
+      body: new globalThis.ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    };
+  };
+  const release = Schema.decodeUnknownSync(releaseSchema)({
+    appId: "app_notes",
+    releaseId: "rel_notes",
+    artifact: {
+      artifactRef: "artifact:tenant-boot-root",
+      artifactDigest: rootDigest,
+      provenance: {
+        sourceRevision: `git:${"a".repeat(40)}`,
+        sourceTreeDigest: rootDigest,
+        buildRecipeDigest: rootDigest,
+      },
+    },
+  });
+  const registryDatabases = new Map();
+  const registryDatabaseHandles = [];
+  const registryCalls = [];
+  const observations = {
+    domains: [],
+    closed: [],
+    heads: [],
+  };
+  const env = {
+    OYSTER_ORIGIN: "https://default.oyster.test",
+    RELEASES: {
+      get: async (reference) => objectFor(reference),
+      head: async (reference) => {
+        observations.heads.push(reference);
+        const object = objectFor(reference);
+        return object === null ? null : { size: object.size };
+      },
+    },
+    REGISTRY: {
+      getByName(name) {
+        if (!registryDatabases.has(name)) {
+          const database = new DatabaseSync(":memory:");
+          registryDatabaseHandles.push(database);
+          registryDatabases.set(
+            name,
+            new OysterRegistry(
+              { id: { name }, storage: fromNodeSqlite(database) },
+              env,
+            ),
+          );
+        }
+        const registry = registryDatabases.get(name);
+        return {
+          bootCapability(input) {
+            registryCalls.push({
+              name,
+              kind: input.kind,
+              releaseId: input.grant?.lease.identity.releaseId,
+              tokenDigest: input.grant?.tokenDigest,
+            });
+            return registry.bootCapability(input);
+          },
+        };
+      },
+    },
+    BROWSER: {
+      async fetch(url, init = {}) {
+        const path = new URL(url).pathname;
+        const method = init.method ?? "GET";
+        if (method === "POST" && path.endsWith("/browser")) {
+          observations.domains.push(
+            JSON.parse(init.body).guardrails.allowedDomains,
+          );
+          return globalThis.Response.json({
+            sessionId: `session-${observations.domains.length}`,
+          });
+        }
+        const id = path.split("/").at(-1);
+        if (method === "DELETE") {
+          observations.closed.push(id);
+          return globalThis.Response.json({ status: "closed" });
+        }
+        if (path.includes("/session/"))
+          return globalThis.Response.json({ sessionId: id, endTime: 1 });
+        // The CDP upgrade: no page is driven in this tenant-scope test.
+        return new globalThis.Response(null, { status: 502 });
+      },
+    },
+  };
+  t.after(() => {
+    for (const database of registryDatabaseHandles) database.close();
+  });
+
+  const preparations = [];
+  const constructions = [];
+  for (const id of ["aa", "bb"]) {
+    const database = new DatabaseSync(":memory:");
+    t.after(() => database.close());
+    const ctx = {
+      id: { name: instanceIds.instance.generate() },
+      storage: fromNodeSqlite(database),
+      blockConcurrencyWhile: (run) => run(),
+      facets: {
+        clone: () => undefined,
+        abort: () => undefined,
+        delete: () => undefined,
+        get: () => {
+          throw new Error("No running candidate facet is expected");
+        },
+      },
+    };
+    const construction = withBackendConstruction(ctx.facets, {
+      get: (name, configure) => {
+        const configured = configure();
+        return { getDurableObjectClass: () => configured };
+      },
+    });
+    ctx.facets = construction.facets;
+    constructions.push(construction);
+    const instance = new OysterInstance(ctx, {
+      ...env,
+      LOADER: construction.loader,
+    });
+    const state = {
+      instanceId: ctx.id.name,
+      appId: release.appId,
+      releaseId: release.releaseId,
+      owner: { kind: "installation", id: "installation_notes" },
+      status: "enabled",
+      authorityVersion: 1,
+    };
+    preparations.push(
+      await instance.prepare(state, release, undefined, {
+        tenantId: scopeOf(id).tenantId,
+        origin: scopeOf(id).origin,
+      }),
+    );
+  }
+
+  // The UI check ran on each tenant's own browser session; with no page
+  // driven here it reports the runner unavailable, never a refusal.
+  const unavailable = {
+    ok: true,
+    value: { kind: "not_checked", code: "boot_runner_unavailable" },
+  };
+  assert.deepEqual(
+    preparations.map(({ ok, value }) => ({ ok, value })),
+    [unavailable, unavailable],
+    JSON.stringify({ preparations, observations, registryCalls }),
+  );
+  assert.deepEqual(observations.domains, [
+    ["aa.oyster.test"],
+    ["bb.oyster.test"],
+  ]);
+  assert.deepEqual(
+    registryCalls
+      .filter(({ kind }) => kind === "issue")
+      .map(({ name, releaseId }) => ({
+        name,
+        releaseId,
+      })),
+    [
+      { name: "t.aa.registry", releaseId: "rel_notes" },
+      { name: "t.bb.registry", releaseId: "rel_notes" },
+    ],
+  );
+  assert.deepEqual(
+    registryCalls
+      .filter(({ kind }) => kind === "revoke")
+      .map(({ name }) => name),
+    ["t.aa.registry", "t.bb.registry"],
+  );
+  assert.deepEqual(observations.closed, ["session-1", "session-2"]);
+  for (const construction of constructions) {
+    assert.equal(construction.probes.length, 1);
+    assert.equal(construction.probes[0].completed, true);
+  }
+});
 
 test("workbench directory and every storage operation use the host-selected registry", async () => {
   const calls = [];
@@ -319,7 +580,7 @@ test("a verified named key is a Team-key writer and canonical members retain the
     },
     RELEASES: {},
   };
-  const host = oysterGitRoot({ tenancy: ownerOrKeyTenancy }).hostFor(
+  const host = await oysterGitRoot({ tenancy: ownerOrKeyTenancy }).hostFor(
     env,
     tenantScope(defaultTenant, env.OYSTER_ORIGIN),
   );
@@ -363,6 +624,11 @@ test("an Instance retains its tenant pin across reopen and refuses a foreign ten
     storage: fromNodeSqlite(database),
     blockConcurrencyWhile: (run) => run(),
     facets: {
+      // No live guest is invoked in this context probe; App storage is empty.
+      clone: (source, destination) => {
+        assert.equal(source, "app");
+        assert.equal(destination, "candidate");
+      },
       abort: () => {
         aborts += 1;
       },
@@ -374,7 +640,38 @@ test("an Instance retains its tenant pin across reopen and refuses a foreign ten
       },
     },
   };
+  const loaded = [];
+  const construction = withBackendConstruction(ctx.facets, {
+    get: (name, configure) => {
+      const configured = configure();
+      assert.deepEqual(configured.env, {});
+      assert.equal(configured.globalOutbound, null);
+      loaded.push({ name, limits: configured.limits });
+      return { getDurableObjectClass: () => configured };
+    },
+  });
+  ctx.facets = construction.facets;
+  t.after(() => {
+    assert.ok(construction.probes.length > 0);
+    for (const probe of construction.probes) {
+      assert.equal(probe.completed, true);
+      assert.equal(probe.aborted, true);
+      assert.equal(probe.deleted, true);
+      assert.equal(probe.name, "candidate");
+      assert.match(probe.loaderId, /^boot:/);
+      assert.ok(loaded.some((load) => load.name === probe.loaderId));
+    }
+    for (const load of loaded)
+      assert.deepEqual(load.limits, { cpuMs: 1000, subRequests: 50 });
+  });
   const env = {
+    LOADER: construction.loader,
+    REGISTRY: {
+      getByName: (name) => {
+        assert.equal(name, scopeOf("aa").durableName("registry"));
+        return host.installations;
+      },
+    },
     RELEASES: {
       get: async (ref) => {
         const bytes = await host.artifacts.get(ref);
@@ -403,6 +700,8 @@ test("an Instance retains its tenant pin across reopen and refuses a foreign ten
     true,
   );
   const baselineAborts = aborts;
+  const baselineProbes = construction.probes.length;
+  const baselineLoads = loaded.length;
   const { verifyRelease } = await import("../dist/host.js");
   const { admittedCallerFacts } = await import("../dist/invocation.js");
   const verified = await verifyRelease(host.artifacts, installation.release);
@@ -439,11 +738,15 @@ test("an Instance retains its tenant pin across reopen and refuses a foreign ten
     baselineAborts,
     "foreign tenant must not revoke the retained frame",
   );
+  assert.equal(construction.probes.length, baselineProbes);
+  assert.equal(loaded.length, baselineLoads);
   const reopened = new OysterInstance(ctx, env);
   await assert.rejects(
     reopened.apply(state, installation.release, undefined, pin("bb")),
     /tenant mismatch/,
   );
+  assert.equal(construction.probes.length, baselineProbes);
+  assert.equal(loaded.length, baselineLoads);
   assert.equal(
     (await reopened.apply(state, installation.release, undefined, pin("aa")))
       .ok,
@@ -514,6 +817,246 @@ test("the production worker resolves tenancy before authentication and uses the 
     403,
     "cached hosts recheck current identity/role",
   );
+});
+
+test("the production Git Worker serves an anonymous capability only from its admitted tenant registry", async (t) => {
+  const bytes = new globalThis.TextEncoder().encode("<p>tenant candidate</p>");
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const token = randomBytes(32).toString("base64url");
+  const tokenDigest = createHash("sha256").update(token).digest("hex");
+  const databases = new Map();
+  const registries = new Map();
+  let authentications = 0;
+  let assetReads = 0;
+  const env = {
+    OYSTER_ORIGIN: "https://aa.oyster.test",
+    OYSTER_OWNER_KEY: "owner-key-that-is-not-sent-to-the-capability-route",
+    RELEASES: {
+      get: async (ref) => {
+        if (ref !== "artifact:tenant-boot") return null;
+        assetReads += 1;
+        return {
+          size: bytes.byteLength,
+          body: new globalThis.ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes);
+              controller.close();
+            },
+          }),
+        };
+      },
+    },
+    REGISTRY: {
+      getByName(name) {
+        if (!registries.has(name)) {
+          const database = new DatabaseSync(":memory:");
+          databases.set(name, database);
+          const registry = new OysterRegistry(
+            { id: { name }, storage: fromNodeSqlite(database) },
+            env,
+          );
+          registries.set(name, registry);
+        }
+        return registries.get(name);
+      },
+    },
+  };
+  t.after(() => {
+    for (const database of databases.values()) database.close();
+  });
+  const tenancy = {
+    async resolve(request) {
+      const hostname = new URL(request.url).hostname;
+      const id = hostname.split(".")[0];
+      if (id !== "aa" && id !== "bb") return null;
+      return {
+        scope: scopeOf(id),
+        auth: {
+          authenticate: async () => {
+            authentications += 1;
+            return { kind: "refused", status: 401 };
+          },
+        },
+      };
+    },
+  };
+  const worker = createOysterGitWorker(
+    oysterGitRoot({ tenancy: () => tenancy }),
+  );
+  const aaRegistry = env.REGISTRY.getByName("t.aa.registry");
+  aaRegistry.bootCapability({
+    kind: "issue",
+    grant: {
+      lease: {
+        id: "lease-tenant-host",
+        identity: {
+          appId: "app_notes",
+          releaseId: "rel_notes",
+          surfaceId: "host-boot",
+        },
+        base: "./",
+        expiresAt: Date.now() + 5000,
+        assets: [
+          {
+            path: "/index.html",
+            contentType: "text/html; charset=utf-8",
+            artifactRef: "artifact:tenant-boot",
+            digest,
+            byteLength: bytes.byteLength,
+          },
+        ],
+      },
+      tokenDigest,
+    },
+  });
+
+  const response = await worker.fetch(
+    new globalThis.Request(
+      "https://aa.oyster.test/_boot/rel_notes/candidate/index.html",
+      {
+        headers: {
+          Host: "bb.oyster.test",
+          [BOOT_CAPABILITY_HEADER]: token,
+        },
+      },
+    ),
+    env,
+    {},
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(await response.text(), "<p>tenant candidate</p>");
+  assert.equal(
+    authentications,
+    0,
+    "capability access does not require owner auth",
+  );
+  assert.equal(assetReads, 1);
+
+  const otherTenant = await worker.fetch(
+    new globalThis.Request(
+      "https://bb.oyster.test/_boot/rel_notes/candidate/index.html",
+      { headers: { [BOOT_CAPABILITY_HEADER]: token } },
+    ),
+    env,
+    {},
+  );
+  assert.equal(otherTenant.status, 404);
+  assert.equal(assetReads, 1, "another tenant cannot stream the issued asset");
+  const unknownOrigin = await worker.fetch(
+    new globalThis.Request(
+      "https://unknown.oyster.test/_boot/rel_notes/candidate/index.html",
+      { headers: { [BOOT_CAPABILITY_HEADER]: token } },
+    ),
+    env,
+    {},
+  );
+  assert.equal(unknownOrigin.status, 404);
+  assert.equal(authentications, 0);
+
+  const ordinaryApi = await worker.fetch(
+    new globalThis.Request("https://aa.oyster.test/api/installations"),
+    env,
+    {},
+  );
+  assert.equal(ordinaryApi.status, 401);
+  assert.equal(authentications, 1, "ordinary host API still authenticates");
+});
+
+test("window selection and cached HTTP hosts share authentication only within one request", async () => {
+  let authentications = 0;
+  let role = "owner";
+  let liveOwner = true;
+  const reads = [];
+  const selections = [];
+  const registry = {
+    list: async () => [],
+    selectedComputer: async () => {
+      throw new Error(
+        "An explicit window selection must not consult or mutate the default",
+      );
+    },
+    computerFleet: async (memberId, input) => {
+      assert.equal(memberId, "stored-member");
+      assert.equal(input.operation, "resolve");
+      reads.push(input.computerId);
+      if (!liveOwner) return { error: "owner_required" };
+      return input.computerId === "unknown"
+        ? null
+        : {
+            computerId: input.computerId,
+          };
+    },
+  };
+  const env = { RELEASES: {}, REGISTRY: { getByName: () => registry } };
+  const root = oysterGitRoot({
+    tenancy: () => ({
+      resolve: async () => ({
+        scope: scopeOf("aa"),
+        auth: {
+          authenticate: async () => {
+            authentications += 1;
+            return {
+              kind: "admitted",
+              principal: {
+                actor: { kind: "member", memberId: "stored-member" },
+                role,
+              },
+            };
+          },
+        },
+      }),
+    }),
+    workspace: async (currentEnv, _keysLive, scope, incoming) => {
+      const computerId = await standaloneComputerSelection(registry, incoming);
+      selections.push(computerId);
+      return {
+        computerId,
+        files: r2FileSource(currentEnv.RELEASES, scope.workspacePrefix),
+      };
+    },
+  });
+  const worker = createOysterGitWorker(root);
+  const fetch = (computerId) =>
+    worker.fetch(
+      new globalThis.Request(
+        `https://aa.oyster.test/api/installations?computerId=${computerId}`,
+      ),
+      env,
+      {},
+    );
+  assert.equal((await fetch("a")).status, 200);
+  assert.equal((await fetch("b")).status, 200);
+  assert.equal(
+    authentications,
+    2,
+    "workspace and middleware share each request's authentication",
+  );
+  assert.deepEqual(selections, ["a", "b"]);
+  role = "member";
+  assert.equal(
+    (await fetch("a")).status,
+    403,
+    "a cached host must not retain yesterday's owner",
+  );
+  assert.equal(authentications, 3);
+  assert.deepEqual(reads, ["a", "b"], "non-owners never reach the fleet read");
+  role = "owner";
+  liveOwner = false;
+  assert.equal(
+    (await fetch("b")).status,
+    403,
+    "the fleet must still admit the current owner",
+  );
+  liveOwner = true;
+  assert.equal(
+    (await fetch("unknown")).status,
+    404,
+    "a refused hint never falls back to default",
+  );
+  assert.equal(authentications, 5);
+  assert.deepEqual(selections, ["a", "b"]);
 });
 
 test("each request admits its tenant once; a removed tenant refuses the next request without a visitor fallback", async () => {
@@ -598,7 +1141,7 @@ test("cached tenant host resolution refuses changed domain ownership and suspend
     {},
   );
   assert.equal(response.status, 200);
-  const cachedAuth = root.hostFor(env, scopeOf("aa")).auth;
+  const cachedAuth = (await root.hostFor(env, scopeOf("aa"))).auth;
   assert.deepEqual(await cachedAuth.resolve(member), {
     actor: member,
     role: "owner",
@@ -645,7 +1188,7 @@ test("the keys.live port rechecks the live, current owner on every read: a forme
           : null,
     },
   };
-  const host = oysterGitWorkerHost(env, {}, selected);
+  const host = await oysterGitWorkerHost(env, {}, selected);
   const issued = await keys
     .getByName(scope.durableName("keys"))
     .issue("owner", {
@@ -697,7 +1240,7 @@ test("the keys.live port rechecks the live owner's role, not merely that the mem
           : null,
     },
   };
-  const host = oysterGitWorkerHost(env, {}, selected);
+  const host = await oysterGitWorkerHost(env, {}, selected);
   const issued = await keys
     .getByName(scope.durableName("keys"))
     .issue("owner", {

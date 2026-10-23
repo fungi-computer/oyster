@@ -1,8 +1,20 @@
+import { homePageFixture } from "./home-page.fixture.mjs";
 /* global Response */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createOyster } from "../dist/host.js";
 import { computerHost } from "./computer-host.fixture.mjs";
+import { approvedInstallation } from "../dist/testing/index.js";
+import {
+  installationObservationSignal,
+  observeInstallation,
+} from "../dist/installation-client.js";
+import {
+  installationCommandIds,
+  installationOperationSchema,
+} from "../dist/installation-operations.js";
+
+import { verifyRelease } from "../dist/release.js";
 
 test("an anonymous public method resolves its installation once per request", async () => {
   const host = await computerHost(
@@ -76,21 +88,51 @@ test("public page admission reuses its selection only within the current request
   assert.deepEqual(reads, ["context-probe", "context-probe", "context-probe"]);
 });
 
-function fixture(
+async function fixture(
   homeInstallationId,
   anonymous = false,
   publicRelease = null,
   computerId,
 ) {
   const calls = [];
-  const desktop = {
+  const desktop = await approvedInstallation({
     installationId: "desktop-fork",
-    instanceId: "instance_desktop",
-    release: { appId: "app_desktop", releaseId: "rel_desktop" },
-    authorityVersion: 1,
-    status: "enabled",
+    instanceId: null,
+    release: {
+      appId: "app_desktop",
+      releaseId: "rel_desktop",
+      artifact: {
+        artifactRef: `artifact:sha256-${"a".repeat(64)}`,
+        artifactDigest: `sha256:${"a".repeat(64)}`,
+        provenance: {
+          sourceRevision: `git:${"a".repeat(40)}`,
+          sourceTreeDigest: `sha256:${"a".repeat(64)}`,
+          buildRecipeDigest: `sha256:${"a".repeat(64)}`,
+        },
+      },
+    },
+    declaration: { capabilities: [], handlers: [], roles: [] },
     visibility: "private",
+  });
+  let publicApp = {
+    ...desktop,
+    installationId: "public-bonsai",
+    visibility: "public",
   };
+  if (publicRelease !== null) {
+    const verified = await verifyRelease(
+      { get: async (ref) => publicRelease.artifacts.get(ref) ?? null },
+      publicRelease.release,
+    );
+    assert.ok(verified.declaration);
+    publicApp = await approvedInstallation({
+      installationId: "public-bonsai",
+      instanceId: null,
+      release: publicRelease.release,
+      declaration: verified.declaration,
+      visibility: "public",
+    });
+  }
   const host = {
     auth: {
       authenticate: (request) =>
@@ -121,12 +163,7 @@ function fixture(
       list: () =>
         Promise.resolve([
           desktop,
-          {
-            ...desktop,
-            installationId: "public-bonsai",
-            release: publicRelease?.release ?? desktop.release,
-            visibility: "public",
-          },
+          publicApp,
           {
             ...desktop,
             installationId: "disabled-public",
@@ -170,7 +207,7 @@ function fixture(
 }
 
 test("root selects any installed home without importing a particular App", async () => {
-  const { app } = fixture("desktop-fork");
+  const { app } = await fixture("desktop-fork");
   const response = await app.request("/", {
     headers: { Authorization: "owner" },
   });
@@ -179,7 +216,7 @@ test("root selects any installed home without importing a particular App", async
 });
 
 test("root directory is owner-only and contains no synthetic Hub administration", async () => {
-  const { app, calls } = fixture();
+  const { app, calls } = await fixture();
   assert.equal(
     (
       await app.request("/api/workbench/directory", {
@@ -197,7 +234,7 @@ test("root directory is owner-only and contains no synthetic Hub administration"
 });
 
 test("owner workbench inventory projects the fixed Computer without Team grants or timestamps", async () => {
-  const { app } = fixture(undefined, false, null, "workspace");
+  const { app } = await fixture(undefined, false, null, "workspace");
   assert.equal(
     (
       await app.request("/api/workbench/directory", {
@@ -219,7 +256,7 @@ test("owner workbench inventory projects the fixed Computer without Team grants 
 });
 
 test("storage uses admitted owner identity and the canonical key decoder", async () => {
-  const { app, calls } = fixture();
+  const { app, calls } = await fixture();
   const path =
     "/api/workbench/storage/desktop-fork/read?key=desktop&ownerId=forged";
   assert.equal(
@@ -252,7 +289,7 @@ test("storage uses admitted owner identity and the canonical key decoder", async
 });
 
 test("storage rejects forged admission fields before calling its owner", async () => {
-  const { app } = fixture();
+  const { app } = await fixture();
   const response = await app.request(
     "/api/workbench/storage/desktop-fork/write",
     {
@@ -269,143 +306,6 @@ test("storage rejects forged admission fields before calling its owner", async (
   );
   assert.equal(response.status, 400);
 });
-
-async function homePageFixture({
-  declared = true,
-  home = "desktop",
-  rootData = true,
-  opens = false,
-  shellModule = false,
-} = {}) {
-  const { createAppBuild } = await import("@fungi.computer/puffball/app");
-  const { assetBuildMediaType } =
-    await import("@fungi.computer/puffball/assets");
-  const { sha256 } = await import("../dist/release.js");
-  const artifacts = new Map();
-  async function put(bytes) {
-    const digest = await sha256(bytes);
-    const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-    artifacts.set(artifactRef, bytes);
-    return { artifactRef, digest };
-  }
-  const encode = (text) => new globalThis.TextEncoder().encode(text);
-  async function asset(path, contentType, text) {
-    const bytes = encode(text);
-    return {
-      path,
-      ...(await put(bytes)),
-      version: "fixture",
-      byteLength: bytes.length,
-      contentType,
-    };
-  }
-  const bytes = shellModule
-    ? encode(
-        JSON.stringify({
-          format: "fungi-assets-v1",
-          base: "./",
-          assets: [
-            await asset(
-              "/index.html",
-              "text/html; charset=utf-8",
-              "<!doctype html><title>Home fixture</title>",
-            ),
-            await asset(
-              "/shell.js",
-              "text/javascript; charset=utf-8",
-              "export const mountShell = async () => () => {};",
-            ),
-          ],
-        }),
-      )
-    : encode("<!doctype html><title>Home fixture</title>");
-  const ui = {
-    ...(await put(bytes)),
-    version: "fixture",
-    byteLength: bytes.length,
-    mediaType: shellModule ? assetBuildMediaType : "text/html; charset=utf-8",
-  };
-  const built = createAppBuild(ui, null, {
-    capabilities: [
-      ...(declared ? ["team.workbenchHost"] : []),
-      ...(opens ? ["apps.open"] : []),
-    ],
-    handlers: [],
-    roles: [],
-    storage: [{ key: "desktop", scopes: ["member"], maxBytes: 16384 }],
-  });
-  const artifact = await put(
-    new globalThis.TextEncoder().encode(JSON.stringify(built)),
-  );
-  const installation = {
-    installationId: "desktop",
-    instanceId: "instance_desktop",
-    authorityVersion: 1,
-    status: "enabled",
-    release: {
-      appId: "app_desktop",
-      releaseId: "rel_desktop",
-      artifact: {
-        artifactRef: artifact.artifactRef,
-        artifactDigest: artifact.digest,
-        provenance: {
-          sourceRevision: `git:${"a".repeat(40)}`,
-          sourceTreeDigest: artifact.digest,
-          buildRecipeDigest: artifact.digest,
-        },
-      },
-    },
-    // Public, so an anonymous request reaches the page as the host's visitor.
-    visibility: "public",
-  };
-  const host = {
-    homeInstallationId: home,
-    pageScript: "// trusted root composition",
-    auth: {
-      authenticate: (request) => {
-        switch (request.headers.get("x-who") ?? "owner") {
-          case "owner":
-            return Promise.resolve({
-              kind: "admitted",
-              principal: {
-                actor: { kind: "member", memberId: "owner" },
-                role: "owner",
-              },
-            });
-          case "key":
-            return Promise.resolve({
-              kind: "admitted",
-              principal: { actor: { kind: "team-key", keyId: "owner" } },
-            });
-          default:
-            // An anonymous request; the host admits it as a visitor where public.
-            return Promise.resolve({ kind: "refused", status: 401 });
-        }
-      },
-    },
-    installations: {
-      get: (id) => Promise.resolve(id === "desktop" ? installation : null),
-      list: () => Promise.resolve([installation]),
-    },
-    artifacts: {
-      get: (ref) => Promise.resolve(artifacts.get(ref) ?? null),
-      put: () => Promise.reject(new Error("Read only")),
-    },
-    instances: {
-      get: () => {
-        throw new Error("No backend expected");
-      },
-    },
-  };
-  if (rootData)
-    host.workbench = {
-      directory: () => Promise.resolve({ apps: [], roles: {} }),
-      storage: () => {
-        throw new Error("No storage operation expected");
-      },
-    };
-  return createOyster(host);
-}
 
 for (const { name, options, principal, workbench, storage } of [
   {
@@ -465,7 +365,7 @@ for (const { name, options, principal, workbench, storage } of [
 
 test("the home shell page names its Release's own shell module, or none", async () => {
   for (const [shellModule, expected] of [
-    [true, "/ui/desktop/rel_desktop/shell.js"],
+    [true, "/ui-entry/desktop/rel_desktop/shell.js"],
     [false, null],
   ]) {
     const app = await homePageFixture({ shellModule });
@@ -482,12 +382,68 @@ test("the home shell page names its Release's own shell module, or none", async 
     headers: { Accept: "application/json", "x-who": "key" },
   });
   assert.equal((await visitor.json()).shellModuleUrl, null);
+  const entry = await app.request(
+    "https://oyster.test/ui-entry/desktop/rel_desktop/shell.js",
+  );
+  assert.equal(entry.status, 200);
+  assert.match(entry.headers.get("content-type") ?? "", /^text\/javascript/u);
+  assert.equal(
+    await entry.text(),
+    'export * from "/ui/desktop/rel_desktop/shell.js";\n',
+  );
   const module = await app.request(
     "https://oyster.test/ui/desktop/rel_desktop/shell.js",
   );
   assert.equal(module.status, 200);
   assert.match(module.headers.get("content-type") ?? "", /^text\/javascript/u);
   assert.match(await module.text(), /export const mountShell/u);
+});
+
+test("the shell entry and its module recheck current approval instead of immutable UI caching", async () => {
+  const app = await homePageFixture({ shellModule: true });
+  const shell = [
+    "/ui-entry/desktop/rel_desktop/shell.js",
+    "/ui/desktop/rel_desktop/shell.js",
+  ];
+  for (const path of shell) {
+    const approved = await app.request(path);
+    assert.equal(approved.status, 200);
+    assert.equal(approved.headers.get("Cache-Control"), "no-store");
+  }
+  const projectionResponse = await app.request(
+    "/api/installations/desktop/grants",
+    { headers: { Accept: "application/json" } },
+  );
+  assert.equal(projectionResponse.status, 200);
+  const projection = await projectionResponse.json();
+  const revoked = await app.request("/api/installations/desktop/grants", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      storeGeneration: "fixture-generation",
+      authorityVersion: projection.permissions.authority.authorityVersion,
+      artifactDigest: projection.artifactDigest,
+      command: {
+        kind: "change-grants",
+        changes: [{ capability: "team.workbenchHost", grant: null }],
+      },
+    }),
+  });
+  assert.equal(revoked.status, 200);
+  for (const path of shell) {
+    const refused = await app.request(path);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.headers.get("Cache-Control"), "no-store");
+  }
+  const missing = await app.request("/ui-entry/desktop/rel_other/shell.js");
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get("Cache-Control"), "no-store");
+  const ordinary = await app.request("/ui/desktop/rel_desktop/index.html");
+  assert.equal(ordinary.status, 200);
+  assert.equal(
+    ordinary.headers.get("Cache-Control"),
+    "public, max-age=31536000, immutable",
+  );
 });
 
 test("an App page learns apps.open only from its own Release declaration", async () => {
@@ -526,7 +482,7 @@ test("the installed shell admits its bundled data fonts", async () => {
 
 for (const accept of ["text/html", "application/json"]) {
   test(`anonymous home lists only enabled public Apps (${accept})`, async () => {
-    const { app, calls } = fixture(
+    const { app, calls } = await fixture(
       "desktop-fork",
       true,
       await publicReleaseFixture(),
@@ -637,11 +593,11 @@ test("host bundles are digest-pinned immutable assets and share one font stylesh
     html,
   )?.[1];
   assert.match(fonts, /^\/_oyster\/assets\/[a-f0-9]{64}\/fonts.css$/u);
-  const publicApp = fixture(
+  const { app: publicApp } = await fixture(
     "desktop-fork",
     true,
     await publicReleaseFixture(),
-  ).app;
+  );
   const publicHtml = await (await publicApp.request("/")).text();
   assert.ok(publicHtml.includes(`href="${fonts}"`));
   const publicScript = /<script type="module" src="([^"]+)"/u.exec(
@@ -680,5 +636,144 @@ test("login keeps its ordinary owner-key POST and uses the responsive Caps form"
   assert.match(
     html,
     /<link rel="stylesheet" href="\/_oyster\/assets\/[a-f0-9]{64}\/styles.css"/u,
+  );
+});
+
+test("login ships only the sans font family it renders", async () => {
+  const app = await homePageFixture();
+  const html = await (await app.request("/login")).text();
+  const fonts = /<link rel="stylesheet" href="([^"]+login-fonts.css)"/u.exec(
+    html,
+  )?.[1];
+  assert.match(fonts, /^\/_oyster\/assets\/[a-f0-9]{64}\/login-fonts.css$/u);
+  assert.doesNotMatch(html, /\/fonts.css"/u);
+  const response = await app.request(fonts);
+  assert.equal(
+    response.headers.get("Cache-Control"),
+    "public, max-age=31536000, immutable",
+  );
+  const css = await response.text();
+  const families = new Set(
+    [...css.matchAll(/font-family:\s*"?([^";}]+?)"?\s*[;}]/gu)].map(
+      (match) => match[1],
+    ),
+  );
+  assert.deepEqual([...families], ["Nunito"]);
+  const shared = await (
+    await app.request(
+      /<link rel="stylesheet" href="([^"]+\/fonts.css)"/u.exec(
+        await (
+          await app.request("/apps/desktop/", { headers: { "x-who": "owner" } })
+        ).text(),
+      )?.[1],
+    )
+  ).text();
+  assert.ok(css.length < shared.length / 4);
+});
+
+test("a deleted installation id is retired; a reinstall takes a new id", async () => {
+  const app = await homePageFixture({ approved: false });
+  const json = (method, body) => ({
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const [{ release }] = await (await app.request("/api/installations")).json();
+  const install = async (body = {}) => {
+    const requestId = installationCommandIds.request.generate();
+    const admitted = await app.request("/api/installations", {
+      ...json("POST", { release, ...body }),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+    });
+    assert.equal(admitted.status, 202);
+    const initial = installationOperationSchema.parse(await admitted.json());
+    assert.equal(initial.requestId, requestId);
+    assert.equal(
+      initial.requestedInstallationId,
+      body.installationId ?? "app-desktop",
+    );
+    const completed = await observeInstallation({
+      requestId,
+      initial,
+      signal: installationObservationSignal({}),
+      read: async () => {
+        const response = await app.request(
+          `/api/installations/${encodeURIComponent(initial.requestedInstallationId)}/status?requestId=${encodeURIComponent(requestId)}`,
+        );
+        assert.equal(response.status, 200);
+        const operation = installationOperationSchema.parse(
+          await response.json(),
+        );
+        assert.equal(operation.requestId, requestId);
+        return operation;
+      },
+    });
+    assert.equal(completed.state, "succeeded");
+    return completed;
+  };
+  const first = await install();
+  assert.equal(first.creation, "fresh");
+  const named = first.installation;
+  assert.equal(named.installationId, "app-desktop");
+  const pins = await (
+    await app.request("/api/installations/app-desktop/grants", {
+      headers: { Accept: "application/json" },
+    })
+  ).json();
+  assert.equal(
+    (await app.request("/api/installations/app-desktop", { method: "DELETE" }))
+      .status,
+    204,
+  );
+  for (const response of [
+    await app.request("/api/installations/app-desktop/release", {
+      ...json("PUT", release),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": installationCommandIds.request.generate(),
+      },
+    }),
+  ])
+    assert.deepEqual(
+      { status: response.status, body: await response.json() },
+      { status: 409, body: { error: "unavailable" } },
+    );
+  const second = await install();
+  assert.equal(second.creation, "reminted");
+  const fresh = second.installation;
+  assert.match(fresh.installationId, /^app-desktop-[a-z0-9]{21}$/u);
+  const third = await install({ installationId: "app-desktop" });
+  assert.equal(third.creation, "reminted");
+  const another = third.installation;
+  assert.match(another.installationId, /^app-desktop-[a-z0-9]{21}$/u);
+  assert.notEqual(another.installationId, fresh.installationId);
+  assert.equal(fresh.authority.authorityVersion, 1);
+  assert.deepEqual(fresh.authority.approvedGrants, []);
+  assert.deepEqual(fresh.approvedAnonymousMethods, []);
+  assert.equal(
+    (await (await app.request("/api/installations")).json()).find(
+      (row) => row.installationId === "app-desktop",
+    ).status,
+    "deleted",
+  );
+  // A save pinned to the retired installation is a typed stale refusal.
+  const stale = await app.request(
+    "/api/installations/app-desktop/grants",
+    json("PUT", {
+      storeGeneration: "fixture-generation",
+      authorityVersion: pins.permissions.authority.authorityVersion,
+      artifactDigest: pins.artifactDigest,
+      command: {
+        kind: "change-grants",
+        changes: [{ capability: "team.workbenchHost", grant: null }],
+      },
+    }),
+  );
+  assert.deepEqual(
+    { status: stale.status, body: await stale.json() },
+    { status: 409, body: { error: "stale_authority" } },
   );
 });

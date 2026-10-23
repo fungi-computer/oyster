@@ -317,6 +317,62 @@ test("a configured AI_GATEWAY_ID reaches the Workers AI binding, so gateway-only
   assert.deepEqual(seenOptions.gateway, { id: "bonsai-preview" });
 });
 
+test("media preserves safe provider facts without a private marker in its response body", async (t) => {
+  const marker = "synthetic-private-oyster-provider-body";
+  const { bucket, operations } = mediaStorage(t);
+  let dispatches = 0;
+  const adapters = workersMedia(
+    {
+      AI: {
+        run: () => {
+          dispatches++;
+          const cause = new Error(`3031: ${marker}`);
+          cause.name = "InferenceUpstreamError";
+          return Promise.reject(cause);
+        },
+      },
+      MEDIA_OPERATION: operations,
+    },
+    { computerId: "computer-media", files: r2FileSource(bucket, "computer/") },
+  );
+  const fixture = await capabilityFixture({
+    capabilities: ["media.generation"],
+    adapters,
+    authenticate: async () => ({
+      kind: "admitted",
+      principal: {
+        actor: { kind: "member", memberId: "artist" },
+        role: "owner",
+      },
+    }),
+  });
+  for (let replay = 0; replay < 2; replay++) {
+    const response = await fixture.app.request("/media/generate", {
+      method: "POST",
+      headers: {
+        "X-Oyster-Installation": "capability-fixture",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(generation),
+    });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.ok(!body.includes(marker));
+    assert.deepEqual(JSON.parse(body), {
+      kind: "failed",
+      failure: {
+        message:
+          "Media provider failed; nothing was charged. Start a new request.",
+        stage: "provider",
+        code: "HOST_FAILURE",
+        retryable: false,
+        provider: { category: "InferenceUpstreamError", code: 3031 },
+      },
+    });
+  }
+  assert.equal(dispatches, 1);
+});
+
 test("media refuses paths outside the workspace and forged Computer authority before dispatch", async () => {
   const fixture = await mediaFixture();
   for (const destination of [

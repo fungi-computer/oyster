@@ -3,6 +3,7 @@ import {
   createTeamWorkflowTriggers,
   type WorkflowErrorPort,
   type WorkflowRunAuthority,
+  type WorkflowTriggerAdmission,
 } from "@fungi.computer/braid/runtime";
 import { AppInstanceError } from "../index.js";
 
@@ -25,7 +26,7 @@ export function createStandaloneWorkflowTriggerHost(options: {
   authority: WorkflowRunAuthority;
   runs: Pick<
     Parameters<typeof createTeamWorkflowRuns>[0],
-    "sql" | "transactionSync" | "teamId"
+    "sql" | "transactionSync" | "teamId" | "now"
   >;
   triggers: Omit<
     Parameters<typeof createTeamWorkflowTriggers>[0],
@@ -68,8 +69,16 @@ export function createStandaloneWorkflowTriggerHost(options: {
     errors: standaloneTriggerErrors,
     runs: {
       ...runs,
-      async startCachedGraph(binding, request) {
-        const started = await runs.startCachedGraph(binding, request);
+      async startCachedGraph(
+        binding,
+        request,
+        admission?: WorkflowTriggerAdmission,
+      ) {
+        const started = await runs.startCachedGraph(
+          binding,
+          request,
+          admission,
+        );
         // A replay re-records the same caller after a lost reply.
         if (started.kind === "started" || started.kind === "replay")
           options.recordCaller(

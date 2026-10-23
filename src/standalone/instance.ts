@@ -19,7 +19,7 @@ import {
 import {
   computerFrameMethods,
   computerInvocation,
-  standaloneWorkspace,
+  standaloneFrameWorkspace,
   type StandaloneComputerEnv,
 } from "./computer.js";
 import {
@@ -36,11 +36,9 @@ import {
   workflowFrameMethods,
   dispatchWorkflowBinding,
   deliverWorkflowEvent,
-  openWorkflowGitPass,
   workflowEventRecipients,
   type WorkflowBindingEnv,
   type WorkflowEventEnv,
-  type WorkflowGitPassEnv,
 } from "./workflow-binding.js";
 import {
   appsFrameMethods,
@@ -50,7 +48,6 @@ import {
 export type StandaloneInstanceEnv = OysterGitWorkerEnv &
   WorkflowBindingEnv &
   WorkflowEventEnv &
-  WorkflowGitPassEnv &
   StandaloneComputerEnv &
   StandaloneAgentsEnv &
   OysterMediaEnv &
@@ -85,26 +82,33 @@ export const standaloneBindings: OysterBindingTable<StandaloneInstanceEnv> = {
   },
   COMPUTER: {
     methods: computerFrameMethods.COMPUTER,
-    async dispatch(context, frame, _props, method, args) {
-      if (method !== "workflowGitPass")
-        return computerInvocation(context.env, frame, method, args);
-      // A published Workflow Git step's pass, minted by the library that runs it.
-      const host = await context.backgroundHost();
-      if (host === null) throw new AppInstanceError("revoked");
-      return openWorkflowGitPass(context.env, host.installations, frame, args);
+    dispatch(context, frame, _props, method, args) {
+      return computerInvocation(
+        context.env,
+        context.scope(),
+        frame,
+        method,
+        args,
+      );
     },
   },
   MEDIA: {
     methods: mediaFrameMethods.MEDIA,
-    dispatch: (context, frame, props, method, args) =>
-      dispatchMediaBinding(
+    async dispatch(context, frame, props, method, args) {
+      const workspace = await standaloneFrameWorkspace(
+        context.env,
+        context.scope(),
+        frame,
+      );
+      return dispatchMediaBinding(
         context.env,
         frame,
         props,
         method,
         args,
-        standaloneWorkspace(context.env),
-      ),
+        workspace,
+      );
+    },
   },
   WORKFLOWS: {
     methods: workflowFrameMethods.WORKFLOWS,

@@ -27,11 +27,13 @@
   "include": [
     "src/**/*.ts",
     "test/*.ts",
+    "test/browser/*.ts",
+    "test/machine-link/*.ts",
     "test/tenancy/*.ts",
     "test/stranger/*.mts",
     "test/storage-app/backend/*.ts",
     "test/background-app/backend/*.ts",
     "test/git-app/backend/*.ts"
   ],
-  "exclude": ["src/page/**", "src/shell/**", "src/build/snapshot-programs/**"]
+  "exclude": ["src/page/**", "src/build/snapshot-programs/**"]
 }

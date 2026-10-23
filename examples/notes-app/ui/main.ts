@@ -22,7 +22,7 @@ if (
   throw new Error("Notes markup is missing");
 
 const root = await connectApp({
-  expectedHostOrigin: new URL(document.referrer).origin,
+  host: "parent",
 });
 const backend = root.capabilities.require(appBackend);
 const read = z

@@ -4,6 +4,7 @@ import { graphReviewSchema, reviewAnswerSchema } from "@fungi.computer/braid";
 import {
   graphStartRequestSchema,
   workflowTriggerTargetSchema,
+  type WorkflowGitPassGrant,
 } from "@fungi.computer/braid/runtime";
 import {
   runReply,
@@ -23,7 +24,6 @@ import {
   triggerListInputSchema,
 } from "@fungi.computer/workflows-wire";
 import type { Installation } from "../apps/index.js";
-import type { WorkflowGitPassResult } from "@fungi.computer/agar/computer-contracts";
 import { workflowAttestationSchema } from "@fungi.computer/puffball/app-method-runtime";
 import {
   appEventFactSchema,
@@ -54,6 +54,7 @@ export type EventDisarmInput = z.output<typeof eventDisarmInputSchema>;
 /** The frame gate needs only these run-owner calls; it re-decodes each reply with the method's owner schema. */
 export type WorkflowRunCalls = Pick<
   StandaloneWorkflowRunsBase,
+  | "admitWorkflowGit"
   | "catalog"
   | "start"
   | "status"
@@ -154,10 +155,7 @@ export const workflowFrameMethods = {
 export async function workflowEventRecipients(
   installations: Readonly<{
     list(): Promise<
-      readonly Pick<
-        Installation,
-        "installationId" | "status" | "approvedGrants"
-      >[]
+      readonly Pick<Installation, "installationId" | "status" | "authority">[]
     >;
   }>,
 ): Promise<readonly string[]> {
@@ -165,7 +163,7 @@ export async function workflowEventRecipients(
     .filter(
       (installation) =>
         installation.status === "enabled" &&
-        installation.approvedGrants.some(
+        installation.authority.approvedGrants.some(
           (grant) => grant.capability === "workflow.arm",
         ),
     )
@@ -193,7 +191,7 @@ export async function deliverWorkflowEvent(
   await env.WORKFLOW_RUNS.getByName(libraryId).deliverEvent(fact);
 }
 
-/** What a Workflow node frame attests when it asks for its Git step's pass. */
+/** What a Workflow node frame attests when its Git step is admitted. */
 export const workflowGitPassRequestSchema = z.lazy(() =>
   z.strictObject({
     installationId: z.string().min(1).max(256),
@@ -206,47 +204,37 @@ export const workflowGitPassRequestSchema = z.lazy(() =>
 export type WorkflowGitPassRequest = z.output<
   typeof workflowGitPassRequestSchema
 >;
-/** The library run owners a node frame's pass request may reach. */
-export type WorkflowGitPassEnv = Readonly<{
-  OYSTER_COMPUTER_ID: string;
+/** Each run library's per-step Workflow Git admission. */
+export type WorkflowGitStepEnv = Readonly<{
   WORKFLOW_RUNS: Readonly<{
-    getByName(installationId: string): Readonly<{
-      openWorkflowGitPass(
-        request: WorkflowGitPassRequest,
-      ): Promise<WorkflowGitPassResult | null>;
-    }>;
+    getByName(libraryId: string): Pick<WorkflowRunCalls, "admitWorkflowGit">;
   }>;
 }>;
+
 /**
- * COMPUTER.workflowGitPass from a published Workflow node frame. Only the
- * frame's host-attested Workflow, call key, member and pinned Computer cross;
- * the library that dispatched that Git step derives the scope from its own
- * stored run and mints or renews the pass.
+ * The public grant for the Git step a member Workflow node frame is running,
+ * from the run library that dispatched it; null for any other frame. Every
+ * native command the step starts carries this grant, never a credential.
  */
-export async function openWorkflowGitPass(
-  env: WorkflowGitPassEnv,
+export async function workflowGitStepGrant(
+  env: WorkflowGitStepEnv,
   installations: Readonly<{
     list(): Promise<
-      readonly Pick<
-        Installation,
-        "installationId" | "status" | "approvedGrants"
-      >[]
+      readonly Pick<Installation, "installationId" | "status" | "authority">[]
     >;
   }>,
   frame: Readonly<{ facts: InvocationFacts; signal: AbortSignal }>,
-  args: readonly unknown[],
-): Promise<WorkflowGitPassResult> {
-  z.tuple([z.strictObject({})]).parse(args);
+): Promise<WorkflowGitPassGrant | null> {
   const { subject, selection } = frame.facts;
   if (
     subject.kind !== "call" ||
     subject.context.workflow === undefined ||
     subject.context.idempotencyKey === undefined ||
     subject.context.actor.kind !== "member" ||
-    subject.context.computerId !== env.OYSTER_COMPUTER_ID ||
+    subject.context.computerId === null ||
     selection.owner.kind !== "installation"
   )
-    throw new AppInstanceError("revoked");
+    return null;
   const request = workflowGitPassRequestSchema.parse({
     installationId: selection.owner.id,
     idempotencyKey: subject.context.idempotencyKey,
@@ -254,21 +242,21 @@ export async function openWorkflowGitPass(
     memberId: subject.context.actor.memberId,
     computerId: subject.context.computerId,
   });
-  const libraries = (await installations.list()).filter(
-    (installation) =>
-      installation.status === "enabled" &&
-      installation.approvedGrants.some(
+  for (const library of await installations.list()) {
+    if (
+      library.status !== "enabled" ||
+      !library.authority.approvedGrants.some(
         (grant) => grant.capability === "workflow.run",
-      ),
-  );
-  for (const library of libraries) {
+      )
+    )
+      continue;
     frame.signal.throwIfAborted();
-    const pass = await env.WORKFLOW_RUNS.getByName(
+    const grant = await env.WORKFLOW_RUNS.getByName(
       library.installationId,
-    ).openWorkflowGitPass(request);
-    if (pass !== null) return pass;
+    ).admitWorkflowGit(request);
+    if (grant !== null) return grant;
   }
-  throw new AppInstanceError("revoked");
+  return null;
 }
 
 /** Called only after the Instance's shared gate resolves this live frame. */
@@ -282,7 +270,8 @@ export async function dispatchWorkflowBinding(
   frame.signal.throwIfAborted();
   if (
     props.binding !== "WORKFLOWS" ||
-    frame.facts.subject.kind !== "call" ||
+    (frame.facts.subject.kind !== "call" &&
+      !(method === "runGraph" && frame.facts.subject.name === "onGitPush")) ||
     frame.facts.selection.owner.kind !== "installation"
   )
     throw new AppInstanceError("revoked");

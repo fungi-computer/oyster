@@ -58,9 +58,11 @@ export function createFrameBindingWire<
                       input: z.array(z.unknown()),
                       output: z.promise(z.unknown()),
                     });
-                    // Select one native method without enumerating the opaque stub.
+                    // Native RPC methods are selectable without reflected key membership.
+                    // A plain lookup view also accepts callable native namespaces. The selected
+                    // callable is still required before invoking it with the native receiver.
                     const call = z
-                      .object({ [named.data]: callSchema })
+                      .object({ [named.data]: z.optional(callSchema) })
                       .parse(Object.create(stub))[named.data];
                     if (call === undefined)
                       throw new Error("App binding method unavailable");

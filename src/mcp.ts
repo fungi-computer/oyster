@@ -1,4 +1,18 @@
+import { z } from "zod";
+import {
+  describeModule,
+  invokeModuleOperation,
+} from "@fungi.computer/mycelium/remote";
+import {
+  PendingApprovalSchema,
+  ApprovalRefusalSchema,
+} from "@fungi.computer/approvals";
+import { jsonSchemaToZod } from "@fungi.computer/forage";
 import { admits } from "./apps/gate.js";
+import {
+  createMcpWorkflowControl,
+  WORKFLOW_CONTROL_MODULE_ID,
+} from "./workflows.js";
 import { causeClass } from "./cause-class.js";
 import { deriveDeclaredOperations } from "./apps/operations.js";
 import { appToolPolicySchema, type AppToolPolicy } from "./apps/tools.js";
@@ -165,7 +179,8 @@ export function appSurfaceCache(
   };
 }
 
-async function appModules(
+/** Derive the current principal's admitted App modules and grants. */
+export async function oysterAppSnapshot(
   host: Pick<
     OysterHost,
     | "installations"
@@ -192,14 +207,24 @@ async function appModules(
   Readonly<{
     modules: Readonly<Record<string, ModuleRegistration>>;
     levels: Readonly<Record<string, AppToolPolicy["level"]>>;
+    fences: Readonly<Record<string, string>>;
+    effects: Readonly<
+      Record<string, Readonly<Record<string, "read" | "write" | "external">>>
+    >;
   }>
 > {
   const limits = guestLimits(host.guestLimits);
+  const generation = await host.installations.generation();
   const caller = invocationCallerContext(principal, host.computerId ?? null);
   const { actor } = principal;
   const visitor = actor.kind === "visitor";
   const modules: Record<string, ModuleRegistration> = {};
   const levels: Record<string, AppToolPolicy["level"]> = {};
+  const fences: Record<string, string> = {};
+  const effects: Record<
+    string,
+    Record<string, "read" | "write" | "external">
+  > = {};
   for (const installation of installations) {
     if (installation.status !== "enabled" || installation.instanceId === null)
       continue;
@@ -241,8 +266,8 @@ async function appModules(
       if (
         currentInstallation?.status !== "enabled" ||
         currentInstallation.instanceId !== instanceId ||
-        currentInstallation.authorityVersion !==
-          installation.authorityVersion ||
+        currentInstallation.authority.authorityVersion !==
+          installation.authority.authorityVersion ||
         currentInstallation.release.releaseId !==
           installation.release.releaseId ||
         currentInstallation.release.artifact.artifactDigest !==
@@ -276,7 +301,13 @@ async function appModules(
       const json = Schema.decodeUnknownSync(Schema.Json)(input);
       const decision = admits(
         {
-          installation,
+          installation: {
+            status: installation.status,
+            visibility: installation.visibility,
+            instanceId: installation.instanceId,
+            authority: installation.authority,
+            artifactDigest: installation.release.artifact.artifactDigest,
+          },
           declaration,
           declaredOperations,
           api,
@@ -324,9 +355,13 @@ async function appModules(
         throw new AppMethodRefused(result.value.code, result.value.message);
       return result.value.value;
     };
+    const operationEffects: Record<string, "read" | "write" | "external"> = {};
+    effects[id] = operationEffects;
+    let familyFacts: OysterJson | null = null;
     const toolOperations = Object.entries(toolSchemas)
       .filter(([, method]) => !visitor || method.effect === "read")
       .map(([name, method]) => {
+        operationEffects[name] = method.effect;
         const appMethod = Mycelium.operation({
           replay: "unsafe",
           access: method.effect === "read" ? "read" : "write",
@@ -367,7 +402,10 @@ async function appModules(
               }
               const compiled = appToolFamilySchemas(api, listing);
               if (compiled === null) return [];
+              familyFacts = Schema.decodeUnknownSync(Schema.Json)(listing);
               return compiled.tools.map((tool) => {
+                operationEffects[compiled.name + "." + tool.row.tool] =
+                  compiled.effect;
                 const operation = Mycelium.operation({
                   replay: "unsafe",
                   access: compiled.effect === "read" ? "read" : "write",
@@ -423,6 +461,19 @@ async function appModules(
               return [];
             }
           })();
+    fences[id] = await sha256(
+      new TextEncoder().encode(
+        JSON.stringify({
+          installation,
+          generation,
+          principal,
+          access: captured,
+          api,
+          family: familyFacts,
+          computerId: host.computerId ?? null,
+        }),
+      ),
+    );
     modules[id] = Mycelium.module({
       id,
       name: appBindingName(installation.installationId),
@@ -431,7 +482,7 @@ async function appModules(
       operations: Object.fromEntries([...toolOperations, ...familyOperations]),
     });
   }
-  return { modules, levels };
+  return { modules, levels, fences, effects };
 }
 
 /** `OysterCallerAccess`, with any `Map` turned into a sorted, JSON-stable array of entries: `JSON.stringify` on a `Map` itself silently drops its contents, which would collapse every key's version hash to one. */
@@ -479,6 +530,7 @@ export async function oysterAppMethods(
     | "capabilities"
     | "appToolPolicy"
     | "keys"
+    | "approvals"
   >,
   principal: OysterPrincipal,
   access: OysterCallerAccess,
@@ -490,7 +542,7 @@ export async function oysterAppMethods(
   // Shared so a session-scoped re-derivation below reuses this call's tool-
   // family listings instead of asking each Instance for them twice.
   const familyListingCache = new Map<string, unknown>();
-  const { modules: entries, levels } = await appModules(
+  const initial = await oysterAppSnapshot(
     host,
     surfaces,
     principal,
@@ -499,7 +551,7 @@ export async function oysterAppMethods(
     undefined,
     familyListingCache,
   );
-  const modules = Object.values(entries);
+  const modules = admittedAppModules(host, principal, initial, null);
   const version = await sha256(
     new TextEncoder().encode(
       JSON.stringify({
@@ -511,7 +563,7 @@ export async function oysterAppMethods(
             installation.instanceId,
             installation.release.releaseId,
             installation.release.artifact.artifactDigest,
-            installation.authorityVersion,
+            installation.authority.authorityVersion,
             installation.status,
             installation.visibility,
           ]),
@@ -520,24 +572,25 @@ export async function oysterAppMethods(
   );
   return {
     id: "oyster-apps",
-    grants: levels,
+    grants: initial.levels,
     acquire: async ({ signal, session }) => {
       signal.throwIfAborted();
       const acquiredModules =
         session === undefined
           ? modules
-          : Object.values(
-              (
-                await appModules(
-                  host,
-                  surfaces,
-                  principal,
-                  installations,
-                  access,
-                  session.sessionId,
-                  familyListingCache,
-                )
-              ).modules,
+          : admittedAppModules(
+              host,
+              principal,
+              await oysterAppSnapshot(
+                host,
+                surfaces,
+                principal,
+                installations,
+                access,
+                session.sessionId,
+                familyListingCache,
+              ),
+              session.sessionId,
             );
       signal.throwIfAborted();
       return {
@@ -598,6 +651,7 @@ export function oysterMcpCatalogLoad(
     | "capabilities"
     | "appToolPolicy"
     | "keys"
+    | "workflows"
   >,
 ): (principal: McpPrincipal) => Promise<McpCatalogSnapshot> {
   const surfaces = appSurfaceCache(host);
@@ -632,31 +686,150 @@ export function oysterMcpCatalogLoad(
       surfaces,
       installations,
     );
-    // Pre-approval ("never asked") is what a captured Agent/key policy
-    // itself grants; an owner's own calls, or an Agent/key with none, are
-    // never pre-approved even though their modules still default to the
-    // coarse "write" ceiling above.
-    const approvedWrites =
-      access === null
-        ? []
-        : Object.entries(apps.grants)
-            .filter(([, level]) => level === "write")
-            .map(([id]) => id);
     const computer = await oysterComputerTools(host, principal);
+    const control = await host.workflows?.(principal);
+    const workflowSources: CapabilitySource[] =
+      control == null
+        ? []
+        : [
+            {
+              id: "oyster-workflows",
+              acquire: () =>
+                Promise.resolve({
+                  snapshot: {
+                    version: WORKFLOW_CONTROL_MODULE_ID,
+                    modules: [createMcpWorkflowControl(control).module],
+                  },
+                  release: () => Promise.resolve(),
+                }),
+            },
+          ];
+    const workflowGrants: Grants =
+      control == null ? {} : { [WORKFLOW_CONTROL_MODULE_ID]: "write" };
     if (computer === null)
       return {
         instructions:
           "Installed Apps on this Oyster. Each App is env.<APP>; dotted method names are nested properties, e.g. env.BONSAI.repos.list({}). Use forage.search / forage.describe to find methods.",
-        grants: apps.grants,
-        approvedWrites,
-        sources: [apps],
+        grants: { ...apps.grants, ...workflowGrants },
+        sources: [apps, ...workflowSources],
       };
     return {
       instructions:
         'Installed Apps and this Oyster\'s Computer. Each App is env.<APP>; dotted method names are nested properties, e.g. env.BONSAI.repos.list({}). The Computer is env.computers.workspace, e.g. env.computers.workspace.exec({command: "ls"}). Use forage.search / forage.describe to find methods.',
-      grants: { ...apps.grants, ...computer.grants },
-      approvedWrites,
-      sources: [apps, computer],
+      grants: { ...apps.grants, ...computer.grants, ...workflowGrants },
+      sources: [apps, computer, ...workflowSources],
     };
   };
+}
+/** Exact authoring metadata: an absent source description stays omitted. */
+type NativeDescriptionMetadata = { description?: string };
+
+function admittedAppModules(
+  host: Pick<OysterHost, "approvals">,
+  principal: OysterPrincipal,
+  snapshot: Awaited<ReturnType<typeof oysterAppSnapshot>>,
+  sessionId: string | null,
+) {
+  return Object.entries(snapshot.modules).map(([id, raw]) => {
+    const { description: moduleDescription, ...descriptor } =
+      describeModule(raw);
+    const installationId = id.slice("oyster-app:".length);
+    const moduleMetadata: NativeDescriptionMetadata = {};
+    if (moduleDescription !== undefined)
+      moduleMetadata.description = moduleDescription;
+    return Mycelium.module({
+      ...descriptor,
+      ...moduleMetadata,
+      id,
+      name: appBindingName(installationId),
+      operations: Object.fromEntries(
+        Object.entries(descriptor.operations).map(([path, rawOperation]) => {
+          const { description: operationDescription, ...operation } =
+            rawOperation;
+          const effect = snapshot.effects[id]?.[path];
+          const fence = snapshot.fences[id];
+          if (effect === undefined || fence === undefined)
+            throw new Error("App snapshot has no operation authority facts");
+          const declaredOutput = operation.output ?? true;
+          // Decode each document at its own root before composing: a nested
+          // JSON Schema document's root-relative $refs would otherwise escape.
+          const declared = jsonSchemaToZod(declaredOutput);
+          const output =
+            effect === "read"
+              ? declared
+              : z.union([
+                  declared,
+                  jsonSchemaToZod(
+                    Schema.toStandardJSONSchemaV1(PendingApprovalSchema)[
+                      "~standard"
+                    ].jsonSchema.output({ target: "draft-2020-12" }),
+                  ),
+                  jsonSchemaToZod(
+                    Schema.toStandardJSONSchemaV1(ApprovalRefusalSchema)[
+                      "~standard"
+                    ].jsonSchema.output({ target: "draft-2020-12" }),
+                  ),
+                ]);
+          const outputValidator = z.intersection(output, z.json());
+          const operationMetadata: NativeDescriptionMetadata = {};
+          if (operationDescription !== undefined)
+            operationMetadata.description = operationDescription;
+          // App methods are never replayed by the host: a write goes through
+          // its approval record, and even a read may have App-side effects.
+          const appOperation = Mycelium.operation({
+            ...operation,
+            ...operationMetadata,
+            replay: "unsafe",
+            access: effect === "read" ? "read" : "write",
+            input: z.intersection(jsonSchemaToZod(operation.input), z.json()),
+            output: {
+              "~standard": {
+                ...outputValidator["~standard"],
+                // As appMethodSchemas does, describe the JSON contract
+                // without nesting another redundant recursive JSON guard.
+                jsonSchema: output["~standard"].jsonSchema,
+              },
+            },
+            execute: async (input, context) => {
+              if (effect === "read")
+                return z
+                  .json()
+                  .parse(
+                    await invokeModuleOperation(raw, path, input, context),
+                  );
+              if (principal.actor.kind === "visitor")
+                return { kind: "refused", reason: "not-granted" };
+              if (host.approvals === undefined)
+                return { kind: "refused", reason: "not-granted" };
+              // Mycelium numbers each operation call within one execute and
+              // replays the same sequence; a direct call is its own execution.
+              const ordinal = context.operationOrdinal ?? 0;
+              const result = await host.approvals.submit({
+                actor: principal.actor,
+                installationId,
+                sessionId,
+                operation: path,
+                access: effect,
+                authorityFence: fence,
+                idempotencyKey: await sha256(
+                  new TextEncoder().encode(
+                    JSON.stringify([
+                      context.executionId,
+                      context.toolCallId,
+                      ordinal,
+                    ]),
+                  ),
+                ),
+                input,
+              });
+              return z
+                .json()
+                .parse(result.kind === "applied" ? result.output : result);
+            },
+          });
+          return [path, appOperation];
+        }),
+      ),
+    });
+  });
 }

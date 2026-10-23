@@ -56,6 +56,7 @@ export class PackedOysterProof extends DurableObject {
       undefined,
       () => Effect.fail(new Error("No Releases in this consumer")),
       () => ({}),
+      () => Promise.resolve(null),
     );
     const state = {
       instanceId,

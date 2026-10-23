@@ -22,6 +22,7 @@ import { admittedCallerFacts } from "../dist/invocation.js";
 import { instanceIds, appInstanceErrorCodeSchema } from "../dist/index.js";
 import { createFrameBindingWire } from "../dist/frame-binding-wire.js";
 import { sha256, verifyRelease } from "../dist/release.js";
+import { withBackendConstruction } from "./boot-construction.fixture.ts";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -107,35 +108,65 @@ async function instanceFixture(t, artifacts, installationId = "notes") {
   let work;
   let lastFacts;
   let env;
-  const instance = new OysterGitInstance(
-    {
-      id: { name: instanceId },
-      blockConcurrencyWhile: (initialize) => initialize(),
-      storage: fromNodeSqlite(database),
-      exports: {
-        OysterBinding: ({ props }) => {
-          if (props.binding === "GIT") keys.push(props.frameId);
-          return new OysterBinding({ props }, env);
-        },
-      },
-      facets: {
-        get: (_name, prepare) => {
-          prepare();
-          return {
-            // A generated App method answers with its typed reply.
-            invoke: async (_method, _args, bindings) => ({
-              kind: "ok",
-              value: await work(guestWire.wrap(bindings)),
-            }),
-            http: async () => {
-              throw new Error("App method unavailable");
-            },
-          };
-        },
-        abort: () => undefined,
-        delete: () => undefined,
+  const context = {
+    id: { name: instanceId },
+    blockConcurrencyWhile: (initialize) => initialize(),
+    storage: fromNodeSqlite(database),
+    exports: {
+      OysterBinding: ({ props }) => {
+        if (props.binding === "GIT") keys.push(props.frameId);
+        return new OysterBinding({ props }, env);
       },
     },
+    facets: {
+      // The Guest fixture has no App storage; its copy is empty.
+      clone: (source, destination) => {
+        assert.equal(source, "app");
+        assert.equal(destination, "candidate");
+      },
+      get: (_name, prepare) => {
+        prepare();
+        return {
+          // A generated App method answers with its typed reply.
+          invoke: async (_method, _args, bindings) => ({
+            kind: "ok",
+            value: await work(guestWire.wrap(bindings)),
+          }),
+          http: async () => {
+            throw new Error("App method unavailable");
+          },
+        };
+      },
+      abort: () => undefined,
+      delete: () => undefined,
+    },
+  };
+  const loaded = [];
+  const construction = withBackendConstruction(context.facets, {
+    get: (name, configure) => {
+      const configured = configure();
+      loaded.push({ name, limits: configured.limits });
+      assert.equal(configured.globalOutbound, null);
+      assert.deepEqual(configured.env, {});
+      return { getDurableObjectClass: () => configured };
+    },
+  });
+  t.after(() => {
+    assert.ok(construction.probes.length > 0);
+    assert.ok(loaded.length > construction.probes.length);
+    for (const probe of construction.probes) {
+      assert.equal(probe.completed, true);
+      assert.equal(probe.aborted, true);
+      assert.equal(probe.deleted, true);
+      assert.equal(probe.name, "candidate");
+      assert.match(probe.loaderId, /^boot:/);
+      assert.ok(loaded.some((load) => load.name === probe.loaderId));
+    }
+    for (const load of loaded)
+      assert.deepEqual(load.limits, { cpuMs: 1000, subRequests: 50 });
+  });
+  const instance = new OysterGitInstance(
+    { ...context, facets: construction.facets },
     (env = {
       OYSTER_OWNER_KEY: "fixture-owner-key-not-a-real-secret",
       OYSTER_ORIGIN: "https://oyster.invalid",
@@ -159,12 +190,7 @@ async function instanceFixture(t, artifacts, installationId = "notes") {
           return bytes ? { arrayBuffer: async () => bytes.buffer } : null;
         },
       },
-      LOADER: {
-        get: (_id, configure) => {
-          const configured = configure();
-          return { getDurableObjectClass: () => configured };
-        },
-      },
+      LOADER: construction.loader,
     }),
   );
   const applied = await instance.apply(
@@ -173,7 +199,7 @@ async function instanceFixture(t, artifacts, installationId = "notes") {
     undefined,
     tenant,
   );
-  assert.equal(applied.ok, true);
+  assert.equal(applied.ok, true, JSON.stringify(applied));
   return {
     keys,
     change: async (command) => {
@@ -186,7 +212,7 @@ async function instanceFixture(t, artifacts, installationId = "notes") {
       const outcome = applyInstallationCommand(installed, command, {
         by: { kind: "member", memberId: "fixture-owner" },
         role: "owner",
-        expectedVersion: installed.authorityVersion,
+        expectedVersion: installed.authority.authorityVersion,
         declaration: nextVerified.declaration,
         declaredOperations: await deriveDeclaredOperations(
           nextRelease,

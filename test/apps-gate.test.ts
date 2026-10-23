@@ -3,7 +3,11 @@ import * as Result from "effect/Result";
 import type { AppDeclaration } from "@fungi.computer/puffball/app";
 import { instanceIds } from "../src/index.js";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
-import { applyInstallationCommand } from "../src/apps/installation.js";
+import {
+  applyGrantCommand,
+  applyInstallationCommand,
+  type CapabilityOperationDescriptor,
+} from "../src/apps/installation.js";
 import {
   admits,
   admitMethodMetadata,
@@ -14,9 +18,116 @@ import {
 } from "../src/apps/gate.js";
 import { declaration, descriptors, release } from "./apps-fixture.js";
 
-async function facts(
+it("admits with host-independent installation facts and no Release record", async () => {
+  const current = await approvedFacts();
+  const stored = current.installation;
+  expect(
+    admits(
+      {
+        ...current,
+        installation: {
+          status: stored.status,
+          visibility: stored.visibility,
+          instanceId: stored.instanceId,
+          authority: stored.authority,
+          artifactDigest: release.artifact.artifactDigest,
+        },
+      },
+      {
+        kind: "capability",
+        capability: "computer.readFile",
+        resource: { kind: "computer", id: "c1" },
+      },
+    ).kind,
+  ).toBe("admitted");
+});
+
+it("a Computer-scoped grant admits c1 and refuses c2", async () => {
+  const current = await approvedFacts();
+  const scoped: GateFacts = {
+    ...current,
+    installation: {
+      ...current.installation,
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: current.installation.authority.approvedGrants.map(
+          (grant) => ({
+            ...grant,
+            resources: [{ kind: "computer", id: "c1" }],
+          }),
+        ),
+      },
+    },
+  };
+  expect(
+    admits(scoped, {
+      kind: "capability",
+      capability: "computer.readFile",
+      resource: { kind: "computer", id: "c1" },
+    }).kind,
+  ).toBe("admitted");
+  expect(
+    admits(scoped, {
+      kind: "capability",
+      capability: "computer.readFile",
+      resource: { kind: "computer", id: "c2" },
+    }),
+  ).toEqual({ kind: "refused", code: "not_approved" });
+  expect(
+    admits(scoped, {
+      kind: "capability",
+      capability: "computer.readFile",
+      resource: "any",
+    }).kind,
+  ).toBe("admitted");
+});
+
+it("a tenant-scoped grant admits either Computer", async () => {
+  const current = await approvedFacts();
+  for (const id of ["c1", "c2"]) {
+    expect(
+      admits(current, {
+        kind: "capability",
+        capability: "computer.readFile",
+        resource: { kind: "computer", id },
+      }).kind,
+    ).toBe("admitted");
+  }
+});
+
+it("a method cannot use its required capability on an unapproved Computer", async () => {
+  const current = await approvedFacts();
+  const scoped: GateFacts = {
+    ...current,
+    installation: {
+      ...current.installation,
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: current.installation.authority.approvedGrants.map(
+          (grant) => ({
+            ...grant,
+            resources: [{ kind: "computer", id: "c1" }],
+          }),
+        ),
+      },
+    },
+  };
+  for (const id of ["c1", "c2"]) {
+    expect(
+      admits(scoped, {
+        kind: "method",
+        name: "notes.read",
+        input: { path: "/note" },
+        via: "ui",
+        resource: { kind: "computer", id },
+      }).kind,
+    ).toBe(id === "c1" ? "admitted" : "refused");
+  }
+});
+
+async function approvedFacts(
   nextDeclaration: AppDeclaration = declaration,
-  operationDescriptors = descriptors,
+  operationDescriptors: readonly CapabilityOperationDescriptor[] = descriptors,
 ): Promise<GateFacts> {
   const declaredOperations = await deriveDeclaredOperations(
     release,
@@ -25,7 +136,7 @@ async function facts(
   );
   const result = applyInstallationCommand(
     null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
+    { kind: "install", release, releasePin: "pinned" },
     {
       by: { kind: "member", memberId: "owner" },
       role: "owner",
@@ -40,9 +151,40 @@ async function facts(
     },
   );
   if (Result.isFailure(result)) throw new Error(result.failure.code);
+  // Admission fixtures start after explicit owner consent, not merely installation.
+  const approved = applyGrantCommand(
+    result.success.next.authority,
+    {
+      kind: "change-grants",
+      changes: declaredOperations.capabilities.map(
+        ({ capability, operations }) => ({
+          capability,
+          grant: { operations, resources: "tenant-scope" },
+        }),
+      ),
+    },
+    {
+      principal: {
+        actor: { kind: "member", memberId: "owner" },
+        role: "owner",
+      },
+      expectedVersion: result.success.next.authority.authorityVersion,
+      declaration: nextDeclaration,
+      declaredOperations,
+      now: 1001,
+    },
+  );
+  if (Result.isFailure(approved)) throw new Error(approved.failure.code);
+
   return {
     principal: { actor: { kind: "member", memberId: "owner" }, role: "owner" },
-    installation: result.success.next,
+    installation: {
+      status: result.success.next.status,
+      visibility: result.success.next.visibility,
+      instanceId: result.success.next.instanceId,
+      authority: approved.success,
+      artifactDigest: release.artifact.artifactDigest,
+    },
     declaration: nextDeclaration,
     declaredOperations,
     api: nextDeclaration.api ?? null,
@@ -50,12 +192,15 @@ async function facts(
   };
 }
 it("projects only approved declared binding operations for host freshness checks", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const installation = {
     ...current.installation,
-    approvedGrants: current.installation.approvedGrants.filter(
-      (grant) => grant.capability === "computer.readFile",
-    ),
+    authority: {
+      ...current.installation.authority,
+      approvedGrants: current.installation.authority.approvedGrants.filter(
+        (grant) => grant.capability === "computer.readFile",
+      ),
+    },
   };
   expect(approvedBindingGrants(installation, declaration)).toEqual([
     { binding: "COMPUTER", operations: ["read"] },
@@ -67,11 +212,20 @@ it("projects only approved declared binding operations for host freshness checks
     approvedBindingGrants(installation, { ...declaration, capabilities: [] }),
   ).toEqual([]);
   expect(
-    approvedBindingGrants({ ...installation, approvedGrants: [] }, declaration),
+    approvedBindingGrants(
+      {
+        ...installation,
+        authority: {
+          ...installation.authority,
+          approvedGrants: [],
+        },
+      },
+      declaration,
+    ),
   ).toEqual([]);
 });
 it("always refuses external methods before input or write-level admission", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   expect(
     admits(
       {
@@ -105,8 +259,8 @@ it.each([
     change: (f: GateFacts) => ({
       ...f,
       pins: {
-        authorityVersion: 2,
-        artifactDigest: f.installation.release.artifact.artifactDigest,
+        authorityVersion: f.installation.authority.authorityVersion + 1,
+        artifactDigest: f.installation.artifactDigest,
       },
     }),
     name: "notes.read",
@@ -142,7 +296,13 @@ it.each([
     code: "requires_not_granted",
     change: (f: GateFacts) => ({
       ...f,
-      installation: { ...f.installation, approvedGrants: [] },
+      installation: {
+        ...f.installation,
+        authority: {
+          ...f.installation.authority,
+          approvedGrants: [],
+        },
+      },
     }),
     name: "notes.read",
     input: { path: "/note" },
@@ -173,7 +333,7 @@ it.each([
   "returns $code at the retained admission stage",
   async ({ code, change, name, input }) => {
     expect(
-      admits(change(await facts()), {
+      admits(change(await approvedFacts()), {
         kind: "method",
         name,
         input,
@@ -183,7 +343,7 @@ it.each([
   },
 );
 it("admits a dotted read method with only its approved required read binding", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const result = admits(current, {
     kind: "method",
     name: "notes.read",
@@ -199,17 +359,20 @@ it("admits a dotted read method with only its approved required read binding", a
   expect(invocationGrantsSchema.parse(result.grants)).toEqual(result.grants);
 });
 it("keeps route and backend approvals separate and preserves host resource selectors", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const installation = {
     ...current.installation,
-    approvedGrants: [
-      {
-        capability: "computer.readFile" as const,
-        capabilityApproved: true as const,
-        operations: ["route:computer.readFile:open"],
-        resources: [{ kind: "computer", id: "selected" }],
-      },
-    ],
+    authority: {
+      ...current.installation.authority,
+      approvedGrants: [
+        {
+          capability: "computer.readFile" as const,
+          capabilityApproved: true as const,
+          operations: ["route:computer.readFile:open"],
+          resources: [{ kind: "computer", id: "selected" }],
+        },
+      ],
+    },
   };
   expect(
     grantsFor(
@@ -254,7 +417,7 @@ it("keeps route and backend approvals separate and preserves host resource selec
   ).toEqual({ kind: "refused", code: "not_approved" });
 });
 it("admits visitors only to public read methods with their approved read bindings", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const visitor = {
     ...current,
     principal: { actor: { kind: "visitor" as const }, role: null },
@@ -286,7 +449,7 @@ it("admits visitors only to public read methods with their approved read binding
   });
 });
 it("maps unsupported declared input schemas to a typed refusal without compiler diagnostics", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const method = current.api?.methods["notes.read"];
   if (method === undefined) throw new Error("Fixture method missing");
   expect(
@@ -310,7 +473,7 @@ it("maps unsupported declared input schemas to a typed refusal without compiler 
 });
 it("retains the Hub's 64 KiB method-input bound", async () => {
   expect(
-    admits(await facts(), {
+    admits(await approvedFacts(), {
       kind: "method",
       name: "notes.read",
       input: { path: "x".repeat(65536) },
@@ -320,7 +483,7 @@ it("retains the Hub's 64 KiB method-input bound", async () => {
 });
 
 it("refuses EVENTS.emit when the App declares its binding without the required capability", async () => {
-  const current = await facts({
+  const current = await approvedFacts({
     ...declaration,
     backend: { bindings: [{ name: "EVENTS", operations: ["emit"] }] },
   });
@@ -361,8 +524,8 @@ const emittingDeclaration: AppDeclaration = {
 };
 
 it("requires explicit approval of the canonical event capability before emitting", async () => {
-  const current = await facts(emittingDeclaration);
-  const granted = current.installation.approvedGrants.find(
+  const current = await approvedFacts(emittingDeclaration);
+  const granted = current.installation.authority.approvedGrants.find(
     (grant) => grant.capability === "app.events.emit",
   );
   expect(granted).toEqual({
@@ -385,9 +548,12 @@ it("requires explicit approval of the canonical event capability before emitting
     ...current,
     installation: {
       ...current.installation,
-      approvedGrants: current.installation.approvedGrants.filter(
-        (grant) => grant.capability !== "app.events.emit",
-      ),
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: current.installation.authority.approvedGrants.filter(
+          (grant) => grant.capability !== "app.events.emit",
+        ),
+      },
     },
   };
   expect(
@@ -399,7 +565,7 @@ it("requires explicit approval of the canonical event capability before emitting
 });
 
 it("projects event emission only to an approved write method at write level", async () => {
-  const current = await facts(emittingDeclaration);
+  const current = await approvedFacts(emittingDeclaration);
   expect(
     admits(current, { kind: "method", name: "emit", input: {}, via: "ui" }),
   ).toMatchObject({
@@ -454,30 +620,21 @@ async function selectRequirements(
     nextDeclaration,
     descriptors,
   );
-  const result = applyInstallationCommand(
-    current.installation,
+  const result = applyGrantCommand(
+    current.installation.authority,
+    { kind: "select-release" },
     {
-      kind: "select-release",
-      release,
-      releasePin: "pinned",
-    },
-    {
-      by: { kind: "member", memberId: "owner" },
-      role: "owner",
-      expectedVersion: current.installation.authorityVersion,
+      principal: current.principal,
+      expectedVersion: current.installation.authority.authorityVersion,
       declaration: nextDeclaration,
       declaredOperations: snapshot,
       now: 2000,
-      identity: {
-        installationId: "notes",
-        instanceId: current.installation.instanceId,
-      },
     },
   );
   if (Result.isFailure(result)) throw new Error(result.failure.code);
   return {
     ...current,
-    installation: result.success.next,
+    installation: { ...current.installation, authority: result.success },
     declaration: nextDeclaration,
     api: nextDeclaration.api ?? null,
     declaredOperations: snapshot,
@@ -486,7 +643,7 @@ async function selectRequirements(
 
 it("admits an added method under existing capability consent but refuses a new capability", async () => {
   const publish = requirementMethod(["workflow.publish"]);
-  const current = await facts(
+  const current = await approvedFacts(
     requirementDeclaration({ publishWorkflow: publish }),
   );
   const upgraded = await selectRequirements(
@@ -500,8 +657,8 @@ it("admits an added method under existing capability consent but refuses a new c
       ["workflow.publish", "workflow.run"],
     ),
   );
-  expect(upgraded.installation.approvedGrants).toEqual(
-    current.installation.approvedGrants,
+  expect(upgraded.installation.authority.approvedGrants).toEqual(
+    current.installation.authority.approvedGrants,
   );
   expect(
     admits(upgraded, {
@@ -519,24 +676,30 @@ it("admits an added method under existing capability consent but refuses a new c
       via: "ui",
     }),
   ).toEqual({ kind: "refused", code: "requires_not_granted" });
-  const approval = applyInstallationCommand(
-    upgraded.installation,
-    { kind: "set-grants", grants: "declared" },
+  const approval = applyGrantCommand(
+    upgraded.installation.authority,
     {
-      by: { kind: "member", memberId: "owner" },
-      role: "owner",
-      expectedVersion: upgraded.installation.authorityVersion,
+      kind: "change-grants",
+      changes: upgraded.declaredOperations.capabilities.map(
+        ({ capability, operations }) => ({
+          capability,
+          grant: { operations, resources: "tenant-scope" },
+        }),
+      ),
+    },
+    {
+      principal: upgraded.principal,
+      expectedVersion: upgraded.installation.authority.authorityVersion,
       declaration: upgraded.declaration,
       declaredOperations: upgraded.declaredOperations,
       now: 3000,
-      identity: {
-        installationId: "notes",
-        instanceId: upgraded.installation.instanceId,
-      },
     },
   );
   if (Result.isFailure(approval)) throw new Error(approval.failure.code);
-  const approved = { ...upgraded, installation: approval.success.next };
+  const approved = {
+    ...upgraded,
+    installation: { ...upgraded.installation, authority: approval.success },
+  };
   expect(
     admits(approved, {
       kind: "method",
@@ -549,14 +712,14 @@ it("admits an added method under existing capability consent but refuses a new c
 
 it("keeps capability consent through replacing its only method without widening stored operations", async () => {
   const publish = requirementMethod(["workflow.publish"]);
-  const current = await facts(
+  const current = await approvedFacts(
     requirementDeclaration({ publishWorkflow: publish }),
   );
   const renamed = await selectRequirements(
     current,
     requirementDeclaration({ publishAnother: publish }),
   );
-  expect(renamed.installation.approvedGrants).toEqual([
+  expect(renamed.installation.authority.approvedGrants).toEqual([
     {
       capability: "workflow.publish",
       capabilityApproved: true,
@@ -586,7 +749,7 @@ it("keeps capability consent through replacing its only method without widening 
     requirementDeclaration({}, []),
   );
   const restored = await selectRequirements(removed, renamed.declaration);
-  expect(restored.installation.approvedGrants).toEqual([]);
+  expect(restored.installation.authority.approvedGrants).toEqual([]);
   expect(
     admits(restored, {
       kind: "method",
@@ -599,13 +762,13 @@ it("keeps capability consent through replacing its only method without widening 
 
 it("stores one capability approval for two signed methods requiring that capability", async () => {
   const publish = requirementMethod(["workflow.publish"]);
-  const current = await facts(
+  const current = await approvedFacts(
     requirementDeclaration({
       publishWorkflow: publish,
       publishAnother: publish,
     }),
   );
-  expect(current.installation.approvedGrants).toEqual([
+  expect(current.installation.authority.approvedGrants).toEqual([
     {
       capability: "workflow.publish",
       capabilityApproved: true,
@@ -619,7 +782,7 @@ it("stores one capability approval for two signed methods requiring that capabil
 });
 
 it("refuses a method requiring two capabilities when only one has consent", async () => {
-  const current = await facts(
+  const current = await approvedFacts(
     requirementDeclaration({
       publishWorkflow: requirementMethod(["workflow.publish"]),
     }),
@@ -645,7 +808,7 @@ it("refuses a method requiring two capabilities when only one has consent", asyn
 });
 
 it("refuses an old operation digest and reselects the release without adding method operations", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const oldDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
     capabilities: declaration.capabilities,
     handlers: [],
@@ -661,13 +824,18 @@ it("refuses an old operation digest and reselects the release without adding met
     ...current,
     installation: {
       ...current.installation,
-      declaredOperationsDigest: oldSnapshot.digest,
-      approvedGrants: current.installation.approvedGrants.map((grant) => ({
-        ...grant,
-        operations: grant.operations.filter(
-          (operation) => !operation.startsWith("route:app.methods:"),
+      authority: {
+        ...current.installation.authority,
+        declaredOperationsDigest: oldSnapshot.digest,
+        approvedGrants: current.installation.authority.approvedGrants.map(
+          (grant) => ({
+            ...grant,
+            operations: grant.operations.filter(
+              (operation) => !operation.startsWith("route:app.methods:"),
+            ),
+          }),
         ),
-      })),
+      },
     },
   };
   expect(
@@ -687,8 +855,8 @@ it("refuses an old operation digest and reselects the release without adding met
     }),
   ).toEqual({ kind: "refused", code: "stale_authority" });
   const selected = await selectRequirements(old, declaration);
-  expect(selected.installation.approvedGrants).toEqual(
-    old.installation.approvedGrants,
+  expect(selected.installation.authority.approvedGrants).toEqual(
+    old.installation.authority.approvedGrants,
   );
   expect(
     admits(selected, {
@@ -701,7 +869,7 @@ it("refuses an old operation digest and reselects the release without adding met
 });
 
 it("method approval rows grant neither backend bindings nor capability routes", async () => {
-  const current = await facts(
+  const current = await approvedFacts(
     requirementDeclaration(
       { readNote: requirementMethod(["computer.readFile"]) },
       ["computer.readFile"],
@@ -735,7 +903,7 @@ it("method approval rows grant neither backend bindings nor capability routes", 
 });
 
 it("admits method metadata without fabricating mapped input and preserves dispatch input priority", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   expect(admitMethodMetadata(current, "notes.read")).toEqual({
     kind: "admitted",
     method: current.api?.methods["notes.read"],
@@ -750,7 +918,13 @@ it("admits method metadata without fabricating mapped input and preserves dispat
   ).toEqual({ kind: "refused", code: "invalid_input" });
   const unapproved = {
     ...current,
-    installation: { ...current.installation, approvedGrants: [] },
+    installation: {
+      ...current.installation,
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: [],
+      },
+    },
   };
   expect(admitMethodMetadata(unapproved, "notes.read")).toEqual({
     kind: "refused",
@@ -767,7 +941,7 @@ it("admits method metadata without fabricating mapped input and preserves dispat
 });
 
 it("metadata admission preserves live Release, principal, effect and capability refusal ordering", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   expect(
     admitMethodMetadata(
       {
@@ -782,8 +956,8 @@ it("metadata admission preserves live Release, principal, effect and capability 
       {
         ...current,
         pins: {
-          authorityVersion: current.installation.authorityVersion + 1,
-          artifactDigest: current.installation.release.artifact.artifactDigest,
+          authorityVersion: current.installation.authority.authorityVersion + 1,
+          artifactDigest: current.installation.artifactDigest,
         },
       },
       "notes.read",
@@ -808,7 +982,13 @@ it("metadata admission preserves live Release, principal, effect and capability 
   });
   const unapproved = {
     ...current,
-    installation: { ...current.installation, approvedGrants: [] },
+    installation: {
+      ...current.installation,
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: [],
+      },
+    },
   };
   expect(admitMethodMetadata(unapproved, "notes.external")).toEqual({
     kind: "refused",
@@ -831,7 +1011,7 @@ it("metadata admission preserves live Release, principal, effect and capability 
 });
 
 it("capture uses the same principal ceiling as ordinary invocation", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const captured = approvedBindingGrants(
     current.installation,
     current.declaration,
@@ -881,19 +1061,24 @@ import { installationSchema } from "../src/apps/installation.js";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 
 it("rejects a false stored capability marker before metadata admission", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const stored = installationSchema.safeParse({
     ...current.installation,
-    approvedGrants: current.installation.approvedGrants.map((grant) => ({
-      ...grant,
-      capabilityApproved: false,
-    })),
+    authority: {
+      ...current.installation.authority,
+      approvedGrants: current.installation.authority.approvedGrants.map(
+        (grant) => ({
+          ...grant,
+          capabilityApproved: false,
+        }),
+      ),
+    },
   });
   expect(stored.success).toBe(false);
 });
 
 it("metadata does not prove an input schema can compile for execution", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const method = current.api?.methods["notes.read"];
   if (method === undefined) throw new Error("Fixture method missing");
   const unsupported = {
@@ -914,7 +1099,7 @@ it("metadata does not prove an input schema can compile for execution", async ()
 });
 
 it("metadata and dispatch preserve refusal parity for every valid-input policy fixture", async () => {
-  const current = await facts();
+  const current = await approvedFacts();
   const otherDigest = Schema.decodeUnknownSync(sha256DigestSchema)(
     `sha256:${"f".repeat(64)}`,
   );
@@ -986,8 +1171,8 @@ it("metadata and dispatch preserve refusal parity for every valid-input policy f
       change: (value) => ({
         ...value,
         pins: {
-          authorityVersion: value.installation.authorityVersion + 1,
-          artifactDigest: value.installation.release.artifact.artifactDigest,
+          authorityVersion: value.installation.authority.authorityVersion + 1,
+          artifactDigest: value.installation.artifactDigest,
         },
       }),
     },
@@ -1012,7 +1197,13 @@ it("metadata and dispatch preserve refusal parity for every valid-input policy f
       expected: "requires_not_granted",
       change: (value) => ({
         ...value,
-        installation: { ...value.installation, approvedGrants: [] },
+        installation: {
+          ...value.installation,
+          authority: {
+            ...value.installation.authority,
+            approvedGrants: [],
+          },
+        },
       }),
     },
     {
@@ -1109,4 +1300,191 @@ it("metadata and dispatch preserve refusal parity for every valid-input policy f
       scenario.label,
     ).toBe(scenario.expected);
   }
+});
+
+it("an apps.open affordance cannot satisfy a method without stored owner approval", async () => {
+  const current = await approvedFacts(
+    requirementDeclaration(
+      {
+        open: requirementMethod(["apps.open"]),
+      },
+      ["apps.open"],
+    ),
+  );
+  const unapproved: GateFacts = {
+    ...current,
+    installation: {
+      ...current.installation,
+      authority: {
+        ...current.installation.authority,
+        approvedGrants: [],
+        approval: null,
+      },
+    },
+  };
+  expect(
+    admits(unapproved, { kind: "method", name: "open", input: {}, via: "ui" }),
+  ).toEqual({ kind: "refused", code: "requires_not_granted" });
+  expect(
+    grantsFor(
+      unapproved.installation,
+      current.declaration,
+      current.declaredOperations,
+      "apps.open",
+    ),
+  ).toBeNull();
+  expect(
+    admits(current, { kind: "method", name: "open", input: {}, via: "ui" })
+      .kind,
+  ).toBe("admitted");
+  const revoked = applyGrantCommand(
+    current.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [{ capability: "apps.open", grant: null }],
+    },
+    {
+      principal: current.principal,
+      expectedVersion: current.installation.authority.authorityVersion,
+      declaration: current.declaration,
+      declaredOperations: current.declaredOperations,
+      now: 2001,
+    },
+  );
+  if (Result.isFailure(revoked)) throw new Error(revoked.failure.code);
+  expect(
+    admits(
+      {
+        ...current,
+        installation: { ...current.installation, authority: revoked.success },
+      },
+      {
+        kind: "method",
+        name: "open",
+        input: {},
+        via: "ui",
+      },
+    ),
+  ).toEqual({ kind: "refused", code: "requires_not_granted" });
+});
+
+it("an apps.open affordance preserves stored operation and resource ceilings", async () => {
+  const current = await approvedFacts(
+    requirementDeclaration(
+      {
+        open: requirementMethod(["apps.open"]),
+        other: requirementMethod(["apps.open"]),
+      },
+      ["apps.open"],
+    ),
+  );
+  const approved = {
+    capability: "apps.open",
+    capabilityApproved: true,
+    operations: ["route:app.methods:open"],
+    resources: [{ kind: "computer", id: "c1" }],
+  } satisfies NonNullable<ReturnType<typeof grantsFor>>;
+  const installation = {
+    ...current.installation,
+    authority: {
+      ...current.installation.authority,
+      approvedGrants: [approved],
+    },
+  };
+  expect(
+    grantsFor(
+      installation,
+      current.declaration,
+      current.declaredOperations,
+      "apps.open",
+      { kind: "computer", id: "c1" },
+    ),
+  ).toEqual(approved);
+  expect(
+    grantsFor(
+      installation,
+      current.declaration,
+      current.declaredOperations,
+      "apps.open",
+      "any",
+    ),
+  ).toEqual(approved);
+  expect(
+    grantsFor(
+      installation,
+      current.declaration,
+      current.declaredOperations,
+      "apps.open",
+      { kind: "computer", id: "c2" },
+    ),
+  ).toBeNull();
+});
+
+it("approvals routes require their own current installation consent", async () => {
+  const request = {
+    kind: "capability-route",
+    capability: "approvals",
+    operation: "route:approvals:list",
+  } as const;
+  expect(admits(await approvedFacts(), request)).toEqual({
+    kind: "refused",
+    code: "not_declared",
+  });
+  const current = await approvedFacts(
+    {
+      ...declaration,
+      capabilities: [...declaration.capabilities, "approvals"],
+    },
+    [
+      ...descriptors,
+      {
+        id: "approvals",
+        permission: "approvals",
+        methods: { list: { kind: "json", method: "POST", path: "/list" } },
+      },
+    ],
+  );
+  expect(admits(current, request).kind).toBe("admitted");
+  const revoked = applyGrantCommand(
+    current.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [{ capability: "approvals", grant: null }],
+    },
+    {
+      principal: current.principal,
+      expectedVersion: current.installation.authority.authorityVersion,
+      declaration: current.declaration,
+      declaredOperations: current.declaredOperations,
+      now: 1002,
+    },
+  );
+  if (Result.isFailure(revoked)) throw new Error(revoked.failure.code);
+  const fresh = {
+    ...current,
+    installation: { ...current.installation, authority: revoked.success },
+  };
+  expect(admits(fresh, request)).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+  expect(
+    admits(fresh, {
+      kind: "capability",
+      capability: "computer.readFile",
+      resource: "any",
+    }).kind,
+  ).toBe("admitted");
+  expect(
+    admits(
+      {
+        ...fresh,
+        pins: {
+          authorityVersion: current.installation.authority.authorityVersion,
+          artifactDigest: current.installation.artifactDigest,
+        },
+      },
+      request,
+    ),
+  ).toEqual({ kind: "refused", code: "stale_authority" });
 });

@@ -73,7 +73,6 @@ async function installation(
       kind: "install",
       release,
       releasePin: "pinned",
-      grants: "declared",
     },
     context,
   );
@@ -82,7 +81,7 @@ async function installation(
     current: outcome.success.next,
     context: {
       ...context,
-      expectedVersion: outcome.success.next.authorityVersion,
+      expectedVersion: outcome.success.next.authority.authorityVersion,
     },
   };
 }
@@ -99,7 +98,6 @@ it("never treats declared capability grants or member installation as anonymous 
       kind: "install",
       release,
       releasePin: "pinned",
-      grants: "none",
     },
     { ...context, role: "member", expectedVersion: null },
   );
@@ -133,7 +131,9 @@ it("approves exact identities only through explicit matching human-owner consent
     at: 1000,
     authorityVersion: 2,
   });
-  expect(approved.success.next.approvedGrants).toEqual(current.approvedGrants);
+  expect(approved.success.next.authority.approvedGrants).toEqual(
+    current.authority.approvedGrants,
+  );
   expect(current.approvedAnonymousMethods).toEqual([]);
 });
 
@@ -234,7 +234,7 @@ async function approvedInstallation(declaration = declared({ readShare })) {
     current: result.success.next,
     context: {
       ...context,
-      expectedVersion: result.success.next.authorityVersion,
+      expectedVersion: result.success.next.authority.authorityVersion,
     },
   };
 }
@@ -366,7 +366,7 @@ it("revokes explicitly and refuses approval against a stale installation snapsho
   expect(
     applyInstallationCommand(current, command, {
       ...trustedContext,
-      expectedVersion: current.authorityVersion - 1,
+      expectedVersion: current.authority.authorityVersion - 1,
     }),
   ).toEqual(Result.fail({ kind: "refused", code: "stale_authority" }));
   expect(
@@ -401,7 +401,7 @@ it("refuses stored anonymous authority without a matching human approval receipt
       ...current,
       anonymousApproval: {
         ...current.anonymousApproval,
-        authorityVersion: current.authorityVersion + 1,
+        authorityVersion: current.authority.authorityVersion + 1,
       },
     }).success,
   ).toBe(false);
@@ -423,8 +423,8 @@ it("lets only an owner revoke anonymous consent without an interactive approval"
   if (Result.isFailure(revoked)) throw new Error(revoked.failure.code);
   expect(revoked.success.next.approvedAnonymousMethods).toEqual([]);
   expect(revoked.success.next.anonymousApproval).toBeNull();
-  expect(revoked.success.next.authorityVersion).toBe(
-    current.authorityVersion + 1,
+  expect(revoked.success.next.authority.authorityVersion).toBe(
+    current.authority.authorityVersion + 1,
   );
 });
 
@@ -449,8 +449,8 @@ it("lets an owner narrow exact approved identities without consent and preserves
   expect(narrowed.success.next.anonymousApproval).toEqual(
     current.anonymousApproval,
   );
-  expect(narrowed.success.next.authorityVersion).toBe(
-    current.authorityVersion + 1,
+  expect(narrowed.success.next.authority.authorityVersion).toBe(
+    current.authority.authorityVersion + 1,
   );
   expect(
     applyInstallationCommand(
@@ -459,7 +459,10 @@ it("lets an owner narrow exact approved identities without consent and preserves
         kind: "approve-anonymous",
         methods: current.approvedAnonymousMethods,
       },
-      { ...context, expectedVersion: narrowed.success.next.authorityVersion },
+      {
+        ...context,
+        expectedVersion: narrowed.success.next.authority.authorityVersion,
+      },
     ),
   ).toEqual(Result.fail({ kind: "refused", code: "not_owner" }));
 });
@@ -495,21 +498,32 @@ it("drops anonymous consent after a description-only release change", async () =
 });
 
 it("retains an older anonymous receipt after a capability grant update", async () => {
-  const { current, context } = await approvedInstallation();
+  const { current, context } = await approvedInstallation({
+    ...declared({ readShare }),
+    capabilities: ["computer.readFile"],
+  });
   const updated = applyInstallationCommand(
     current,
-    { kind: "set-grants", grants: "declared" },
+    {
+      kind: "change-grants",
+      changes: context.declaredOperations.capabilities.map(
+        ({ capability, operations }) => ({
+          capability,
+          grant: { operations, resources: "tenant-scope" },
+        }),
+      ),
+    },
     context,
   );
   if (Result.isFailure(updated)) throw new Error(updated.failure.code);
-  expect(updated.success.next.authorityVersion).toBe(
-    current.authorityVersion + 1,
+  expect(updated.success.next.authority.authorityVersion).toBe(
+    current.authority.authorityVersion + 1,
   );
   expect(updated.success.next.anonymousApproval).toEqual(
     current.anonymousApproval,
   );
   expect(updated.success.next.anonymousApproval?.authorityVersion).toBeLessThan(
-    updated.success.next.authorityVersion,
+    updated.success.next.authority.authorityVersion,
   );
   expect(installationSchema.safeParse(updated.success.next).success).toBe(true);
 });
@@ -528,7 +542,7 @@ it("approves a disabled installation and refreshes explicit consent for the same
   });
   const approved = applyInstallationCommand(disabled.success.next, command, {
     ...context,
-    expectedVersion: disabled.success.next.authorityVersion,
+    expectedVersion: disabled.success.next.authority.authorityVersion,
     anonymousConsent: { memberId: "owner" },
     now: 2000,
   });
@@ -537,7 +551,7 @@ it("approves a disabled installation and refreshes explicit consent for the same
   expect(approved.success.next.anonymousApproval?.at).toBe(2000);
   const refreshed = applyInstallationCommand(approved.success.next, command, {
     ...context,
-    expectedVersion: approved.success.next.authorityVersion,
+    expectedVersion: approved.success.next.authority.authorityVersion,
     anonymousConsent: { memberId: "owner" },
     now: 3000,
   });
@@ -546,13 +560,13 @@ it("approves a disabled installation and refreshes explicit consent for the same
   expect(refreshed.success.next.approvedAnonymousMethods).toEqual(
     approved.success.next.approvedAnonymousMethods,
   );
-  expect(refreshed.success.next.authorityVersion).toBe(
-    approved.success.next.authorityVersion + 1,
+  expect(refreshed.success.next.authority.authorityVersion).toBe(
+    approved.success.next.authority.authorityVersion + 1,
   );
   expect(refreshed.success.next.anonymousApproval).toEqual({
     by: { kind: "member", memberId: "owner" },
     at: 3000,
-    authorityVersion: refreshed.success.next.authorityVersion,
+    authorityVersion: refreshed.success.next.authority.authorityVersion,
   });
 });
 
@@ -571,9 +585,11 @@ it("refuses reinstalling a deleted id and starts a new installation without anon
         kind: "install",
         release,
         releasePin: "pinned",
-        grants: "declared",
       },
-      { ...context, expectedVersion: deleted.success.next.authorityVersion },
+      {
+        ...context,
+        expectedVersion: deleted.success.next.authority.authorityVersion,
+      },
     ),
   ).toEqual(Result.fail({ kind: "refused", code: "unavailable" }));
   const fresh = await installation(context.declaration, "new-shares");

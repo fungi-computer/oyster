@@ -1,3 +1,4 @@
+import { installationStore } from "./native-approval-host.fixture.mjs";
 // Simulated isolate boundary: two real Oyster/MCP servers share host data and
 // authentication, but have independent module memory. No protocol is mocked.
 /* global Request, URL */
@@ -24,7 +25,7 @@ const authenticate = (request) =>
       : { kind: "refused", status: 401 },
   );
 const data = {
-  installations: { list: () => Promise.resolve([]) },
+  installations: installationStore({ list: () => Promise.resolve([]) }),
   artifacts: { get: () => Promise.resolve(null) },
   instances: {
     get: () => {

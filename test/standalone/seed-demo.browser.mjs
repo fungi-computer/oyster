@@ -1,3 +1,4 @@
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // The production standalone Oyster + real Bonsai release; local real Git provider.
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
@@ -77,7 +78,7 @@ if (process.env.BONSAI_SEED_RELEASE) {
       cwd: repository,
       encoding: "utf8",
     }).trim(),
-    recipe: bonsai.recipe,
+    recipe: committedAppRecipe(repository, bonsai, revision),
     outDirectory: releaseDirectory,
   });
 }

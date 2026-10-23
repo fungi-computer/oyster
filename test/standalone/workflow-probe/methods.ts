@@ -1,25 +1,41 @@
 import * as z from "zod";
 import {
-  workflowGitPassResultSchema,
-  type WorkflowGitPassResult,
-} from "@fungi.computer/agar/computer-contracts";
-import {
   defineAppBackend,
   defineAppMethod,
 } from "@fungi.computer/agar/backend-definition";
 import { pending } from "@fungi.computer/agar/backend-definition";
-/** The probe asks only for the host's Workflow Git pass on its pinned Computer. */
+/** The probe runs Git only through its pinned Computer's native command. */
 export type ProbeEnv = Readonly<{
   COMPUTER?: Readonly<{
-    workflowGitPass(
-      input: Record<string, never>,
-    ): Promise<WorkflowGitPassResult>;
+    exec(
+      input: Readonly<{ command: string; timeoutMs: number }>,
+    ): Promise<z.input<typeof execResult>>;
+    processStart(
+      input: Readonly<{ command: string }>,
+    ): Promise<z.input<typeof startedProcess>>;
   }>;
 }>;
-const passRecord = z.strictObject({
-  remote: z.string(),
-  bearer: z.string().optional(),
+/** Only that the Computer started the child; never its output or env. */
+const startedProcess = z.object({ id: z.string() });
+/** Only the exit status a native command reports; never its output or env. */
+const execResult = z.object({
+  output: z.object({ exitCode: z.number().nullable() }),
 });
+const saveRecord = z.strictObject({
+  outside: z.number().nullable(),
+  saved: z.number().nullable(),
+});
+/**
+ * Each native command receives its own Git step credential as command-local
+ * Git config, and FUNGI_GIT_REMOTE names the ordinary credential-free remote.
+ */
+const prepare =
+  'mkdir -p probe-save && cd probe-save && { git rev-parse -q --verify HEAD >/dev/null || { git init -q -b work && git -c user.name=Workflow -c user.email=workflow@test.invalid commit -q --allow-empty -m "Save storyboard"; }; }';
+const push = (ref: string) =>
+  prepare +
+  ' && git push -q "$FUNGI_GIT_REMOTE" HEAD:' +
+  ref +
+  " >/dev/null 2>&1";
 type ProbeContext = { ctx: DurableObjectState; env: ProbeEnv };
 const row = z.strictObject({ calls: z.number(), keys: z.string() });
 export const appBackend = defineAppBackend<ProbeContext>({
@@ -84,7 +100,7 @@ export const appBackend = defineAppBackend<ProbeContext>({
     }),
     save: defineAppMethod({
       description:
-        "Open this Git step's Workflow pass and keep it for the proof.",
+        "Push this Git step's branch from a native command; keep only exit statuses.",
       effect: "write",
       requires: ["computer.execute"],
       // The host adds the step's resolved gitAccess; the probe never reads it.
@@ -92,33 +108,49 @@ export const appBackend = defineAppBackend<ProbeContext>({
       output: z.strictObject({ saved: z.boolean() }),
       handler: async (_input, context, caller) => {
         if (!caller.idempotencyKey || context.env.COMPUTER === undefined)
-          throw new Error("Workflow Git pass binding is unavailable");
-        const pass = workflowGitPassResultSchema.parse(
-          await context.env.COMPUTER.workflowGitPass({}),
+          throw new Error("The Workflow Computer binding is unavailable");
+        const computer = context.env.COMPUTER;
+        const run = async (command: string) =>
+          execResult.parse(await computer.exec({ command, timeoutMs: 30_000 }))
+            .output.exitCode;
+        // A push outside the granted branch fails; the granted branch lands.
+        const record = saveRecord.parse({
+          outside: await run(push("refs/heads/main")),
+          saved: await run(push("refs/heads/storyboards")),
+        });
+        // A child the step starts keeps its own credential after this App
+        // call returns, while it lives: it pushes one more commit later.
+        startedProcess.parse(
+          await computer.processStart({
+            command:
+              "sleep 3 && " +
+              prepare +
+              ' && git -c user.name=Workflow -c user.email=workflow@test.invalid commit -q --allow-empty -m Late && git push -q "$FUNGI_GIT_REMOTE" HEAD:refs/heads/storyboards >/dev/null 2>&1',
+          }),
         );
         context.ctx.storage.sql.exec(
-          "INSERT INTO passes(id,pass) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET pass=excluded.pass",
+          "INSERT INTO saves(id,outside,saved) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET outside=excluded.outside,saved=excluded.saved",
           caller.idempotencyKey,
-          JSON.stringify({ remote: pass.remote, bearer: pass.bearer }),
+          record.outside,
+          record.saved,
         );
-        return { saved: true };
+        return { saved: record.saved === 0 };
       },
     }),
-    passes: defineAppMethod({
-      description: "Read the Workflow Git passes this probe received.",
+    saves: defineAppMethod({
+      description: "Read the exit statuses of this probe's Git step commands.",
       effect: "read",
       requires: [],
       input: z.strictObject({}),
-      output: z.array(passRecord),
+      output: z.array(saveRecord),
       handler: (_input, context) =>
         z
-          .array(z.strictObject({ pass: z.string() }))
+          .array(saveRecord)
           .parse(
             context.ctx.storage.sql
-              .exec("SELECT pass FROM passes ORDER BY id")
+              .exec("SELECT outside,saved FROM saves ORDER BY id")
               .toArray(),
-          )
-          .map((row) => passRecord.parse(JSON.parse(row.pass))),
+          ),
     }),
     stamps: defineAppMethod({
       description: "Read recorded scheduled deliveries.",

@@ -14,6 +14,7 @@ export {
   OysterRegistry,
   OysterInstance,
   OysterBinding,
+  OysterInstallationExecutor,
 } from "@fungi.computer/oyster/workers";
 
 export class StorageAgentDirectory extends DurableObject {

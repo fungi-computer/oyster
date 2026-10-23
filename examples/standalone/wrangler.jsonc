@@ -16,6 +16,8 @@
     },
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
+  // Fresh, zero-grant UI boot checks run in Cloudflare Browser Rendering.
+  "browser": { "binding": "BROWSER" },
   "containers": [
     {
       "class_name": "ComputerDO",

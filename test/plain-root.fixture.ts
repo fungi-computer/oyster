@@ -9,6 +9,7 @@ export {
   OysterInstance,
   OysterRegistry,
   OysterMcp,
+  OysterInstallationExecutor,
 } from "@fungi.computer/oyster/workers";
 
 export default createOysterWorker();

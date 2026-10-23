@@ -39,6 +39,7 @@ export class ConfiguredInstance extends DurableObject<Env> {
           Effect.mapError((error) => new Error(String(error))),
         ),
       () => ({}),
+      () => Promise.resolve(null),
     );
   }
   async fetch(request: Request) {

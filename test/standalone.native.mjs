@@ -9,13 +9,17 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { parseArgs } from "node:util";
+import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { z } from "zod";
 import { installRelease, packRelease } from "../dist/pack.js";
 import { proveMcp } from "./mcp.native.mjs";
+import { ApprovalViewSchema } from "@fungi.computer/approvals";
+import * as Schema from "effect/Schema";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
@@ -27,6 +31,7 @@ await mkdir(`${root}.botanical`, { recursive: true });
 const work = await mkdtemp(`${root}.botanical/standalone-`);
 const key = randomBytes(24).toString("hex");
 const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
+let passed = false;
 
 async function freePort() {
   const socket = createServer();
@@ -40,36 +45,50 @@ async function freePort() {
 }
 
 // 1. Build UI, backend and declaration from the exact committed repository.
-const packed = await packRelease({
-  appId: "app_notes",
-  releaseId: "rel_notes1",
-  sourceDirectory: repository,
-  sourceRevision,
-  packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
-    cwd: repository,
-    encoding: "utf8",
-  }).trim(),
-  recipe: {
-    entry: "packages/oyster/examples/notes-app/ui/index.html",
-    assets: {
-      maxManifestBytes: 1_048_576,
-      maxObjects: 1024,
-      maxObjectBytes: 16_777_216,
-      maxTotalBytes: 67_108_864,
-    },
-    assetBase: "./",
-    maxOutputBytes: 67_108_864,
-    backend: {
-      entry: "packages/oyster/test/guest-headers.fixture.ts",
-      exportName: "Notes",
-      compatibilityDate: "2026-09-04",
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-    },
-  },
-  outDirectory: `${work}/release`,
-});
-assert.equal(packed.release.appId, "app_notes");
-assert.equal(packed.release.artifact.provenance.sourceRevision, sourceRevision);
+// A pinned build may be prepared before entering the runtime's private network.
+// It still passes the normal installer/artifact verification below.
+const prebuilt = parseArgs({
+  options: { "release-directory": { type: "string" } },
+}).values["release-directory"];
+const releaseDirectory = prebuilt ?? work + "/release";
+const release =
+  prebuilt === undefined
+    ? (
+        await packRelease({
+          appId: "app_notes",
+          releaseId: "rel_notes1",
+          sourceDirectory: repository,
+          sourceRevision,
+          packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
+            cwd: repository,
+            encoding: "utf8",
+          }).trim(),
+          recipe: {
+            entry: "packages/oyster/examples/notes-app/ui/index.html",
+            assets: {
+              maxManifestBytes: 1_048_576,
+              maxObjects: 1024,
+              maxObjectBytes: 16_777_216,
+              maxTotalBytes: 67_108_864,
+            },
+            assetBase: "./",
+            maxOutputBytes: 67_108_864,
+            backend: {
+              entry: "packages/oyster/test/guest-headers.fixture.ts",
+              exportName: "Notes",
+              compatibilityDate: "2026-09-04",
+              runtime: { kind: "durable-facet", stateSchema: 1 },
+            },
+          },
+          outDirectory: releaseDirectory,
+        })
+      ).release
+    : Schema.decodeUnknownSync(Schema.fromJsonString(releaseSchema))(
+        await readFile(releaseDirectory + "/release.json", "utf8"),
+      );
+assert.equal(release.appId, "app_notes");
+assert.equal(release.releaseId, "rel_notes1");
+assert.equal(release.artifact.provenance.sourceRevision, sourceRevision);
 
 // 2. Start the standalone Oyster.
 const port = await freePort();
@@ -129,7 +148,7 @@ try {
 
   // 4. Install over HTTP.
   const installed = await installRelease({
-    directory: `${work}/release`,
+    directory: releaseDirectory,
     url: origin,
     key,
     installationId: "notes",
@@ -208,6 +227,43 @@ try {
   assert.deepEqual(await (await call("readNote", {})).json(), {
     text: "via mcp",
   });
+  // The owner's own writes use the same durable policy, not a special
+  // pre-approved-key bypass or an outer inline confirmation prompt.
+  await proveMcp(
+    origin,
+    key,
+    async () => await (await call("readNote", {})).json(),
+  );
+  // The actual MCP writes above reached the real App backend. Even under
+  // auto-approve it must have produced a durable record in the host home.
+  const approvalResponse = await fetch(origin + "/api/proof-approvals", {
+    headers: auth,
+  });
+  assert.equal(approvalResponse.status, 200);
+  const approvals = Schema.decodeUnknownSync(
+    Schema.Struct({
+      items: Schema.Array(ApprovalViewSchema),
+      nextCursor: Schema.NullOr(Schema.String),
+    }),
+  )(await approvalResponse.json());
+  const policyActions = approvals.items.filter(
+    ({ record }) =>
+      record.module === "oyster-app:notes" && record.operation === "saveNote",
+  );
+  assert.equal(
+    policyActions.length,
+    6,
+    "The key and owner each perform three actual native writes with distinct durable records",
+  );
+  assert.equal(
+    new Set(policyActions.map(({ record }) => record.recordId)).size,
+    6,
+  );
+  for (const { record } of policyActions) {
+    assert.equal(record.state, "applied");
+    assert.deepEqual(record.by, { kind: "policy" });
+  }
+
   // The App UI reads the same state written by the MCP Agent.
   const mcpBrowser = await chromium.launch();
   try {
@@ -347,8 +403,10 @@ try {
   console.log(
     `standalone Oyster on ${runtime}: install, named-key MCP approval + owner-admin denial, App UI MCP readback, methods, backend, capability file read and delete passed`,
   );
+  passed = true;
 } finally {
   wrangler.kill("SIGTERM");
   await stopped;
-  await rm(work, { recursive: true, force: true });
+  if (passed) await rm(work, { recursive: true, force: true });
+  else console.error("Native proof state preserved at " + work);
 }

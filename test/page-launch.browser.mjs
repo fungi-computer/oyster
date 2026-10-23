@@ -5,12 +5,17 @@ import { test } from "node:test";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { Hono } from "hono";
-import { createAppBuild } from "@fungi.computer/puffball/app";
+import {
+  createAppBuild,
+  emptyAppDeclaration,
+} from "@fungi.computer/puffball/app";
 import { assetBuildMediaType } from "@fungi.computer/puffball/assets";
 import { createOyster } from "../dist/host.js";
 import { sha256 } from "../dist/release.js";
 import { computerSlots } from "../dist/computer.js";
 import { computerHost } from "./computer-host.fixture.mjs";
+import { approvedInstallation } from "../dist/testing/index.js";
+import { instanceIds } from "../dist/index.js";
 
 async function wasmAssetHost(mainSource) {
   const artifacts = new Map();
@@ -71,11 +76,10 @@ async function wasmAssetHost(mainSource) {
       ),
     ),
   );
-  const installation = {
+  const installation = await approvedInstallation({
     installationId: "wasm-probe",
-    instanceId: "instance_wasmprobe",
-    authorityVersion: 1,
-    status: "enabled",
+    instanceId: instanceIds.instance.generate(),
+    declaration: emptyAppDeclaration,
     release: {
       appId: "app_wasmprobe",
       releaseId: "rel_wasmprobe",
@@ -89,8 +93,9 @@ async function wasmAssetHost(mainSource) {
         },
       },
     },
-  };
+  });
   return createOyster({
+    bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({
         kind: "admitted",
@@ -159,7 +164,7 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
   const guest = await build({
     stdin: {
       contents: `import { connectApp } from "@fungi.computer/agar";
-        const app = await connectApp({ expectedHostOrigin: "http://oyster.test" });
+        const app = await connectApp({ host: "parent" });
         document.body.textContent = JSON.stringify(app.context.get());`,
       resolveDir: new globalThis.URL("..", import.meta.url).pathname,
     },
@@ -246,7 +251,7 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
   const guest = await build({
     stdin: {
       contents: `import { connectApp } from "@fungi.computer/agar";
-        const app = await connectApp({ expectedHostOrigin: "https://oyster.test" });
+        const app = await connectApp({ host: "parent" });
         const output = document.createElement("output");
         document.body.append(output);
         for (const [label, request] of [
@@ -304,7 +309,10 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
         .get("content-security-policy")
         .includes("allow-same-origin"),
     );
-    await page.goto("https://oyster.test/apps/wasm-probe/");
+    const documentResponse = await page.goto(
+      "https://oyster.test/apps/wasm-probe/",
+    );
+    assert.equal(documentResponse?.status(), 200);
     const frame = page.frameLocator("#oyster-app");
     const output = frame.locator("output");
     const downloads = [];

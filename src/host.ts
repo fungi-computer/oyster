@@ -1,15 +1,34 @@
+import type { OysterApprovalCall } from "./approval-home.js";
+import type {
+  PendingApproval,
+  ApprovalApplyResult,
+} from "@fungi.computer/approvals";
 import { hostGateFacts, releaseCache } from "./internal/host-gate.js";
+import type { WorkflowControl } from "./workflows.js";
+import {
+  InstallationOperationError,
+  installationCommandIds,
+  installationRequestIdSchema,
+  type InstallationOperations,
+  type InstallationOperation,
+} from "./installation-operations.js";
+export type { InstallationOperations };
+import {
+  completedInstallationResponse,
+  observeInstallation,
+  InstallationObservationError,
+} from "./installation-client.js";
+
+import {
+  instanceRefusalBody,
+  instanceRefusalStatus,
+} from "./instance-refusal.js";
 import { appSandbox } from "./app-sandbox.js";
 import type { KnapsackComputer } from "@fungi.computer/knapsack";
-import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import {
   shellModuleAsset,
   shellModuleAssetPath,
 } from "@fungi.computer/puffball/assets";
-import {
-  installationConsentSchema,
-  capabilityDescriptions,
-} from "./installation-consent.js";
 import type { TenantPrincipal } from "./tenant.js";
 import { gitRepositoryNameSchema } from "@fungi.computer/puffball/git-representation";
 import {
@@ -55,12 +74,15 @@ import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
 import {
   applyInstallationCommand,
   installationIdSchema,
-  installationCommandSchema,
   type Installation,
   type InstallationCommand,
   type InstallationReader,
 } from "./apps/installation.js";
 import { admits, scopedBindings, grantsFor } from "./apps/gate.js";
+import {
+  appPermissionPageSchema,
+  permissionSaveSchema,
+} from "./apps/permissions.js";
 import type { AppToolPolicy } from "./apps/tools.js";
 import type { LiveOysterKey } from "./keys.js";
 import {
@@ -86,8 +108,8 @@ export {
   type CapabilityMethodKind,
 } from "./capability-descriptor.js";
 import type { Release } from "@fungi.computer/puffball";
+import type { UiBootCheckOutcome } from "./boot-gate.js";
 import {
-  instanceIds,
   selectionOf,
   type Instance,
   type InstanceId,
@@ -97,26 +119,20 @@ import {
 import {
   parseRelease,
   readVerified,
-  ReleaseError,
   sha256,
-  verifyRelease,
   type ArtifactStore,
   type VerifiedRelease,
 } from "./release.js";
 import { createGitDoor, type GitDoorTarget } from "./git.js";
-import {
-  buildGitPassPrefix,
-  presentedGitKey,
-  workflowGitPassPrefix,
-} from "./git-auth.js";
+import { buildGitPassPrefix, presentedGitKey } from "./git-auth.js";
+import { workflowGitPassPrefix } from "@fungi.computer/braid/runtime";
 import type { AdmittedGit } from "./git-admission.js";
 import {
-  pageScript,
-  publicHomeScript,
-  grantConsentScript,
-  fontStyles,
-  shellStyles,
-} from "#page-script";
+  loadPageAssets,
+  PageAssetsLoadError,
+  type PageAssetLoader,
+} from "./page-assets.js";
+import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -205,12 +221,19 @@ export type InstallationCommit =
 /** Durable commits remain with the host's registry; reads are tenant-scoped. */
 export type InstallationStore = InstallationReader &
   Readonly<{
-    /** Commit one reducer-produced installation record. */
-    put: (installation: Installation) => Promise<void>;
-    /** Atomically commit only the authority version the owner reviewed. */
+    /** Absence makes installation commands unavailable, never synchronous. */
+    operations?: InstallationOperations;
+    /** Opaque identity of this store incarnation; replacing the store mints another. */
+    generation: () => Promise<string>;
+    /**
+     * Atomically commit one reducer-produced record only over the version it
+     * was computed from (0: no record). Every writer reads, may await
+     * activation, then commits here, so a concurrent commit is never undone.
+     */
     compareAndPut: (
       installation: Installation,
       expectedAuthorityVersion: number,
+      expectedGeneration: string,
     ) => Promise<InstallationCommit>;
   }>;
 
@@ -236,7 +259,12 @@ export type InstanceResult<T> =
 
 /** One running App Instance, wherever the host runs it. */
 export type InstanceHandle = Readonly<{
-  /** Apply a complete owner state for `release`. */
+  /** Check lifecycle and construction without activating or changing Instance state. */
+  prepare: (
+    state: OwnerState,
+    release: Release,
+  ) => Promise<InstanceResult<UiBootCheckOutcome | null>>;
+  /** Activate a complete owner state only after its registry selection commits. */
   apply: (
     state: OwnerState,
     release: Release,
@@ -337,6 +365,18 @@ export type OysterEnv = { Variables: OysterVariables };
 
 /** Everything a host supplies to run Oyster. */
 export type OysterHost = Readonly<{
+  /** Native approval home. A host without one cannot execute App tool writes. */
+  approvals?: Readonly<{
+    /** Stage an admitted operation; only the native home may apply it. */
+    submit(
+      call: OysterApprovalCall,
+    ): Promise<PendingApproval | ApprovalApplyResult>;
+  }>;
+  /**
+   * Host-bound Workflow control; absence exposes no Workflow authority.
+   * @inlineType WorkflowControl
+   */
+  workflows?: (principal: OysterPrincipal) => Promise<WorkflowControl | null>;
   auth: OysterAuth;
   /** Host-held sealing key for member writes; never exposed to the guest.
    * Absence refuses eligible named member writes, even when the App has no sync continuation.
@@ -345,6 +385,8 @@ export type OysterHost = Readonly<{
   artifacts: ArtifactStore;
   installations: InstallationStore;
   instances: InstanceDirectory;
+  /** Report-only host UI check; backend construction remains Instance-owned and blocking. */
+  bootUi: (release: Release) => Promise<UiBootCheckOutcome>;
   /** Fixed Computer selected by the host; request input never selects it. */
   computerId?: string;
   /** The fixed Computer's advertised calls for one admitted caller, or null
@@ -400,6 +442,11 @@ export type OysterHost = Readonly<{
   homeInstallationId?: string;
   /** Browser composition supplied by a deployable host; defaults to Oyster shell. */
   pageScript?: string;
+  /**
+   * Host page-source acquisition; defaults to the generated Oyster assets.
+   * @inlineType PageAssetLoader
+   */
+  pageAssets?: PageAssetLoader;
   /** Page title shown in the shell. */
   title?: string;
 }>;
@@ -451,17 +498,29 @@ function refusal(status: number, error: string, retryAfter?: number): Response {
   return Response.json({ error }, init);
 }
 
+function installationOperationRefusal(
+  cause: InstallationOperationError,
+): Response {
+  return cause.code === "stored_operation_invalid"
+    ? Response.json(
+        { error: cause.code, message: cause.message },
+        { status: 409 },
+      )
+    : refusal(cause.code === "unavailable" ? 503 : 409, cause.code);
+}
+
+/** A refusal no cache may keep: its answer depends on current authority. */
+function noStoreRefusal(status: number, error: string): Response {
+  return Response.json(
+    { error },
+    { status, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
 function instanceRefusal(
   code: AppInstanceErrorCode | "failed",
   causeClass?: Extract<InstanceResult<never>, { ok: false }>["causeClass"],
 ): Response {
-  const conflict: readonly string[] = [
-    "conflicting_owner_state",
-    "stale_authority",
-    "instance_release_mismatch",
-    "release_no_longer_matches_instance",
-    "state_schema_migration_unsupported",
-  ];
   if (code === "failed") {
     if (causeClass === undefined)
       console.error("AppInstance failure", {
@@ -476,7 +535,9 @@ function instanceRefusal(
       });
     return refusal(502, "App execution failed");
   }
-  return refusal(conflict.includes(code) ? 409 : 403, code);
+  return Response.json(instanceRefusalBody(code), {
+    status: instanceRefusalStatus(code),
+  });
 }
 
 /** An App's typed refusal keeps its code and caller-facing message. */
@@ -490,87 +551,99 @@ function methodResponse(reply: AppMethodReply): Response {
 }
 
 /**
- * Install a Release at `installationId`, or switch an already-live one onto
- * it: the one path the POST install and PUT release-select routes share,
- * and that a build owner's own install call reaches too. Nothing there (or
- * only a deleted installation) is a fresh install; a live installation is
- * switched in place, refusing a change of the installation's App identity.
+ * Admit the retained command shared by POST and PUT selection. Only POST's
+ * explicit install-or-remint intent
+ * may choose a fresh id for a tombstone; ordinary selection keeps the retired
+ * id unavailable. App-mediated build selection stays refused until it has
+ * designated install authority.
  */
+async function admitInstallation(
+  host: OysterHost,
+  installationId: string,
+  release: Release,
+  principal: OysterPrincipal,
+  intent: "install-or-select" | "install-or-remint" | "create-only",
+  origin: "owner-direct" | "workflow" | "app",
+  requestId: string = installationCommandIds.request.generate(),
+): Promise<Response | InstallationOperation> {
+  // App-mediated installation needs installFree/designated-marketplace
+  // authority. A member's owner role is not that delegated App authority.
+  if (origin !== "owner-direct" && origin !== "workflow")
+    return refusal(403, "install_authority_unavailable");
+  if (!oysterPrincipalIsOwner(principal)) return refusal(403, "Owner only");
+  if (!installationIdSchema.safeParse(installationId).success)
+    return refusal(400, "Invalid installation id");
+  if (!installationRequestIdSchema.safeParse(requestId).success)
+    return refusal(400, "Invalid installation request identity");
+  const operations = host.installations.operations;
+  if (operations === undefined)
+    return refusal(503, "Installation commands unavailable");
+  try {
+    return await operations.admit({
+      requestId,
+      installationId,
+      release,
+      actor: principal.actor,
+      intent,
+      origin,
+    });
+  } catch (cause) {
+    if (cause instanceof InstallationOperationError)
+      return installationOperationRefusal(cause);
+    throw cause;
+  }
+}
+
+/** Completed selection, without re-deriving or executing outside Watchdog. */
 export async function installOrSelect(
   host: OysterHost,
   installationId: string,
   release: Release,
   principal: OysterPrincipal,
+  intent: "install-or-select" | "install-or-remint" | "create-only",
+  origin: "owner-direct" | "workflow" | "app",
+  requestId: string = installationCommandIds.request.generate(),
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<Response> {
-  let verifiedRelease: VerifiedRelease;
-  try {
-    verifiedRelease = await verifyRelease(host.artifacts, release);
-  } catch (cause) {
-    return cause instanceof ReleaseError
-      ? refusal(422, cause.code)
-      : refusal(502, "Release could not be read");
-  }
-  const operationDescriptors = host.capabilities ?? [];
-  const reduce = async (
-    current: Installation | null,
-    command: InstallationCommand,
-    identity: Pick<Installation, "installationId" | "instanceId">,
-  ) => {
-    const context = invocationCallerContext(principal, host.computerId ?? null);
-    const declaration = verifiedRelease.declaration ?? emptyAppDeclaration;
-    return applyInstallationCommand(current, command, {
-      by: context.actor,
-      role: context.role ?? null,
-      expectedVersion: current?.authorityVersion ?? null,
-      declaration,
-      declaredOperations: await deriveDeclaredOperations(
-        verifiedRelease.release,
-        declaration,
-        operationDescriptors,
-      ),
-      now: Date.now(),
-      identity,
-    });
-  };
-  const apply = async (installation: Installation) => {
-    if (verifiedRelease.backend === null) return null;
-    const limits = guestLimits(host.guestLimits);
-    const result = await host.instances
-      .get(selectionOf(installation).instanceId, limits)
-      .apply(
-        { ...selectionOf(installation), status: installation.status },
-        installation.release,
-      );
-    return result.ok ? null : instanceRefusal(result.code, result.causeClass);
-  };
-  const current = await host.installations.get(installationId);
-  if (current !== null && current.status !== "deleted") {
-    const update = await reduce(
-      current,
-      { kind: "select-release", release, releasePin: "pinned" },
-      current,
-    );
-    if (Result.isFailure(update)) return refusal(409, update.failure.code);
-    const next = update.success.next;
-    const refused = await apply(next);
-    if (refused !== null) return refused;
-    await host.installations.put(next);
-    return Response.json(next);
-  }
-  if (!installationIdSchema.safeParse(installationId).success)
-    return refusal(400, "Invalid installation id");
-  const update = await reduce(
-    null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
-    { installationId, instanceId: instanceIds.instance.generate() },
+  const admitted = await admitInstallation(
+    host,
+    installationId,
+    release,
+    principal,
+    intent,
+    origin,
+    requestId,
   );
-  if (Result.isFailure(update)) return refusal(409, update.failure.code);
-  const installation = update.success.next;
-  const refused = await apply(installation);
-  if (refused !== null) return refused;
-  await host.installations.put(installation);
-  return Response.json(installation, { status: 201 });
+  if (admitted instanceof Response) return admitted;
+  const operations = host.installations.operations;
+  if (operations === undefined)
+    return refusal(503, "Installation commands unavailable");
+  try {
+    return completedInstallationResponse(
+      await observeInstallation({
+        requestId,
+        initial: admitted,
+        read: () => operations.read(requestId, installationId),
+        signal,
+      }),
+    );
+  } catch (cause) {
+    if (
+      cause instanceof InstallationObservationError &&
+      cause.cause instanceof InstallationOperationError
+    )
+      return installationOperationRefusal(cause.cause);
+    if (cause instanceof InstallationObservationError)
+      return Response.json(
+        { error: "Installation outcome unconfirmed", requestId },
+        { status: 503 },
+      );
+    throw cause;
+  }
 }
+
+/** The tab icon of every Oyster page a person opens at the top level. */
+const tabIcon = `<link rel="icon" type="image/svg+xml" href="${fungiFaviconHref}">`;
 
 /**
  * Create the Oyster App server: a Hono app that installs App Releases, serves
@@ -588,6 +661,29 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     release: VerifiedRelease,
     principal: OysterPrincipal,
   ) => hostGateFacts(host, installation, release, principal);
+  // Current approval for the home shell's code, read on every entry request.
+  const shellApproved = async (
+    installation: Installation,
+    release: VerifiedRelease,
+  ) => {
+    const declaration = release.declaration ?? emptyAppDeclaration;
+    return (
+      grantsFor(
+        {
+          status: installation.status,
+          authority: installation.authority,
+          artifactDigest: installation.release.artifact.artifactDigest,
+        },
+        declaration,
+        await deriveDeclaredOperations(
+          installation.release,
+          declaration,
+          operationDescriptors,
+        ),
+        "team.workbenchHost",
+      ) !== null
+    );
+  };
   const reduceInstallation = async (
     current: Installation | null,
     command: InstallationCommand,
@@ -600,7 +696,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     return applyInstallationCommand(current, command, {
       by: context.actor,
       role: context.role ?? null,
-      expectedVersion: current?.authorityVersion ?? null,
+      expectedVersion: current?.authority.authorityVersion ?? null,
       declaration,
       declaredOperations: await deriveDeclaredOperations(
         release.release,
@@ -618,27 +714,85 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     contentType,
     source,
   });
-  const assets = Promise.all([
-    asset(
-      "page.js",
-      "text/javascript; charset=utf-8",
-      host.pageScript ?? pageScript,
-    ),
-    asset("public-home.js", "text/javascript; charset=utf-8", publicHomeScript),
-    asset(
-      "grant-consent.js",
-      "text/javascript; charset=utf-8",
+  const prepareAssets = async () => {
+    const {
+      pageScript,
+      publicHomeScript,
       grantConsentScript,
-    ),
-    asset("fonts.css", "text/css; charset=utf-8", fontStyles),
-    asset("styles.css", "text/css; charset=utf-8", shellStyles),
-  ]).then(([page, publicHome, grantConsent, fonts, styles]) => ({
-    page,
-    publicHome,
-    grantConsent,
-    fonts,
-    styles,
-  }));
+      fontStyles,
+      loginFontStyles,
+      shellStyles,
+    } = await (host.pageAssets ?? loadPageAssets)();
+    return Promise.all([
+      asset(
+        "page.js",
+        "text/javascript; charset=utf-8",
+        host.pageScript ?? pageScript,
+      ),
+      asset(
+        "public-home.js",
+        "text/javascript; charset=utf-8",
+        publicHomeScript,
+      ),
+      asset(
+        "grant-consent.js",
+        "text/javascript; charset=utf-8",
+        grantConsentScript,
+      ),
+      asset("fonts.css", "text/css; charset=utf-8", fontStyles),
+      asset("login-fonts.css", "text/css; charset=utf-8", loginFontStyles),
+      asset("styles.css", "text/css; charset=utf-8", shellStyles),
+    ]).then(([page, publicHome, grantConsent, fonts, loginFonts, styles]) => ({
+      page,
+      publicHome,
+      grantConsent,
+      fonts,
+      loginFonts,
+      styles,
+    }));
+  };
+  let preparedAssets: ReturnType<typeof prepareAssets> | undefined;
+  const assets = () =>
+    (preparedAssets ??= prepareAssets().catch((cause: unknown) => {
+      preparedAssets = undefined;
+      throw cause instanceof PageAssetsLoadError
+        ? cause
+        : new PageAssetsLoadError(cause);
+    }));
+
+  // The home page imports this host-owned entry, never the Release module's
+  // own URL: released Oyster 0.2.0 served that URL immutable, so a browser may
+  // hold a copy it would import without a request. The entry is never cached
+  // and rechecks current approval before it names the module.
+  app.get(
+    `/ui-entry/:installationId/:releaseId${shellModuleAssetPath}`,
+    async (context) => {
+      const installation = await host.installations.get(
+        context.req.param("installationId"),
+      );
+      if (
+        installation?.status !== "enabled" ||
+        installation.release.releaseId !== context.req.param("releaseId")
+      )
+        return noStoreRefusal(404, "Not found");
+      const release = await releaseOf(installation.release);
+      if (
+        release.ui?.kind !== "assets" ||
+        shellModuleAsset(release.ui.build) === undefined
+      )
+        return noStoreRefusal(404, "Not found");
+      if (!(await shellApproved(installation, release)))
+        return noStoreRefusal(403, "not_approved");
+      const module = `/ui/${installation.installationId}/${installation.release.releaseId}${shellModuleAssetPath}`;
+      return new Response(`export * from ${JSON.stringify(module)};\n`, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-store",
+        },
+      });
+    },
+  );
 
   // App UI: digest-pinned, sandboxed, and readable without a session because
   // the opaque-origin frame cannot carry one.
@@ -675,6 +829,11 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     const wanted = path === "/" ? "/index.html" : path;
     const asset = release.ui.build.assets.find((item) => item.path === wanted);
     if (asset === undefined) return refusal(404, "Not found");
+    // The Release's shell module is read only through the host's entry, but
+    // keeps the same per-request check; other UI assets stay digest-cacheable.
+    const shellEntry = wanted === shellModuleAssetPath;
+    if (shellEntry && !(await shellApproved(installation, release)))
+      return noStoreRefusal(403, "not_approved");
     const bytes = await readVerified(
       host.artifacts,
       asset.artifactRef,
@@ -687,14 +846,16 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         "Content-Security-Policy": `default-src 'none'; script-src ${scope} 'wasm-unsafe-eval'; style-src ${scope} 'unsafe-inline'; img-src ${scope} blob: data:; media-src blob:; font-src ${scope} data:; connect-src data: ${scope}; worker-src blob:; frame-src 'none'; frame-ancestors ${origin}; base-uri 'none'; form-action 'none'; sandbox ${appSandbox}`,
         "Access-Control-Allow-Origin": "*",
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": shellEntry
+          ? "no-store"
+          : "public, max-age=31536000, immutable",
       },
     });
   });
 
   app.get("/_oyster/assets/*", async (context) => {
     const wanted = new URL(context.req.url).pathname;
-    const found = Object.values(await assets).find(
+    const found = Object.values(await assets()).find(
       ({ path }) => path === wanted,
     );
     if (found === undefined) return refusal(404, "Not found");
@@ -708,7 +869,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   });
 
   app.get("/login", async () => {
-    const { fonts, styles } = await assets;
+    const { loginFonts, styles } = await assets();
     const form = renderToStaticMarkup(
       createElement(
         CenteredCard,
@@ -744,7 +905,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       ),
     );
     return new Response(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in · ${escapeHtml(title)}</title><link rel="stylesheet" href="${styles.path}"><link rel="stylesheet" href="${fonts.path}"></head><body class="px-lg">${form}</body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in · ${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${styles.path}"><link rel="stylesheet" href="${loginFonts.path}"></head><body class="px-lg">${form}</body></html>`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -954,7 +1115,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       }
       const config = JSON.stringify({ title, apps }).replaceAll("<", "\\u003c");
       return new Response(
-        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title><link rel="stylesheet" href="${(await assets).fonts.path}"><style>html,body{margin:0;min-height:100%;font-family:var(--font-sans);background:var(--color-base-100);color:var(--color-base-content)}#oyster-public-home{min-height:100vh;display:flex;flex-direction:column}</style><div id="oyster-public-home"></div><script type="application/json" id="oyster-public-config">${config}</script><script type="module" src="${(await assets).publicHome.path}"></script>`,
+        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${(await assets()).fonts.path}"><style>html,body{margin:0;min-height:100%;font-family:var(--font-sans);background:var(--color-base-100);color:var(--color-base-content)}#oyster-public-home{min-height:100vh;display:flex;flex-direction:column}</style><div id="oyster-public-home"></div><script type="application/json" id="oyster-public-config">${config}</script><script type="module" src="${(await assets()).publicHome.path}"></script>`,
         {
           headers: {
             "Content-Type": "text/html; charset=utf-8",
@@ -973,7 +1134,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       )
       .join("");
     return new Response(
-      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title><h1>${escapeHtml(title)}</h1><ul>${items || "<li>No Apps installed yet.</li>"}</ul>`,
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title>${tabIcon}<h1>${escapeHtml(title)}</h1><ul>${items || "<li>No Apps installed yet.</li><li>Install Apps with <code>npx oyster install-apps</code></li>"}</ul>`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -992,6 +1153,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   });
 
   app.put("/api/installations/:installationId/visibility", async (context) => {
+    const generation = await host.installations.generation();
     const current = await host.installations.get(
       context.req.param("installationId"),
     );
@@ -1010,9 +1172,17 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     );
     if (Result.isFailure(update)) return refusal(409, update.failure.code);
     const next = update.success.next;
-    const refused = await apply(next, await releaseOf(current.release));
+    const release = await releaseOf(current.release);
+    const refused = await prepare(next, release);
     if (refused !== null) return refused;
-    await host.installations.put(next);
+    const commit = await host.installations.compareAndPut(
+      next,
+      current.authority.authorityVersion,
+      generation,
+    );
+    if (!commit.ok) return refusal(409, commit.code);
+    const activationRefusal = await apply(next, release);
+    if (activationRefusal !== null) return activationRefusal;
     return Response.json(next);
   });
 
@@ -1109,6 +1279,19 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     return new Response(null, { status: 204 });
   });
 
+  const prepare = async (
+    installation: Installation,
+    verifiedRelease: VerifiedRelease,
+  ) => {
+    if (verifiedRelease.backend === null) return null;
+    const result = await host.instances
+      .get(selectionOf(installation).instanceId, limits)
+      .prepare(
+        { ...selectionOf(installation), status: installation.status },
+        installation.release,
+      );
+    return result.ok ? null : instanceRefusal(result.code, result.causeClass);
+  };
   const apply = async (
     installation: Installation,
     verifiedRelease: VerifiedRelease,
@@ -1136,17 +1319,62 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     }
     const installationId =
       request.installationId ?? release.appId.replaceAll("_", "-");
-    return installOrSelect(
+    if (!installationIdSchema.safeParse(installationId).success)
+      return refusal(400, "Invalid installation id");
+    const key = installationRequestIdSchema.safeParse(
+      context.req.header("Idempotency-Key"),
+    );
+    if (!key.success)
+      return refusal(400, "Invalid installation request identity");
+    const admitted = await admitInstallation(
       host,
       installationId,
       release,
       context.get("principal"),
+      "install-or-remint",
+      context.req.raw.headers.has("X-Oyster-Installation")
+        ? "app"
+        : "owner-direct",
+      key.data,
     );
+    return admitted instanceof Response
+      ? admitted
+      : Response.json(admitted, { status: 202 });
+  });
+
+  app.get("/api/installations/:installationId/status", async (context) => {
+    if (
+      !oysterPrincipalIsOwner(context.get("principal")) ||
+      context.req.raw.headers.has("X-Oyster-Installation")
+    )
+      return refusal(403, "Owner only");
+    const key = installationRequestIdSchema.safeParse(
+      context.req.query("requestId"),
+    );
+    if (!key.success)
+      return refusal(400, "Invalid installation request identity");
+    const operations = host.installations.operations;
+    if (operations === undefined)
+      return refusal(503, "Installation commands unavailable");
+    try {
+      const operation = await operations.read(
+        key.data,
+        context.req.param("installationId"),
+      );
+      return operation === null
+        ? refusal(404, "Installation request not found")
+        : Response.json(operation);
+    } catch (cause) {
+      if (cause instanceof InstallationOperationError)
+        return installationOperationRefusal(cause);
+      throw cause;
+    }
   });
 
   app.get("/api/installations/:installationId/grants", async (context) => {
     if (context.req.raw.headers.has("X-Oyster-Installation"))
       return refusal(403, "Owner direct only");
+    const generation = await host.installations.generation();
     const current = await host.installations.get(
       context.req.param("installationId"),
     );
@@ -1159,39 +1387,24 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       declaration,
       operationDescriptors,
     );
-    const config = Schema.decodeUnknownSync(installationConsentSchema)({
+    const config = appPermissionPageSchema.parse({
+      storeGeneration: generation,
       installationId: current.installationId,
       appId: current.appId,
       appName: declaration.displayName ?? current.installationId,
-      authorityVersion: current.authorityVersion,
       artifactDigest: current.release.artifact.artifactDigest,
-      capabilities: declaration.capabilities.map((capability) => {
-        const existing = current.approvedGrants.find(
-          (grant) => grant.capability === capability,
-        );
-        return {
-          approved: existing !== undefined,
-          description: `Lets this App ${capabilityDescriptions[capability]}`,
-          scope:
-            (existing?.resources ?? "tenant-scope") === "tenant-scope"
-              ? "All of this Oyster"
-              : "Only the resources you already approved",
-
-          request: {
-            capability,
-            operations:
-              existing?.operations ??
-              declared.capabilities.find((row) => row.capability === capability)
-                ?.operations ??
-              [],
-            resources: existing?.resources ?? "tenant-scope",
-          },
-        };
-      }),
+      permissions: {
+        authority: current.authority,
+        declaredOperations: declared,
+      },
     });
+    if (context.req.header("Accept")?.includes("application/json"))
+      return Response.json(config, {
+        headers: { "Cache-Control": "no-store" },
+      });
     const encoded = JSON.stringify(config).replaceAll("<", "\\u003c");
     return new Response(
-      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(config.appName)} permissions</title><link rel="stylesheet" href="${(await assets).fonts.path}"><style>html,body{margin:0;min-height:100%;font-family:var(--font-sans);background:var(--color-base-100);color:var(--color-base-content)}</style><div id="oyster-consent"></div><script type="application/json" id="oyster-consent-config">${encoded}</script><script type="module" src="${(await assets).grantConsent.path}"></script>`,
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(config.appName)} permissions</title><link rel="stylesheet" href="${(await assets()).fonts.path}"><style>html,body{margin:0;min-height:100%;font-family:var(--font-sans);background:var(--color-base-100);color:var(--color-base-content)}</style><div id="oyster-consent"></div><script type="application/json" id="oyster-consent-config">${encoded}</script><script type="module" src="${(await assets()).grantConsent.path}"></script>`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -1216,42 +1429,43 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         return refusal(403, "Owner direct only");
       const principal = context.get("principal");
       if (!oysterPrincipalIsOwner(principal)) return refusal(403, "Owner only");
-      const parsed = Schema.decodeUnknownOption(
-        Schema.fromJsonString(
-          Schema.Struct({
-            authorityVersion: Schema.Int.check(Schema.isGreaterThan(0)),
-            artifactDigest: sha256DigestSchema,
-            command: Schema.Unknown,
-          }),
-        ),
-        { onExcessProperty: "error" },
+      const body = Schema.decodeUnknownOption(
+        Schema.fromJsonString(Schema.Unknown),
       )(await context.req.text());
-      if (parsed._tag === "None") return refusal(400, "Invalid approval");
-      const command = installationCommandSchema.safeParse(parsed.value.command);
-      if (!command.success || command.data.kind !== "set-grants")
+      if (body._tag === "None") return refusal(400, "Invalid approval");
+      const parsed = permissionSaveSchema.safeParse(body.value);
+      if (!parsed.success || parsed.data.command.kind !== "change-grants")
         return refusal(400, "Invalid approval");
+      const generation = await host.installations.generation();
+      if (generation !== parsed.data.storeGeneration)
+        return refusal(409, "stale_authority");
       const current = await host.installations.get(
         context.req.param("installationId"),
       );
-      if (current === null || current.status === "deleted")
-        return refusal(404, "Not found");
+      if (current === null) return refusal(404, "Not found");
+      // A retired installation's pins can never match a live record: the
+      // page already offers a reload, which then finds the App gone.
+      if (current.status === "deleted") return refusal(409, "stale_authority");
       if (
-        current.authorityVersion !== parsed.value.authorityVersion ||
-        current.release.artifact.artifactDigest !== parsed.value.artifactDigest
+        current.authority.authorityVersion !== parsed.data.authorityVersion ||
+        current.release.artifact.artifactDigest !== parsed.data.artifactDigest
       )
         return refusal(409, "stale_authority");
       const release = await releaseOf(current.release);
       const update = await reduceInstallation(
         current,
-        command.data,
+        parsed.data.command,
         release,
         principal,
         current,
       );
       if (Result.isFailure(update)) return refusal(409, update.failure.code);
+      const preflightRefusal = await prepare(update.success.next, release);
+      if (preflightRefusal !== null) return preflightRefusal;
       const commit = await host.installations.compareAndPut(
         update.success.next,
-        parsed.value.authorityVersion,
+        parsed.data.authorityVersion,
+        parsed.data.storeGeneration,
       );
       if (!commit.ok) return refusal(409, commit.code);
       const refused = await apply(update.success.next, release);
@@ -1267,15 +1481,30 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     } catch {
       return refusal(400, "Invalid Release");
     }
+    const key = installationRequestIdSchema.safeParse(
+      context.req.header("Idempotency-Key") ??
+        installationCommandIds.request.generate(),
+    );
+    if (!key.success)
+      return refusal(400, "Invalid installation request identity");
+    // PUT retains its completed-response meaning. Cancellation only stops this
+    // observer; Watchdog's retained command continues independently.
     return installOrSelect(
       host,
       context.req.param("installationId"),
       release,
       context.get("principal"),
+      "install-or-select",
+      context.req.raw.headers.has("X-Oyster-Installation")
+        ? "app"
+        : "owner-direct",
+      key.data,
+      context.req.raw.signal,
     );
   });
 
   app.delete("/api/installations/:installationId", async (context) => {
+    const generation = await host.installations.generation();
     const current = await host.installations.get(
       context.req.param("installationId"),
     );
@@ -1290,9 +1519,17 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     );
     if (Result.isFailure(update)) return refusal(409, update.failure.code);
     const next = update.success.next;
-    const refused = await apply(next, await releaseOf(current.release));
+    const release = await releaseOf(current.release);
+    const refused = await prepare(next, release);
     if (refused !== null) return refused;
-    await host.installations.put(next);
+    const commit = await host.installations.compareAndPut(
+      next,
+      current.authority.authorityVersion,
+      generation,
+    );
+    if (!commit.ok) return refusal(409, commit.code);
+    const activationRefusal = await apply(next, release);
+    if (activationRefusal !== null) return activationRefusal;
     return new Response(null, { status: 204 });
   });
 
@@ -1354,7 +1591,13 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       oysterPrincipalIsOwner(principal) &&
       host.workbench !== undefined &&
       installation.installationId === host.homeInstallationId &&
-      declaration?.capabilities.includes("team.workbenchHost") === true;
+      declaration?.capabilities.includes("team.workbenchHost") === true &&
+      grantsFor(
+        facts.installation,
+        facts.declaration,
+        facts.declaredOperations,
+        "team.workbenchHost",
+      ) !== null;
     const uiUrl = `/ui/${installation.installationId}/${installation.release.releaseId}/`;
     const config = {
       workbench,
@@ -1364,7 +1607,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         workbench &&
         release.ui?.kind === "assets" &&
         shellModuleAsset(release.ui.build) !== undefined
-          ? `${uiUrl}${shellModuleAssetPath.slice(1)}`
+          ? `/ui-entry/${installation.installationId}/${installation.release.releaseId}${shellModuleAssetPath}`
           : null,
       storage:
         oysterPrincipalIsOwner(principal) &&
@@ -1374,7 +1617,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       computerId: invocationCallerContext(principal, host.computerId ?? null)
         .computerId,
 
-      authorityVersion: installation.authorityVersion,
+      authorityVersion: installation.authority.authorityVersion,
       capabilities,
       commands: declaration?.commands ?? [],
       icon: declaration?.icon ?? null,
@@ -1390,8 +1633,8 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       return Response.json(config, {
         headers: { "Cache-Control": "no-store", Vary: "Accept" },
       });
-    const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(installation.installationId)} · ${escapeHtml(title)}</title><link rel="stylesheet" href="${(await assets).fonts.path}">`;
-    const tail = `<script type="application/json" id="oyster-config">${JSON.stringify(config).replaceAll("<", "\\u003c")}</script><script type="module" src="${(await assets).page.path}"></script>`;
+    const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(installation.installationId)} · ${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${(await assets()).fonts.path}">`;
+    const tail = `<script type="application/json" id="oyster-config">${JSON.stringify(config).replaceAll("<", "\\u003c")}</script><script type="module" src="${(await assets()).page.path}"></script>`;
     // The home shell is trusted: the host's page script renders it in this
     // top-level document, and it mounts each App's sandboxed frame inside
     // that App's window. Every other App page is only its one framed App;
@@ -1404,7 +1647,9 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "no-store",
-          "Content-Security-Policy": `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src data:; frame-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+          // worker-src would otherwise fall back to script-src 'self': trusted
+          // shell code must not outlive revocation in a Worker or Service Worker.
+          "Content-Security-Policy": `default-src 'none'; script-src 'self'; worker-src 'none'; style-src 'self' 'unsafe-inline'; font-src data:; frame-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
         },
       },
     );
@@ -1526,7 +1771,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     );
     if (
       current.declaredOperations.digest !==
-        installation.declaredOperationsDigest ||
+        installation.authority.declaredOperationsDigest ||
       current.declaredOperations.artifactDigest !==
         installation.release.artifact.artifactDigest
     )
@@ -1535,7 +1780,11 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       method.requires.some(
         (capability) =>
           grantsFor(
-            installation,
+            {
+              status: installation.status,
+              authority: installation.authority,
+              artifactDigest: installation.release.artifact.artifactDigest,
+            },
             current.declaration,
             current.declaredOperations,
             capability,
@@ -1732,7 +1981,8 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
       ]);
       if (
         currentCaller?.status !== "enabled" ||
-        currentCaller.authorityVersion !== caller.authorityVersion ||
+        currentCaller.authority.authorityVersion !==
+          caller.authority.authorityVersion ||
         currentCaller.release.artifact.artifactDigest !==
           caller.release.artifact.artifactDigest ||
         !(await allows(currentCaller, fresh))
@@ -1740,7 +1990,8 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         return refusal(403, "app_call_not_allowed");
       if (
         currentTarget?.status !== "enabled" ||
-        currentTarget.authorityVersion !== target.authorityVersion ||
+        currentTarget.authority.authorityVersion !==
+          target.authority.authorityVersion ||
         currentTarget.release.releaseId !== target.release.releaseId ||
         currentTarget.release.artifact.artifactDigest !==
           target.release.artifact.artifactDigest

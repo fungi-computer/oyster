@@ -2,8 +2,100 @@ import { parseReleaseId } from "@fungi.computer/puffball";
 import { expect, it } from "vitest";
 import * as Result from "effect/Result";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
-import { applyInstallationCommand } from "../src/apps/installation.js";
+import {
+  applyGrantCommand,
+  applyInstallationCommand,
+} from "../src/apps/installation.js";
 import { declaration, descriptors, release } from "./apps-fixture.js";
+
+it("member install grants nothing and owner install grants the declared ordinary capabilities", async () => {
+  const declaredOperations = await deriveDeclaredOperations(
+    release,
+    declaration,
+    descriptors,
+  );
+  for (const role of ["owner", "member"]) {
+    const result = applyGrantCommand(
+      null,
+      { kind: "install" },
+      {
+        principal: {
+          actor: { kind: "member", memberId: "installer" },
+          role: role === "owner" ? "owner" : "member",
+        },
+        expectedVersion: null,
+        declaration,
+        declaredOperations,
+        now: 1000,
+      },
+    );
+    if (Result.isFailure(result)) throw new Error(result.failure.code);
+    expect(result.success.approvedGrants.length).toBe(role === "owner" ? 2 : 0);
+    expect(result.success.authorityVersion).toBe(1);
+  }
+});
+
+it("owner installs leave a third-party full-access shell unapproved", async () => {
+  const shellDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+    ...declaration,
+    capabilities: [...declaration.capabilities, "team.workbenchHost"],
+  });
+  const snapshot = await deriveDeclaredOperations(
+    release,
+    shellDeclaration,
+    descriptors,
+  );
+  const outcome = applyInstallationCommand(
+    null,
+    { kind: "install", release, releasePin: "pinned" },
+    {
+      by: { kind: "member", memberId: "owner" },
+      role: "owner",
+      expectedVersion: null,
+      declaration: shellDeclaration,
+      declaredOperations: snapshot,
+      now: 1000,
+      identity: { installationId: "third-party-shell", instanceId: null },
+    },
+  );
+  if (Result.isFailure(outcome)) throw new Error(outcome.failure.code);
+  expect(
+    outcome.success.next.authority.approvedGrants.map(
+      (grant) => grant.capability,
+    ),
+  ).toEqual(["computer.readFile", "computer.writeFile"]);
+});
+
+it("installing at the configured home identity does not grant shell consent", async () => {
+  const shellDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+    ...declaration,
+    capabilities: [...declaration.capabilities, "team.workbenchHost"],
+  });
+  const snapshot = await deriveDeclaredOperations(
+    release,
+    shellDeclaration,
+    descriptors,
+  );
+  const outcome = applyInstallationCommand(
+    null,
+    { kind: "install", release, releasePin: "pinned" },
+    {
+      by: { kind: "member", memberId: "owner" },
+      role: "owner",
+      expectedVersion: null,
+      declaration: shellDeclaration,
+      declaredOperations: snapshot,
+      now: 1000,
+      identity: { installationId: "tourtois", instanceId: null },
+    },
+  );
+  if (Result.isFailure(outcome)) throw new Error(outcome.failure.code);
+  expect(
+    outcome.success.next.authority.approvedGrants.map(
+      (grant) => grant.capability,
+    ),
+  ).not.toContain("team.workbenchHost");
+});
 
 it("derives approved operations from the real descriptors and registry and pins their digest", async () => {
   const snapshot = await deriveDeclaredOperations(
@@ -13,7 +105,7 @@ it("derives approved operations from the real descriptors and registry and pins 
   );
   const outcome = applyInstallationCommand(
     null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
+    { kind: "install", release, releasePin: "pinned" },
     {
       by: { kind: "member", memberId: "owner" },
       role: "owner",
@@ -26,7 +118,7 @@ it("derives approved operations from the real descriptors and registry and pins 
   );
   expect(Result.isSuccess(outcome)).toBe(true);
   if (Result.isFailure(outcome)) throw new Error(outcome.failure.code);
-  expect(outcome.success.next.approvedGrants).toEqual([
+  expect(outcome.success.next.authority.approvedGrants).toEqual([
     {
       capability: "computer.readFile",
       capabilityApproved: true,
@@ -50,8 +142,10 @@ it("derives approved operations from the real descriptors and registry and pins 
       resources: "tenant-scope",
     },
   ]);
-  expect(outcome.success.next.declaredOperationsDigest).toBe(snapshot.digest);
-  expect(outcome.success.next.approval).toEqual({
+  expect(outcome.success.next.authority.declaredOperationsDigest).toBe(
+    snapshot.digest,
+  );
+  expect(outcome.success.next.authority.approval).toEqual({
     by: { kind: "member", memberId: "owner" },
     at: 1000,
     authorityVersion: 1,
@@ -82,13 +176,32 @@ async function installed(grants: "none" | "declared" = "declared") {
   };
   const result = applyInstallationCommand(
     null,
-    { kind: "install", release, releasePin: "pinned", grants },
+    { kind: "install", release, releasePin: "pinned" },
     context,
   );
   if (Result.isFailure(result)) throw new Error(result.failure.code);
+  const installation =
+    grants === "declared"
+      ? result.success.next
+      : next(
+          applyInstallationCommand(
+            result.success.next,
+            {
+              kind: "change-grants",
+              changes: declaration.capabilities.map((capability) => ({
+                capability,
+                grant: null,
+              })),
+            },
+            { ...context, expectedVersion: 1 },
+          ),
+        );
   return {
-    installation: result.success.next,
-    context: { ...context, expectedVersion: 1 },
+    installation,
+    context: {
+      ...context,
+      expectedVersion: installation.authority.authorityVersion,
+    },
   };
 }
 function next(
@@ -159,11 +272,13 @@ it("never adds a capability or an operation on an already-approved capability du
       { ...context, declaration: upgraded, declaredOperations: snapshot },
     ),
   );
-  expect(updated.approvedGrants).toEqual(installation.approvedGrants);
-  expect(updated.declaredOperationsDigest).toBe(snapshot.digest);
-  expect(updated.authorityVersion).toBe(2);
-  expect(updated.approval).toEqual(installation.approval);
-  expect(installation.authorityVersion).toBe(1);
+  expect(updated.authority.approvedGrants).toEqual(
+    installation.authority.approvedGrants,
+  );
+  expect(updated.authority.declaredOperationsDigest).toBe(snapshot.digest);
+  expect(updated.authority.authorityVersion).toBe(2);
+  expect(updated.authority.approval).toEqual(installation.authority.approval);
+  expect(installation.authority.authorityVersion).toBe(1);
 });
 it("drops removed operations and clears grants on deletion without changing the source record", async () => {
   const { installation, context } = await installed();
@@ -183,7 +298,7 @@ it("drops removed operations and clears grants on deletion without changing the 
       { ...context, declaration: reduced, declaredOperations: snapshot },
     ),
   );
-  expect(updated.approvedGrants).toEqual([
+  expect(updated.authority.approvedGrants).toEqual([
     {
       capability: "computer.writeFile",
       capabilityApproved: true,
@@ -198,18 +313,26 @@ it("drops removed operations and clears grants on deletion without changing the 
       context,
     ),
   );
-  expect(deleted.approvedGrants).toEqual([]);
-  expect(deleted.approval).toBeNull();
-  expect(installation.approvedGrants).toHaveLength(2);
+  expect(deleted.authority.approvedGrants).toEqual([]);
+  expect(deleted.authority.approval).toBeNull();
+  expect(installation.authority.approvedGrants).toHaveLength(2);
 });
-it.each(["none", "declared"] as const)(
-  "only owners change grants, including %s",
-  async (grants) => {
+it.each([false, true])(
+  "only owners change grants, including revocation (%s)",
+  async (approve) => {
     const { installation, context } = await installed();
     expect(
       applyInstallationCommand(
         installation,
-        { kind: "set-grants", grants },
+        {
+          kind: "change-grants",
+          changes: context.declaredOperations.capabilities.map(
+            ({ capability, operations }) => ({
+              capability,
+              grant: approve ? { operations, resources: "tenant-scope" } : null,
+            }),
+          ),
+        },
         { ...context, role: "member" },
       ),
     ).toEqual(Result.fail({ kind: "refused", code: "not_owner" }));
@@ -221,12 +344,12 @@ it("lets members manage installations without granting operations", async () => 
   const empty = next(
     applyInstallationCommand(
       null,
-      { kind: "install", release, releasePin: "pinned", grants: "none" },
+      { kind: "install", release, releasePin: "pinned" },
       member,
     ),
   );
-  expect(empty.approvedGrants).toEqual([]);
-  expect(empty.approval).toBeNull();
+  expect(empty.authority.approvedGrants).toEqual([]);
+  expect(empty.authority.approval).toBeNull();
   expect(
     next(
       applyInstallationCommand(
@@ -234,15 +357,8 @@ it("lets members manage installations without granting operations", async () => 
         { kind: "set-status", status: "disabled" },
         { ...member, expectedVersion: 1 },
       ),
-    ).authorityVersion,
+    ).authority.authorityVersion,
   ).toBe(2);
-  expect(
-    applyInstallationCommand(
-      null,
-      { kind: "install", release, releasePin: "pinned", grants: "declared" },
-      member,
-    ),
-  ).toEqual(Result.fail({ kind: "refused", code: "not_owner" }));
 });
 it("refuses non-declared operations and stale version writes", async () => {
   const { installation, context } = await installed();
@@ -250,12 +366,14 @@ it("refuses non-declared operations and stale version writes", async () => {
     applyInstallationCommand(
       installation,
       {
-        kind: "set-grants",
-        grants: [
+        kind: "change-grants",
+        changes: [
           {
             capability: "computer.readFile",
-            operations: ["binding:COMPUTER:exec"],
-            resources: "tenant-scope",
+            grant: {
+              operations: ["binding:COMPUTER:exec"],
+              resources: "tenant-scope",
+            },
           },
         ],
       },
@@ -290,7 +408,7 @@ it("an App-call approval names each target method and upgrades never add calls",
   };
   const initial = applyInstallationCommand(
     null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
+    { kind: "install", release, releasePin: "pinned" },
     {
       by: { kind: "member", memberId: "owner" },
       role: "owner",
@@ -302,7 +420,7 @@ it("an App-call approval names each target method and upgrades never add calls",
     },
   );
   if (Result.isFailure(initial)) throw new Error(initial.failure.code);
-  expect(initial.success.next.approvedGrants).toEqual([
+  expect(initial.success.next.authority.approvedGrants).toEqual([
     {
       capability: "apps.call",
       capabilityApproved: true,
@@ -317,7 +435,7 @@ it("an App-call approval names each target method and upgrades never add calls",
     {
       by: { kind: "member", memberId: "owner" },
       role: "owner",
-      expectedVersion: initial.success.next.authorityVersion,
+      expectedVersion: initial.success.next.authority.authorityVersion,
       declaration: after,
       declaredOperations: await deriveDeclaredOperations(
         nextRelease,
@@ -329,8 +447,8 @@ it("an App-call approval names each target method and upgrades never add calls",
     },
   );
   if (Result.isFailure(upgraded)) throw new Error(upgraded.failure.code);
-  expect(upgraded.success.next.approvedGrants).toEqual(
-    initial.success.next.approvedGrants,
+  expect(upgraded.success.next.authority.approvedGrants).toEqual(
+    initial.success.next.authority.approvedGrants,
   );
 });
 
@@ -357,19 +475,37 @@ it("approves signed API requirements and intersects stored operation identities 
     now: 1000,
     identity: { installationId: "trellis", instanceId: null },
   };
-  const current = next(
+  const installed = next(
     applyInstallationCommand(
       null,
       {
         kind: "install",
         release,
         releasePin: "pinned",
-        grants: "declared",
       },
       context,
     ),
   );
-  expect(current.approvedGrants).toEqual([
+  expect(installed.authority.approvedGrants).toEqual([]);
+  const current = next(
+    applyInstallationCommand(
+      installed,
+      {
+        kind: "change-grants",
+        changes: [
+          {
+            capability: "workflow.publish",
+            grant: {
+              operations: ["route:app.methods:publishWorkflow"],
+              resources: "tenant-scope",
+            },
+          },
+        ],
+      },
+      { ...context, expectedVersion: installed.authority.authorityVersion },
+    ),
+  );
+  expect(current.authority.approvedGrants).toEqual([
     {
       capability: "workflow.publish",
       capabilityApproved: true,
@@ -394,7 +530,7 @@ it("approves signed API requirements and intersects stored operation identities 
       },
       {
         ...context,
-        expectedVersion: current.authorityVersion,
+        expectedVersion: current.authority.authorityVersion,
         declaration: after,
         declaredOperations: await deriveDeclaredOperations(
           selectedRelease,
@@ -404,7 +540,9 @@ it("approves signed API requirements and intersects stored operation identities 
       },
     ),
   );
-  expect(selected.approvedGrants).toEqual(current.approvedGrants);
+  expect(selected.authority.approvedGrants).toEqual(
+    current.authority.approvedGrants,
+  );
   const removed = Schema.decodeUnknownSync(appDeclarationSchema)({
     capabilities: ["workflow.publish"],
     handlers: [],
@@ -425,7 +563,7 @@ it("approves signed API requirements and intersects stored operation identities 
       },
       {
         ...context,
-        expectedVersion: selected.authorityVersion,
+        expectedVersion: selected.authority.authorityVersion,
         declaration: removed,
         declaredOperations: await deriveDeclaredOperations(
           removedRelease,
@@ -435,7 +573,7 @@ it("approves signed API requirements and intersects stored operation identities 
       },
     ),
   );
-  expect(narrowed.approvedGrants).toEqual([
+  expect(narrowed.authority.approvedGrants).toEqual([
     {
       capability: "workflow.publish",
       capabilityApproved: true,

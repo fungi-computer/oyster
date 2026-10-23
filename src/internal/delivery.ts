@@ -60,7 +60,8 @@ async function admitGitPush(
   if (
     current?.status !== "enabled" ||
     current.instanceId !== installation.instanceId ||
-    current.authorityVersion !== installation.authorityVersion ||
+    current.authority.authorityVersion !==
+      installation.authority.authorityVersion ||
     current.release.releaseId !== installation.release.releaseId
   )
     throw new Error("Git push installation changed");
@@ -107,13 +108,14 @@ export async function deliverGitPush(
     installationId,
     fact,
   );
-  if (admitted !== null)
+  if (admitted !== null) {
     await deliverAdmittedGitPush(
       host,
       admitted.installation,
       admitted.release,
       admitted.fact,
     );
+  }
 }
 
 /** Re-admit a stored member through the same directory and method gate as a click. */

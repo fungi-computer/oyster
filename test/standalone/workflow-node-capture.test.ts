@@ -70,7 +70,7 @@ async function fixture() {
       bindings: [
         {
           name: "COMPUTER",
-          operations: ["processes", "processStart", "workflowGitPass"],
+          operations: ["processes", "processStart", "exec"],
         },
         { name: "EVENTS", operations: ["emit"] },
         { name: "GIT", operations: ["read", "write"] },
@@ -183,25 +183,31 @@ async function fixture() {
     const updated = applyInstallationCommand(
       installation,
       {
-        kind: "set-grants",
-        grants:
-          choice === "none"
-            ? "none"
-            : installation.approvedGrants.map((grant) => ({
-                capability: grant.capability,
-                resources: grant.resources,
-                operations: grant.operations.filter(
-                  (operation) =>
-                    operation !== "binding:COMPUTER:processStart" &&
-                    operation !== "binding:COMPUTER:workflowGitPass" &&
-                    operation !== "binding:GIT:write",
-                ),
-              })),
+        kind: "change-grants",
+        changes: installation.authority.approvedGrants.map(
+          ({ capability, resources, operations }) => ({
+            capability,
+            grant:
+              choice === "none"
+                ? null
+                : {
+                    resources,
+                    operations: operations.filter(
+                      (operation) =>
+                        ![
+                          "binding:COMPUTER:processStart",
+                          "binding:COMPUTER:exec",
+                          "binding:GIT:write",
+                        ].includes(operation),
+                    ),
+                  },
+          }),
+        ),
       },
       {
         by: actor,
         role: "owner",
-        expectedVersion: installation.authorityVersion,
+        expectedVersion: installation.authority.authorityVersion,
         declaration,
         declaredOperations: await deriveDeclaredOperations(
           release,
@@ -242,7 +248,7 @@ it("captures real approvals without asking for runtime input or invoking an App"
     bindings: [
       {
         name: "COMPUTER",
-        operations: ["processes", "processStart", "workflowGitPass"],
+        operations: ["processes", "processStart", "exec"],
       },
     ],
   });

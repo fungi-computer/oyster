@@ -10,26 +10,25 @@ import {
   createAppBuild,
 } from "@fungi.computer/puffball/app";
 import { backendMediaType } from "@fungi.computer/puffball/backend";
-import {
-  contentDigest,
-  catalogEvents,
-  catalogMethods,
-} from "@fungi.computer/braid";
+import { contentDigest, catalogMethods } from "@fungi.computer/braid";
 import {
   approvedBindingGrants,
   deriveDeclaredOperations,
   applyInstallationCommand,
 } from "@fungi.computer/oyster/apps";
 import { sha256, verifyRelease } from "@fungi.computer/oyster/host";
-import { admittedCallerFacts } from "@fungi.computer/oyster/invocation";
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
 import {
-  createWorkflowRunAuthority,
-  createWorkflowCeilingCapture,
-  armedWorkflowTriggerSchema,
-  compileForMember,
-} from "@fungi.computer/braid/runtime";
-import { createStandaloneWorkflowTriggerHost } from "../../src/standalone/workflow-trigger-host.ts";
+  admittedCallerFacts,
+  createInvocationGate,
+} from "@fungi.computer/oyster/invocation";
+import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+import { createTriggerRunReservations } from "@fungi.computer/braid/runtime";
+import { createMcpWorkflowControl } from "../../src/workflows.ts";
+import {
+  standaloneWorkflowWebhookRoutes,
+  standaloneWorkflowWebhookControls,
+} from "../../src/standalone/workflow-webhooks.ts";
+import { Hono } from "hono";
 import { createWorkflowIndexes } from "../../../../apps/trellis/backend/indexes.ts";
 
 const hooks = registerHooks({
@@ -49,7 +48,7 @@ const hooks = registerHooks({
 const { StandaloneAgent, StandaloneInstance, StandaloneWorkflowRuns } =
   await import("../../src/standalone/worker.ts");
 const { OysterBinding } = await import("../../src/standalone/instance.ts");
-const { workflowFrameMethods } =
+const { workflowFrameMethods, dispatchWorkflowBinding } =
   await import("../../src/standalone/workflow-binding.ts");
 const { StandaloneTenants, standaloneTenancy } =
   await import("../../src/standalone/tenancy.ts");
@@ -83,7 +82,15 @@ hooks.deregister();
  */
 async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
   const database = new DatabaseSync(":memory:");
-  t.after(() => database.close());
+  const storage = fromNodeSqlite(database);
+  const background = [];
+  t.after(async () => {
+    try {
+      await Promise.all(background);
+    } finally {
+      database.close();
+    }
+  });
   const tenantDatabase = new DatabaseSync(":memory:");
   t.after(() => tenantDatabase.close());
   const tenantStorage = fromNodeSqlite(tenantDatabase);
@@ -166,6 +173,7 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     },
     REGISTRY: {
       getByName: () => ({
+        selectedComputer: async () => env.OYSTER_COMPUTER_ID,
         get: async (installationId) =>
           installations.get(installationId) ?? null,
         list: async () => [...installations.values()],
@@ -174,6 +182,12 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     GRAPH_WORKFLOWS: {
       create: async (request) => {
         created.push(request);
+      },
+    },
+    WORKFLOW_RUNS: {
+      getByName: (name) => {
+        assert.equal(name, "trellis");
+        return runs;
       },
     },
     AI: {
@@ -192,7 +206,7 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
       return this.hostFor(scope);
     }
   }
-  const httpHost = new RootDoor({}, env).hostAt(
+  const httpHost = await new RootDoor({}, env).hostAt(
     tenantScope(defaultTenant, env.OYSTER_ORIGIN),
   );
   const httpSnapshot = await deriveDeclaredOperations(
@@ -200,49 +214,52 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     workflowsDeclaration,
     httpHost.capabilities,
   );
-  const installed = applyInstallationCommand(
-    null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
-    {
+  function installAndApprove(installationId) {
+    const context = {
       by: currentOwner.actor,
       role: currentOwner.role,
       expectedVersion: null,
       declaration: workflowsDeclaration,
       declaredOperations: httpSnapshot,
       now: 1000,
-      identity: {
-        installationId: "trellis",
-        instanceId: instanceIds.instance.generate(),
-      },
-    },
-  );
-  assert.equal(installed._tag, "Success");
-  installation = installed.success.next;
-  installations.set("trellis", installation);
-  assert.equal(installation.declaredOperationsDigest, httpSnapshot.digest);
-  // Extra installations at the same release, so a graph can bind a node to
-  // a second App; its catalog methods and digests are identical to the
-  // library's own, since it is the same verified Release.
-  for (const extraId of extraInstallationIds) {
-    const extra = applyInstallationCommand(
+      identity: { installationId, instanceId: instanceIds.instance.generate() },
+    };
+    const installed = applyInstallationCommand(
       null,
-      { kind: "install", release, releasePin: "pinned", grants: "declared" },
+      { kind: "install", release, releasePin: "pinned" },
+      context,
+    );
+    assert.equal(installed._tag, "Success");
+    // Installation alone is not owner consent for Workflow execution.
+    const approved = applyInstallationCommand(
+      installed.success.next,
       {
-        by: currentOwner.actor,
-        role: currentOwner.role,
-        expectedVersion: null,
-        declaration: workflowsDeclaration,
-        declaredOperations: httpSnapshot,
-        now: 1000,
-        identity: {
-          installationId: extraId,
-          instanceId: instanceIds.instance.generate(),
-        },
+        kind: "change-grants",
+        changes: httpSnapshot.capabilities.map(
+          ({ capability, operations }) => ({
+            capability,
+            grant: { operations, resources: "tenant-scope" },
+          }),
+        ),
+      },
+      {
+        ...context,
+        expectedVersion: installed.success.next.authority.authorityVersion,
+        now: 1001,
       },
     );
-    assert.equal(extra._tag, "Success");
-    installations.set(extraId, extra.success.next);
+    assert.equal(approved._tag, "Success");
+    return approved.success.next;
   }
+  installation = installAndApprove("trellis");
+  installations.set("trellis", installation);
+  assert.equal(
+    installation.authority.declaredOperationsDigest,
+    httpSnapshot.digest,
+  );
+  // Extra Apps use the same verified Release and their own explicit approvals.
+  for (const extraId of extraInstallationIds)
+    installations.set(extraId, installAndApprove(extraId));
   const verified = await verifyRelease(httpHost.artifacts, release);
   const facts = admittedCallerFacts(
     installation,
@@ -265,17 +282,24 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
   ).definition;
   const runs = new StandaloneWorkflowRuns(
     {
-      storage: fromNodeSqlite(database),
+      storage,
       blockConcurrencyWhile: (work) => work(),
+      waitUntil: (promise) => {
+        background.push(promise);
+      },
     },
     env,
   );
   return {
     runs,
+    storage,
+    control: httpHost.workflows,
+    host: httpHost,
     created,
     facts,
     definition,
     ownerId: currentOwner.actor.memberId,
+    ownerPrincipal: currentOwner,
     agentFacts: (agentId, sessionId, grantorMemberId) =>
       admittedCallerFacts(
         installation,
@@ -300,8 +324,374 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     // exactly as a real authoring client would after reading the catalog.
     methodDigest: async (methodName) =>
       (await catalogMethods(verified.api.methods)).methods[methodName].digest,
+    methodSpec: async (methodName) =>
+      (await catalogMethods(verified.api.methods)).methods[methodName],
   };
 }
+
+// Admission tracer: the production Git-push delivery supplies this lifecycle
+// subject, not a human call context. The build/install template is exercised
+// separately; this law isolates the first missing capability admission.
+test("Workflows admits an onGitPush lifecycle frame without a forged call context", async (t) => {
+  const { runs, created, facts } = await libraryFixture(t);
+  const sourceRevision = "git:" + "c".repeat(40);
+  const definition = {
+    format: "fungi.workflow/v1",
+    title: "Accepted main head",
+    apps: {},
+    input: {
+      type: "object",
+      properties: { sourceRevision: { type: "string" } },
+      required: ["sourceRevision"],
+      additionalProperties: false,
+    },
+    nodes: [
+      {
+        id: "accepted-head",
+        kind: "transform",
+        fields: {
+          sourceRevision: { from: { node: "$input", port: "sourceRevision" } },
+        },
+      },
+    ],
+    edges: [],
+    output: {
+      sourceRevision: { node: "accepted-head", port: "sourceRevision" },
+    },
+  };
+  const lifecycle = {
+    ...facts,
+    subject: {
+      kind: "lifecycle",
+      name: "onGitPush",
+      eventId: "accepted-main-push-42",
+    },
+  };
+  const request = {
+    requestId: "accepted-main-push-42",
+    definition,
+    bindings: {},
+    input: { sourceRevision },
+    published: {
+      workflowId: "lifecycle-admission-proof",
+      commit: "a".repeat(40),
+      digest: await contentDigest(definition),
+    },
+  };
+  const gate = createInvocationGate({
+    abortGuest: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  });
+  const dispatch = (captured, method, args) =>
+    gate.run(captured, {}, (frame) =>
+      dispatchWorkflowBinding(
+        { WORKFLOW_RUNS: { getByName: () => runs } },
+        frame,
+        {
+          instanceId: frame.facts.instanceId,
+          frameId: frame.frameId,
+          binding: "WORKFLOWS",
+        },
+        method,
+        args,
+      ),
+    );
+  const result = await dispatch(lifecycle, "runGraph", [request]);
+  assert.equal(result.kind, "started", JSON.stringify(result));
+  assert.equal(created.length, 1);
+  assert.equal(created[0].id, result.runId);
+  const replay = await dispatch(lifecycle, "runGraph", [
+    {
+      ...request,
+      requestId: "guest-changed-id",
+    },
+  ]);
+  assert.equal(replay.kind, "replay", JSON.stringify(replay));
+  assert.equal(replay.runId, result.runId);
+  const listed = await runs.runs(facts, {
+    workflowId: "lifecycle-admission-proof",
+  });
+  assert.equal(listed.runs.length, 1);
+  assert.equal(
+    listed.runs[0].source,
+    "event",
+    "lifecycle is not misreported as a human click",
+  );
+  assert.deepEqual(
+    await runs.loadRun("trellis", result.runId).then((run) => run.input),
+    { sourceRevision },
+  );
+  // The binding dispatcher preserves call-only control operations too.
+  for (const method of Object.keys(workflowFrameMethods.WORKFLOWS).filter(
+    (name) => name !== "runGraph",
+  ))
+    await assert.rejects(() => dispatch(lifecycle, method, [{}]), {
+      code: "revoked",
+    });
+  // A lifecycle start is not a general-purpose member call capability.
+  for (const action of [
+    () => runs.runs(lifecycle, {}),
+    () => runs.cancel(lifecycle, { runId: result.runId }),
+    () => runs.status(lifecycle, { runId: result.runId }),
+  ])
+    await assert.rejects(action, { code: "revoked" });
+  await assert.rejects(
+    () =>
+      runs.start(
+        {
+          ...lifecycle,
+          subject: {
+            kind: "lifecycle",
+            name: "syncRefused",
+            lane: "member:owner",
+            code: "access_changed",
+          },
+          grants: [],
+        },
+        request,
+      ),
+    { code: "revoked" },
+  );
+  await assert.rejects(
+    () =>
+      runs.start(
+        {
+          ...lifecycle,
+          selection: {
+            ...lifecycle.selection,
+            authorityVersion: lifecycle.selection.authorityVersion + 1,
+          },
+        },
+        request,
+      ),
+    { code: "revoked" },
+  );
+});
+
+test("standalone webhook control admits its current owner for an empty metadata list and refuses another member claiming owner role", async (t) => {
+  const limiter = { limit: async () => ({ success: true }) };
+  const { runs, ownerPrincipal, created } = await libraryFixture(t, {
+    WORKFLOW_WEBHOOK_HOST_RATE: limiter,
+    WORKFLOW_WEBHOOK_BINDING_RATE: limiter,
+    WORKFLOW_WEBHOOK_POLICY: {
+      limits: {
+        bodyBytes: 65536,
+        headerBytes: 8192,
+        headerCount: 32,
+        readMilliseconds: 1000,
+      },
+      concurrency: { hostConcurrency: 2, bindingConcurrency: 1 },
+    },
+  });
+  const ownerReply = await runs.webhookControl(ownerPrincipal, "trellis", {
+    operation: "list",
+  });
+  assert.equal(ownerReply.status, 200);
+  assert.equal(ownerReply.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await ownerReply.json(), { bindings: [], next: null });
+  const foreignReply = await runs.webhookControl(
+    {
+      ...ownerPrincipal,
+      actor: { kind: "member", memberId: "foreign" },
+    },
+    "trellis",
+    { operation: "list" },
+  );
+  assert.equal(foreignReply.status, 403);
+  assert.equal(foreignReply.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await foreignReply.json(), { error: "refused" });
+  assert.equal(created.length, 0);
+});
+
+test("standalone webhook admission stays closed when abuse configuration is absent", async (t) => {
+  const { runs, ownerPrincipal, created } = await libraryFixture(t);
+  const control = await runs.webhookControl(ownerPrincipal, "trellis", {
+    operation: "list",
+  });
+  assert.equal(control.status, 403);
+  assert.equal(control.headers.get("cache-control"), "no-store");
+  for (const method of ["GET", "POST"]) {
+    const response = await runs.fetch(
+      new globalThis.Request("https://owner.test/webhooks/binding", { method }),
+    );
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { error: "refused" });
+  }
+  assert.equal(created.length, 0);
+});
+
+test("standalone webhook routing addresses only an existing library, forwards to its native owner and preserves refusal", async (t) => {
+  const { runs, host, ownerPrincipal } = await libraryFixture(t);
+  const addresses = [];
+  const env = {
+    WORKFLOW_RUNS: {
+      getByName(id) {
+        addresses.push(id);
+        return runs;
+      },
+    },
+  };
+  const routes = standaloneWorkflowWebhookRoutes(env, async (request) =>
+    new URL(request.url).origin === "https://owner.test" ? host : null,
+  );
+  for (const [origin, library] of [
+    ["https://owner.test", "missing"],
+    ["https://foreign.test", "trellis"],
+  ]) {
+    const response = await routes.request(
+      `${origin}/api/installations/${library}/workflows/webhooks/opaque-binding`,
+      { method: "POST", body: "{}" },
+    );
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "refused" });
+  }
+  assert.deepEqual(addresses, []);
+  const response = await routes.request(
+    "https://owner.test/api/installations/trellis/workflows/webhooks/opaque-binding",
+    { method: "POST", body: "{}" },
+  );
+  assert.deepEqual(addresses, ["trellis"]);
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { error: "refused" });
+  const controls = new Hono()
+    .use("*", async (context, next) => {
+      context.set("principal", ownerPrincipal);
+      await next();
+    })
+    .route(
+      "/",
+      standaloneWorkflowWebhookControls(env, () => Promise.resolve(host)),
+    );
+  const control = await controls.request(
+    "https://owner.test/api/installations/trellis/workflows/webhooks",
+    { method: "POST", body: JSON.stringify({ operation: "list" }) },
+  );
+  assert.deepEqual(addresses, ["trellis", "trellis"]);
+  assert.equal(control.status, 403);
+  assert.equal(control.headers.get("cache-control"), "no-store");
+});
+
+async function webhookControlRouteFixture(t) {
+  const { runs, host, ownerPrincipal } = await libraryFixture(t);
+  const addresses = [];
+  const control = t.mock.method(runs, "webhookControl");
+  const routes = new Hono()
+    .use("*", async (context, next) => {
+      context.set("principal", ownerPrincipal);
+      await next();
+    })
+    .route(
+      "/",
+      standaloneWorkflowWebhookControls(
+        {
+          WORKFLOW_RUNS: {
+            getByName(id) {
+              addresses.push(id);
+              return runs;
+            },
+          },
+        },
+        () => Promise.resolve(host),
+      ),
+    );
+  return {
+    addresses,
+    control,
+    ownerPrincipal,
+    request: (body) =>
+      routes.request(
+        "https://owner.test/api/installations/trellis/workflows/webhooks",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        },
+      ),
+  };
+}
+
+test("standalone webhook control refuses malformed JSON without addressing its native owner", async (t) => {
+  const f = await webhookControlRouteFixture(t);
+  const response = await f.request("{");
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { error: "refused" });
+  assert.deepEqual(f.addresses, []);
+  assert.equal(f.control.mock.callCount(), 0);
+});
+
+test("standalone webhook control refuses schema-invalid bodies without addressing its native owner", async (t) => {
+  const f = await webhookControlRouteFixture(t);
+  for (const command of [
+    {},
+    { operation: "create" },
+    { operation: "list", installationAuthority: {} },
+  ]) {
+    const response = await f.request(JSON.stringify(command));
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { error: "refused" });
+    assert.deepEqual(f.addresses, []);
+    assert.equal(f.control.mock.callCount(), 0);
+  }
+});
+
+test("standalone webhook control forwards a valid decoded command to its native owner", async (t) => {
+  const f = await webhookControlRouteFixture(t);
+  const response = await f.request(JSON.stringify({ operation: "list" }));
+  // This fixture's native owner has no abuse configuration and still closes
+  // the surface. Decoding must not replace or bypass that owner admission.
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { error: "refused" });
+  assert.deepEqual(f.addresses, ["trellis"]);
+  assert.equal(f.control.mock.callCount(), 1);
+  assert.deepEqual(f.control.mock.calls[0].arguments, [
+    f.ownerPrincipal,
+    "trellis",
+    { operation: "list" },
+  ]);
+});
+
+test("standalone terminal transition settles its existing trigger reservation", async (t) => {
+  const { runs, facts, definition, storage } = await libraryFixture(t);
+  const started = await runs.start(facts, {
+    requestId: "terminal-reservation",
+    definition,
+    bindings: {},
+    input: {},
+    published: {
+      workflowId: "review",
+      commit: "a".repeat(40),
+      digest: await contentDigest(definition),
+    },
+  });
+  assert.equal(started.kind, "started");
+  const reservations = createTriggerRunReservations(storage);
+  const scope = {
+    installationId: "trellis",
+    workflowId: "review",
+    commit: "a".repeat(40),
+    triggerId: "hook",
+  };
+  const reserved = reservations.reserveTriggerRun({
+    scope,
+    requestId: "terminal-reservation",
+  });
+  assert.equal(reserved.kind, "reserved");
+  assert.equal(
+    reservations.bindTriggerRun(reserved.reservationId, started.runId),
+    "bound",
+  );
+  assert.equal(reservations.countActiveTriggerRuns(scope), 1);
+  await runs.terminal(started.runId, {
+    kind: "failed",
+    error: "fixture ending",
+  });
+  assert.equal(reservations.countActiveTriggerRuns(scope), 0);
+});
 
 test("HTTP/MCP approval digests admit the same published Workflow in WorkflowRuns", async (t) => {
   const { runs, created, facts, definition } = await libraryFixture(t);
@@ -361,6 +751,81 @@ test("runStatus reports a started run as queued, not a 502, while its engine ins
     output: null,
     error: null,
   });
+});
+
+test("standalone MCP status and terminal cancellation share the live Workflow owner and refuse foreign actors", async (t) => {
+  let state = "running";
+  let terminated = 0;
+  const library = await libraryFixture(t, {
+    GRAPH_WORKFLOWS: {
+      create: async () => undefined,
+      get: async () => ({
+        status: async () => ({ status: state }),
+        terminate: async () => {
+          terminated++;
+          state = "terminated";
+        },
+      }),
+    },
+  });
+  const started = await library.runs.start(library.facts, {
+    requestId: "mcp-controls",
+    definition: library.definition,
+    bindings: {},
+    input: {},
+    published: {
+      workflowId: "review",
+      commit: "a".repeat(40),
+      digest: await contentDigest(library.definition),
+    },
+  });
+  assert.equal(started.kind, "started");
+  const bound = await library.control({
+    actor: { kind: "member", memberId: library.ownerId },
+    role: "owner",
+  });
+  assert.ok(bound);
+  const tools = createMcpWorkflowControl(bound);
+  const status = await tools.operations.status({ runId: started.runId });
+  assert.equal(status.kind, "found");
+  assert.equal(status.snapshot.runId, started.runId);
+  assert.deepEqual(await tools.operations.cancel({ runId: started.runId }), {
+    kind: "cancelled",
+  });
+  assert.deepEqual(await tools.operations.cancel({ runId: started.runId }), {
+    kind: "terminal",
+  });
+  assert.equal(terminated, 1);
+  await assert.rejects(
+    library.control({
+      actor: { kind: "member", memberId: "foreign" },
+      role: "owner",
+    }),
+  );
+});
+
+test("Agent Workflow schedule and App-event controls require the exact current approval revision", async (t) => {
+  let policy = null;
+  const library = await libraryFixture(t, {
+    AGENT_DIRECTORY: {
+      getByName: () => ({
+        appToolPolicy: async () => policy,
+      }),
+    },
+  });
+  policy = {
+    level: "write",
+    revision: "agent_one:1",
+    grantedBy: library.ownerId,
+  };
+  const facts = library.agentFacts("agent_one", "session_one", library.ownerId);
+  assert.deepEqual(await library.runs.schedules(facts), { schedules: [] });
+  assert.deepEqual(await library.runs.eventTriggers(facts), {
+    eventTriggers: [],
+  });
+  policy = { ...policy, revision: "agent_one:2" };
+  await assert.rejects(library.runs.schedules(facts));
+  await assert.rejects(library.runs.eventTriggers(facts));
 });
 
 test("an Agent-started run acts as its grantor and reports its ending to the starting Session; a declared chat receives any run's ending", async (t) => {
@@ -765,6 +1230,157 @@ test("a run is refused with not_granted when it declares a delivery or has a Git
   assert.equal(library.created.length, 1);
 });
 
+// Standalone red 2: the run owner's issuer admits only the exact library,
+// repository and scope of an admitted Git step's live credential.
+test("standalone Workflow Git credentials refuse another repository, owner, secret, non-live, closed invocation or ended run", async (t) => {
+  // The selected Computer answers native liveness; the library never names it.
+  const live = new Set();
+  const library = await libraryFixture(
+    t,
+    {
+      COMPUTER: {
+        getByName: (computerId) => {
+          assert.equal(computerId, "workspace");
+          return {
+            executionIsLive: async (invocationId) => live.has(invocationId),
+          };
+        },
+      },
+    },
+    ["bonsai"],
+  );
+  const listDigest = await library.methodDigest("listRuns");
+  const gitDefinition = {
+    format: "fungi.workflow/v1",
+    title: "Owner Git node",
+    apps: { bonsai: { appId: "app_trellis" } },
+    input: { type: "object", properties: {}, additionalProperties: false },
+    nodes: [
+      {
+        id: "list",
+        kind: "app",
+        app: "bonsai",
+        method: "listRuns",
+        methodDigest: listDigest,
+        values: {},
+        gitAccess: {
+          binding: "repo",
+          repository: "demo-repo",
+          branches: ["refs/heads/main"],
+        },
+      },
+    ],
+    edges: [],
+    output: { result: { node: "list", port: "value" } },
+  };
+  const started = await library.runs.start(library.facts, {
+    requestId: "owner-git-node",
+    definition: gitDefinition,
+    bindings: { bonsai: "bonsai", repo: "bonsai" },
+    input: {},
+    published: {
+      workflowId: "owner-git",
+      commit: "a".repeat(40),
+      digest: await contentDigest(gitDefinition),
+    },
+  });
+  assert.equal(started.kind, "started", JSON.stringify(started));
+  const event = {
+    runId: started.runId,
+    nodeId: "list",
+    iteration: "0",
+    state: "running",
+    attempt: 0,
+  };
+  assert.deepEqual(await library.runs.beforeNode(event), { kind: "admitted" });
+  const idempotencyKey = started.runId + ":list";
+  // The dispatched step is recorded before its App call; this harness has
+  // no App Instance, so only the call itself then fails.
+  const methodSpec = await library.methodSpec("listRuns");
+  await assert.rejects(
+    library.runs.dispatch({
+      teamId: "trellis",
+      runId: started.runId,
+      nodeId: "list",
+      iteration: "0",
+      installationId: "bonsai",
+      method: "listRuns",
+      methodSpec,
+      input: {},
+      idempotencyKey,
+    }),
+    /INSTANCES|getByName/u,
+  );
+  const workflow = {
+    workflowId: "owner-git",
+    runId: started.runId,
+    nodeId: "list",
+    armedBy: { kind: "member", memberId: library.ownerId },
+  };
+  const request = {
+    installationId: "bonsai",
+    idempotencyKey,
+    workflow,
+    memberId: library.ownerId,
+    computerId: "workspace",
+  };
+  // A frame claiming another member or Computer is a revocation.
+  for (const forged of [
+    { ...request, memberId: "someone-else" },
+    { ...request, computerId: "elsewhere" },
+  ])
+    await assert.rejects(library.runs.admitWorkflowGit(forged));
+  const grant = await library.runs.admitWorkflowGit(request);
+  assert.ok(grant);
+  assert.equal(grant.scope, "write");
+  const credential = await library.runs.issueWorkflowGit("exec:one", grant);
+  assert.equal(
+    credential.remote,
+    "https://workflow-unit.invalid/git/bonsai/demo-repo.git",
+  );
+  assert.match(credential.bearer, /^wgp\.trellis\.[0-9a-f]{64}$/u);
+  const repository = (name) => ({
+    kind: "installation",
+    installationId: "bonsai",
+    repository: name,
+  });
+  const admit = (bearer, name, scope) =>
+    library.runs.admitWorkflowGitPass(bearer, repository(name), scope);
+  // A credential whose native command is not proven live admits nothing.
+  assert.equal(await admit(credential.bearer, "demo-repo", "read"), null);
+  live.add("exec:one");
+  // Write grants push and read their own repository.
+  assert.ok(await admit(credential.bearer, "demo-repo", "write"));
+  assert.ok(await admit(credential.bearer, "demo-repo", "read"));
+  const token = credential.bearer.split(".")[2];
+  for (const [bearer, name] of [
+    [credential.bearer, "other-repo"],
+    ["wgp.other-library." + token, "demo-repo"],
+    ["wgp.trellis." + "0".repeat(64), "demo-repo"],
+  ])
+    assert.equal(await admit(bearer, name, "read"), null);
+  // A replayed invocation never obtains a second secret.
+  await assert.rejects(library.runs.issueWorkflowGit("exec:one", grant));
+  // Closing the invocation's credential denies its next request.
+  await library.runs.closeWorkflowGit("exec:one", grant);
+  assert.equal(await admit(credential.bearer, "demo-repo", "read"), null);
+  await assert.rejects(library.runs.renewWorkflowGit("exec:one", grant));
+  // Ending the run denies every credential it issued.
+  const second = await library.runs.issueWorkflowGit("exec:two", grant);
+  live.add("exec:two");
+  assert.ok(await admit(second.bearer, "demo-repo", "read"));
+  // A proven native exit denies the next request at once.
+  live.delete("exec:two");
+  assert.equal(await admit(second.bearer, "demo-repo", "read"), null);
+  live.add("exec:two");
+  await library.runs.terminal(started.runId, {
+    kind: "failed",
+    error: "fixture ending",
+  });
+  assert.equal(await admit(second.bearer, "demo-repo", "read"), null);
+  assert.equal(await library.runs.admitWorkflowGit(request), null);
+});
+
 test("revoking the key mid-run gets the next node refused with revoked", async (t) => {
   const library = await keyLibraryFixture(t);
   const listDigest = await library.methodDigest("listRuns");
@@ -1004,159 +1620,6 @@ test("a key run is refused with revoked when a planInstallationLevels entry is d
     kind: "refused",
     code: "revoked",
   });
-});
-
-test("a schedule and an event fire their admitted Workflow, and listRuns shows both sources", async (t) => {
-  const database = new DatabaseSync(":memory:");
-  t.after(() => database.close());
-  const storage = fromNodeSqlite(database);
-  const emitterEvents = await catalogEvents({
-    "git.push": {
-      description: "A repository accepted a push.",
-      payload: { type: "object", properties: {}, additionalProperties: true },
-    },
-  });
-  const definition = {
-    format: "fungi.workflow/v1",
-    title: "Triggered",
-    apps: { emitter: { appId: "app_emitter" } },
-    input: { type: "object", properties: {}, additionalProperties: false },
-    nodes: [],
-    edges: [],
-    output: {},
-    triggers: [
-      {
-        id: "tick",
-        on: "schedule",
-        cron: { expression: "0 6 * * *", timeZone: "UTC" },
-        input: {},
-      },
-      {
-        id: "pushed",
-        on: "event",
-        app: "emitter",
-        event: "git.push",
-        eventDigest: emitterEvents.events["git.push"].digest,
-        input: {},
-      },
-    ],
-  };
-  const publisher = {
-    installationId: "library",
-    appId: "app_trellis",
-    displayName: "Trellis",
-    methods: {},
-    capabilities: ["workflow.publish"],
-    workflowPublishGranted: true,
-  };
-  const emitter = {
-    installationId: "emitter-installation",
-    appId: "app_emitter",
-    displayName: "Emitter",
-    methods: {},
-    ...emitterEvents,
-  };
-  const entries = [publisher, emitter];
-  const installationAuthority = {
-    selection: {
-      instanceId: "instance_library",
-      owner: { kind: "installation", id: "library" },
-      appId: "app_trellis",
-      releaseId: "rel_trellis",
-      authorityVersion: 3,
-    },
-    artifactDigest: "sha256:" + "c".repeat(64),
-  };
-  const authority = createWorkflowRunAuthority({
-    member: () => Promise.resolve({ membershipVersion: 1 }),
-    memberComputer: () => Promise.resolve(true),
-    catalog: () => Promise.resolve(entries),
-    admitAgent: () => {
-      throw new Error("No Agent starts in this trigger proof");
-    },
-    capture: createWorkflowCeilingCapture({
-      node: () => Promise.resolve(null),
-      git: () => Promise.resolve(false),
-    }),
-    denied: () => new Error("denied"),
-  });
-  const unexpected = (...args) => {
-    throw new Error(`Unexpected trigger port call: ${JSON.stringify(args)}`);
-  };
-  const host = createStandaloneWorkflowTriggerHost({
-    admitDelivery: () => Promise.resolve(false),
-    authority,
-    runs: {
-      sql: storage.sql,
-      transactionSync: (body) => storage.transactionSync(body),
-      teamId: () => "library",
-    },
-    triggers: {
-      published: { resolve: unexpected },
-      source: unexpected,
-      admit: () => Promise.resolve(installationAuthority),
-      readAgentAccess: () => Promise.resolve(null),
-      admitGitAccess: () => Promise.resolve(),
-      launch: () => Promise.resolve(),
-    },
-    recordCaller: () => undefined,
-  });
-  const compiled = await compileForMember(entries, {
-    requestId: "compile-triggered",
-    definition,
-    bindings: { emitter: "emitter-installation" },
-    input: {},
-  });
-  if (compiled.kind !== "compiled")
-    throw new Error(
-      `Trigger fixture graph did not compile: ${JSON.stringify(compiled)}`,
-    );
-  const digest = await contentDigest(definition);
-  const bindingFor = (triggerId) =>
-    armedWorkflowTriggerSchema.parse({
-      installationId: "library",
-      workflowId: "triggered",
-      commit: "a".repeat(40),
-      digest,
-      triggerId,
-      bindings: { emitter: "emitter-installation" },
-      armedBy: "owner",
-      armedVia: null,
-      grantorMembershipVersion: 1,
-      installationAuthority,
-      computerId: "computer",
-    });
-  const scheduleBinding = await bindingFor("tick");
-  host.runs.triggerPlans.put(scheduleBinding, compiled.plan);
-  const scheduled = await host.triggers.fire(scheduleBinding, "library/tick", {
-    scheduledAt: "2026-10-14T06:00:00.000Z",
-    eventId: "tick-1",
-  });
-  if (scheduled.kind !== "started")
-    throw new Error(`Schedule fire was refused: ${JSON.stringify(scheduled)}`);
-  const eventBinding = await bindingFor("pushed");
-  host.runs.triggerPlans.put(eventBinding, compiled.plan);
-  const fired = await host.triggers.fire(eventBinding, "library/pushed", {
-    payload: { ref: "refs/heads/main" },
-    eventId: "push-1",
-  });
-  if (fired.kind !== "started")
-    throw new Error(`Event fire was refused: ${JSON.stringify(fired)}`);
-  // listRuns reads the host's own run store: a fired trigger's source is the
-  // kind it actually fired as, never the earlier blanket "event" guess.
-  const listed = host.runs.listRuns("library", "owner");
-  const byId = (runId) => listed.find((row) => row.runId === runId);
-  assert.equal(byId(scheduled.runId)?.source, "schedule");
-  assert.deepEqual(byId(scheduled.runId)?.initiatedBy, {
-    kind: "member",
-    memberId: "owner",
-  });
-  assert.equal(byId(fired.runId)?.source, "event");
-  assert.deepEqual(byId(fired.runId)?.initiatedBy, {
-    kind: "member",
-    memberId: "owner",
-  });
-  assert.equal(listed.length, 2);
 });
 
 function fixture(installationId) {

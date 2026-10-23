@@ -13,6 +13,7 @@ import {
 } from "@fungi.computer/oyster/workers-git";
 import type { OysterAgents } from "@fungi.computer/oyster/agents";
 import type { OysterTenancy } from "@fungi.computer/oyster/tenant";
+import { installationWorkerEntrypoint } from "@fungi.computer/oyster/workers";
 import {
   standaloneComputerCapabilities,
   standaloneWorkspace,
@@ -86,10 +87,15 @@ const proofAgents = (): OysterAgents => ({
 
 const root = oysterGitRoot<ProofEnv>({
   tenancy: countingTenancy,
-  workspace: standaloneWorkspace,
+  // This native fixture intentionally hosts its configured default Computer.
+  workspace: (env, keysLive) => standaloneWorkspace(env, keysLive),
   agents: proofAgents,
   capabilities: standaloneComputerCapabilities,
 });
+
+export class OysterInstallationExecutor extends installationWorkerEntrypoint<ProofEnv>(
+  (env, scope) => root.hostFor(env, scope),
+) {}
 
 export class OysterMcp extends createOysterGitMcpOwner(root) {}
 

@@ -1,19 +1,19 @@
 import process from "node:process";
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { spawnSync } from "node:child_process";
+
+import { mkdir, writeFile } from "node:fs/promises";
+
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { build } from "esbuild";
+
 import * as z from "zod";
 import {
   commitDetail,
   repoDetail,
 } from "../../../../apps/bonsai/shared/contract.ts";
-import { parse as parseJsonc } from "jsonc-parser";
+
 import {
   Client,
   StreamableHTTPClientTransport,
@@ -37,9 +37,18 @@ for (const args of [
   const prepared = spawnSync("pnpm", args, { cwd: root, stdio: "inherit" });
   assert.equal(prepared.status, 0, "Native push proof prerequisites failed");
 }
-const { createAppBuild } = await import("@fungi.computer/puffball/app");
-const { backendMediaType } = await import("@fungi.computer/puffball/backend");
-const { sha256 } = await import("@fungi.computer/oyster/host");
+const { grantDeclaredAppCapabilities } =
+  await import("./owner-grants.fixture.mjs");
+const { committedAppRecipe } =
+  await import("./committed-app-recipe.fixture.mjs");
+const {
+  runNativeGit,
+  nativeWorkflowHost,
+  nativeAppClient,
+  nativeFixtureWorkspace,
+  until,
+} = await import("./workflow-native.fixture.mjs");
+
 const { buildAppDeclaration } =
   await import("@fungi.computer/agar/backend-declaration");
 const { appBackend } =
@@ -57,148 +66,28 @@ const appDeclaration = buildAppDeclaration(
   appBackend,
   packageMetadata.fungi.app,
 );
-const { workflowGitProvider } = await import("./workflow-git.fixture.mjs");
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/landed-push-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
-config.main = `${root}test/standalone/landed-push-root.fixture.ts`;
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const provider = await workflowGitProvider();
-const port = await new Promise((resolve) => {
-  const socket = createServer().listen(0, "127.0.0.1", () => {
-    const { port: free } = socket.address();
-    socket.close(() => resolve(free));
-  });
-});
-const origin = `http://127.0.0.1:${port}`;
-const auth = { Authorization: `Bearer ${key}` };
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/landed-push-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--var",
-    `OYSTER_OWNER_KEY:${key}`,
-    "--local-upstream",
-    "oyster.test",
-    "--upstream-protocol",
-    "https",
-    "--var",
-    "OYSTER_ORIGIN:https://oyster.test",
-    "--var",
-    `GIT_ORIGIN:${provider.origin}`,
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-let output = "";
-worker.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-worker.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
 
-async function call(installation, method, input, headers = auth) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-async function until(read, accepts, label) {
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const value = await read();
-    if (accepts(value)) return value;
-    assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
-    await delay(100);
-  }
-}
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    {
-      method: "PUT",
-      headers: auth,
-      body: bytes,
-      signal: globalThis.AbortSignal.timeout(60_000),
-    },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
-async function install(installationId, entry, exportName, declaration) {
-  // These are digest-verified test Releases of the real backend source. App
-  // publication tooling is not under test; Workflow publication below is.
-  const bundled = await build({
-    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName,
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  const artifact = await persist(createAppBuild(null, backend, declaration));
-  const release = {
-    appId: `app_${installationId}`,
-    releaseId: `rel_${installationId}`,
-    artifact: {
-      artifactRef: artifact.artifactRef,
-      artifactDigest: artifact.digest,
-      provenance: {
-        sourceRevision: `git:${"a".repeat(40)}`,
-        sourceTreeDigest: artifact.digest,
-        buildRecipeDigest: artifact.digest,
-      },
-    },
-  };
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ installationId, release }),
-    signal: globalThis.AbortSignal.timeout(60_000),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
+const { work, config } = await nativeFixtureWorkspace(
+  root,
+  "landed-push-native-",
+);
+
+config.main = `${root}test/standalone/landed-push-git-only-root.fixture.ts`;
+
+const nativeHost = await nativeWorkflowHost({
+  root,
+  work,
+  config,
+  oysterOrigin: "https://oyster.test",
+});
+const { key, provider, origin, auth } = nativeHost;
+
+const { call, installFirstParty } = nativeAppClient(origin, auth, {
+  key,
+  requestMilliseconds: 60_000,
+  installationMilliseconds: 60_000,
+});
+
 const redact = (text) => text.replaceAll(key, "[REDACTED]");
 const gitEnvironment = { ...process.env };
 delete gitEnvironment.GIT_TRACE;
@@ -218,32 +107,18 @@ function git(...args) {
   return result.stdout.trim();
 }
 /** Run git asynchronously: the native provider serves in this event loop. */
-async function gitAsync(args, cwd, env) {
-  const child = spawn("git", args, {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const status = await new Promise((resolve) => child.once("exit", resolve));
-  return { status, stdout, stderr };
-}
+
 async function push(token, remote) {
-  const { status, stdout, stderr } = await gitAsync(
+  const { status, stdout, stderr } = await runNativeGit(
     ["push", remote, "main"],
-    `${work}/checkout`,
     {
-      ...gitEnvironment,
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "http.extraHeader",
-      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+      cwd: `${work}/checkout`,
+      env: {
+        ...gitEnvironment,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "http.extraHeader",
+        GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+      },
     },
   );
   const text = stdout + stderr;
@@ -251,36 +126,21 @@ async function push(token, remote) {
 }
 /** Read one native provider ref. */
 async function remoteRef(remote, ref) {
-  const { status, stdout, stderr } = await gitAsync(
+  const { status, stdout, stderr } = await runNativeGit(
     ["ls-remote", remote, ref],
-    work,
-    gitEnvironment,
+    { cwd: work, env: gitEnvironment },
   );
   assert.equal(status, 0, redact(stderr));
   return stdout.trim();
 }
 try {
-  const deadline = Date.now() + 60_000;
-  while (
-    !(await globalThis
-      .fetch(`${origin}/login`, {
-        signal: globalThis.AbortSignal.timeout(
-          Math.max(1, Math.min(2_000, deadline - Date.now())),
-        ),
-      })
-      .then(
-        (response) => response.ok,
-        () => false,
-      ))
-  ) {
-    assert.equal(
-      worker.exitCode,
-      null,
-      "Production root exited before readiness",
-    );
-    assert.ok(Date.now() < deadline, "Production root did not become ready");
-    await delay(100);
-  }
+  await nativeHost.ready({
+    milliseconds: 60_000,
+    interval: 100,
+    label: "Production root did not become ready",
+    requestMilliseconds: 2_000,
+    boundRequestToDeadline: true,
+  });
   // The starter installer's first act: the owner route publishes Tourtois's
   // editable source as this Oyster's template through the Registry's own
   // Artifacts namespace, over the same native Git provider.
@@ -291,10 +151,10 @@ try {
   const publish = async () => {
     const response = await publishSource({
       appId: tourtois.appId,
-      entry: tourtois.recipe.entry,
+      entry: committedAppRecipe(repository, tourtois, head).entry,
       repositoryPath: repository,
       sourceRevision: `git:${head}`,
-      recipe: tourtois.recipe,
+      recipe: committedAppRecipe(repository, tourtois, head),
       url: origin,
       key,
     });
@@ -324,12 +184,12 @@ try {
   log(
     "PASS owner route publishes the Tourtois source template on the provider",
   );
-  await install(
-    "bonsai",
-    "../../../../apps/bonsai/backend/index.ts",
-    "BonsaiApp",
-    appDeclaration,
-  );
+  await installFirstParty("bonsai", appDeclaration);
+  await grantDeclaredAppCapabilities({
+    origin,
+    installationId: "bonsai",
+    headers: auth,
+  });
   await call("bonsai", "repos.create", { name: "pond" });
   await mkdir(`${work}/checkout`);
   git("-C", "checkout", "init", "-q", "-b", "main");
@@ -703,15 +563,155 @@ try {
   log(
     "PASS member files.save through the production host route synced by the host-armed replay wake alone",
   );
+  // A real accepted main push starts the retained Workflow. This runtime has
+  // no attached backend (the fixture uses the real fleet creation projection):
+  // it must stop honestly at the hosted boundary, not run
+  // an App build locally or manufacture an installed Release.
+  const appRepo = "app-boundary";
+  const appRemote = origin + "/git/bonsai/" + appRepo + ".git";
+  await call("bonsai", "repos.create", { name: appRepo });
+  await writeFile(
+    work + "/checkout/package.json",
+    JSON.stringify({
+      name: "native-build-boundary",
+      fungi: {
+        appId: "app_boundary",
+        build: {
+          entry: "index.html",
+          backend: null,
+          maxOutputBytes: 1048576,
+        },
+      },
+    }),
+  );
+  await writeFile(
+    work + "/checkout/index.html",
+    "<!doctype html><h1>Boundary seed</h1>",
+  );
+  git("-C", "checkout", "add", "package.json", "index.html");
+  git(
+    "-C",
+    "checkout",
+    "-c",
+    "user.name=Owner",
+    "-c",
+    "user.email=owner@test.invalid",
+    "commit",
+    "-qm",
+    "Commit the App source",
+  );
+  const seedPush = await push(key, appRemote);
+  assert.equal(seedPush.status, 0, seedPush.output);
+  const registered = await call("bonsai", "apps.register", { repo: appRepo });
+  assert.equal(registered.appId, "app_boundary");
+  const before = await call("bonsai", "apps.buildWorkflowRuns", {});
+  assert.ok("runs" in before, JSON.stringify(before));
+  const previousRuns = new Set(before.runs.map((run) => run.runId));
+  await writeFile(
+    work + "/checkout/index.html",
+    "<!doctype html><h1>Accepted main</h1>",
+  );
+  git("-C", "checkout", "add", "index.html");
+  git(
+    "-C",
+    "checkout",
+    "-c",
+    "user.name=Owner",
+    "-c",
+    "user.email=owner@test.invalid",
+    "commit",
+    "-qm",
+    "Push registered App main",
+  );
+  const acceptedHead = git("-C", "checkout", "rev-parse", "HEAD");
+  const appPush = await push(key, appRemote);
+  assert.equal(appPush.status, 0, appPush.output);
+  const workflowDeadline = Date.now() + 60_000;
+  let automatic;
+  let finished;
+  let lastListed;
+  let lastStatus;
+  while (finished === undefined) {
+    assert.equal(
+      nativeHost.exitCode,
+      null,
+      "Oyster exited during the build Workflow",
+    );
+    assert.ok(
+      Date.now() < workflowDeadline,
+      "Accepted main never reached the hosted-backend boundary: " +
+        JSON.stringify({ lastListed, lastStatus }),
+    );
+    const listed = await call("bonsai", "apps.buildWorkflowRuns", {});
+    lastListed = listed;
+    assert.ok("runs" in listed, JSON.stringify(listed));
+    automatic = listed.runs.find(
+      (run) => run.source === "event" && !previousRuns.has(run.runId),
+    );
+    if (automatic !== undefined) {
+      const status = await call("bonsai", "apps.buildWorkflowRun", {
+        runId: automatic.runId,
+      });
+      lastStatus = status;
+      if ("outcome" in status && status.outcome !== "active") finished = status;
+    }
+    if (finished === undefined) await delay(250);
+  }
+  assert.equal(automatic.workflowId, "bonsai-build-on-merge");
+  assert.equal(automatic.initiatedBy.kind, "member");
+  assert.ok(
+    finished.events.some(
+      (event) => event.nodeId === "build" && event.state === "failed",
+    ),
+    JSON.stringify(finished),
+  );
+  assert.match(
+    JSON.stringify(finished),
+    /No hosted build backend is attached to this Computer/u,
+  );
+  assert.ok(
+    !finished.events.some(
+      (event) =>
+        ["verify", "install"].includes(event.nodeId) &&
+        event.state === "complete",
+    ),
+    JSON.stringify(finished),
+  );
+  // The owner build door exposes the closed reason; the Workflow records its
+  // caller-facing refusal. Neither preflight may create a job or installation.
+  const refused = await globalThis.fetch(origin + "/api/builds", {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      appId: "app_boundary",
+      sourceRevision: "git:" + acceptedHead,
+    }),
+  });
+  assert.equal(refused.status, 503);
+  assert.deepEqual(await refused.json(), {
+    code: "no_backend",
+    error: "No hosted build backend is attached to this Computer",
+  });
+  assert.equal(
+    await call("bonsai", "apps.buildStatus", { repo: appRepo }),
+    null,
+  );
+  const inventory = await globalThis.fetch(origin + "/api/installations", {
+    headers: auth,
+  });
+  assert.equal(inventory.status, 200);
+  assert.ok(
+    !(await inventory.json()).some((item) => item.installationId === appRepo),
+  );
+  log(
+    "PASS accepted main → retained Workflow → build step refuses no_backend; no local build, job or install",
+  );
   log(
     "PASS ordinary owner git push and receive-pack advertisement through production Oyster root into installed real Bonsai backend/native Git provider",
   );
 } catch (cause) {
-  error(redact(output));
+  error(redact(nativeHost.output()));
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }

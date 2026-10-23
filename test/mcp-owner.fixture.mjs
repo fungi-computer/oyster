@@ -1,3 +1,4 @@
+import { installationStore } from "./native-approval-host.fixture.mjs";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
@@ -19,7 +20,7 @@ const { createOysterGitWorker, createOysterGitMcpOwner, oysterGitRoot } =
   await import("../dist/workers-git.js");
 hooks.deregister();
 
-export function ownerFrontends() {
+export function ownerFrontends({ beforeHost } = {}) {
   const scope = tenantScope(defaultTenant, "https://oyster.test");
   const scopes = new Map([[scope.origin, scope]]);
   let principal = {
@@ -44,12 +45,19 @@ export function ownerFrontends() {
       },
     }),
   });
-  const Owner = createOysterGitMcpOwner(root);
+  const Owner = createOysterGitMcpOwner({
+    ...root,
+    hostFor: async (env, selected) => {
+      await beforeHost?.();
+      return root.hostFor(env, selected);
+    },
+  });
   const database = new DatabaseSync(":memory:");
   const storage = fromNodeSqlite(database);
   let owner;
   const owners = new Map();
   const databases = new Map([[scope.durableName("mcp"), database]]);
+  const registries = new Map();
   const env = {
     OYSTER_ORIGIN: scope.origin,
     OYSTER_OWNER_KEY: "unused-fixture-owner-key-24",
@@ -57,7 +65,13 @@ export function ownerFrontends() {
     LOADER: {},
     INSTANCES: {},
     KEYS: {},
-    REGISTRY: { getByName: () => ({ list: async () => [] }) },
+    REGISTRY: {
+      getByName: (name) => {
+        if (!registries.has(name))
+          registries.set(name, installationStore({ list: async () => [] }));
+        return registries.get(name);
+      },
+    },
     MCP: {
       getByName: (name) => {
         if (!owners.has(name)) {

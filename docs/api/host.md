@@ -179,10 +179,12 @@ A serializable registry commit result, including across native DO RPC.
 ```ts
 type InstallationStore = InstallationReader &
   Readonly<{
-    put: (installation) => Promise<void>;
+    operations?: InstallationOperations;
+    generation: () => Promise<string>;
     compareAndPut: (
       installation,
       expectedAuthorityVersion,
+      expectedGeneration,
     ) => Promise<InstallationCommit>;
   }>;
 ```
@@ -237,6 +239,10 @@ The result of one Instance operation; refusals carry Oyster's error code.
 
 ```ts
 type InstanceHandle = Readonly<{
+  prepare: (
+    state,
+    release,
+  ) => Promise<InstanceResult<UiBootCheckOutcome | null>>;
   apply: (state, release) => Promise<InstanceResult<Instance>>;
   onGitPush: (facts, fact) => Promise<void>;
   syncRefused: (facts, refusal) => Promise<void>;
@@ -412,11 +418,63 @@ Variables: OysterVariables;
 
 ```ts
 type OysterHost = Readonly<{
+  approvals?: Readonly<{
+     submit: Promise<
+        | {
+        kind: Schema.Literal<"pending_approval">;
+        recordId: Schema.String;
+        description: Schema.Struct<{
+           title: Schema.String;
+           inputBytes: Schema.Int;
+           inputSha256: Schema.String;
+        }>;
+      }
+       | ApprovalApplyResult>;
+  }>;
+  workflows?: (principal) => Promise<
+     | {
+     status: Promise<
+        | {
+        runId: z.ZodString;
+        planDigest: z.ZodString;
+        outcome: z.ZodEnum<{
+           cancelled: ...;
+           terminal: ...;
+           active: ...;
+        }>;
+        title: z.ZodString;
+        events: z.ZodArray<z.ZodRecord<..., ...>>;
+        reviews: z.ZodArray<z.ZodRecord<..., ...>>;
+        status: z.ZodString;
+        output: z.ZodJSONSchema;
+        error: z.ZodJSONSchema;
+      }
+        | {
+        error: z.ZodString;
+      }
+       | null>;
+     cancel: Promise<
+        | {
+        kind: z.ZodEnum<{
+           cancelled: ...;
+           terminal: ...;
+        }>;
+      }
+        | {
+        kind: z.ZodLiteral<"refused">;
+        reason: z.ZodLiteral<"denied">;
+      }
+        | {
+        error: z.ZodString;
+     }>;
+   }
+    | null>;
   auth: OysterAuth;
   backgroundOriginKey?: () => Promise<CryptoKey>;
   artifacts: ArtifactStore;
   installations: InstallationStore;
   instances: InstanceDirectory;
+  bootUi: (release) => Promise<UiBootCheckOutcome>;
   computerId?: string;
   computer?: (principal) => KnapsackComputer | null | Promise<KnapsackComputer | null>;
   appToolPolicy?: (actor) =>
@@ -453,11 +511,759 @@ type OysterHost = Readonly<{
   }>;
   homeInstallationId?: string;
   pageScript?: string;
+  pageAssets?: () => Promise<{
+     pageScript: string;
+     publicHomeScript: string;
+     fontStyles: string;
+     loginFontStyles: string;
+     shellStyles: string;
+     grantConsentScript: string;
+  }>;
   title?: string;
 }>;
 ```
 
 Everything a host supplies to run Oyster.
+
+---
+
+### InstallationOperations
+
+```ts
+type InstallationOperations = Readonly<{
+  admit: Promise<
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "refused";
+     status: number;
+     code: string;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "unconfirmed";
+     outcome: "cancelled" | "outcome_unknown" | "interrupted";
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "succeeded";
+     reference: {
+        generation: string;
+        instanceId: InstanceId;
+        authorityVersion: number;
+        status: "enabled" | "disabled" | "deleted";
+     };
+     creation: "fresh" | "replacement" | "reminted";
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other"
+              | "Error";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      }
+        | null;
+     installation:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
+           }>;
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "pending";
+  }>;
+  read: Promise<
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "refused";
+     status: number;
+     code: string;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "unconfirmed";
+     outcome: "cancelled" | "outcome_unknown" | "interrupted";
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "succeeded";
+     reference: {
+        generation: string;
+        instanceId: InstanceId;
+        authorityVersion: number;
+        status: "enabled" | "disabled" | "deleted";
+     };
+     creation: "fresh" | "replacement" | "reminted";
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other"
+              | "Error";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      }
+        | null;
+     installation:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
+           }>;
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "pending";
+   }
+    | null>;
+  load: Promise<
+     | {
+     admission: {
+        requestId: string;
+        installationId: string;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: ...;
+                 sourceTreeDigest: ...;
+                 buildRecipeDigest: ...;
+              }>;
+           }>;
+        };
+        actor:   | {
+           kind: z.ZodMiniLiteral<"member">;
+           memberId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"agent">;
+           agentId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"team-key">;
+           keyId: z.ZodMiniString<string>;
+         };
+        intent: "install-or-select" | "install-or-remint" | "create-only";
+        origin: "workflow" | "owner-direct";
+     };
+     scope: {
+        tenantId: string & Brand<"OysterTenantId">;
+        origin: string;
+     };
+     installationId: string;
+     instanceId: InstanceId;
+     generation: string;
+     baseline:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
+           }>;
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+     acceptedAt: number;
+     creation: "fresh" | "replacement" | "reminted";
+     plan:   | {
+        installation: {
+           installationId: string;
+           instanceId: InstanceId | null;
+           appId: AppId;
+           release: {
+              releaseId: Schema.refine<ReleaseId, Schema.String>;
+              appId: Schema.refine<AppId, Schema.String>;
+              artifact: Schema.Struct<{
+                 artifactRef: ...;
+                 artifactDigest: ...;
+                 provenance: ...;
+              }>;
+           };
+           releasePin: "pinned" | "floating";
+           authority: {
+              authorityVersion: number;
+              declaredOperationsDigest: Sha256Digest;
+              approvedGrants: readonly Readonly<...>[];
+              approval: Readonly<...> | null;
+           };
+           status: "enabled" | "disabled" | "deleted";
+           visibility: "private" | "public";
+           approvedAnonymousMethods: readonly Readonly<{
+              name: ...;
+              digest: ...;
+           }>[];
+           anonymousApproval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        hasBackend: boolean;
+        prepared: boolean;
+        uiCheck?:   | {
+           kind: "passed";
+         }
+           | {
+           kind: "failed";
+           code: "ui_mount_failed";
+           diagnostics?: {
+              failedPredicate: ...;
+              errorName?: ...;
+              finalUrlPath: ...;
+              consoleErrors: ...;
+              pageErrors: ...;
+              failedRequests: ...;
+              droppedCount: ...;
+           };
+         }
+           | {
+           kind: "not_checked";
+           code:   | "boot_runner_unavailable"
+              | "boot_browser_binding_missing"
+              | "boot_clone_unavailable"
+              | "boot_timeout"
+              | "boot_cleanup_failed"
+              | "ui_check_not_run_on_host";
+         }
+           | null;
+      }
+        | null;
+     operation: {
+        requestId: string;
+        requestedInstallationId: string;
+        installationId: string;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: ...;
+                 sourceTreeDigest: ...;
+                 buildRecipeDigest: ...;
+              }>;
+           }>;
+        };
+        state: "pending";
+     };
+   }
+    | null>;
+  plan: Promise<{
+     admission: {
+        requestId: string;
+        installationId: string;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: Schema.refine<..., ...>;
+                 sourceTreeDigest: Schema.refine<..., ...>;
+                 buildRecipeDigest: Schema.refine<..., ...>;
+              }>;
+           }>;
+        };
+        actor:   | {
+           kind: z.ZodMiniLiteral<"member">;
+           memberId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"agent">;
+           agentId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"team-key">;
+           keyId: z.ZodMiniString<string>;
+         };
+        intent: "install-or-select" | "install-or-remint" | "create-only";
+        origin: "workflow" | "owner-direct";
+     };
+     scope: {
+        tenantId: string & Brand<"OysterTenantId">;
+        origin: string;
+     };
+     installationId: string;
+     instanceId: InstanceId;
+     generation: string;
+     baseline:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: ...;
+                 sourceTreeDigest: ...;
+                 buildRecipeDigest: ...;
+              }>;
+           }>;
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability:   | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...
+                 | ...;
+              capabilityApproved: true;
+              operations: readonly ...[];
+              resources: ... | ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ... | ... | ...;
+              at: number;
+              authorityVersion: number;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by:   | {
+              kind: ...;
+              memberId: ...;
+            }
+              | {
+              kind: ...;
+              agentId: ...;
+            }
+              | {
+              kind: ...;
+              keyId: ...;
+            };
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+     acceptedAt: number;
+     creation: "fresh" | "replacement" | "reminted";
+     plan:   | {
+        installation: {
+           installationId: string;
+           instanceId: InstanceId | null;
+           appId: AppId;
+           release: {
+              releaseId: Schema.refine<ReleaseId, Schema.String>;
+              appId: Schema.refine<AppId, Schema.String>;
+              artifact: Schema.Struct<{
+                 artifactRef: Schema.refine<..., ...>;
+                 artifactDigest: Schema.refine<..., ...>;
+                 provenance: Schema.Struct<...>;
+              }>;
+           };
+           releasePin: "pinned" | "floating";
+           authority: {
+              authorityVersion: number;
+              declaredOperationsDigest: Sha256Digest;
+              approvedGrants: readonly Readonly<{
+                 capability: ...;
+                 capabilityApproved: ...;
+                 operations: ...;
+                 resources: ...;
+              }>[];
+              approval:   | Readonly<{
+                 by: ...;
+                 at: ...;
+                 authorityVersion: ...;
+               }>
+                 | null;
+           };
+           status: "enabled" | "disabled" | "deleted";
+           visibility: "private" | "public";
+           approvedAnonymousMethods: readonly Readonly<{
+              name: string;
+              digest: Sha256Digest;
+           }>[];
+           anonymousApproval:   | Readonly<{
+              by: ... | ... | ...;
+              at: number;
+              authorityVersion: number;
+            }>
+              | null;
+        };
+        hasBackend: boolean;
+        prepared: boolean;
+        uiCheck?:   | {
+           kind: "passed";
+         }
+           | {
+           kind: "failed";
+           code: "ui_mount_failed";
+           diagnostics?: {
+              failedPredicate: ... | ... | ... | ... | ...;
+              errorName?: ... | ... | ... | ... | ... | ... | ... | ...;
+              finalUrlPath: string;
+              consoleErrors: ...[];
+              pageErrors: ...[];
+              failedRequests: ...[];
+              droppedCount: number;
+           };
+         }
+           | {
+           kind: "not_checked";
+           code:   | "boot_runner_unavailable"
+              | "boot_browser_binding_missing"
+              | "boot_clone_unavailable"
+              | "boot_timeout"
+              | "boot_cleanup_failed"
+              | "ui_check_not_run_on_host";
+         }
+           | null;
+      }
+        | null;
+     operation: {
+        requestId: string;
+        requestedInstallationId: string;
+        installationId: string;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: Schema.refine<..., ...>;
+                 sourceTreeDigest: Schema.refine<..., ...>;
+                 buildRecipeDigest: Schema.refine<..., ...>;
+              }>;
+           }>;
+        };
+        state: "pending";
+     };
+  }>;
+  commit: Promise<InstallationCommit>;
+}>;
+```
+
+Host-side port; RPC transport and tenant context belong to the adapter.
 
 ---
 
@@ -689,23 +1495,27 @@ function installOrSelect(
   installationId,
   release,
   principal,
+  intent,
+  origin,
+  requestId?,
+  signal?,
 ): Promise<Response>;
 ```
 
-Install a Release at `installationId`, or switch an already-live one onto it:
-the one path the POST install and PUT release-select routes share, and that a
-build owner's own install call reaches too. Nothing there (or only a deleted
-installation) is a fresh install; a live installation is switched in place,
-refusing a change of the installation's App identity.
+Completed selection, without re-deriving or executing outside Watchdog.
 
 #### Parameters
 
-| Parameter        | Type                                  |
-| ---------------- | ------------------------------------- |
-| `host`           | [`OysterHost`](#oysterhost)           |
-| `installationId` | `string`                              |
-| `release`        | `Release`                             |
-| `principal`      | [`OysterPrincipal`](#oysterprincipal) |
+| Parameter        | Type                                                              |
+| ---------------- | ----------------------------------------------------------------- |
+| `host`           | [`OysterHost`](#oysterhost)                                       |
+| `installationId` | `string`                                                          |
+| `release`        | `Release`                                                         |
+| `principal`      | [`OysterPrincipal`](#oysterprincipal)                             |
+| `intent`         | `"install-or-select"` \| `"install-or-remint"` \| `"create-only"` |
+| `origin`         | `"workflow"` \| `"owner-direct"` \| `"app"`                       |
+| `requestId`      | `string`                                                          |
+| `signal`         | `AbortSignal`                                                     |
 
 #### Returns
 
@@ -795,9 +1605,11 @@ function verifyRelease(
         }>;
         displayName?: string;
         capabilities: readonly (
+           | "approvals"
            | "agent.list"
            | "agent.manage"
            | "agent.rename"
+           | "agent.avatar"
            | "agent.toolPolicy"
            | "agent.read"
            | "agent.send"
@@ -861,9 +1673,11 @@ function verifyRelease(
         }>;
         displayName?: string;
         capabilities: readonly (
+           | "approvals"
            | "agent.list"
            | "agent.manage"
            | "agent.rename"
+           | "agent.avatar"
            | "agent.toolPolicy"
            | "agent.read"
            | "agent.send"
@@ -920,9 +1734,11 @@ function verifyRelease(
         }>;
         displayName?: string;
         capabilities: readonly (
+           | "approvals"
            | "agent.list"
            | "agent.manage"
            | "agent.rename"
+           | "agent.avatar"
            | "agent.toolPolicy"
            | "agent.read"
            | "agent.send"
@@ -980,6 +1796,7 @@ function verifyRelease(
         pending?: ... | ...;
         hidden?: ... | ...;
         anonymous?: ... | ...;
+        present?: ... | ...;
      }>>>;
      toolFamily?: Readonly<{
         name: string;
@@ -1000,9 +1817,11 @@ function verifyRelease(
      }>;
      displayName?: string;
      capabilities: readonly (
+        | "approvals"
         | "agent.list"
         | "agent.manage"
         | "agent.rename"
+        | "agent.avatar"
         | "agent.toolPolicy"
         | "agent.read"
         | "agent.send"
@@ -1085,29 +1904,54 @@ function verifyRelease(
 }>>;
 ```
 
-Read a Release root and verify every artifact it names: the UI document or asset
-build (and each asset object), and the backend descriptor.
+Read a Release root and verify its UI build and backend descriptor. `readAssets`
+verifies UI object bodies when true. When false, it reads the asset manifest
+needed to resolve references but does not read any UI object body, including
+standalone HTML.
 
 #### Parameters
 
-| Parameter                 | Type                                                                                                               | Default value        | Description                                                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `store`                   | [`ArtifactStore`](#artifactstore)                                                                                  | `undefined`          | -                                                                                                                    |
-| `release`                 | `Release`                                                                                                          | `undefined`          | -                                                                                                                    |
-| `policy`                  | \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \} | `defaultAssetPolicy` | -                                                                                                                    |
-| `policy.maxManifestBytes` | `number`                                                                                                           | `undefined`          | -                                                                                                                    |
-| `policy.maxObjects`       | `number`                                                                                                           | `undefined`          | -                                                                                                                    |
-| `policy.maxObjectBytes`   | `number`                                                                                                           | `undefined`          | -                                                                                                                    |
-| `policy.maxTotalBytes`    | `number`                                                                                                           | `undefined`          | -                                                                                                                    |
-| `readAssets`              | `boolean`                                                                                                          | `true`               | Read and check every UI asset now. Serving can skip this: each asset is verified against its digest when it is read. |
+| Parameter                 | Type                                                                                                               | Default value        | Description                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------- | -------------------------------------------------------------------- |
+| `store`                   | [`ArtifactStore`](#artifactstore)                                                                                  | `undefined`          | -                                                                    |
+| `release`                 | `Release`                                                                                                          | `undefined`          | -                                                                    |
+| `policy`                  | \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \} | `defaultAssetPolicy` | -                                                                    |
+| `policy.maxManifestBytes` | `number`                                                                                                           | `undefined`          | -                                                                    |
+| `policy.maxObjects`       | `number`                                                                                                           | `undefined`          | -                                                                    |
+| `policy.maxObjectBytes`   | `number`                                                                                                           | `undefined`          | -                                                                    |
+| `policy.maxTotalBytes`    | `number`                                                                                                           | `undefined`          | -                                                                    |
+| `readAssets`              | `boolean`                                                                                                          | `true`               | Read and check every UI object now. Serving verifies each on demand. |
 
 #### Returns
 
 `Promise`\<`Readonly`\<\{ `release`: `Release`; `build`: \| \{ `declaration?`:
 `Readonly`\<\{ `api?`: `Readonly`\<\{ `methods`: ...; `toolFamily?`: ...;
 `events?`: ...; \}\>; `displayName?`: `string`; `capabilities`: readonly ( \|
-`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"`
-\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
+`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
+`"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<...\>[];
+`guidance?`: `string`; `handlers`: readonly `"file.open"`[]; `receives?`:
+readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"dashboard"` \|
+`"inbox"` \| `"files"` \| `"media"` \| `"sessions"` \| `"terminal"`)[];
+`storage?`: readonly `Readonly`\<...\>[]; `commands?`: readonly
+`Readonly`\<...\>[]; `gills?`: readonly `Readonly`\<...\>[]; `backend?`:
+`Readonly`\<\{ `bindings`: ...; `sync?`: ...; \}\>; \}\>; `format`:
+`"fungi-app-v1"`; `ui`: \{ `mediaType`: `"text/html; charset=utf-8"` \|
+`"application/vnd.fungi.app-assets+json"`; `artifactRef`: `ArtifactRef`;
+`digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \};
+`backend`: \{ `mediaType`: `"application/vnd.fungi.app-backend+json"`;
+`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; `version`: `string`;
+`byteLength`: `number`; \}; \} \| \{ `declaration?`: `Readonly`\<\{ `api?`:
+`Readonly`\<\{ `methods`: ...; `toolFamily?`: ...; `events?`: ...; \}\>;
+`displayName?`: `string`; `capabilities`: readonly ( \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
 `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
 `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
@@ -1123,84 +1967,63 @@ readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"dashboard"` \|
 `Readonly`\<\{ `bindings`: ...; `sync?`: ...; \}\>; \}\>; `format`:
 `"fungi-app-v1"`; `ui`: \{ `mediaType`: `"text/html; charset=utf-8"` \|
 `"application/vnd.fungi.app-assets+json"`; `artifactRef`: `ArtifactRef`;
-`digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \};
-`backend`: \{ `mediaType`: `"application/vnd.fungi.app-backend+json"`;
-`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; `version`: `string`;
-`byteLength`: `number`; \}; \} \| \{ `declaration?`: `Readonly`\<\{ `api?`:
-`Readonly`\<\{ `methods`: ...; `toolFamily?`: ...; `events?`: ...; \}\>;
-`displayName?`: `string`; `capabilities`: readonly ( \| `"agent.list"` \|
-`"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"`
-\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
-`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<...\>[]; `guidance?`: `string`; `handlers`: readonly
-`"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`;
-`roles`: readonly (`"dashboard"` \| `"inbox"` \| `"files"` \| `"media"` \|
-`"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<...\>[];
-`commands?`: readonly `Readonly`\<...\>[]; `gills?`: readonly
-`Readonly`\<...\>[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
-\}\>; \}\>; `format`: `"fungi-app-v1"`; `ui`: \{ `mediaType`:
-`"text/html; charset=utf-8"` \| `"application/vnd.fungi.app-assets+json"`;
-`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; `version`: `string`;
-`byteLength`: `number`; \}; \} \| \{ `declaration?`: `Readonly`\<\{ `api?`:
-`Readonly`\<\{ `methods`: ...; `toolFamily?`: ...; `events?`: ...; \}\>;
-`displayName?`: `string`; `capabilities`: readonly ( \| `"agent.list"` \|
-`"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"`
-\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
-`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<...\>[]; `guidance?`: `string`; `handlers`: readonly
-`"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`;
-`roles`: readonly (`"dashboard"` \| `"inbox"` \| `"files"` \| `"media"` \|
-`"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<...\>[];
-`commands?`: readonly `Readonly`\<...\>[]; `gills?`: readonly
-`Readonly`\<...\>[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
-\}\>; \}\>; `format`: `"fungi-app-v1"`; `backend`: \{ `mediaType`:
+`digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \}; \} \|
+\{ `declaration?`: `Readonly`\<\{ `api?`: `Readonly`\<\{ `methods`: ...;
+`toolFamily?`: ...; `events?`: ...; \}\>; `displayName?`: `string`;
+`capabilities`: readonly ( \| `"approvals"` \| `"agent.list"` \|
+`"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"`
+\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<...\>[];
+`guidance?`: `string`; `handlers`: readonly `"file.open"`[]; `receives?`:
+readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"dashboard"` \|
+`"inbox"` \| `"files"` \| `"media"` \| `"sessions"` \| `"terminal"`)[];
+`storage?`: readonly `Readonly`\<...\>[]; `commands?`: readonly
+`Readonly`\<...\>[]; `gills?`: readonly `Readonly`\<...\>[]; `backend?`:
+`Readonly`\<\{ `bindings`: ...; `sync?`: ...; \}\>; \}\>; `format`:
+`"fungi-app-v1"`; `backend`: \{ `mediaType`:
 `"application/vnd.fungi.app-backend+json"`; `artifactRef`: `ArtifactRef`;
 `digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \}; \};
 `api`: \| `Readonly`\<\{ `methods`: `Readonly`\<`Record`\<`string`,
 `Readonly`\<\{ `description`: `string`; `input`: `object`; `output`: `object`;
 `effect`: ... \| ... \| ...; `requires`: readonly ...; `pending?`: ... \| ...;
-`hidden?`: ... \| ...; `anonymous?`: ... \| ...; \}\>\>\>; `toolFamily?`:
-`Readonly`\<\{ `name`: `string`; `list`: `string`; `call`: `string`; \}\>;
-`events?`: `Readonly`\<`Record`\<`string`, `Readonly`\<\{ `description`: ...;
-`payload`: ...; \}\>\>\>; \}\> \| `null`; `declaration`: \| `Readonly`\<\{
-`api?`: `Readonly`\<\{ `methods`: `Readonly`\<`Record`\<..., ...\>\>;
-`toolFamily?`: `Readonly`\<...\>; `events?`: `Readonly`\<...\>; \}\>;
-`displayName?`: `string`; `capabilities`: readonly ( \| `"agent.list"` \|
-`"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"`
-\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
-`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<\{ `appId`: `string`; `methods`: readonly ...[]; \}\>[];
-`guidance?`: `string`; `handlers`: readonly `"file.open"`[]; `receives?`:
-readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"dashboard"` \|
-`"inbox"` \| `"files"` \| `"media"` \| `"sessions"` \| `"terminal"`)[];
-`storage?`: readonly `Readonly`\<\{ `key`: `string`; `scopes`: readonly ...[];
-`maxBytes`: `number`; \}\>[]; `commands?`: readonly `Readonly`\<\{ `id`:
-`string`; `title`: `string`; `category`: `string`; `description?`: ... \| ...;
-`sigil?`: ... \| ...; `projections?`: ... \| ...; \}\>[]; `gills?`: readonly
-`Readonly`\<\{ `id`: `string`; `source`: `string`; `title`: `string`; `params?`:
-... \| ...; `watch?`: ... \| ...; `desktop?`: ... \| ...; \}\>[]; `backend?`:
-`Readonly`\<\{ `bindings`: readonly `Readonly`\<...\>[]; `sync?`:
-`Readonly`\<...\>; \}\>; \}\> \| `null`; `ui`: \| `Readonly`\<\{ `kind`:
-`"html"`; `artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\> \|
-`Readonly`\<\{ `kind`: `"assets"`; `build`: \{ `format`: `"fungi-assets-v1"`;
-`base`: `string`; `assets`: readonly `object`[]; \}; \}\> \| `null`; `backend`:
-\| `Readonly`\<\{ `artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\>
-\| `null`; \}\>\>
+`hidden?`: ... \| ...; `anonymous?`: ... \| ...; `present?`: ... \| ...;
+\}\>\>\>; `toolFamily?`: `Readonly`\<\{ `name`: `string`; `list`: `string`;
+`call`: `string`; \}\>; `events?`: `Readonly`\<`Record`\<`string`,
+`Readonly`\<\{ `description`: ...; `payload`: ...; \}\>\>\>; \}\> \| `null`;
+`declaration`: \| `Readonly`\<\{ `api?`: `Readonly`\<\{ `methods`:
+`Readonly`\<`Record`\<..., ...\>\>; `toolFamily?`: `Readonly`\<...\>; `events?`:
+`Readonly`\<...\>; \}\>; `displayName?`: `string`; `capabilities`: readonly ( \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
+`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
+`"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<\{ `appId`:
+`string`; `methods`: readonly ...[]; \}\>[]; `guidance?`: `string`; `handlers`:
+readonly `"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`:
+`string`; `roles`: readonly (`"dashboard"` \| `"inbox"` \| `"files"` \|
+`"media"` \| `"sessions"` \| `"terminal"`)[]; `storage?`: readonly
+`Readonly`\<\{ `key`: `string`; `scopes`: readonly ...[]; `maxBytes`: `number`;
+\}\>[]; `commands?`: readonly `Readonly`\<\{ `id`: `string`; `title`: `string`;
+`category`: `string`; `description?`: ... \| ...; `sigil?`: ... \| ...;
+`projections?`: ... \| ...; \}\>[]; `gills?`: readonly `Readonly`\<\{ `id`:
+`string`; `source`: `string`; `title`: `string`; `params?`: ... \| ...;
+`watch?`: ... \| ...; `desktop?`: ... \| ...; \}\>[]; `backend?`: `Readonly`\<\{
+`bindings`: readonly `Readonly`\<...\>[]; `sync?`: `Readonly`\<...\>; \}\>; \}\>
+\| `null`; `ui`: \| `Readonly`\<\{ `kind`: `"html"`; `artifactRef`:
+`ArtifactRef`; `digest`: `Sha256Digest`; \}\> \| `Readonly`\<\{ `kind`:
+`"assets"`; `build`: \{ `format`: `"fungi-assets-v1"`; `base`: `string`;
+`assets`: readonly `object`[]; \}; \}\> \| `null`; `backend`: \| `Readonly`\<\{
+`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\> \| `null`; \}\>\>
 
 ---
 
@@ -1219,9 +2042,11 @@ function resolveBackend(store, release): Promise<
      }>;
      displayName?: string;
      capabilities: readonly (
+        | "approvals"
         | "agent.list"
         | "agent.manage"
         | "agent.rename"
+        | "agent.avatar"
         | "agent.toolPolicy"
         | "agent.read"
         | "agent.send"
@@ -1301,25 +2126,26 @@ root artifact, then the backend descriptor it names.
 `Promise`\< \| `Readonly`\<\{ `digest`: `Sha256Digest`; `backend`:
 `DurableBackend`; `declaration`: \| `Readonly`\<\{ `api?`: `Readonly`\<\{
 `methods`: `Readonly`\<...\>; `toolFamily?`: ... \| ...; `events?`: ... \| ...;
-\}\>; `displayName?`: `string`; `capabilities`: readonly ( \| `"agent.list"` \|
-`"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"`
-\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
-`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<\{ `appId`: ...; `methods`: ...; \}\>[]; `guidance?`: `string`;
-`handlers`: readonly `"file.open"`[]; `receives?`: readonly `"git.push"`[];
-`icon?`: `string`; `roles`: readonly (`"dashboard"` \| `"inbox"` \| `"files"` \|
-`"media"` \| `"sessions"` \| `"terminal"`)[]; `storage?`: readonly
-`Readonly`\<\{ `key`: ...; `scopes`: ...; `maxBytes`: ...; \}\>[]; `commands?`:
-readonly `Readonly`\<\{ `id`: ...; `title`: ...; `category`: ...;
-`description?`: ...; `sigil?`: ...; `projections?`: ...; \}\>[]; `gills?`:
-readonly `Readonly`\<\{ `id`: ...; `source`: ...; `title`: ...; `params?`: ...;
-`watch?`: ...; `desktop?`: ...; \}\>[]; `backend?`: `Readonly`\<\{ `bindings`:
-readonly ...[]; `sync?`: ... \| ...; \}\>; \}\> \| `null`; \}\> \| `null`\>
+\}\>; `displayName?`: `string`; `capabilities`: readonly ( \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<\{ `appId`: ...;
+`methods`: ...; \}\>[]; `guidance?`: `string`; `handlers`: readonly
+`"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`;
+`roles`: readonly (`"dashboard"` \| `"inbox"` \| `"files"` \| `"media"` \|
+`"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<\{ `key`: ...;
+`scopes`: ...; `maxBytes`: ...; \}\>[]; `commands?`: readonly `Readonly`\<\{
+`id`: ...; `title`: ...; `category`: ...; `description?`: ...; `sigil?`: ...;
+`projections?`: ...; \}\>[]; `gills?`: readonly `Readonly`\<\{ `id`: ...;
+`source`: ...; `title`: ...; `params?`: ...; `watch?`: ...; `desktop?`: ...;
+\}\>[]; `backend?`: `Readonly`\<\{ `bindings`: readonly ...[]; `sync?`: ... \|
+...; \}\>; \}\> \| `null`; \}\> \| `null`\>
 
 ## References
 

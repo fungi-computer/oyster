@@ -136,7 +136,10 @@ await describe("standalone Oyster workbench data", async () => {
           ...original,
           installationId: "notes-one",
           status: "disabled",
-          authorityVersion: 2,
+          authority: {
+            ...original.authority,
+            authorityVersion: 2,
+          },
         },
         { ...original, installationId: "deleted", status: "deleted" },
       ]);
@@ -150,7 +153,15 @@ await describe("standalone Oyster workbench data", async () => {
         surface: null,
         surfacePath: "/apps/notes-one/",
       });
-      replace([{ ...original, authorityVersion: 3 }]);
+      replace([
+        {
+          ...original,
+          authority: {
+            ...original.authority,
+            authorityVersion: 3,
+          },
+        },
+      ]);
       assert.partialDeepStrictEqual((await root.directory()).apps[0], {
         authorityVersion: 3,
         availability: "available",

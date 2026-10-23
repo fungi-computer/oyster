@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
+import { fileURLToPath, URL } from "node:url";
 import * as Effect from "effect/Effect";
 import { base64url } from "jose";
 import { createHash } from "node:crypto";
@@ -19,7 +20,6 @@ import {
   type Sha256Digest,
 } from "@fungi.computer/puffball";
 import {
-  capturedPinnedRecipeSchema,
   createCapturedCandidatePreparer,
   normalizeAppPublisherRecipe,
   type AppPublisherCoreConfigInput,
@@ -47,6 +47,7 @@ import {
   oysterAppBuildTimeoutMs,
   type OysterAppBuildOptions,
   type OysterBuildComputer,
+  type OysterBuildLocation,
 } from "../src/app-builds.js";
 import {
   verifyRelease,
@@ -233,19 +234,27 @@ function fixture(
   uploaded: BuildOutput | null = built,
 ) {
   const store = memoryStore();
+  let hostedBackend = true;
   const port: OysterBuildComputer = {
+    buildBackend: () =>
+      Promise.resolve(
+        hostedBackend ? { kind: "hosted" } : { kind: "no_backend" },
+      ),
     async runBuild(input) {
       if (uploaded !== null) await upload(store, uploaded);
       return { output: { exitCode: await simulate(input) } };
     },
   };
-  const builds = createOysterAppBuilds({
-    owner: fromNodeSqlite(new DatabaseSync(":memory:")),
-    tenantId: "tenant-1",
-    computer: { name: "workspace", objectId: computerObjectId, port },
-    artifacts: store,
-    templates,
-  });
+  const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
+  const reopen = () =>
+    createOysterAppBuilds({
+      owner,
+      tenantId: "tenant-1",
+      computer: { name: "workspace", objectId: computerObjectId, port },
+      artifacts: store,
+      templates,
+    });
+  const builds = reopen();
   builds.registerSource({
     appId: parseAppId(appId),
     location: {
@@ -256,7 +265,14 @@ function fixture(
     recipe: source.recipe,
     buildRecipeDigest: source.buildRecipeDigest,
   });
-  return { builds, store };
+  return {
+    builds,
+    store,
+    reopen,
+    setHostedBackend: (available: boolean) => {
+      hostedBackend = available;
+    },
+  };
 }
 
 /** The upload grant the fixed command carries to the Computer's builder. */
@@ -271,6 +287,69 @@ function grantOf(command: string): string {
     onExcessProperty: "ignore",
   }).uploadGrant;
 }
+
+it("repository registration replays with the existing fork identity, not the manifest identity", () => {
+  const { builds } = fixture(() => {
+    throw new Error("Registration must not run a build");
+  });
+  const input = {
+    appId: "app_original",
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: {
+      kind: "bundled-html",
+      entry: "bundle/index.html",
+      assets,
+      assetBase: "./",
+      backend: null,
+      maxOutputBytes: assets.maxTotalBytes,
+    },
+  } satisfies {
+    appId: string;
+    location: OysterBuildLocation;
+    recipe: AppPublisherCoreConfigInput["recipe"];
+  };
+  const first = builds.registerRepositorySource(input);
+  const replay = builds.registerRepositorySource({
+    ...input,
+    appId: "app_another_attempt",
+  });
+  expect(first).toMatchObject({
+    kind: "registered",
+    source: { appId: "app_fixture", location: input.location },
+  });
+  expect(replay).toEqual(first);
+  expect(builds.readSource("app_original")).toBeNull();
+  expect(builds.readSource("app_another_attempt")).toBeNull();
+});
+
+it("repository registration refuses an App identity already bound to another repository", () => {
+  const { builds } = fixture(() => {
+    throw new Error("No build during registration");
+  });
+  const original = builds.readSource(appId);
+  const result = builds.registerRepositorySource({
+    appId,
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "different",
+    },
+    recipe: {
+      kind: "bundled-html",
+      entry: "bundle/index.html",
+      assets,
+      assetBase: "./",
+      backend: null,
+      maxOutputBytes: assets.maxTotalBytes,
+    },
+  });
+  expect(result).toEqual({ kind: "conflict" });
+  expect(builds.readSource(appId)).toEqual(original);
+});
 
 it("builds a registered source's exact commit on the Computer into a verified Release", async () => {
   // The simulated Computer reads `builds` only once a build runs.
@@ -574,6 +653,7 @@ function restartedOwners(clock: { now: number }) {
         objectId: computerObjectId,
         // The Computer keeps building after the owner that called it is gone.
         port: {
+          buildBackend: () => Promise.resolve({ kind: "hosted" }),
           runBuild: ({ command }) => {
             commands.push(command);
             return new Promise(() => undefined);
@@ -658,6 +738,7 @@ it("keeps a build running when the Computer loses its result, and completes it f
       name: "workspace",
       objectId: computerObjectId,
       port: {
+        buildBackend: () => Promise.resolve({ kind: "hosted" }),
         runBuild: (input) => {
           command = input.command;
           return Promise.resolve({ output: null });
@@ -1041,133 +1122,298 @@ it("refuses a template build at a revision that is not a seed of its pinned reci
   ).rejects.toThrow("Revision is not a seed of this App's template");
 });
 
-/** Storage as recorded before the location union: an installation source
- * and a settled job naming its installation repository in two columns. */
-function retainedOwner() {
-  const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
-  owner.sql.exec(
-    "CREATE TABLE oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",
-  );
-  owner.sql.exec(
-    `CREATE TABLE oyster_build_jobs (
-      job_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, release_id TEXT NOT NULL UNIQUE,
-      source_revision TEXT NOT NULL, installation_id TEXT NOT NULL, repository TEXT NOT NULL,
-      recipe TEXT NOT NULL, recipe_digest TEXT NOT NULL, requested_by TEXT NOT NULL,
-      credential_id TEXT NOT NULL, upload_grant_digest TEXT NOT NULL,
-      status TEXT NOT NULL, artifact_digest TEXT, artifact_bytes INTEGER, detail TEXT,
-      issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, executable_until INTEGER NOT NULL
-    ) STRICT`,
-  );
-  owner.sql.exec(
-    `INSERT INTO oyster_build_jobs VALUES(?, ?, ?, ?, 'bonsai', 'my-fixture', ?, ?, 'o', ?, ?,
-      'failed', NULL, NULL, 'Build exited with 1', 1, 2, 0)`,
-    `build_${"1".repeat(32)}`,
-    appId,
-    "rel_old",
-    sourceRevision,
-    Schema.encodeUnknownSync(Schema.fromJsonString(capturedPinnedRecipeSchema))(
-      normalized.recipe,
-    ),
-    normalized.buildRecipeDigest,
-    "c".repeat(64),
-    "d".repeat(64),
-  );
-  owner.sql.exec(
-    "INSERT INTO oyster_build_sources(app_id, source) VALUES(?, ?)",
-    appId,
-    JSON.stringify({
-      appId,
-      installationId: "bonsai",
-      repository: "my-fixture",
-      recipe: Schema.encodeUnknownSync(capturedPinnedRecipeSchema)(
-        normalized.recipe,
-      ),
-      buildRecipeDigest: normalized.buildRecipeDigest,
-    }),
-  );
-  return owner;
-}
+it.each(["fresh", "current"] as const)(
+  "initializes a %s build store without converting data or probing its schema",
+  async (state) => {
+    const scratch = fileURLToPath(
+      new URL("../../../.botanical/", import.meta.url),
+    );
+    await mkdir(scratch, { recursive: true });
+    const directory = await mkdtemp(join(scratch, "oyster-build-schema-"));
+    let database: DatabaseSync | undefined;
+    try {
+      const path = join(directory, "builds.sqlite");
+      database = new DatabaseSync(path);
+      let owner = fromNodeSqlite(database);
+      const open = () =>
+        createOysterAppBuilds({
+          owner,
+          tenantId: "tenant-1",
+          now: () => 1_000,
+          computer: {
+            name: "workspace",
+            objectId: computerObjectId,
+            port: {
+              buildBackend: () => Promise.resolve({ kind: "hosted" }),
+              runBuild: () => {
+                throw new Error("Initialization must not execute a build");
+              },
+            },
+          },
+          artifacts: memoryStore(),
+          templates: { read: () => Promise.resolve(null) },
+        });
+      const facts = () => ({
+        sources: owner.sql.exec("SELECT * FROM oyster_build_sources").toArray(),
+        jobs: owner.sql.exec("SELECT * FROM oyster_build_jobs").toArray(),
+        releases: owner.sql
+          .exec("SELECT * FROM oyster_build_releases")
+          .toArray(),
+      });
+      if (state === "current") {
+        const builds = open();
+        builds.registerSource({
+          appId: parseAppId(appId),
+          location: {
+            kind: "installation",
+            installationId: "bonsai",
+            repository: "my-fixture",
+          },
+          recipe: normalized.recipe,
+          buildRecipeDigest: normalized.buildRecipeDigest,
+        });
+        await builds.start({
+          appId,
+          sourceRevision,
+          requestedBy: "owner-1",
+          installAt: "my-fixture",
+          requestId: "pending-build",
+        });
+      }
+      const before = state === "current" ? facts() : null;
+      database.close();
+      database = new DatabaseSync(path);
+      owner = fromNodeSqlite(database);
+      const conversions: {
+        action: number;
+        table: string | null;
+        column: string | null;
+      }[] = [];
+      database.setAuthorizer((action, table, column) => {
+        if (
+          action === constants.SQLITE_PRAGMA ||
+          action === constants.SQLITE_ALTER_TABLE ||
+          action === constants.SQLITE_DROP_TABLE ||
+          (action === constants.SQLITE_UPDATE &&
+            table === "oyster_build_sources")
+        )
+          conversions.push({ action, table, column });
+        return constants.SQLITE_OK;
+      });
+      migrateOysterAppBuilds(owner);
+      database.setAuthorizer(null);
+      expect(conversions).toEqual([]);
+      expect(
+        owner.sql
+          .exec(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+          )
+          .toArray(),
+      ).toEqual([
+        { name: "oyster_build_jobs" },
+        { name: "oyster_build_releases" },
+        { name: "oyster_build_sources" },
+      ]);
+      if (before === null) {
+        expect(facts()).toEqual({ sources: [], jobs: [], releases: [] });
+        expect(open().readSource(appId)).toBeNull();
+      } else {
+        expect(facts()).toEqual(before);
+        expect(open().readSource(appId)?.location).toEqual({
+          kind: "installation",
+          installationId: "bonsai",
+          repository: "my-fixture",
+        });
+        expect(
+          open().latestRepositoryBuild("bonsai", "my-fixture")?.installation,
+        ).toEqual({ kind: "pending", installationId: "my-fixture" });
+      }
+    } finally {
+      if (database?.isOpen) database.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
-it("keeps retained facts unchanged when the conversion is interrupted, and retries", () => {
-  const owner = retainedOwner();
-  const facts = () => ({
-    sources: owner.sql.exec("SELECT * FROM oyster_build_sources").toArray(),
-    jobs: owner.sql.exec("SELECT * FROM oyster_build_jobs").toArray(),
-    tables: owner.sql
-      .exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .toArray(),
-  });
-  const before = facts();
-  // The storage fails mid-conversion, after the copy and before the swap.
-  let failed = false;
-  expect(() => {
-    migrateOysterAppBuilds({
-      sql: {
-        exec: (statement, ...bindings) => {
-          if (statement === "DROP TABLE oyster_build_jobs" && !failed) {
-            failed = true;
-            throw new Error("Storage interrupted");
-          }
-          return owner.sql.exec(statement, ...bindings);
-        },
-      },
-      transactionSync: (operation) => owner.transactionSync(operation),
+it.each(["installed", "needs_consent", "failed"] as const)(
+  "retains typed %s installation outcome on the successful build across owner restart",
+  async (kind) => {
+    const { builds, reopen } = fixture(async ({ jobId, command }) => {
+      const admission = builds.admitBuild(jobId, computerObjectId);
+      if (admission === null) throw new Error("Build not admitted");
+      expect(
+        (
+          await builds.submitCandidate(
+            jobId,
+            candidate,
+            grantOf(command),
+            admission.credentialId,
+          )
+        ).status,
+      ).toBe(200);
+      builds.record({
+        kind: "build-status",
+        jobId,
+        credentialId: admission.credentialId,
+        status: "succeeded",
+        detail: null,
+      });
+      return 0;
     });
-  }).toThrow("Storage interrupted");
-  expect(failed).toBe(true);
-  expect(facts()).toEqual(before);
-  migrateOysterAppBuilds(owner);
-  const [job] = owner.sql
-    .exec("SELECT job_id, status, location FROM oyster_build_jobs")
-    .toArray();
-  expect(job).toEqual({
-    job_id: `build_${"1".repeat(32)}`,
-    status: "failed",
-    location: JSON.stringify({
-      kind: "installation",
-      installationId: "bonsai",
-      repository: "my-fixture",
-    }),
+    const { build, run } = await builds.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner-1",
+      installAt: "my-fixture",
+    });
+    await run();
+    const outcome =
+      kind === "failed"
+        ? {
+            kind,
+            installationId: "my-fixture",
+            detail: "Automatic installation unavailable",
+          }
+        : { kind, installationId: "my-fixture" };
+    const resumed = reopen();
+    let decisions = 0;
+    expect(
+      await resumed.install(build.jobId, (release, installationId) => {
+        decisions += 1;
+        expect(release).toEqual(resumed.read(build.jobId)?.release);
+        expect(installationId).toBe("my-fixture");
+        if (kind === "failed") throw new Error("internal-secret");
+        return Promise.resolve({ kind, installationId });
+      }),
+    ).toBe(true);
+    expect(
+      await reopen().install(build.jobId, () => {
+        throw new Error("Terminal installations must not run twice");
+      }),
+    ).toBe(false);
+    expect(decisions).toBe(1);
+    expect(reopen().read(build.jobId)).toMatchObject({
+      status: "succeeded",
+      installation: outcome,
+    });
+  },
+);
+
+it("a failed automatic build never accepts an installation outcome and is not left pending install", async () => {
+  const { builds, reopen } = fixture(() => Promise.resolve(2));
+  const { build, run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+    installAt: "my-fixture",
   });
+  expect(
+    await builds.install(build.jobId, () => {
+      throw new Error("An unsettled or failed build must never install");
+    }),
+  ).toBe(false);
+  const done = await run();
+  expect(done.status).toBe("failed");
+  expect(done.installation).toMatchObject({
+    kind: "failed",
+    installationId: "my-fixture",
+  });
+  expect(
+    await builds.install(build.jobId, () => {
+      throw new Error("An unsettled or failed build must never install");
+    }),
+  ).toBe(false);
+  expect(reopen().read(build.jobId)?.installation).toEqual(done.installation);
 });
 
-it("carries an installation source and job recorded before the location union forward once", () => {
-  const owner = retainedOwner();
+it("a Workflow node reuses its exact-head build across retries and restart", async () => {
+  let executions = 0;
+  const { builds, reopen, setHostedBackend } = fixture(() => {
+    executions += 1;
+    return Promise.resolve(2);
+  });
+  const input = {
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+    installAt: "my-fixture",
+    requestId: "workflow-run-node-build",
+  };
+  const first = await builds.start(input);
+  expect(first.build).toMatchObject({
+    appId,
+    sourceRevision,
+    installation: { kind: "pending", installationId: "my-fixture" },
+  });
+  await first.run();
+  setHostedBackend(false);
+  const replay = await reopen().start(input);
+  expect(replay.build.jobId).toBe(first.build.jobId);
+  await replay.run();
+  expect(executions).toBe(1);
+});
+
+it("refuses no_backend before minting a job or starting a command", async () => {
+  const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
   const builds = createOysterAppBuilds({
     owner,
     tenantId: "tenant-1",
     computer: {
-      name: "workspace",
+      name: "local-only",
       objectId: computerObjectId,
-      port: { runBuild: () => Promise.resolve({ output: null }) },
+      port: {
+        buildBackend: () => Promise.resolve({ kind: "no_backend" }),
+        runBuild: () => {
+          throw new Error("A local machine must not run an App build");
+        },
+      },
     },
     artifacts: memoryStore(),
     templates: { read: () => Promise.resolve(null) },
   });
-  expect(builds.readSource(appId)?.location).toEqual({
-    kind: "installation",
-    installationId: "bonsai",
-    repository: "my-fixture",
-  });
-  // The retained job keeps its facts under the one location column.
-  expect(builds.read(`build_${"1".repeat(32)}`)).toMatchObject({
-    status: "failed",
-    detail: "Build exited with 1",
-    sourceRevision,
-  });
-  const [row] = owner.sql
-    .exec("SELECT location FROM oyster_build_jobs")
-    .toArray();
-  expect(row).toEqual({
-    location: JSON.stringify({
+  builds.registerSource({
+    appId: parseAppId(appId),
+    location: {
       kind: "installation",
       installationId: "bonsai",
       repository: "my-fixture",
-    }),
+    },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
   });
-  // Migrating again finds nothing left to carry.
-  migrateOysterAppBuilds(owner);
+  await expect(
+    builds.start({ appId, sourceRevision, requestedBy: "owner-1" }),
+  ).rejects.toMatchObject({ reason: "no_backend" });
   expect(
-    owner.sql.exec("SELECT * FROM oyster_build_jobs").toArray(),
-  ).toHaveLength(1);
+    owner.sql.exec("SELECT job_id FROM oyster_build_jobs").toArray(),
+  ).toEqual([]);
+});
+
+it("a reopened repository status finds its latest job without a remembered job id and cannot cross the source owner", async () => {
+  const { builds, reopen } = fixture(() => Promise.resolve(2));
+  expect(builds.latestRepositoryBuild("bonsai", "my-fixture")).toBeNull();
+  await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+    installAt: "my-fixture",
+  });
+  const latest = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+    installAt: "my-fixture",
+  });
+  await latest.run();
+  expect(reopen().latestRepositoryBuild("bonsai", "my-fixture")).toMatchObject({
+    jobId: latest.build.jobId,
+    status: "failed",
+    installation: { kind: "failed", installationId: "my-fixture" },
+  });
+  expect(
+    reopen().latestRepositoryBuild("other-installation", "my-fixture"),
+  ).toBeNull();
+  expect(
+    reopen().latestRepositoryBuild("bonsai", "other-repository"),
+  ).toBeNull();
 });

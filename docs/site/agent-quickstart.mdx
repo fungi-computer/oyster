@@ -22,9 +22,9 @@ read the "If it fails" notes under it before trying anything else.
 
 ## 1. Check prerequisites
 
-You need Node 24 or newer, pnpm, Git, curl and openssl. You do not need a
-Cloudflare account until step 7. Docker is needed only in step 7, where Wrangler
-builds the Computer's container image.
+You need Node 24 or newer, pnpm 11 or newer, Git, curl and openssl. You do not
+need a Cloudflare account until step 7. Docker is needed only in step 7, where
+Wrangler builds the Computer's container image.
 
 ```sh
 node --version
@@ -32,44 +32,58 @@ pnpm --version
 git --version
 ```
 
-Expected output: a `v24.` or later Node version, any pnpm version, then any
+Expected output: a `v24.` or later Node version, pnpm 11 or newer, then any
 `git version 2.x` line.
 
 If it fails:
 
 - Wrong Node: install Node 24 with your version manager, for example
   `mise use node@24` or `nvm install 24`.
-- No pnpm: run `corepack enable`, or use `npm install` wherever this guide says
-  `pnpm add`.
+- No pnpm, or an older version: install pnpm 11 with `npm install -g pnpm@11`.
 
 ## 2. Create a project
 
 Make a new directory, install Oyster, its Computer and Wrangler, and copy the
-example Worker out of the package:
+example Worker out of the package. The local pnpm policy allows esbuild and
+workerd to install their native binaries and disables unneeded optional
+dependency scripts. Write it before installing so neither command stops for
+unapproved build scripts:
 
 ```sh
 mkdir my-oyster
 cd my-oyster
-pnpm add @fungi.computer/oyster @fungi.computer/computer
+cat > pnpm-workspace.yaml <<'YAML'
+allowBuilds:
+  "@google/genai": false
+  "@mongodb-js/zstd": false
+  esbuild: true
+  exifreader: false
+  node-liblzma: false
+  protobufjs: false
+  workerd: true
+YAML
+pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0
 pnpm add -D wrangler
 cp node_modules/@fungi.computer/oyster/examples/standalone/worker.ts .
 cp node_modules/@fungi.computer/oyster/examples/standalone/wrangler.jsonc .
 ```
 
 Expected output: pnpm lists the added package after each `add`, and `ls` now
-shows `node_modules`, `package.json`, `worker.ts` and `wrangler.jsonc`.
+shows `node_modules`, `package.json`, `pnpm-workspace.yaml`, `worker.ts` and
+`wrangler.jsonc`.
 
 Every later command runs from this `my-oyster` directory unless the step says
 otherwise.
 
 If it fails:
 
-- `ERR_PNPM_IGNORED_BUILDS` naming packages such as `esbuild`, `workerd` or
-  `protobufjs`: pnpm installed them without running their install scripts, and
-  nothing in this guide needs those scripts. Go on.
+- `ERR_PNPM_IGNORED_BUILDS`: check that the policy file above exists before
+  running `pnpm add`. If it names a new dependency not listed there, stop and
+  review that package before allowing its scripts; do not treat exit 1 as
+  success.
 - `cp: cannot stat …/examples/standalone/…`: the install did not finish. Run
-  `pnpm add @fungi.computer/oyster @fungi.computer/computer` again and read its
-  first error.
+  `pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0`
+  again and read its first error.
 
 ## 3. Run a local Oyster
 

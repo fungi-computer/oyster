@@ -4,7 +4,7 @@ export const probeDeclaration = buildAppDeclaration(appBackend, {
   displayName: "Workflow proof App",
   capabilities: ["computer.execute"],
   backend: {
-    bindings: [{ name: "COMPUTER", operations: ["workflowGitPass"] }],
+    bindings: [{ name: "COMPUTER", operations: ["exec", "processStart"] }],
   },
   handlers: [],
   roles: [],

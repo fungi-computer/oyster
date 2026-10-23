@@ -8,13 +8,14 @@ import {
   createOysterGitMcpOwner,
   oysterGitRoot,
   type OysterGitWorkerEnv,
+  type OysterGitRoot,
 } from "../workers-git.js";
 import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
 import { onBoxVmIngress } from "@fungi.computer/computer";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { installationWorkerEntrypoint } from "../installation-execution.js";
 import { putContentObject } from "../build-contract.js";
-import { workflowGitPassPrefix } from "../git.js";
-import { z } from "zod";
+import { workflowGitPassTokenSchema } from "@fungi.computer/braid/runtime";
 import {
   standaloneComputerCapabilities,
   standaloneWorkspace,
@@ -36,7 +37,22 @@ import {
 import { standaloneTenancy, type StandaloneTenancyEnv } from "./tenancy.js";
 export { StandaloneTenants } from "./tenancy.js";
 import { standalonePreviewRequest } from "./preview.js";
+import {
+  standaloneMachineLinkRoutes,
+  type StandaloneMachineLinkBindings,
+} from "./machine-link.js";
+export { MachineLinkDO } from "./machine-link.js";
+import { standaloneWorkflowControl } from "./workflow-control.js";
+import {
+  standaloneWorkflowWebhookRoutes,
+  standaloneWorkflowWebhookControls,
+} from "./workflow-webhooks.js";
+import { Hono } from "hono";
 import { standaloneBuildRoutes } from "./builds.js";
+import {
+  standaloneComputerFleetRoutes,
+  standaloneComputerSelection,
+} from "./computer-fleet.js";
 import {
   serveOysterComputerEgress,
   type OysterComputerEgressProps,
@@ -55,6 +71,7 @@ export type StandaloneEnv = OysterGitWorkerEnv &
   StandaloneTenancyEnv &
   StandaloneComputerEnv &
   StandaloneAgentsEnv &
+  StandaloneMachineLinkBindings &
   OysterMediaEnv &
   StandaloneWorkflowEnv &
   AppSourceBindingEnv & {
@@ -66,8 +83,8 @@ export type StandaloneEnv = OysterGitWorkerEnv &
 /** A tenant's registry: it owns that tenant's installations and App builds. */
 const tenantRegistry = (env: StandaloneComputerEnv, scope: TenantScope) =>
   env.REGISTRY.getByName(scope.durableName("registry"));
-/** The standalone's one Computer belongs to its default tenant, whose
- * registry minted every build job that Computer runs. */
+/** The standalone fleet belongs to its default tenant, whose registry also
+ * owns build jobs on the fixed build Computer. */
 const computerRegistry = (env: StandaloneEnv) =>
   tenantRegistry(env, tenantScope(defaultTenant, env.OYSTER_ORIGIN));
 
@@ -77,76 +94,106 @@ export {
   WorkspaceServiceProxy,
 } from "@fungi.computer/computer";
 
-export { StandaloneRegistry as OysterRegistry } from "./registry.js";
+import {
+  StandaloneRegistry as BaseRegistry,
+  type StandaloneRegistryGit,
+} from "./registry.js";
+
+/** The registry uses the same root, with its own in-process Computer selection. */
+export class OysterRegistry extends BaseRegistry {
+  readonly #rootEnv: StandaloneEnv;
+  readonly #root = standaloneRoot(() => this.selectedComputer());
+  constructor(
+    state: DurableObjectState,
+    env: StandaloneEnv,
+    git: StandaloneRegistryGit = {},
+  ) {
+    super(state, env, git);
+    this.#rootEnv = env;
+  }
+  protected hostFor(scope: TenantScope) {
+    return this.#root.hostFor(this.#rootEnv, scope);
+  }
+}
 export { OysterKeys } from "../workers-git.js";
 // WEBHOOKS keeps its deployed class name; the standalone owner also delivers to Workflows.
 export { StandaloneEventDelivery as OysterWebhooks } from "./instance.js";
 
 export { AgentDirectory } from "./agents.js";
 
-/** After Oyster's bearer prefix: `<library>.<pass>`, as the library minted it. */
-const workflowGitPassToken = z.lazy(() =>
-  z
-    .string()
-    .regex(/^([a-zA-Z0-9_-]{1,256})\.([0-9a-f]{64})$/u)
-    .transform((token) => {
-      const [libraryId = "", passId = ""] = token.split(".");
-      return [libraryId, passId] as const;
-    }),
-);
 /** The one composition root: every door reaches a tenant's host through `hostFor`. */
-const oysterRoot = oysterGitRoot<StandaloneEnv>({
-  tenancy: (env) => ({
-    resolve: async (request) =>
-      (await standaloneTenancy(env)).oyster.resolve(request),
-  }),
+const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
+  const root: OysterGitRoot<StandaloneEnv> = oysterGitRoot<StandaloneEnv>({
+    tenancy: (env) => ({
+      resolve: async (request) =>
+        (await standaloneTenancy(env)).oyster.resolve(request),
+    }),
 
-  homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
-  agents: standaloneAgents,
-  workspace: standaloneWorkspace,
-  capabilities: (env, workspace, keysLive) => [
-    ...standaloneComputerCapabilities(env, workspace, keysLive),
-    ...workersMedia(env, workspace),
-  ],
-  // A presented pass names the library that minted it; only that library's
-  // run owner admits it, for one installation repository and scope.
-  workflowGitPass: async (env, _scope, pass, target) => {
-    const parsed = workflowGitPassToken.safeParse(
-      pass.slice(workflowGitPassPrefix.length),
-    );
-    if (!parsed.success) return null;
-    const [libraryId, passId] = parsed.data;
-    return env.WORKFLOW_RUNS.getByName(libraryId).admitWorkflowGitPass(
-      passId,
-      {
-        kind: "installation",
-        installationId: target.installationId,
-        repository: target.repository,
-      },
-      target.scope,
-    );
-  },
-  // A build job's clone reads one repository as the owner who started it.
-  buildGitPass: async (env, scope, pass, target) => {
-    const admitted = await tenantRegistry(env, scope).admitBuildGitPass(
-      pass,
-      target,
-    );
-    return admitted === null
-      ? null
-      : {
-          kind: "actor",
-          actor: { kind: "member", memberId: admitted.requestedBy },
-          role: "owner",
-        };
-  },
-  // Operator source seeding and owner builds share the one owner guard.
-  ownerRoutes: (env, scope) =>
-    appSourceOwnerRoutes(env, scope).route(
-      "/",
-      standaloneBuildRoutes(() => tenantRegistry(env, scope)),
-    ),
-});
+    homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
+    agents: standaloneAgents,
+    workflows: standaloneWorkflowControl,
+    workspace: async (env, keysLive, scope, request) =>
+      standaloneWorkspace(
+        env,
+        keysLive,
+        await selectComputer(tenantRegistry(env, scope), request),
+      ),
+    capabilities: (env, workspace, keysLive) => [
+      ...standaloneComputerCapabilities(env, workspace, keysLive),
+      ...workersMedia(env, workspace),
+    ],
+    // A presented bearer names the library that issued it; only that
+    // library's run owner admits it, for one installation repository and scope.
+    workflowGitPass: async (env, _scope, bearer, target) => {
+      const parsed = workflowGitPassTokenSchema.safeParse(bearer);
+      if (!parsed.success) return null;
+      return env.WORKFLOW_RUNS.getByName(
+        parsed.data.ownerId,
+      ).admitWorkflowGitPass(
+        bearer,
+        {
+          kind: "installation",
+          installationId: target.installationId,
+          repository: target.repository,
+        },
+        target.scope,
+      );
+    },
+    // A build job's clone reads one repository as the owner who started it.
+    buildGitPass: async (env, scope, pass, target) => {
+      const admitted = await tenantRegistry(env, scope).admitBuildGitPass(
+        pass,
+        target,
+      );
+      return admitted === null
+        ? null
+        : {
+            kind: "actor",
+            actor: { kind: "member", memberId: admitted.requestedBy },
+            role: "owner",
+          };
+    },
+    // Operator source seeding and owner builds share the one owner guard.
+    ownerRoutes: (env, scope) =>
+      appSourceOwnerRoutes(env, scope)
+        .route(
+          "/",
+          standaloneBuildRoutes(() => tenantRegistry(env, scope)),
+        )
+        .route(
+          "/",
+          standaloneComputerFleetRoutes(() => tenantRegistry(env, scope)),
+        )
+        .route(
+          "/",
+          standaloneWorkflowWebhookControls(env, () =>
+            root.hostFor(env, scope),
+          ),
+        ),
+  });
+  return root;
+};
+const oysterRoot = standaloneRoot(standaloneComputerSelection);
 export class OysterMcp extends createOysterGitMcpOwner(oysterRoot) {}
 /** Background wakes readmit members through this root's tenancy, as HTTP and MCP do. */
 export class StandaloneInstance extends ComputerInstance<StandaloneEnv> {
@@ -168,6 +215,11 @@ export class StandaloneWorkflowRuns extends StandaloneWorkflowRunsBase<Standalon
 }
 const oyster = createOysterGitWorker(oysterRoot);
 
+/** Private loopback execution uses this root's ordinary host composition. */
+export class OysterInstallationExecutor extends installationWorkerEntrypoint<StandaloneEnv>(
+  (env, scope) => oysterRoot.hostFor(env, scope),
+) {}
+
 /** The Computer's egress gateway: its own HTTPS Git back into this Worker. */
 export class OysterComputerEgress extends WorkerEntrypoint<
   StandaloneEnv,
@@ -180,6 +232,10 @@ export class OysterComputerEgress extends WorkerEntrypoint<
       origin: this.env.OYSTER_ORIGIN,
       computerId: computerObjectId,
       publicEgress: this.env.COMPUTER_PUBLIC_EGRESS,
+      internetAccess: () =>
+        this.env.COMPUTER.get(
+          this.env.COMPUTER.idFromString(computerObjectId),
+        ).internetAccess(),
       build: {
         gitPassFor: (target) =>
           registry.buildGitPassFor(computerObjectId, target),
@@ -211,12 +267,20 @@ export class OysterComputerEgress extends WorkerEntrypoint<
 
 export default {
   async fetch(request, env, context) {
+    const path = new URL(request.url).pathname;
+    if (
+      path === "/local/mesh/join" ||
+      new URLPattern({
+        pathname: "/api/teams/:teamId/local/mesh/:deviceId/connect",
+      }).test(request.url)
+    )
+      return standaloneMachineLinkRoutes(env).fetch(request);
     const preview = await standalonePreviewRequest(
       request,
       env,
-      env.OYSTER_COMPUTER_ID,
-      (signature, port, service) =>
-        env.COMPUTER.getByName(env.OYSTER_COMPUTER_ID).portPreview(
+      (computerId) => computerRegistry(env).ownsComputer(computerId),
+      (computerId, signature, port, service) =>
+        env.COMPUTER.getByName(computerId).portPreview(
           signature,
           port,
           service,
@@ -225,8 +289,20 @@ export default {
     if (preview !== null) return preview;
     const ingress = onBoxVmIngress(request, env, env.COMPUTER);
     if (ingress !== undefined) return ingress;
-    if (oyster.fetch === undefined)
+    const fetchOyster = oyster.fetch;
+    if (fetchOyster === undefined)
       throw new Error("Oyster fetch handler is missing");
-    return oyster.fetch(request, env, context);
+    return new Hono()
+      .route(
+        "/",
+        standaloneWorkflowWebhookRoutes(env, async (incoming) => {
+          const admitted = await oysterRoot.admit(env, incoming);
+          return admitted === null
+            ? null
+            : oysterRoot.hostFor(env, admitted.scope);
+        }),
+      )
+      .all("*", () => fetchOyster(request, env, context))
+      .fetch(request);
   },
 } satisfies ExportedHandler<StandaloneEnv>;

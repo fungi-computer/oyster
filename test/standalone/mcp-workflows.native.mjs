@@ -1,68 +1,32 @@
-// Agents drive Workflows over MCP (S8, rows 29/30).
+import { nativeMcpConnector } from "../native-mcp-client.fixture.mjs";
+import {
+  nativeArtifactBucket,
+  nativeWorkflowHost,
+  nativeAppClient,
+  nativeFixtureWorkspace,
+  until,
+} from "./workflow-native.fixture.mjs";
+// Real owner and scoped team-key MCP sessions against Standalone Trellis and
+// Bonsai. The installed "trellis" module is env.TRELLIS; forage discovers the
+// published flows family through that same catalog.
 //
-// Boots the real standalone Oyster Worker exactly like workflows.native.mjs,
-// plus Bonsai and a team key, then drives it through a real headless/owner
-// MCP client (`@modelcontextprotocol/client`), the same way
-// mcp-computer.native.mjs and Oyster's own test/mcp.native.mjs drive the
-// shared MCP owner: one top-level `execute` tool whose sandbox exposes
-// `env.<APP>` and `forage`.
+// Drafts, direct runs and flows-family runs use each session's actual authority.
+// MCP adds no outer write confirmation for the owner or a granted key. Completed
+// runs retain honest member/key attribution and the real grantor's identity.
 //
-// KEYS ARE EAR TAG GRANTS (oyster-ear-tag-cutover-2026-10-14.md). The team
-// key below is issued with `{apps.use, selected:[workflows]}` and
-// `{apps.read, selected:[bonsai]}` (packages/oyster/src/keys.ts's
-// `oysterKeyVocabulary`), not a blanket policy — it only ever sees and acts
-// on the installations its grants name.
-//
-// SOURCE CHECK (required by the brief): what source does a key-started run
-// record? `"key"`, honestly — S3 landed
-// (packages/oyster/src/standalone/workflow-host.ts:548-660). A key never becomes a
-// member or an Agent principal: `prepare()` resolves its live grants
-// (`:548-554`), filters the catalog to what they allow before compiling
-// (`keyCatalogEntries`), then runs on its grantor owner's access
-// (`keyInitiator.grantorMemberId`, `:608-617`) — the same shape an Agent's
-// own grantor path already used. The preparation it builds is `{
-// initiatedBy: { kind: "key", keyId, grantorMemberId }, source: "key" }`
-// (`:646`). A key with the right grants is admitted for real, below, for
-// both call shapes: direct `runWorkflow` and the `flows.*` tool-family
-// sugar over the exact same admitted call
-// (fix/oyster-mcp-app-tool-families). No Agent or member is ever spoofed.
-//
-// ROW 30 ("an Agent saves a draft"): traced to the runbook's actual
-// advertised caller (section 8) — not an Oyster Agent actor, but a TEAM KEY
-// over the real /mcp endpoint, building and saving a draft for the owner to
-// publish later. `saveDraft` (apps/trellis/backend/library-methods.ts:
-// 151-168 -> library.ts:146-182) only `requires: ["workflow.run"]` (the same
-// capability this file's key's `apps.use` grant on Workflows already
-// covers) and has no member/Agent-only gate. Below: the team key saves a
-// real draft over MCP with honest team-key attribution, the owner sees it
-// on its own real MCP connection, and it is never published or run by the
-// key, so it never becomes a flows tool either. A model-driven live
-// authoring proof (an actual Agent writing the draft's content) stays a
-// separate, S10b rehearsal-time leg with @fungi/luna, owned by Opus-DC —
-// this file proves the transport and admission, not an Agent's own
-// judgment.
+// This qualifies transport and admission, not model-driven Agent authoring,
+// App publication provenance or a physical Computer VM.
 import process from "node:process";
-import { log, error } from "node:console";
+import { log } from "node:console";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+
 import { URL, fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
-import { parse as parseJsonc } from "jsonc-parser";
+
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
-import { createAppBuild } from "@fungi.computer/puffball/app";
-import { backendMediaType } from "@fungi.computer/puffball/backend";
-import { sha256 } from "@fungi.computer/oyster/host";
-import { build } from "esbuild";
-import {
-  Client,
-  StreamableHTTPClientTransport,
-} from "@modelcontextprotocol/client";
+
 import { z } from "zod";
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+
 import { appBackend as workflowsBackend } from "../../../../apps/trellis/backend/methods.ts";
 import workflowsMetadata from "../../../../apps/trellis/package.json" with { type: "json" };
 import { appBackend as bonsaiBackend } from "../../../../apps/bonsai/backend/methods.ts";
@@ -78,167 +42,33 @@ const bonsaiDeclaration = buildAppDeclaration(
 );
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/mcp-workflows-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
+
+const { work, config } = await nativeFixtureWorkspace(
+  root,
+  "mcp-workflows-native-",
 );
+
 config.main = `${root}test/standalone/workflows-root.fixture.ts`;
-config.r2_buckets = config.r2_buckets.map((bucket) =>
-  bucket.binding === "APP_ARTIFACTS"
-    ? { ...bucket, bucket_name: "mcp-workflows-proof-app-artifacts" }
-    : bucket,
-);
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
+nativeArtifactBucket(config, "mcp-workflows-proof-app-artifacts");
+
 const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
-const provider = await workflowGitProvider();
-const port = await new Promise((resolve) => {
-  const socket = createServer().listen(0, "127.0.0.1", () => {
-    const { port: free } = socket.address();
-    socket.close(() => resolve(free));
-  });
-});
-const origin = `http://127.0.0.1:${port}`;
+
 const tenantHost = "oyster.test";
 const tenantOrigin = `https://${tenantHost}`;
-const auth = { Authorization: `Bearer ${key}` };
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/workflows-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--local-upstream",
-    tenantHost,
-    "--upstream-protocol",
-    "https",
-    "--var",
-    `OYSTER_OWNER_KEY:${key}`,
-    "--var",
-    `OYSTER_ORIGIN:${tenantOrigin}`,
-    "--var",
-    `GIT_ORIGIN:${provider.origin}`,
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
+
+const nativeHost = await nativeWorkflowHost({
+  root,
+  work,
+  config,
+  oysterOrigin: tenantOrigin,
+});
+const { key, origin, auth } = nativeHost;
+
+const { call, installFirstParty, publish, approve } = nativeAppClient(
+  origin,
+  auth,
+  { key, installationMilliseconds: 60_000 },
 );
-let output = "";
-worker.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-worker.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
-
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    { method: "PUT", headers: auth, body: bytes },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
-
-async function install(installationId, entry, exportName, declaration) {
-  const bundled = await build({
-    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName,
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  const artifact = await persist(createAppBuild(null, backend, declaration));
-  const release = {
-    appId: `app_${installationId}`,
-    releaseId: `rel_${installationId}`,
-    artifact: {
-      artifactRef: artifact.artifactRef,
-      artifactDigest: artifact.digest,
-      provenance: {
-        sourceRevision: `git:${"a".repeat(40)}`,
-        sourceTreeDigest: artifact.digest,
-        buildRecipeDigest: artifact.digest,
-      },
-    },
-  };
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ installationId, release }),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
-
-/** Publication finishes in the App's background lane; wait for its commit. */
-async function publish(workflowId, expectedRevision) {
-  const reply = await call("trellis", "publishWorkflow", {
-    workflowId,
-    expectedRevision,
-  });
-  if (reply.kind !== "publishing") return reply;
-  return until(
-    () =>
-      call("trellis", "publicationStatus", {
-        workflowId,
-        publicationId: reply.publicationId,
-      }),
-    (status) => status.kind !== "publishing",
-    `${workflowId} publication`,
-  );
-}
-async function until(read, accepts, label) {
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const value = await read();
-    if (accepts(value)) return value;
-    assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
-    await delay(100);
-  }
-}
 
 /** `execute`'s MCP content array holds one text block whose own `text` is
  * the App method's JSON-stringified return value. `unwrap` reaches that
@@ -250,72 +80,26 @@ function unwrap(contentText) {
 function reply(contentText) {
   return JSON.parse(unwrap(contentText));
 }
+async function readRun(session, runId) {
+  const raw = await session.execute(
+    `return await env.TRELLIS.runStatus({ runId: ${JSON.stringify(runId)} })`,
+  );
+  assert.notEqual(raw.isError, true, raw.text);
+  return reply(raw.text);
+}
 /** The dynamic family call's intended shape, once wired: `{ runId }`. */
 const startedByTool = z.object({ runId: z.string().min(1) });
 
-/** `headless` is shaped like `claude -p`: a bare elicitation capability that
- * cancels every confirmation, as mcp-computer.native.mjs's `connect` does. A
- * non-headless client auto-accepts, so an owner's own writes (which always
- * ask: packages/mycelium/src/mcp-catalog.ts `approvedWrites` is only ever
- * populated for an agent's or key's own approved write policy, never for the
- * owner) still go through. */
-async function connectMcp(credential, headless) {
-  const client = new Client(
-    { name: "mcp-workflows proof", version: "1" },
-    { capabilities: { elicitation: headless ? {} : { form: {} } } },
-  );
-  let asked = 0;
-  client.setRequestHandler("elicitation/create", () => {
-    asked += 1;
-    return headless
-      ? { action: "cancel" }
-      : { action: "accept", content: { approve: true } };
-  });
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`${origin}/mcp`),
-    { requestInit: { headers: { Authorization: `Bearer ${credential}` } } },
-  );
-  await client.connect(transport);
-  const execute = async (code) => {
-    const result = await client.callTool({
-      name: "execute",
-      arguments: { code },
-    });
-    return { ...result, text: JSON.stringify(result.content) };
-  };
-  return {
-    client,
-    execute,
-    asked: () => asked,
-    close: async () => {
-      await transport.terminateSession();
-      await client.close();
-    },
-  };
-}
+/** The two clients differ only in handling explicit operation-level confirmation.
+ * The MCP transport does not force confirmation for every write. */
+const connectMcp = nativeMcpConnector({ origin, name: "mcp-workflows proof" });
 
 try {
-  await until(
-    async () =>
-      globalThis.fetch(`${origin}/login`).then(
-        (r) => r.ok,
-        () => false,
-      ),
-    (ready) => ready,
-    "standalone root readiness",
-  );
-  await install(
-    "trellis",
-    "../../../../apps/trellis/backend/index.ts",
-    "Trellis",
-    workflowsDeclaration,
-  );
-  await install(
-    "bonsai",
-    "../../../../apps/bonsai/backend/index.ts",
-    "BonsaiApp",
-    bonsaiDeclaration,
-  );
+  await nativeHost.ready();
+  await installFirstParty("trellis", workflowsDeclaration);
+  await installFirstParty("bonsai", bonsaiDeclaration);
+  await approve("trellis");
+  await approve("bonsai");
   await call("bonsai", "repos.create", { name: "pond" });
 
   // A published Workflow with a REAL Bonsai App node (the demo "Repo list"
@@ -434,19 +218,19 @@ try {
 
   await test("owner MCP: saveDraft / loadWorkflow / listWorkflows round trip", async () => {
     const savedDraft = await owner.execute(
-      `return await env.WORKFLOWS.saveDraft({ workflowId: ${JSON.stringify(draftOnlyId)}, expectedRevision: 0, draft: { definition: ${JSON.stringify({ ...definition, title: "MCP flows draft-only proof" })}, layout: {} } })`,
+      `return await env.TRELLIS.saveDraft({ workflowId: ${JSON.stringify(draftOnlyId)}, expectedRevision: 0, draft: { definition: ${JSON.stringify({ ...definition, title: "MCP flows draft-only proof" })}, layout: {} } })`,
     );
     assert.notEqual(savedDraft.isError, true, savedDraft.text);
     assert.equal(reply(savedDraft.text).kind, "saved", savedDraft.text);
     // The owner sees the saved draft back.
     const loaded = await owner.execute(
-      `return await env.WORKFLOWS.loadWorkflow({ workflowId: ${JSON.stringify(draftOnlyId)}, at: "draft" })`,
+      `return await env.TRELLIS.loadWorkflow({ workflowId: ${JSON.stringify(draftOnlyId)}, at: "draft" })`,
     );
     assert.notEqual(loaded.isError, true, loaded.text);
     assert.match(unwrap(loaded.text), /MCP flows draft-only proof/u);
     // The library listing finds both the published tool and the draft.
     const listed = await owner.execute(
-      "return await env.WORKFLOWS.listWorkflows({})",
+      "return await env.TRELLIS.listWorkflows({})",
     );
     assert.notEqual(listed.isError, true, listed.text);
     const library = reply(listed.text).items.map((row) => row.workflowId);
@@ -458,18 +242,12 @@ try {
     // A real run, over MCP, through the plain runWorkflow method (not the
     // flows.* sugar, exercised separately below): it reaches terminal.
     const startedRaw = await owner.execute(
-      `return await env.WORKFLOWS.runWorkflow({ workflowId: ${JSON.stringify(workflowId)}, commit: ${JSON.stringify(published.commit)}, requestId: "owner-mcp-run", bindings: { bonsai: "bonsai" }, input: { names: [" owner run "] } })`,
+      `return await env.TRELLIS.runWorkflow({ workflowId: ${JSON.stringify(workflowId)}, commit: ${JSON.stringify(published.commit)}, requestId: "owner-mcp-run", bindings: { bonsai: "bonsai" }, input: { names: [" owner run "] } })`,
     );
     assert.notEqual(startedRaw.isError, true, startedRaw.text);
     const started = reply(startedRaw.text);
     assert.equal(started.kind, "started", JSON.stringify(started));
-    const runStatus = async () => {
-      const raw = await owner.execute(
-        `return await env.WORKFLOWS.runStatus({ runId: ${JSON.stringify(started.runId)} })`,
-      );
-      assert.notEqual(raw.isError, true, raw.text);
-      return reply(raw.text);
-    };
+    const runStatus = () => readRun(owner, started.runId);
     const completed = await until(
       runStatus,
       (value) => {
@@ -484,19 +262,11 @@ try {
       ["pond"],
       "the real Bonsai App node executed and returned the real repo",
     );
-    // The owner's own write asked for (and auto-accepted) confirmation: a
-    // true headless client, below, never gets this far on its own calls
-    // because Mycelium's `approvedWrites` is only ever populated for an
-    // agent's or key's own pre-approved policy (packages/mycelium/src/
-    // mcp-catalog.ts:28-30), never for the owner.
-    assert.ok(
-      owner.asked() >= 1,
-      "the owner's own writes ask for confirmation",
-    );
+    assert.equal(owner.asked(), 0, "MCP adds no outer write confirmation");
 
     // The owner's listRuns shows this run.
     const runsRaw = await owner.execute(
-      `return await env.WORKFLOWS.listRuns({ workflowId: ${JSON.stringify(workflowId)} })`,
+      `return await env.TRELLIS.listRuns({ workflowId: ${JSON.stringify(workflowId)} })`,
     );
     assert.notEqual(runsRaw.isError, true, runsRaw.text);
     const runs = reply(runsRaw.text);
@@ -519,19 +289,13 @@ try {
     assert.match(found, /flows\.mcpFlowsProof/u);
     assert.doesNotMatch(found, new RegExp(draftOnlyId, "u"));
   });
-  await test("owner MCP: env.WORKFLOWS.flows.mcpFlowsProof() is a real, second run that reaches terminal", async () => {
+  await test("owner MCP: env.TRELLIS.flows.mcpFlowsProof() is a real, second run that reaches terminal", async () => {
     const dynamic = await owner.execute(
-      'return await env.WORKFLOWS.flows.mcpFlowsProof({ names: [" owner flows "] })',
+      'return await env.TRELLIS.flows.mcpFlowsProof({ names: [" owner flows "] })',
     );
     assert.notEqual(dynamic.isError, true, dynamic.text);
     const { runId } = startedByTool.parse(reply(dynamic.text));
-    const runStatus = async () => {
-      const raw = await owner.execute(
-        `return await env.WORKFLOWS.runStatus({ runId: ${JSON.stringify(runId)} })`,
-      );
-      assert.notEqual(raw.isError, true, raw.text);
-      return reply(raw.text);
-    };
+    const runStatus = () => readRun(owner, runId);
     const completed = await until(
       runStatus,
       (value) => {
@@ -556,30 +320,26 @@ try {
     // this App-tool-policy path is not broken for every method, only for
     // starting a run (below).
     const catalog = await teamClient.execute(
-      "return await env.WORKFLOWS.catalog({})",
+      "return await env.TRELLIS.catalog({})",
     );
     assert.notEqual(catalog.isError, true, catalog.text);
-    assert.equal(
-      teamClient.asked(),
-      0,
-      "a pre-approved key's read is never asked",
-    );
+    assert.equal(teamClient.asked(), 0, "a granted key's read is never asked");
   });
 
   await test("team key MCP: saveDraft is honest team-key attribution, the owner sees it, no publish or run by the key", async () => {
     const saved = await teamClient.execute(
-      `return await env.WORKFLOWS.saveDraft({ workflowId: ${JSON.stringify(teamKeyDraftId)}, expectedRevision: 0, draft: { definition: ${JSON.stringify({ ...definition, title: "Team key draft proof" })}, layout: {} } })`,
+      `return await env.TRELLIS.saveDraft({ workflowId: ${JSON.stringify(teamKeyDraftId)}, expectedRevision: 0, draft: { definition: ${JSON.stringify({ ...definition, title: "Team key draft proof" })}, layout: {} } })`,
     );
     assert.notEqual(saved.isError, true, saved.text);
     assert.equal(reply(saved.text).kind, "saved", saved.text);
     assert.equal(
       teamClient.asked(),
       0,
-      "a pre-approved key's saveDraft is never asked for confirmation",
+      "a granted key's saveDraft is never asked for confirmation",
     );
     // The owner, over its own real MCP connection, sees the key's draft.
     const loaded = await owner.execute(
-      `return await env.WORKFLOWS.loadWorkflow({ workflowId: ${JSON.stringify(teamKeyDraftId)}, at: "draft" })`,
+      `return await env.TRELLIS.loadWorkflow({ workflowId: ${JSON.stringify(teamKeyDraftId)}, at: "draft" })`,
     );
     assert.notEqual(loaded.isError, true, loaded.text);
     assert.match(unwrap(loaded.text), /Team key draft proof/u);
@@ -615,14 +375,14 @@ try {
       "ownerMemberId was captured from the earlier owner run",
     );
     const direct = await teamClient.execute(
-      `return await env.WORKFLOWS.runWorkflow({ workflowId: ${JSON.stringify(workflowId)}, commit: ${JSON.stringify(published.commit)}, requestId: "team-key-run", bindings: { bonsai: "bonsai" }, input: { names: [" key run "] } })`,
+      `return await env.TRELLIS.runWorkflow({ workflowId: ${JSON.stringify(workflowId)}, commit: ${JSON.stringify(published.commit)}, requestId: "team-key-run", bindings: { bonsai: "bonsai" }, input: { names: [" key run "] } })`,
     );
     assert.notEqual(direct.isError, true, direct.text);
     const directStarted = reply(direct.text);
     assert.equal(directStarted.kind, "started", JSON.stringify(directStarted));
 
     const viaFamily = await teamClient.execute(
-      'return await env.WORKFLOWS.flows.mcpFlowsProof({ names: [" key flows "] })',
+      'return await env.TRELLIS.flows.mcpFlowsProof({ names: [" key flows "] })',
     );
     assert.notEqual(viaFamily.isError, true, viaFamily.text);
     const familyStarted = startedByTool.parse(reply(viaFamily.text));
@@ -630,17 +390,11 @@ try {
     assert.equal(
       teamClient.asked(),
       0,
-      "a pre-approved key's write skips elicitation entirely, start to finish",
+      "a granted key's write skips elicitation entirely, start to finish",
     );
 
     // Both reach terminal for real, through the key's own access.
-    const runStatus = async (runId) => {
-      const raw = await teamClient.execute(
-        `return await env.WORKFLOWS.runStatus({ runId: ${JSON.stringify(runId)} })`,
-      );
-      assert.notEqual(raw.isError, true, raw.text);
-      return reply(raw.text);
-    };
+    const runStatus = (runId) => readRun(teamClient, runId);
     const terminal = (runId, label) =>
       until(
         () => runStatus(runId),
@@ -692,19 +446,11 @@ try {
     `DONE standalone ${runtime}: see the individual node:test results above.`,
   );
 } catch (cause) {
-  const diagnostic = `${root}.botanical/workflow-reviews/native-mcp-workflows-${runtime}.log`;
-  await mkdir(`${root}.botanical/workflow-reviews`, {
-    recursive: true,
-    mode: 0o700,
+  await nativeHost.recordFailure({
+    diagnostic: `${root}.botanical/workflow-reviews/native-mcp-workflows-${runtime}.log`,
+    description: "Native MCP Workflow proof failed",
   });
-  await writeFile(diagnostic, output, { mode: 0o600 });
-  error(
-    `Native MCP Workflow proof failed; private Worker diagnostics: ${diagnostic}`,
-  );
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }

@@ -1,3 +1,4 @@
+import { installationStore } from "./native-approval-host.fixture.mjs";
 import { approvedInstallation } from "../dist/testing/index.js";
 import { verifyRelease } from "../dist/release.js";
 import {
@@ -87,6 +88,7 @@ export async function computerHost(
   });
   return {
     computerId,
+    bootUi: () => Promise.resolve({ kind: "passed" }),
     capabilities,
     // A null principal is an anonymous request; the host may admit it as a visitor.
     auth: {
@@ -96,13 +98,14 @@ export async function computerHost(
           : { kind: "admitted", principal },
     },
     artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
-    installations: {
+    installations: installationStore({
       get: async (id) =>
         id === installation.installationId ? installation : null,
       list: async () => [installation],
-    },
+    }),
     instances: {
       get: () => ({
+        prepare: () => Promise.resolve({ ok: true, value: { kind: "passed" } }),
         apply: async (state) => ({
           ok: true,
           value: {

@@ -1,3 +1,4 @@
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // Signed webhook deliveries and issues-as-files, against the real standalone
 // Oyster Worker + real Bonsai release and a real local Git provider. Worker
 // boot copied from seed-demo.browser.mjs (production release pack/install;
@@ -76,7 +77,7 @@ if (process.env.BONSAI_SEED_RELEASE) {
       cwd: repository,
       encoding: "utf8",
     }).trim(),
-    recipe: bonsai.recipe,
+    recipe: committedAppRecipe(repository, bonsai, revision),
     outDirectory: releaseDirectory,
   });
 }

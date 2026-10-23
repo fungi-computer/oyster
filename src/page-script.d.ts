@@ -7,6 +7,9 @@ export declare const publicHomeScript: string;
 /** Shared host fonts, served once as a digest-pinned stylesheet. */
 export declare const fontStyles: string;
 
+/** The sans family alone, for the sign-in page. */
+export declare const loginFontStyles: string;
+
 /** Caps styles for server-rendered host pages. */
 export declare const shellStyles: string;
 

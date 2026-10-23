@@ -91,6 +91,7 @@ type AppInstanceContext<FacetClass> = Readonly<{
     get: (name, prepare) => AppFacetStub;
     abort: (name, reason) => void;
     delete: (name) => void;
+    clone?: (source, destination) => void;
   }>;
 }>;
 ```
@@ -265,6 +266,87 @@ The shared RPC boundary decoder for host-minted invocation binding props.
 
 ## Functions
 
+### checkBackendConstruction()
+
+```ts
+function checkBackendConstruction<FacetClass>(
+  ctx,
+  loader,
+  artifact,
+  limits,
+  priorStateSchema,
+): Promise<void>;
+```
+
+The Instance owns the disposable facet and supplies its already-read prior state
+schema. Only initialized App storage is copied; supervisor state and authority
+are never copied. A unique Loader ID isolates candidate globals. No invocation
+frame or guestEnv factory is accepted.
+
+#### Type Parameters
+
+| Type Parameter |
+| -------------- |
+| `FacetClass`   |
+
+#### Parameters
+
+| Parameter          | Type                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx`              | `Pick`\<[`AppInstanceContext`](#appinstancecontext)\<`FacetClass`\>, `"facets"`\>                                                                 |
+| `loader`           | \| `Readonly`\<\{ `get`: (`id`, `configure`) => `Readonly`\<\{ `getDurableObjectClass`: (`exportName`) => `FacetClass`; \}\>; \}\> \| `undefined` |
+| `artifact`         | [`Backend`](index.md#backend)                                                                                                                     |
+| `limits`           | [`GuestLimits`](#guestlimits)                                                                                                                     |
+| `priorStateSchema` | `number` \| `null`                                                                                                                                |
+
+#### Returns
+
+`Promise`\<`void`\>
+
+---
+
+### r2ArtifactStore()
+
+```ts
+function r2ArtifactStore(bucket): Readonly<{
+  get: (artifactRef) => Promise<Uint8Array<ArrayBufferLike> | null>;
+  put: (artifactRef, bytes) => Promise<void>;
+}> &
+  Readonly<{
+    head: (artifactRef) => Promise<Readonly<{
+      byteLength: number;
+      digest: Sha256Digest | null;
+    }> | null>;
+  }> &
+  Readonly<{
+    stream: (
+      artifactRef,
+      signal?,
+    ) => Promise<ReadableStream<Uint8Array<ArrayBufferLike>> | null>;
+  }>;
+```
+
+Store Release artifacts without loading the Worker ownership barrel.
+
+#### Parameters
+
+| Parameter | Type       |
+| --------- | ---------- |
+| `bucket`  | `R2Bucket` |
+
+#### Returns
+
+`Readonly`\<\{ `get`: (`artifactRef`) =>
+`Promise`\<`Uint8Array`\<`ArrayBufferLike`\> \| `null`\>; `put`: (`artifactRef`,
+`bytes`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `head`: (`artifactRef`)
+=> `Promise`\< \| `Readonly`\<\{ `byteLength`: `number`; `digest`:
+`Sha256Digest` \| `null`; \}\> \| `null`\>; \}\> & `Readonly`\<\{ `stream`:
+(`artifactRef`, `signal?`) =>
+`Promise`\<`ReadableStream`\<`Uint8Array`\<`ArrayBufferLike`\>\> \| `null`\>;
+\}\>
+
+---
+
 ### captureFrameBindingReply()
 
 ```ts
@@ -383,7 +465,9 @@ function createCloudflareAppInstance<FacetClass, Host>(
   loader,
   resolve,
   guestEnv,
+  bootUi,
   limits?,
+  onAbort?,
 ): AppInstance<Host>;
 ```
 
@@ -402,13 +486,15 @@ Guest code gets only host gatekeeper bindings and no ambient outbound access.
 
 #### Parameters
 
-| Parameter  | Type                                                                                                                                              | Description                                                             |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `ctx`      | [`AppInstanceContext`](#appinstancecontext)\<`FacetClass`\>                                                                                       | The Durable Object's name, storage and facets.                          |
-| `loader`   | \| `Readonly`\<\{ `get`: (`id`, `configure`) => `Readonly`\<\{ `getDurableObjectClass`: (`exportName`) => `FacetClass`; \}\>; \}\> \| `undefined` | The Worker Loader binding; without it backend execution is unavailable. |
-| `resolve`  | (`release`, `scope`) => `Effect`\<`Readonly`\<\{ `release`: `Release`; `digest`: `Sha256Digest`; `backend`: `DurableBackend`; \}\>, `Error`\>     | Resolves a Release ID to its verified durable backend.                  |
-| `guestEnv` | (`frame`) => `object`                                                                                                                             | Mints loopbacks bound to the captured invocation frame.                 |
-| `limits?`  | `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>                                                                      | Guest CPU and subrequest budgets; omitted fields use safe defaults.     |
+| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Description                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `ctx`      | [`AppInstanceContext`](#appinstancecontext)\<`FacetClass`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | The Durable Object's name, storage and facets.                                                                                |
+| `loader`   | \| `Readonly`\<\{ `get`: (`id`, `configure`) => `Readonly`\<\{ `getDurableObjectClass`: (`exportName`) => `FacetClass`; \}\>; \}\> \| `undefined`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | The Worker Loader binding; without it backend execution is unavailable.                                                       |
+| `resolve`  | (`release`, `scope`) => `Effect`\<`Readonly`\<\{ `release`: `Release`; `digest`: `Sha256Digest`; `backend`: `DurableBackend`; \}\>, `Error`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolves a Release ID to its verified durable backend.                                                                        |
+| `guestEnv` | (`frame`) => `object`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Mints loopbacks bound to the captured invocation frame.                                                                       |
+| `bootUi`   | (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \| `"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`: \| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"` \| `"Error"`; `finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \} \| `null`\> | Host-owned UI check, or `null` when this executor deliberately skips it (for example, after the signed host already checked). |
+| `limits?`  | `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Guest CPU and subrequest budgets; omitted fields use safe defaults.                                                           |
+| `onAbort?` | (`reason`) => `Promise`\<`void`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Close the host's existing invocation frame after its state is fenced.                                                         |
 
 #### Returns
 

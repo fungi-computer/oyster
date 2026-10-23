@@ -37,6 +37,9 @@ Computer.
 - [Prints](https://github.com/fungi-computer/prints) generates images and video
   with Workers AI.
 
+Stage is not published or included in the 0.3 starter set. It appears as a
+glowing ember swarm and directs animated scenes and cards as an agent answers.
+
 <table>
   <tr>
     <td width="50%"><img alt="Bonsai's koi-pond repository: a network graph with one lane per agent fork, its three open Changes and the live activity feed" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/bonsai-koi-pond.png"><br><b>Bonsai</b>: a repository three agents build together</td>
@@ -61,25 +64,38 @@ Workers AI, Workflows and media.
 
 You need:
 
-- a Cloudflare account on Workers Paid, with Containers, Artifacts, Workers AI
-  and Workflows enabled;
+- a Cloudflare account on Workers Paid, with Containers, Artifacts, Workers AI,
+  Workflows and Browser Rendering (now called Browser Run) enabled;
 - Docker, which Wrangler uses to build the Computer's container image;
-- Node 24, pnpm (npm works the same way) and Git.
+- Node 24, pnpm 11 or newer and Git.
 
 The first install takes about 15 to 20 minutes, most of it the seven App builds
 on the Computer, one after another. Start a project, add Oyster, its Computer
-and Wrangler, and copy the example Worker out of the package:
+and Wrangler, and copy the example Worker out of the package. The local pnpm
+policy allows esbuild and workerd to install their native binaries and disables
+unneeded optional dependency scripts, so a fresh install exits successfully:
 
 ```sh
 mkdir my-oyster && cd my-oyster
-pnpm add @fungi.computer/oyster @fungi.computer/computer
+cat > pnpm-workspace.yaml <<'YAML'
+allowBuilds:
+  "@google/genai": false
+  "@mongodb-js/zstd": false
+  esbuild: true
+  exifreader: false
+  node-liblzma: false
+  protobufjs: false
+  workerd: true
+YAML
+pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0
 pnpm add -D wrangler
 cp node_modules/@fungi.computer/oyster/examples/standalone/{worker.ts,wrangler.jsonc} .
 ```
 
-pnpm 11 may end an `add` with `ERR_PNPM_IGNORED_BUILDS` for packages such as
-`esbuild` or `workerd`; they are installed, and Oyster needs none of their
-install scripts.
+If `pnpm add` reports `ERR_PNPM_IGNORED_BUILDS`, check that the policy file
+above exists before installing. If it names a new dependency not listed there,
+stop and review that package before allowing its scripts. Do not treat exit 1 as
+success.
 
 `worker.ts` re-exports the whole host:
 
@@ -90,10 +106,15 @@ export { default } from "@fungi.computer/oyster/standalone";
 
 `wrangler.jsonc` names the Worker `oyster`, its Release bucket `oyster-releases`
 and its Artifacts namespace `oyster`, and runs the Computer from
-`node_modules/@fungi.computer/computer/Dockerfile`. Create the bucket and
-deploy. Your Worker's address is `https://oyster.<your-subdomain>.workers.dev`;
-your workers.dev subdomain is on the Workers & Pages overview in the Cloudflare
-dashboard.
+`node_modules/@fungi.computer/computer/Dockerfile`. Its
+`"browser": { "binding": "BROWSER" }` enables Cloudflare Browser Rendering for
+the zero-grant UI boot check and for Agents' browser tool. Without the binding
+the UI of a Release is reported `not_checked` with
+`code: "boot_browser_binding_missing"`; the install still proceeds.
+
+Create the bucket and deploy. Your Worker's address is
+`https://oyster.<your-subdomain>.workers.dev`; your workers.dev subdomain is on
+the Workers & Pages overview in the Cloudflare dashboard.
 
 ```sh
 npx wrangler login
@@ -105,7 +126,56 @@ npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
 Set `OYSTER_ORIGIN` in `wrangler.jsonc` instead if you deploy again later; every
 deploy replaces the Worker's variables.
 
-Choose an owner key and store it as a secret:
+### API-token permissions and teardown
+
+For an API token instead of `wrangler login`, load `CLOUDFLARE_API_TOKEN` into
+your shell without committing it. Set `CLOUDFLARE_ACCOUNT_ID` (or `account_id`
+in `wrangler.jsonc`) explicitly, and skip the login command. Use Wrangler
+4.135.0 or newer; record `npx wrangler --version` for deployment and teardown.
+
+The [Cloudflare API specification](https://github.com/cloudflare/api-schemas)
+names these account-scoped permission groups for the deployment and resource
+deletion operations:
+
+| Permission group         | Used for                                                    |
+| ------------------------ | ----------------------------------------------------------- |
+| Workers Scripts Write    | Deploy, secrets, Worker deletion and Workflow deletion      |
+| Workers R2 Storage Write | Release bucket creation, object cleanup and bucket deletion |
+| Workers Containers Write | Computer container application management                   |
+| Artifacts Edit           | Artifacts namespace and repository management               |
+
+Browser Rendering through the Workers `BROWSER` binding
+[needs no additional API-token permission](https://developers.cloudflare.com/browser-run/quick-actions/).
+The separate Browser Rendering Write permission is for its REST API, which this
+quick start does not use. Workers Paid entitlement is still required.
+
+For stream-rehearsal diagnostics, include **Browser Rendering (Read)** in the
+account-scoped token checklist: it permits REST session inspection, separate
+from the `BROWSER` binding's boot operation. Use the documented
+`/browser-rendering/devtools/session` list and `devtools/session/{session_id}`
+details operations; a session's `endTime`, not its connection end time, reports
+closure. A plain 404 from another route does not establish a missing permission.
+If inspection is unavailable, record **UNAVAILABLE**, not confirmed cleanup. Do
+not broaden an existing token automatically.
+
+With an explicit account ID, user/account discovery is unnecessary. Do not add
+Workers KV Storage Read, User Details Read or Memberships Read just for that
+discovery. Wrangler 4.135.0 treats denied legacy-Sites KV inspection during
+`wrangler delete` as a warning, not a reason to broaden this token. AI Gateway
+Read/Edit permissions are not needed for this deploy or a teardown before any
+media ran; inspect that additional resource if media has created a gateway.
+
+`npx wrangler delete` deletes the Worker, not the entire Oyster. For a throwaway
+deployment, also empty and delete the Release bucket, delete the Computer's
+container application, delete the Workflow, and delete the Artifacts
+repositories and namespace. Use the configured resource names and confirm each
+is gone through Cloudflare's dashboard or API. Capture teardown errors and the
+Wrangler version rather than silently adding unrelated token permissions.
+
+### Set the Oyster owner key
+
+Choose an owner key (separate from the Cloudflare API token) and store it as a
+secret:
 
 ```sh
 export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
@@ -532,13 +602,16 @@ returns an `AdmittedGit`; the door forwards reads to `.read` and pushes to
 builds these ports from `host.auth`, `host.installations` and `host.git`, so
 most hosts set `host.git` and never call `createGitDoor` directly.
 
-A host that mints Workflow Git passes supplies `workflowGitPass` in
-`oysterGitRoot` or `oysterWorkerGit` options. A pass travels only as an
-`Authorization: Bearer` header starting with `workflowGitPassPrefix` (`wgp.`) on
-the ordinary credential-free door URL; it is never part of a URL. That header is
-admitted only by the port, for one repository and scope, as the arming member
-under the Workflow's branch grant, and never as a session or key. Pushes outside
-those branches are refused before the App's push policy runs.
+A host whose Workflow run owner issues Workflow Git credentials supplies
+`workflowGitPass` in `oysterGitRoot` or `oysterWorkerGit` options. The run owner
+issues one credential per native command of an admitted Git step and gives it
+only to that command's Git environment. It travels only as an
+`Authorization: Bearer` header starting with Braid's `workflowGitPassPrefix`
+(`wgp.`) on the ordinary credential-free door URL; it is never part of a URL.
+That header is admitted only by the port, for one repository and scope, as the
+arming member under the Workflow's branch grant, and never as a session or key.
+It stops working when its command closes or its run ends. Pushes outside those
+branches are refused before the App's push policy runs.
 
 ### Provide App capabilities
 
@@ -684,6 +757,33 @@ disconnects one. These routes are owner-direct and reject an App installation
 header. A server that is down or refuses the token is left out of that run and
 the others stay available. OAuth sign-in is not offered yet.
 
+### Give an Agent a browser
+
+Declare a Cloudflare Browser Rendering binding and every Agent gets a
+`cloudBrowser` tool for public pages: `open` a driven session (optionally at a
+URL), `navigate`, read it with `snapshot` (a bounded accessibility-tree
+summary), `click`, `type`, `press`, `scroll`, and `close` it.
+
+```jsonc
+// wrangler.jsonc
+"browser": { "binding": "BROWSER" }
+```
+
+Every URL the Agent supplies must be http(s), carry no credentials and resolve
+to a public address; anything else is refused before the browser sees it. A
+standalone Oyster allows two open sessions at once, closes one after 5 idle
+minutes or 30 minutes in all, and is billed by Cloudflare to the owner's
+account. Without the binding the tool is absent.
+
+Hosts compose the same module, `@fungi.computer/oyster/browser`, behind one port
+(`BrowserHost`): a provider (`bindingSessions(env.BROWSER)`, or
+`browserRunSessions` with a Browser Run account token, which also enables the
+`markdown`/`links`/`scrape`/`extract` Quick Reads), a required metering owner
+and an event sink. `createBrowser` owns lease ownership, the URL policy, reaping
+and billing order; `browserCapabilitySource` is the Agent tool. The Agent never
+reaches raw CDP or runs script in the page. See the
+[API reference](docs/api/browser.md).
+
 ### Pack an App
 
 `packRelease` composes `oyster/build`'s source capture, candidate preparer,
@@ -748,50 +848,35 @@ install-or-select owner installs it (201) or, when the installation already
 exists, switches it to that Release (200); the App keeps its state, and every
 other refusal is returned unchanged.
 
+Pending installation commands retain their exact baseline, reduced plan and
+preparation evidence for recovery. Settlement replaces those payloads with the
+request's input digest, correlation, settlement time and recorded outcome. The
+existing Registry alarm deletes superseded settled journal entries in bounded
+batches after 90 days from their own settlement. The latest settled entry per
+effective installation is always pinned, including while newer work is pending.
+Indexed durable deadlines re-arm the same alarm when idle; pending recovery is
+never age-deleted. Expiry removes App journal history, not canonical
+installations, Releases, artifact bytes or Watchdog's private job history. An
+expired operation is no longer readable; re-admitting its ID is refused as
+`unavailable` when Watchdog still retains that job, rather than creating pending
+work that cannot execute. A new intent needs a new request ID.
+
+A retained successful receipt keeps its original generation, instance and
+authority-version reference. Its `installation` is resolved only from the exact
+current canonical selection; after removal, generation change or selection drift
+it is `null`, while the original success remains recorded. Completion helpers
+return `409 installation_result_unavailable` in that case, and the standalone
+installer does not approve defaults from historical success. Settled history is
+never an executable recovery command. Stores containing superseded preview
+journal shapes require separately authorized current-contract republishing, not
+an in-place conversion.
+
 ## Build a shell
 
-`@fungi.computer/oyster/shell` supplies the client side of hosting Apps. It can
-be imported independently of the Workers server and Node packing helpers. The
-same exports are available through focused entries:
-
-| Entry                    | Contract                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| `./shell/workbench`      | Workbench host contract, shared child-window host, Gill layout and arranger shapes. |
-| `./shell/command-host`   | A Whistle graph that admits mounted commands against verified Release declarations. |
-| `./shell/keys`           | DOM key dispatch and shared chord matching.                                         |
-| `./shell/commands`       | Window, App picker and command palette declarations over host callbacks.            |
-| `./shell/window-manager` | Window generations, visibility, navigation, cancellation and disposal.              |
-| `./shell/app-directory`  | App addresses, reusable directory rows and catalog metadata.                        |
-
-`./shell/shell-module` is the contract between a host and the shell it runs, and
-is imported on its own rather than through `./shell`. A shell Release exports
-`mountShell(root, input)` (`MountShell`); `input` (`ShellMountInput`) carries
-the workbench handle, the shell installation's `AppStorage` and
-`methods.call(method, input)` for its declared backend methods, which takes the
-input as JSON text and resolves with the decoded JSON result.
-`importShellModule(moduleUrl, hostOrigin)` imports the picked shell's module
-from the host's own origin, checks that it exports `mountShell`, and rejects
-with `ShellModuleError` otherwise. The host never bundles a shell.
-
-Supply your own mount adapter to `createWindowManager`. It receives the
-container, launch descriptor, cancellation signal and navigation callbacks; its
-returned handle owns visibility, reconfiguration and disposal. The manager
-disposes stale mounts and serializes changes to each window. It neither picks
-Apps nor grants capabilities.
-
-`createAppSurfaceCommandHost` owns command contribution and focus. Give
-`mount(id, declarations)` the verified Release's declarations and pass the
-returned handlers to Agar's `connectAppHost`. A mounted App cannot introduce an
-undeclared command or claim the reserved shell chord. Dispose its command mount
-when its iframe closes, and dispose the command host with the shell.
-`installShellKeys` attaches DOM listeners only when called; its return value
-removes them. Terminal shells can use the command and window owners without a
-DOM.
-
-Directory metadata is not launch authority. A host extends the public row schema
-with its own permission model and admits each mount itself. Fungi's Team
-directory, Team settings capability and signed Hub/host protocol live in its
-private consumers; the public shell imports none of them.
+The shell client lives in its own package,
+[`@fungi.computer/nacre`](../nacre/README.md): workbench host, command host,
+keys, commands, window manager, App directory rows and the shell-module
+contract. Oyster's page uses it; a shell imports it directly.
 
 `@fungi.computer/oyster/page` mounts one installed App's page and connects its
 sandboxed frame with that installation's admitted slots. That page is only the
@@ -893,6 +978,57 @@ caller's transaction. `appStorageSchemaStatements` retains the existing SQLite
 table names.
 
 ### Durable Object composition
+
+Activation is host-gated before selection writes or aborting the old version.
+The candidate backend loads in a unique isolate over one bounded disposable
+sibling facet, `candidate`, with denied test bindings and no outbound network.
+The lifecycle supplies its already-read prior state schema: first activation
+uses empty SQLite; an initialized Instance requires the native facets API to
+copy `app` into `candidate` before construction. A host without clone support
+refuses that check rather than substituting fresh storage. Cleanup aborts and
+deletes the sibling, and Instance purge also deletes that known name. The copy
+is a construction test, not a backup or data rollback. It cannot become the live
+facet and contains no supervisor selection, authority, Team App storage, or live
+bindings. Native copying and isolation require the qualified runtime proof; the
+fresh-SQLite Node adapter is not that proof. The host also checks the immutable
+UI entry in a zero-grant browser session (`reportBootPage` with
+`checkBootPage`): the page opens the pinned `/_boot/<release>/` route on the
+host's own origin (https, or http only on loopback) with a short-lived
+capability, and every request to any other origin is blocked. The UI result is
+reported, never authority: a page that did not mount is `failed`, and a missing
+browser, a timeout, unconfirmed cleanup or an unavailable runner is
+`not_checked`. An App manifest, callback or healthy flag cannot supply the
+verdict. This is construction and UI-mount qualification, not an HTTP request
+smoke, execution against live storage, or a data rewind.
+
+Each check owns one provider session and confirms it closed before reporting;
+unconfirmed closure reports `boot_cleanup_failed`, and Browser Run's
+`keep_alive` remains the backstop.
+
+`pnpm run test:recovery-copy:celld` exercises the actual construction helper
+with synthetic App state, a successful copy and a constructor refusal. It checks
+live state preservation, denied bindings/outbound access, supervisor separation
+and empty storage on reopening the cleaned sibling. It does not prove physical
+file/stream deletion, restart recovery, or owner selection.
+
+The disposable both-host proof is
+`bash apps/hub/scripts/check-app-boot-native.sh` from the repository root, after
+the affected dependency and Oyster builds. It requires Linux network namespaces,
+passwordless local `sudo`, the pinned celld binary and provisioned Playwright
+Chromium. Inside an unnamed private network it drives a local Chromium through
+the same `checkBootPage` both hosts use (a test-only provider in Browser Run's
+devtools API shape) and fresh local fixture storage; it does not install a
+service, contact a live host or exercise an App's HTTP handler. It checks real
+construction and ordinary Agar UI mounting through each host's `/_boot/` route,
+native facet cleanup, closed browser sessions, retained selections on refusal,
+forged verdicts, wrapper tampering and browser unavailability.
+
+The Hub's real Team default-provisioning selection path is qualified separately
+with `bash apps/hub/scripts/check-app-boot-native.sh --publication`, under the
+same prerequisites. Its five host-dependent cases use fresh native resources,
+the maintained artifact writer/readback and immutable R2 object versions. Other
+domain-test metadata seeds are not host proof. This leg qualifies selection
+admission, not downstream projection delivery or deployment.
 
 `createCloudflareAppInstance` keeps supervisor state in a SQLite Durable Object
 and runs the backend in a named `app` facet loaded through the Worker Loader.
@@ -1050,14 +1186,133 @@ capture does not rebase paths to the App directory. The nearest `package.json`
 above the entry supplies `fungi.app`, plus `fungi.backendDefinition` for an API
 derived from the compiled backend.
 
+An App owns its recipe in `package.json#fungi.build`, alongside its existing
+page policy (`react`, `stylesheets`, and dependency build declarations). Recipe
+paths in that metadata are relative to the App's own directory. The Node-only
+`readBuildManifest(packageJson)` decodes that one strict contract;
+`appBuildRecipe(manifest, directory)` roots the recipe for a captured checkout,
+or accepts `""` for an App at the repository root. Dependency-only metadata is
+still valid but cannot supply an App recipe. Unknown build fields are refused.
+
+The starter installer reads metadata with `git show` from the selected commit,
+not from dirty checkout files. Its roster owns only App identity and source
+locations. The scaffold's `npm run build` deliberately reads saved working
+metadata before capturing those same saved files. Its template declares the
+ordinary npm recipe as `kind: "source-html"`, including the backend entry and
+asset bounds; the command does not carry another copy of that recipe.
+
+**Breaking recipe contract:** `@fungi.computer/oyster/standalone/app-set` no
+longer exposes `StarterApp.recipe` or recipe values on `standaloneAppSet`.
+Callers read the selected source's `package.json` with `readBuildManifest` and
+materialize it with `appBuildRecipe`, both exported from
+`@fungi.computer/oyster/build`. The workspace metadata policy advances from
+`package-json-fungi-build-v3` to `package-json-fungi-build-v4`; builders refuse
+missing or superseded policy metadata rather than guessing a recipe.
+
+**Breaking repository-registration contract:** the public
+`PUT /api/apps/:appId/build-source` route, which accepted an App identity in the
+path and caller-supplied installation, repository, and recipe fields, has been
+removed. Use repo-only `APPS.register({ repo })`, exposed by Bonsai as
+`apps.register({ repo })`. The host reads App identity and `fungi.build` recipe
+from the immutable main commit's root `package.json` through the shared manifest
+reader; callers cannot override identity or recipe. An existing repository
+registration retains its App identity on replay. Registration returns the App ID
+and exact commit without starting a build or installing a Release. No
+compatibility route or shim remains.
+
+### Local Release installation
+
+```sh
+export OYSTER_URL=https://your-oyster.example
+export OYSTER_OWNER_KEY='<your owner key>'
+oyster install ./dist --installation-id my-app
+# Or name the same Release's manifest:
+oyster install ./dist/release.json --installation-id my-app
+```
+
+The CLI delegates to `installRelease` from `@fungi.computer/oyster/pack`, using
+the same uploader as programmatic clients. Artifacts must upload before
+`POST /api/installations`. Upload refusal, missing files, and non-OK
+installation responses exit nonzero. No key is discovered from your home
+directory, and this command does not provision a Computer or deploy an Oyster.
+
+For repository authoring, use Bonsai's repository Settings **Make this an App**
+(or `apps.register({ repo })`). Commit the root `package.json#fungi.build`
+recipe first; dirty metadata is not registration input. The readonly App ID and
+editable revision/name come from registration or the latest recorded build.
+Status can be read using `APPS.buildStatus({ repo })` in the captured Git
+installation; Settings uses that selector after reload. No job returns `null`.
+Workflow callers use `APPS.buildStatus({ jobId })` for the particular job they
+started.
+
+### Accepted main builds and approval-bounded installation
+
+The standalone Instance's accepted-ref journal delivers the host-attested main
+push to Bonsai. For a registered repository, Bonsai requests the retained
+Trellis build-on-merge template through WORKFLOWS. Its published run owns the
+build, exact-source verification and installation steps and their result cards.
+An App's change/merge payload is not push authority. The host's Workflow-node
+idempotency key reuses a build job on retry or restart. A local-only Computer
+returns typed no_backend before creating a new job or starting a machine.
+
+Only an admitted Workflow-node APPS call can install its matching successful
+build's recorded Release at the recorded target. Ordinary App-origin
+installation remains refused. Existing grants may be reused, but new permissions
+or anonymous exposure return needs_consent without changing the running Release.
+Registering a repository as an App (**Make this an App**) is the owner's consent
+for its merge Workflow to create that App's installation when none exists yet. A
+Workflow-created installation is private, with no grants and no anonymous
+methods. Later Workflows reuse exactly that approval and can never widen it;
+every grant still needs the owner's explicit consent. The build row records the
+outcome; status reads are read-only and no native alarm resumes installation.
+Workflow execution owns retries. This template has no review step, review
+configuration or separate consent ledger.
+
+**Breaking installation contract:** Bonsai apps.install and APPS.select require
+the successful build's jobId alongside installationId and release. The host
+compares all recorded Release metadata and the target before installation.
+
+**Breaking build-port contract:** consumers of
+`@fungi.computer/oyster/app-builds` must provide
+`OysterBuildComputer.buildBackend()`, returning `{ kind: "hosted" }` or
+`{ kind: "no_backend" }`, alongside `runBuild`. The preflight reads routing
+without starting a machine. The build owner's `install(jobId, decide)` invokes
+the host decision only for a successful job with a verified Release and pending
+installation target; it records that decision on the same job. Terminal
+installation decisions are not invoked again on replay.
+
+For a source HTML build, that nearest package must itself be a pnpm workspace
+member, or the root package of a standalone App repository. A nested package
+outside the workspace inventory fails with `WorkspaceBuildError` code
+`non_workspace_package`; it never inherits the host package's dependency
+closure. Notes is an explicit workspace member with its own Agar and Zod
+dependencies and the builder's pinned Vite toolchain, separate from Oyster's
+host runtime.
+
+The other tracked nested manifests are separate source inputs, not App HTML
+builds inside their parent workspace:
+
+- `apps/bonsai/demo/koi-pond`: copied into its own demo Git repository.
+- `packages/create-fungi-app/template`: copied to the generated App's root.
+- `services/app-publisher/test/fixtures/size-hello`: a backend-only emission
+  fixture, not a workspace HTML build.
+- `apps/tui/test/fixtures/fairy-ring-extension` and
+  `runtimes/local/test/fixtures/{extension-compactor,extension-counter}`:
+  installed extension fixtures, not App source builds.
+- `packages/computer/container` and
+  `packages/cordyceps/upstream/{computerd,dofs,rpc}`: container/vendored package
+  inputs, not App source entries.
+- `templates/vishnu-starter`: a standalone project template outside the pnpm
+  workspace.
+
 A captured UI bundle uses `kind: "bundled-html"`, an `entry` ending in
 `/index.html`, `assetBase: "./"`, and an explicit `assets` policy with
 `maxManifestBytes`, `maxObjects`, `maxObjectBytes`, and `maxTotalBytes`. Set
 `backend: null` for UI only, or supply a repository-relative `backend.entry`
 with the backend runtime, export name, and compatibility date. The compiler
 joins both outputs from that same snapshot. A backend-only recipe uses its
-Worker entry as `entry` and omits `backend.entry`. Existing first-party HTML
-recipes retain their pinned steps and digests.
+Worker entry as `entry` and omits `backend.entry`. First-party HTML recipes
+retain their catalog-owned compilation steps.
 
 For UI source, omit `kind` and use a closed HTML recipe entry, such as
 `ui/index.html` for Notes at its repository root. It requires `assets` and
@@ -1077,8 +1332,18 @@ implicit install. Only the Computer build (`buildTeamCandidate`, composed with
 arbitrary package code, isolated by that admitted Computer. Every other
 composition, including `packRelease` and `create-fungi-app`, refuses such a
 source before installing. Unknown `fungi.build` fields are refused. The policy
-is pinned as `package-json-fungi-build-v2` in the recipe toolchain; an executor
+is pinned as `package-json-fungi-build-v4` in the recipe toolchain; an executor
 refuses a recipe pinned under another policy.
+
+The App's HTML module scripts, shell module and selected backend select its
+workspace compile roots. The maintained HTML parser and esbuild follow local
+runtime imports; erased type imports and authoring scripts do not pull a host
+package into that compilation. Declared package stylesheets are also roots. The
+planning pass follows code imports only; the actual Vite build retains ownership
+of asset loading, validation and emission. Each selected workspace package still
+builds its full declared products and runtime workspace dependency closure, in
+dependency order. Dependency manifests, hydration and the Computer-only
+package-script guard are unchanged.
 
 `createLocalArtifactWriter(directory, recipe.assets)` writes the App root and
 all referenced UI/backend objects. It uses the supplied asset bounds and
@@ -1116,6 +1381,33 @@ selected tenant. Canonical member roles remain distinct from owner authority.
 Public App reads remain available; unknown origins and policy refusals fail
 closed. `ownerOrKeyTenancy` is the single-tenant case.
 
+## Machine link protocol
+
+`@fungi.computer/seam/machine-link-protocol` exposes the bounded read/leave
+decoder and `createMachineLinkPostChannel`. The channel transports ordinary
+Carrier Post envelopes and their receiver receipts without rewriting cargo. The
+host supplies frame-byte, in-flight and acknowledgment-time limits.
+
+`machineLinkDialUrl(issuer, teamId, deviceId)` and
+`machineLinkAudience(teamId, deviceId)` give both hosts the same GET path and
+Seam audience. Enrollment is separately authorized by the account owner; a
+native dial proves possession of the enrolled device key, not command
+acceptance.
+
+The host still owns authenticated native sockets, currentness and connection
+lifetime. Call `close()` when a connection is lost; create a new channel for its
+successor. A closed channel, timeout or capacity failure rejects pending I/O
+without asserting command refusal or custody. Carrier remains the durable outbox
+and retry owner. In-flight state is not a persistent mailbox or a Capnweb
+capability table.
+
+A Post acknowledgment is not Shiitake command acceptance. The Hub's home-aware
+Agent mail route still requires the recipient's actual Accepted receipt. Focused
+channel and route tests do not qualify native transport, reconnect, Hub restart
+or Agent execution. The rebuild now wires Local service, Team native receiver
+and hosted actual-home consumers together; their whole-bundle native
+qualification and production activation remain separate claims.
+
 ## Approve an installed App's permissions
 
 After selecting a new Release, the owner can open **App access** beside the App
@@ -1126,10 +1418,22 @@ preserved; a newly selected capability is approved within this Oyster's scope.
 This updates the installation without reinstalling the App or changing its data.
 
 The page sends an owner-only `PUT` to the same path, carrying the captured
-`authorityVersion`, Release `artifactDigest`, and the maintained
-`{kind:"set-grants",grants}` command. Agents, keys, visitors and App-origin
-requests cannot approve. A stale Release/version or concurrent approval returns
-`409`; reload the page to review current permissions. The required
-`InstallationStore.compareAndPut` port returns a serializable commit/refusal
-result across Durable Object RPC. The registry checks the expected authority
-version in its existing commit transaction.
+`storeGeneration`, `authorityVersion`, Release `artifactDigest`, and a bounded
+`{kind:"change-grants",changes:[{capability,grant}]}` command. Each grant
+contains `operations` and `resources`; `null` revokes that capability. Unnamed
+approvals retain their existing operation and resource ceilings. Agents, keys,
+visitors and App-origin requests cannot approve. A replaced store, stale
+Release/version or concurrent approval returns `409`; the page refreshes the
+facts and rebases touched edits for review. The required `InstallationStore`
+exposes its durable `generation()` and
+`compareAndPut(record, expectedVersion, expectedGeneration)`. The latter returns
+a serializable commit/refusal result across Durable Object RPC and checks both
+pins in the existing commit transaction.
+
+## Breaking App send contract
+
+App `AGENTS.send` requires a caller-owned `requestId`, minted once per user
+intent and reused unchanged on retry after an UNKNOWN outcome. The standalone
+adapter no longer generates a replacement. See the
+[App Agent send API reference](docs/overview.md#app-agent-send-api--breaking-change)
+for the complete input and migration note.

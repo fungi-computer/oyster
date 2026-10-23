@@ -8,6 +8,49 @@
 
 # pack
 
+## Classes
+
+### InstallationObservationError
+
+Observer failure supplies no installation outcome and never cancels its owner.
+
+#### Extends
+
+- `Error`
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new InstallationObservationError(requestId, options?): InstallationObservationError;
+```
+
+###### Parameters
+
+| Parameter   | Type           |
+| ----------- | -------------- |
+| `requestId` | `string`       |
+| `options?`  | `ErrorOptions` |
+
+###### Returns
+
+[`InstallationObservationError`](#installationobservationerror)
+
+###### Overrides
+
+```ts
+Error.constructor;
+```
+
+#### Properties
+
+##### requestId
+
+```ts
+readonly requestId: string;
+```
+
 ## Type Aliases
 
 ### PackOptions
@@ -81,13 +124,15 @@ function installFromSource(input): Promise<Response>;
 
 Capture an Artifacts Git commit, build its Release, upload it to an Oyster, and
 install it, or switch an existing installation to it
-([installRelease](#installrelease)).
+([installRelease](#installrelease)). `waitMs` starts with the upload/observation
+phase after packing; a supplied caller signal retains its original lifetime
+through that phase.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                                                                      |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input`   | `Readonly`\<\{ `appId`: `string`; `releaseId?`: `string`; `recipe`: [`PackOptions`](#packoptions)\[`"recipe"`\]; `source`: `Readonly`\<\{ `remote`: `string`; `token`: `string`; `sourceRevision`: `string`; \}\>; `packageStoreDirectory?`: `string`; `url`: `string`; `key`: `string`; `installationId`: `string`; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `appId`: `string`; `releaseId?`: `string`; `recipe`: \{ `kind?`: `"bundled-html"` \| `"source-html"`; `entry`: `string`; `assets?`: \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \}; `assetBase?`: `string`; `backend`: \| \{ `entry?`: `string`; `runtime`: \{ `kind`: `"durable-facet"`; `stateSchema`: `number`; \}; `compatibilityDate`: `string`; `exportName`: `string`; \} \| `null`; `maxOutputBytes`: `number`; \}; `source`: `Readonly`\<\{ `remote`: `string`; `token`: `string`; `sourceRevision`: `string`; \}\>; `packageStoreDirectory?`: `string`; `url`: `string`; `key`: `string`; `installationId`: `string`; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
 
 #### Returns
 
@@ -103,13 +148,17 @@ function installRelease(input): Promise<Response>;
 
 Upload a packed Release to an Oyster and install it. The host installs a new
 installation (201) or switches an existing one to this Release (200), keeping
-its state; both go through its one install-or-select owner.
+its state. Uploads precede admission; this helper then waits for the correlated
+terminal owner receipt, not merely the HTTP acknowledgement. Uploads and
+observation share the caller signal or explicit `waitMs`; absent either, the
+installer owns a twenty-minute default. Expiry does not cancel admitted work and
+is reported as an unconfirmed observation, not refusal.
 
 #### Parameters
 
-| Parameter | Type                                                                                                      |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; \}\> |
+| Parameter | Type                                                                                                                                                                                                                   |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; `onAdmitted?`: (`operation`) => `void`; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
 
 #### Returns
 

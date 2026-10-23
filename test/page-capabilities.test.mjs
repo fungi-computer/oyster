@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { URL } from "node:url";
 import {
   newMessagePortRpcSession,
   RpcStub,
@@ -32,6 +33,59 @@ import { TerminalCapability } from "../src/page/terminal.ts";
 import { computerSlots } from "../src/computer.ts";
 // Use the maintained browser build, including the page/shell JSX configuration.
 import { oysterAppCapabilities } from "../dist/page/mount.js";
+
+test("capability handles pin their Computer across JSON, file and transport requests", async (context) => {
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (url) => {
+    requests.push(url);
+    return globalThis.Response.json({ ok: true });
+  });
+  const descriptor = {
+    id: "proof",
+    version: 1,
+    base: "/computer/",
+    methods: {
+      list: { kind: "json", method: "GET", path: "list" },
+      start: { kind: "json", method: "POST", path: "processes/start" },
+      read: { kind: "read", method: "GET", path: "content" },
+      write: { kind: "write", method: "PUT", path: "content" },
+      open: { kind: "transport", method: "ANY", path: "terminal" },
+    },
+  };
+  for (const computerId of ["A", "B", "A"]) {
+    const handle = new RpcStub(
+      capabilityHandle(descriptor, "shed", computerId),
+    );
+    await handle.list({ path: "/workspace", computerId: "forged" });
+    await handle.start({ command: "echo proof" });
+    const reader = await handle.read({ path: "/workspace/proof.txt" });
+    await reader.response();
+    const writer = await handle.write({ path: "/workspace/proof.txt" });
+    await writer.write(new globalThis.Response("proof").body);
+    const transport = await handle.open({});
+    await transport.fetch(
+      new globalThis.Request("https://guest.invalid/session"),
+    );
+    await assert.rejects(
+      async () =>
+        await transport.fetch(
+          new globalThis.Request(
+            "https://guest.invalid/session?computerId=foreign",
+          ),
+        ),
+      { code: "INVALID_ARGUMENT" },
+    );
+    await transport.close();
+    await writer.close();
+    await reader.close();
+  }
+  assert.deepEqual(
+    requests.map((path) =>
+      new URL(path, "https://oyster.test").searchParams.get("computerId"),
+    ),
+    [...Array(5).fill("A"), ...Array(5).fill("B"), ...Array(5).fill("A")],
+  );
+});
 
 test("Computer port and process mutations send the host wire body, not the bare argument", async (context) => {
   const sent = [];
@@ -136,10 +190,12 @@ test("registered terminal factories bind transport access to their installation"
           rows: 24,
           session: "terminal-one",
           oysterInstallation: "forged-installation",
+          computerId: "forged-computer",
         });
         const url = new globalThis.URL(socket.url, "https://oyster.test");
         assert.equal(url.pathname, "/computer/terminal");
         assert.equal(url.searchParams.get("oysterInstallation"), "shed");
+        assert.equal(url.searchParams.get("computerId"), "A");
         assert.equal(url.searchParams.get("session"), "terminal-one");
         assert.equal(url.searchParams.get("cols"), "80");
         assert.equal(url.searchParams.get("rows"), "24");
@@ -148,6 +204,7 @@ test("registered terminal factories bind transport access to their installation"
     },
     computerSlots.terminal,
     "shed",
+    "A",
   );
 });
 

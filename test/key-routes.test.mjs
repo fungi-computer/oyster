@@ -10,6 +10,11 @@ import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
 import { createOyster } from "../dist/host.js";
 import { fromNodeSqlite } from "@fungi.computer/ear-tag/keys/node";
+import {
+  keyAllowsComputerUse,
+  keyAppAccess,
+  oysterKeyVocabulary,
+} from "../dist/keys.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 
 // workers-git.js imports `cloudflare:workers` at module scope for its
@@ -90,6 +95,40 @@ test("issues a key and lists it back", async () => {
     listed.keys.map((key) => key.name),
     ["morel"],
   );
+});
+
+test("an owner mints and verifies an enrollment-only Oyster key without App or Computer authority", async () => {
+  const keys = keysNamespace();
+  const scope = tenantScope(defaultTenant, "https://oyster.example");
+  const app = createOyster({
+    ...(await computerHost(owner, "fixed-computer")),
+    ownerRoutes: gitAdminRoutes({ KEYS: keys }, scope),
+  });
+  const grants = [{ capability: "machine.enroll", targets: { kind: "all" } }];
+  const issued = await app.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "device-join", grants }),
+  });
+  assert.equal(issued.status, 201);
+  const { plaintext, key } = await issued.json();
+  assert.ok(plaintext.startsWith("oyk_"));
+  assert.deepEqual(key.grants, grants);
+  const store = keys.getByName(scope.durableName("keys"));
+  const verified = await store.verify(plaintext);
+  assert.equal(verified.kind, "ok");
+  assert.deepEqual(verified.value.scope.grants, grants);
+  assert.equal(
+    oysterKeyVocabulary.grantsAllow(
+      verified.value.scope.grants,
+      "machine.enroll",
+    ),
+    true,
+  );
+  const live = await store.live(key.keyId);
+  assert.ok(live);
+  assert.equal(keyAppAccess(live, "notes"), null);
+  assert.equal(keyAllowsComputerUse(live), false);
 });
 
 test("refuses an agent_-shaped name at issuance: Bonsai's mayPush treats a key name and an Agent id as the same name, so they must stay disjoint", async () => {

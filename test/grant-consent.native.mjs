@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -7,7 +7,23 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { sha256 } from "../dist/host.js";
+import { installOnOyster } from "../dist/installation-client.js";
 import { TextEncoder } from "node:util";
+import { grantConsentConfig } from "./grant-consent-config.fixture.mjs";
+
+assert.ok(process.env.CELLD_PLATFORM_CELLD, "Actual pinned celld is required");
+assert.deepEqual(
+  JSON.parse(execFileSync("ip", ["-json", "link"], { encoding: "utf8" })).map(
+    (link) => link.ifname,
+  ),
+  ["lo"],
+  "Run through the disposable native wrapper, never the host network",
+);
+assert.deepEqual(
+  JSON.parse(execFileSync("ip", ["-json", "route"], { encoding: "utf8" })),
+  [],
+  "The native proof must have no external route",
+);
 
 const root = new globalThis.URL("../", import.meta.url).pathname;
 await mkdir(`${root}.botanical`, { recursive: true });
@@ -22,33 +38,7 @@ const port = socket.address().port;
 await new Promise((resolve) => socket.close(resolve));
 const origin = `http://127.0.0.1:${port}`;
 const config = `${work}/wrangler.json`;
-await writeFile(
-  config,
-  JSON.stringify({
-    name: "oyster-grant-rpc-proof",
-    main: `${root}test/grant-consent.worker.fixture.ts`,
-    compatibility_date: "2026-09-04",
-    compatibility_flags: ["nodejs_compat"],
-    r2_buckets: [{ binding: "RELEASES", bucket_name: "proof-releases" }],
-    durable_objects: {
-      bindings: [
-        { name: "REGISTRY", class_name: "OysterRegistry" },
-        { name: "INSTANCES", class_name: "OysterInstance" },
-        { name: "APPROVAL_BARRIER", class_name: "ApprovalBarrier" },
-      ],
-    },
-    migrations: [
-      {
-        tag: "v1",
-        new_sqlite_classes: [
-          "OysterRegistry",
-          "OysterInstance",
-          "ApprovalBarrier",
-        ],
-      },
-    ],
-  }),
-);
+await writeFile(config, JSON.stringify(grantConsentConfig(root, origin)));
 const worker = spawn(
   `${root}node_modules/.bin/wrangler`,
   [
@@ -85,7 +75,7 @@ try {
     await delay(250);
   }
   const ui = new TextEncoder().encode(
-    "<!doctype html><title>Grant proof</title>",
+    "<!doctype html><title>Grant proof</title><main>Grant proof</main>",
   );
   const build = createAppBuild(
     {
@@ -137,13 +127,15 @@ try {
       204,
     );
   }
-  const installed = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: auth,
-    body: JSON.stringify({ installationId: "proof", release }),
+  const installed = await installOnOyster({
+    url: origin,
+    key,
+    installationId: "proof",
+    release,
   });
-  assert.equal(installed.status, 201);
-  const current = await installed.json();
+  assert.equal(installed.state, "succeeded", JSON.stringify(installed));
+  assert.equal(installed.creation, "fresh");
+  const current = installed.installation;
   assert.equal(
     (
       await globalThis.fetch(`${origin}/other/api/installations/proof/grants`, {
@@ -162,45 +154,75 @@ try {
     ).status,
     413,
   );
+  const pins = await (
+    await globalThis.fetch(origin + "/api/installations/proof/grants", {
+      headers: { ...auth, Accept: "application/json" },
+    })
+  ).json();
   const request = (grants) =>
     globalThis.fetch(`${origin}/api/installations/proof/grants`, {
       method: "PUT",
       headers: { ...auth, "X-Proof-Race": "pair" },
       body: JSON.stringify({
-        authorityVersion: current.authorityVersion,
+        storeGeneration: pins.storeGeneration,
+        authorityVersion: current.authority.authorityVersion,
         artifactDigest: digest,
-        command: { kind: "set-grants", grants },
+        command: {
+          kind: "change-grants",
+          changes: [
+            {
+              capability: "app.events.emit",
+              grant:
+                grants[0] === undefined
+                  ? null
+                  : {
+                      operations: grants[0].operations,
+                      resources: grants[0].resources,
+                    },
+            },
+          ],
+        },
       }),
     });
-  const replies = await Promise.all([request("declared"), request("none")]);
+  const replies = await Promise.all([
+    request([
+      {
+        capability: "app.events.emit",
+        operations: [],
+        resources: "tenant-scope",
+      },
+    ]),
+    request([]),
+  ]);
   assert.deepEqual(replies.map((reply) => reply.status).sort(), [200, 409]);
   const records = await (
     await globalThis.fetch(`${origin}/api/installations`, { headers: auth })
   ).json();
-  assert.equal(records[0].authorityVersion, current.authorityVersion + 1);
-  assert.deepEqual(records[0].release, release);
   assert.equal(
-    (
-      await globalThis.fetch(`${origin}/__stale-proof`, {
-        method: "POST",
-        headers: auth,
-      })
-    ).status,
-    200,
+    records[0].authority.authorityVersion,
+    current.authority.authorityVersion + 1,
   );
-  const stale = {
-    kind: "refused",
-    code: "installation_stale",
-    installationId: "proof",
-  };
+  assert.deepEqual(records[0].release, release);
+  const seeded = await globalThis.fetch(`${origin}/__storage-proof`, {
+    method: "POST",
+    headers: auth,
+  });
+  assert.equal(seeded.status, 200);
+  assert.deepEqual(await seeded.json(), [{ value: '{"retained":true}' }]);
   const listing = await globalThis.fetch(`${origin}/api/installations`, {
     headers: auth,
   });
   assert.equal(listing.status, 200);
-  assert.deepEqual(await listing.json(), [stale]);
-  const home = await globalThis.fetch(origin, { headers: auth });
-  assert.equal(home.status, 409);
-  assert.deepEqual(await home.json(), { error: "installation_stale" });
+  assert.deepEqual(await listing.json(), records);
+  const view = await globalThis.fetch(
+    `${origin}/api/installations/proof/grants`,
+    { headers: { ...auth, Accept: "application/json" } },
+  );
+  assert.equal(view.status, 200);
+  assert.deepEqual(
+    (await view.json()).permissions.authority,
+    records[0].authority,
+  );
   assert.equal(
     (
       await globalThis.fetch(`${origin}/api/installations/proof`, {
@@ -218,51 +240,66 @@ try {
     ).status,
     204,
   );
+  const deleted = await (
+    await globalThis.fetch(`${origin}/api/installations`, { headers: auth })
+  ).json();
+  assert.equal(deleted.length, 1);
+  assert.equal(deleted[0].installationId, "proof");
+  assert.equal(deleted[0].status, "deleted");
+  assert.deepEqual(deleted[0].authority.approvedGrants, []);
   assert.deepEqual(
     await (
-      await globalThis.fetch(`${origin}/api/installations`, { headers: auth })
+      await globalThis.fetch(`${origin}/__storage-proof`, { headers: auth })
     ).json(),
     [],
   );
+  // The deleted id is retired; a reinstall takes a new installation id.
+  const retired = await installOnOyster({
+    url: origin,
+    key,
+    installationId: "proof",
+    release,
+  });
+  assert.equal(retired.state, "succeeded");
+  assert.equal(retired.creation, "reminted");
+  const fresh = retired.installation;
+  assert.match(fresh.installationId, /^proof-[a-z0-9]{21}$/u);
+  assert.equal(fresh.authority.authorityVersion, 1);
+  // Fresh-install defaults, not the winning grant edit made above.
   assert.deepEqual(
-    await (
-      await globalThis.fetch(`${origin}/__stale-proof`, { headers: auth })
-    ).json(),
-    [{ value: '{"retained":true}' }],
+    fresh.authority.approvedGrants,
+    current.authority.approvedGrants,
   );
+  assert.deepEqual(fresh.approvedAnonymousMethods, []);
   assert.equal(
     (
-      await globalThis.fetch(`${origin}/api/installations`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ installationId: "proof", release }),
-      })
-    ).status,
-    201,
-  );
-  assert.equal(
-    (
-      await globalThis.fetch(`${origin}/api/installations/proof`, {
-        method: "DELETE",
-        headers: auth,
-      })
+      await globalThis.fetch(
+        `${origin}/api/installations/${fresh.installationId}`,
+        {
+          method: "DELETE",
+          headers: auth,
+        },
+      )
     ).status,
     204,
   );
   assert.deepEqual(
     await (
-      await globalThis.fetch(`${origin}/__stale-proof`, { headers: auth })
+      await globalThis.fetch(`${origin}/__storage-proof`, { headers: auth })
     ).json(),
     [],
   );
   globalThis.console.log(
-    `Stale installation native RPC PASS: typed409/list/delete/reinstall; stale delete retains hub_app_storage rows, normal delete purges them`,
+    `Current installation native RPC PASS: embedded authority projection, owner-only delete, reinstall mints a new id with fresh authority; normal delete purges hub_app_storage rows`,
   );
   globalThis.console.log(
-    `Owner grant RPC concurrent approval PASS (${process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd"}):200/409`,
+    "Owner grant RPC concurrent approval PASS (celld):200/409",
   );
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await rm(work, { recursive: true, force: true });
+  try {
+    worker.kill("SIGTERM");
+    await stopped;
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
 }

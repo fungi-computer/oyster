@@ -8,6 +8,91 @@
 
 # page/mount
 
+## Classes
+
+### OysterAgentBrowserHost
+
+One page-wide selected Session, using only its reporting App's admitted view.
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new OysterAgentBrowserHost(signal): OysterAgentBrowserHost;
+```
+
+End the selected connection with the page's own lifetime.
+
+###### Parameters
+
+| Parameter | Type          |
+| --------- | ------------- |
+| `signal`  | `AbortSignal` |
+
+###### Returns
+
+[`OysterAgentBrowserHost`](#oysteragentbrowserhost)
+
+#### Methods
+
+##### release()
+
+```ts
+release(frame): void;
+```
+
+A departing or deselecting mount cannot close a different active mount.
+
+###### Parameters
+
+| Parameter | Type                |
+| --------- | ------------------- |
+| `frame`   | `HTMLIFrameElement` |
+
+###### Returns
+
+`void`
+
+##### dispose()
+
+```ts
+dispose(): void;
+```
+
+Release the page's current selection; later reports cannot reconnect it.
+
+###### Returns
+
+`void`
+
+##### report()
+
+```ts
+report(
+   frame,
+   selection,
+   capabilities,
+   whistle
+): Promise<void>;
+```
+
+Bind the reporting mount's current command view to its explicitly selected
+Session.
+
+###### Parameters
+
+| Parameter      | Type                                                                         |
+| -------------- | ---------------------------------------------------------------------------- |
+| `frame`        | `HTMLIFrameElement`                                                          |
+| `selection`    | \| `Readonly`\<\{ `agentId`: `string`; `sessionId`: `string`; \}\> \| `null` |
+| `capabilities` | `CapabilityDirectory`                                                        |
+| `whistle`      | `Pick`\<`WhistleRuntime`, `"snapshot"` \| `"execute"`\>                      |
+
+###### Returns
+
+`Promise`\<`void`\>
+
 ## Type Aliases
 
 ### OysterAppOpenRouting
@@ -41,6 +126,9 @@ The host-admitted App configuration served by Oyster.
 ```ts
 type OysterAppConnectionOptions = Readonly<{
   config: OysterAppConfig;
+  agentBrowser: OysterAgentBrowserHost;
+  agentCommands: Pick<WhistleRuntime, "snapshot" | "execute">;
+  computerTarget?: string;
   frame: HTMLIFrameElement;
   signal: AbortSignal;
   handlers: AppHostHandlers;
@@ -218,7 +306,7 @@ would, without a frame between the shell and its host.
 
 | Name      | Type                                                                                                                                                                                                                                                                                                                                                                                                                                          | Description                                                                     |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `storage` | \| `Readonly`\<\{ `read`: `Promise`\<\{ `value`: `Json`; `source`: `"team"` \| `"member"` \| `"none"`; `team`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`; `member`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`; `canWriteTeam`: `boolean`; \}\>; `write`: `Promise`\<\{ `revision`: `number`; \}\>; `reset`: `Promise`\<\{ `revision`: `number`; \}\>; `watch`: `Promise`\<`AppStorageWatch`\>; \}\> \| `null` | -                                                                               |
+| `storage` | \| `Readonly`\<\{ `read`: `Promise`\<\{ `value`: `Json`; `source`: `"member"` \| `"team"` \| `"none"`; `team`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`; `member`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`; `canWriteTeam`: `boolean`; \}\>; `write`: `Promise`\<\{ `revision`: `number`; \}\>; `reset`: `Promise`\<\{ `revision`: `number`; \}\>; `watch`: `Promise`\<`AppStorageWatch`\>; \}\> \| `null` | -                                                                               |
 | `methods` | `object`                                                                                                                                                                                                                                                                                                                                                                                                                                      | -                                                                               |
 | `call()`  | (`method`, `input`) => `Promise`\<`WhistleJsonValue`\>                                                                                                                                                                                                                                                                                                                                                                                        | Call the named method with JSON-encoded `input`; resolves with its JSON result. |
 
@@ -269,9 +357,9 @@ Resolve only the slots admitted for this installation by its current host.
 
 #### Parameters
 
-| Parameter | Type                                                                                                           |
-| --------- | -------------------------------------------------------------------------------------------------------------- |
-| `options` | `Pick`\<[`OysterAppConnectionOptions`](#oysterappconnectionoptions), `"config"` \| `"signal"` \| `"appOpen"`\> |
+| Parameter | Type                                                                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `options` | `Pick`\<[`OysterAppConnectionOptions`](#oysterappconnectionoptions), `"config"` \| `"signal"` \| `"appOpen"` \| `"computerTarget"`\> |
 
 #### Returns
 

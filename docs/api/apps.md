@@ -10,6 +10,36 @@
 
 ## Type Aliases
 
+### PermissionCatalogEntry
+
+```ts
+type PermissionCatalogEntry = Readonly<{
+  group:
+    | "computers"
+    | "agents"
+    | "generation"
+    | "bazaar"
+    | "data"
+    | "workflows"
+    | "git"
+    | "channels"
+    | "apps"
+    | "shell"
+    | "other";
+  label: string;
+  caption: string;
+  description: string;
+  sigil: SigilName;
+  consent: "affordance" | "install" | "ask";
+  scope: "computer" | "agent" | null;
+  warning: string | null;
+}>;
+```
+
+Consent and resource semantics belong to the grant owner, not its UI.
+
+---
+
 ### HostPrincipal
 
 ```ts
@@ -42,7 +72,10 @@ One decoded method, route, binding or catalog admission request.
 ```ts
 type GateFacts = Readonly<{
   principal: HostPrincipal;
-  installation: Installation;
+  installation: Readonly<
+    Pick<Installation, "status" | "visibility" | "instanceId" | "authority"> &
+      object
+  >;
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
   api: AppApi | null;
@@ -133,15 +166,10 @@ host-owned.
 
 ---
 
-### GrantRequest
+### GrantChange
 
 ```ts
-type GrantRequest = Extract<
-  InstallationCommand,
-  {
-    kind: "install";
-  }
->["grants"];
+type GrantChange = z.output<typeof grantChangeSchema>;
 ```
 
 Installation records and pure admission rules; tenant state and commits stay
@@ -152,7 +180,63 @@ host-owned.
 ### Approval
 
 ```ts
-type Approval = NonNullable<Installation["approval"]>;
+type Approval = Readonly<{
+  by: HostActor;
+  at: number;
+  authorityVersion: number;
+}>;
+```
+
+The owner and version that approved a fixed operation snapshot.
+
+---
+
+### AppAuthority
+
+```ts
+type AppAuthority = z.output<typeof appAuthoritySchema>;
+```
+
+Installation records and pure admission rules; tenant state and commits stay
+host-owned.
+
+---
+
+### GrantCommand
+
+```ts
+type GrantCommand = z.output<typeof grantCommandSchema>;
+```
+
+Installation records and pure admission rules; tenant state and commits stay
+host-owned.
+
+---
+
+### GrantContext
+
+```ts
+type GrantContext = Readonly<{
+  principal: HostPrincipal;
+  expectedVersion: number | null;
+  declaration: AppDeclaration;
+  declaredOperations: DeclaredOperations;
+  now: number;
+}>;
+```
+
+Installation records and pure admission rules; tenant state and commits stay
+host-owned.
+
+---
+
+### GrantRefusal
+
+```ts
+type GrantRefusal = Readonly<{
+  kind: "refused";
+  code: "stale_authority" | "not_owner" | "not_declared" | "invalid_command";
+}>;
 ```
 
 Installation records and pure admission rules; tenant state and commits stay
@@ -279,59 +363,52 @@ type InstallationReader = Readonly<{
         }>;
      };
      releasePin: "pinned" | "floating";
-     authorityVersion: number;
+     authority: {
+        authorityVersion: number;
+        declaredOperationsDigest: Sha256Digest;
+        approvedGrants: readonly Readonly<{
+           capability:   | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...;
+           capabilityApproved: true;
+           operations: readonly ...[];
+           resources: ... | ...;
+        }>[];
+        approval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+     };
      status: "enabled" | "disabled" | "deleted";
      visibility: "private" | "public";
-     declaredOperationsDigest: Sha256Digest;
-     approvedGrants: readonly Readonly<{
-        capability:   | "agent.list"
-           | "agent.manage"
-           | "agent.rename"
-           | "agent.toolPolicy"
-           | "agent.read"
-           | "agent.send"
-           | "computer.list"
-           | "computer.readFile"
-           | "computer.writeFile"
-           | "computer.execute"
-           | "llm.generation"
-           | "media.generation"
-           | "games:servers"
-           | "git.repository"
-           | "apps.open"
-           | "apps.call"
-           | "app.storage"
-           | "app.events.emit"
-           | "team.workbenchHost"
-           | "marketplace.browse"
-           | "marketplace.purchase"
-           | "workflow.run"
-           | "workflow.publish"
-           | "workflow.arm"
-           | "world"
-           | "channels.read"
-           | "channels.personal.manage";
-        capabilityApproved: true;
-        operations: readonly string[];
-        resources: "tenant-scope" | readonly ...[];
-     }>[];
-     approval:   | Readonly<{
-        by:   | {
-           kind: ...;
-           memberId: ...;
-         }
-           | {
-           kind: ...;
-           agentId: ...;
-         }
-           | {
-           kind: ...;
-           keyId: ...;
-         };
-        at: number;
-        authorityVersion: number;
-      }>
-        | null;
      approvedAnonymousMethods: readonly Readonly<{
         name: string;
         digest: Sha256Digest;
@@ -373,59 +450,52 @@ type InstallationReader = Readonly<{
         }>;
      };
      releasePin: "pinned" | "floating";
-     authorityVersion: number;
+     authority: {
+        authorityVersion: number;
+        declaredOperationsDigest: Sha256Digest;
+        approvedGrants: readonly Readonly<{
+           capability:   | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...
+              | ...;
+           capabilityApproved: true;
+           operations: readonly ...[];
+           resources: ... | ...;
+        }>[];
+        approval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+     };
      status: "enabled" | "disabled" | "deleted";
      visibility: "private" | "public";
-     declaredOperationsDigest: Sha256Digest;
-     approvedGrants: readonly Readonly<{
-        capability:   | "agent.list"
-           | "agent.manage"
-           | "agent.rename"
-           | "agent.toolPolicy"
-           | "agent.read"
-           | "agent.send"
-           | "computer.list"
-           | "computer.readFile"
-           | "computer.writeFile"
-           | "computer.execute"
-           | "llm.generation"
-           | "media.generation"
-           | "games:servers"
-           | "git.repository"
-           | "apps.open"
-           | "apps.call"
-           | "app.storage"
-           | "app.events.emit"
-           | "team.workbenchHost"
-           | "marketplace.browse"
-           | "marketplace.purchase"
-           | "workflow.run"
-           | "workflow.publish"
-           | "workflow.arm"
-           | "world"
-           | "channels.read"
-           | "channels.personal.manage";
-        capabilityApproved: true;
-        operations: readonly string[];
-        resources: "tenant-scope" | readonly ...[];
-     }>[];
-     approval:   | Readonly<{
-        by:   | {
-           kind: ...;
-           memberId: ...;
-         }
-           | {
-           kind: ...;
-           agentId: ...;
-         }
-           | {
-           kind: ...;
-           keyId: ...;
-         };
-        at: number;
-        authorityVersion: number;
-      }>
-        | null;
      approvedAnonymousMethods: readonly Readonly<{
         name: string;
         digest: Sha256Digest;
@@ -454,6 +524,163 @@ type InstallationReader = Readonly<{
 
 Read port for one host tenant; commits, receipts and revocation stay with that
 host.
+
+---
+
+### ResourceOption
+
+```ts
+type ResourceOption = object;
+```
+
+A host-provided resource identity and its display label.
+
+#### Properties
+
+##### kind
+
+```ts
+kind: string;
+```
+
+##### id
+
+```ts
+id: string;
+```
+
+##### label
+
+```ts
+label: string;
+```
+
+---
+
+### GrantRequestDecision
+
+```ts
+type GrantRequestDecision =
+  | Readonly<{
+      kind: "covered";
+    }>
+  | Readonly<{
+      kind: "customize";
+    }>
+  | Readonly<{
+      kind: "refused";
+      code: "not_declared" | "stale_authority" | "window_scope_unavailable";
+    }>
+  | Readonly<{
+      kind: "ask";
+      adds: readonly GrantChange[];
+      command: Extract<
+        GrantCommand,
+        {
+          kind: "change-grants";
+        }
+      >;
+    }>;
+```
+
+How an App's runtime permission request relates to the owner's stored grants.
+
+---
+
+### PermissionDraft
+
+```ts
+type PermissionDraft = ReadonlyMap<
+  AppCapabilityId,
+  {
+    operations: readonly string[];
+    resources:
+      | "tenant-scope"
+      | readonly Readonly<{
+          kind: string;
+          id: string;
+        }>[];
+  } | null
+>;
+```
+
+Capability approvals being edited; null removes the capability's grant.
+
+---
+
+### PermissionEdit
+
+```ts
+type PermissionEdit =
+  | Readonly<{
+      kind: "switch" | "all";
+      capability: AppCapabilityId;
+      on: boolean;
+    }>
+  | Readonly<{
+      kind: "resource";
+      capability: AppCapabilityId;
+      resource: ResourceRef;
+      on: boolean;
+    }>
+  | Readonly<{
+      kind: "operation";
+      capability: AppCapabilityId;
+      operation: string;
+      on: boolean;
+    }>;
+```
+
+One switch, scope, resource or operation change applied to a draft.
+
+---
+
+### AppPermissionsWire
+
+```ts
+type AppPermissionsWire = z.output<typeof appPermissionsWireSchema>;
+```
+
+Host-supplied authority and declared operations used to derive permission UI.
+
+---
+
+### PermissionScreen
+
+```ts
+type PermissionScreen = Readonly<{
+  canEdit: boolean;
+  pending: readonly AppCapabilityId[];
+  groups: readonly Readonly<{
+     id: PermissionCatalogEntry["group"];
+     scope: "computer" | "agent" | null;
+     columns: readonly object[];
+     rows: readonly Readonly<{
+        resource: ... | ...;
+        label: string;
+        cells: readonly ...;
+     }>[];
+     switches: readonly object & Readonly<...>[];
+     operations: readonly Readonly<{
+        capability: "apps.call";
+        operation: string;
+        on: boolean;
+     }>[];
+  }>[];
+}>;
+```
+
+Catalog-derived permission groups, resource cells and operation switches.
+
+---
+
+### PermissionPins
+
+```ts
+type PermissionPins = z.output<typeof permissionPinsSchema>;
+```
+
+Generation, authority version and artifact digest fencing a permission edit.
 
 ---
 
@@ -494,103 +721,138 @@ host.
 
 ## Variables
 
+### permissionCatalog
+
+```ts
+const permissionCatalog: object;
+```
+
+Every capability selects one consent class and one resource grammar.
+
+#### Type Declaration
+
+| Name                                                                    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <a id="property-approvals"></a> `approvals`                             | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentlist"></a> `agent.list`                            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentmanage"></a> `agent.manage`                        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentrename"></a> `agent.rename`                        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentavatar"></a> `agent.avatar`                        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agenttoolpolicy"></a> `agent.toolPolicy`                | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentread"></a> `agent.read`                            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentsend"></a> `agent.send`                            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerlist"></a> `computer.list`                      | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerreadfile"></a> `computer.readFile`              | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerwritefile"></a> `computer.writeFile`            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerexecute"></a> `computer.execute`                | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-llmgeneration"></a> `llm.generation`                    | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-mediageneration"></a> `media.generation`                | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-gamesservers"></a> `games:servers`                      | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-gitrepository"></a> `git.repository`                    | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appsopen"></a> `apps.open`                              | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appscall"></a> `apps.call`                              | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appstorage"></a> `app.storage`                          | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appeventsemit"></a> `app.events.emit`                   | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-teamworkbenchhost"></a> `team.workbenchHost`            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-marketplacebrowse"></a> `marketplace.browse`            | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-marketplacepurchase"></a> `marketplace.purchase`        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowrun"></a> `workflow.run`                        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowpublish"></a> `workflow.publish`                | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowarm"></a> `workflow.arm`                        | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-world"></a> `world`                                     | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-channelsread"></a> `channels.read`                      | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-channelspersonalmanage"></a> `channels.personal.manage` | `Readonly`\<\{ `group`: \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"computers"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"run"` \| `"agent"` \| `"computer"` \| `"list"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"agent"` \| `"computer"` \| `null`; `warning`: `string` \| `null`; \}\> |
+
+---
+
 ### gateRequestSchema
 
 ```ts
-const gateRequestSchema: ZodDiscriminatedUnion<
-  [
-    ZodObject<
-      {
-        kind: ZodLiteral<"method">;
-        name: ZodString;
-        input: ZodUnknown;
-        via: ZodEnum<{
-          ui: "ui";
-          agent: "agent";
-          mcp: "mcp";
-          workflow: "workflow";
-        }>;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        kind: ZodLiteral<"capability-route">;
-        capability: ZodPipe<
-          ZodUnknown,
-          ZodTransform<
-            | "agent.list"
-            | "agent.manage"
-            | "agent.rename"
-            | "agent.toolPolicy"
-            | "agent.read"
-            | "agent.send"
-            | "computer.list"
-            | "computer.readFile"
-            | "computer.writeFile"
-            | "computer.execute"
-            | "llm.generation"
-            | "media.generation"
-            | "games:servers"
-            | "git.repository"
-            | "apps.open"
-            | "apps.call"
-            | "app.storage"
-            | "app.events.emit"
-            | "team.workbenchHost"
-            | "marketplace.browse"
-            | "marketplace.purchase"
-            | "workflow.run"
-            | "workflow.publish"
-            | "workflow.arm"
-            | "world"
-            | "channels.read"
-            | "channels.personal.manage",
-            unknown
-          >
-        >;
-        operation: ZodString;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        kind: ZodLiteral<"binding">;
-        binding: ZodPipe<
-          ZodUnknown,
-          ZodTransform<
-            | "BACKGROUND"
-            | "GIT"
-            | "EVENTS"
-            | "APPS"
-            | "WORKFLOWS"
-            | "APP_STORAGE"
-            | "MEDIA"
-            | "COMPUTER"
-            | "INBOX"
-            | "AGENTS",
-            unknown
-          >
-        >;
-        operation: ZodString;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        kind: ZodLiteral<"list-tools">;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        kind: ZodLiteral<"backend">;
-      },
-      $strict
-    >,
-  ],
-  "kind"
->;
+const gateRequestSchema: ZodLazy<ZodDiscriminatedUnion<[ZodObject<{
+  kind: ZodLiteral<"method">;
+  name: ZodString;
+  input: ZodUnknown;
+  via: ZodEnum<{
+     agent: "agent";
+     mcp: "mcp";
+     ui: "ui";
+     workflow: "workflow";
+  }>;
+  resource: ZodOptional<ZodLazy<ZodReadonly<ZodObject<{
+     kind: ZodString;
+     id: ZodString;
+  }, $strict>>>>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"capability">;
+  capability: ZodPipe<ZodUnknown, ZodTransform<
+     | "approvals"
+     | "agent.list"
+     | "agent.manage"
+     | "agent.rename"
+     | "agent.avatar"
+     | "agent.toolPolicy"
+     | "agent.read"
+     | "agent.send"
+     | "computer.list"
+     | "computer.readFile"
+     | "computer.writeFile"
+     | "computer.execute"
+     | "llm.generation"
+     | "media.generation"
+     | "games:servers"
+     | "git.repository"
+     | "apps.open"
+     | "apps.call"
+     | "app.storage"
+     | "app.events.emit"
+     | "team.workbenchHost"
+     | "marketplace.browse"
+     | "marketplace.purchase"
+     | "workflow.run"
+     | "workflow.publish"
+     | "workflow.arm"
+     | "world"
+     | "channels.read"
+    | "channels.personal.manage", unknown>>;
+  operation: ZodOptional<ZodString>;
+  resource: ZodUnion<readonly [ZodLazy<ZodReadonly<ZodObject<{
+     kind: ...;
+     id: ...;
+  }, $strict>>>, ZodLiteral<"any">]>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"capability-route">;
+  capability: ZodPipe<ZodUnknown, ZodTransform<
+     | "approvals"
+     | "agent.list"
+     | "agent.manage"
+     | "agent.rename"
+     | "agent.avatar"
+     | "agent.toolPolicy"
+     | "agent.read"
+     | "agent.send"
+     | "computer.list"
+     | "computer.readFile"
+     | "computer.writeFile"
+     | "computer.execute"
+     | "llm.generation"
+     | "media.generation"
+     | "games:servers"
+     | "git.repository"
+     | "apps.open"
+     | "apps.call"
+     | "app.storage"
+     | "app.events.emit"
+     | "team.workbenchHost"
+     | "marketplace.browse"
+     | "marketplace.purchase"
+     | "workflow.run"
+     | "workflow.publish"
+     | "workflow.arm"
+     | "world"
+     | "channels.read"
+    | "channels.personal.manage", unknown>>;
+  operation: ZodString;
+}, $strict>], "kind">>;
 ```
 
 Requests select existing SDK methods, opaque backend calls and derived operation
@@ -601,29 +863,31 @@ identities.
 ### invocationGrantsSchema
 
 ```ts
-const invocationGrantsSchema: ZodReadonly<
-  ZodArray<
-    ZodObject<
-      {
-        binding: ZodPipe<
-          ZodUnknown,
-          ZodTransform<
-            | "BACKGROUND"
-            | "GIT"
-            | "EVENTS"
-            | "APPS"
-            | "WORKFLOWS"
-            | "APP_STORAGE"
-            | "MEDIA"
-            | "COMPUTER"
-            | "INBOX"
-            | "AGENTS",
-            unknown
-          >
-        >;
-        operations: ZodReadonly<ZodArray<ZodString>>;
-      },
-      $strict
+const invocationGrantsSchema: ZodLazy<
+  ZodReadonly<
+    ZodArray<
+      ZodObject<
+        {
+          binding: ZodPipe<
+            ZodUnknown,
+            ZodTransform<
+              | "BACKGROUND"
+              | "GIT"
+              | "EVENTS"
+              | "APPS"
+              | "WORKFLOWS"
+              | "APP_STORAGE"
+              | "MEDIA"
+              | "COMPUTER"
+              | "INBOX"
+              | "AGENTS",
+              unknown
+            >
+          >;
+          operations: ZodReadonly<ZodArray<ZodString>>;
+        },
+        $strict
+      >
     >
   >
 >;
@@ -637,22 +901,24 @@ registry grammar.
 ### gateRefusalSchema
 
 ```ts
-const gateRefusalSchema: ZodObject<
-  {
-    kind: ZodLiteral<"refused">;
-    code: ZodEnum<{
-      unavailable: "unavailable";
-      stale_authority: "stale_authority";
-      not_declared: "not_declared";
-      not_approved: "not_approved";
-      level_too_low: "level_too_low";
-      approval_required: "approval_required";
-      requires_not_granted: "requires_not_granted";
-      invalid_input: "invalid_input";
-      visitor_read_only: "visitor_read_only";
-    }>;
-  },
-  $strict
+const gateRefusalSchema: ZodLazy<
+  ZodObject<
+    {
+      kind: ZodLiteral<"refused">;
+      code: ZodEnum<{
+        unavailable: "unavailable";
+        stale_authority: "stale_authority";
+        not_declared: "not_declared";
+        not_approved: "not_approved";
+        level_too_low: "level_too_low";
+        approval_required: "approval_required";
+        requires_not_granted: "requires_not_granted";
+        invalid_input: "invalid_input";
+        visitor_read_only: "visitor_read_only";
+      }>;
+    },
+    $strict
+  >
 >;
 ```
 
@@ -663,7 +929,7 @@ Ordered, closed refusal vocabulary; external methods always require approval.
 ### installationIdSchema
 
 ```ts
-const installationIdSchema: ZodString;
+const installationIdSchema: ZodLazy<ZodString>;
 ```
 
 Installation names cannot contain the tenant separator.
@@ -673,66 +939,44 @@ Installation names cannot contain the tenant separator.
 ### approvedGrantSchema
 
 ```ts
-const approvedGrantSchema: ZodReadonly<
-  ZodObject<
-    {
-      capability: ZodPipe<
-        ZodUnknown,
-        ZodTransform<
-          | "agent.list"
-          | "agent.manage"
-          | "agent.rename"
-          | "agent.toolPolicy"
-          | "agent.read"
-          | "agent.send"
-          | "computer.list"
-          | "computer.readFile"
-          | "computer.writeFile"
-          | "computer.execute"
-          | "llm.generation"
-          | "media.generation"
-          | "games:servers"
-          | "git.repository"
-          | "apps.open"
-          | "apps.call"
-          | "app.storage"
-          | "app.events.emit"
-          | "team.workbenchHost"
-          | "marketplace.browse"
-          | "marketplace.purchase"
-          | "workflow.run"
-          | "workflow.publish"
-          | "workflow.arm"
-          | "world"
-          | "channels.read"
-          | "channels.personal.manage",
-          unknown
-        >
-      >;
-      capabilityApproved: ZodLiteral<true>;
-      operations: ZodReadonly<ZodArray<ZodString>>;
-      resources: ZodUnion<
-        readonly [
-          ZodLiteral<"tenant-scope">,
-          ZodReadonly<
-            ZodArray<
-              ZodReadonly<
-                ZodObject<
-                  {
-                    kind: ZodString;
-                    id: ZodString;
-                  },
-                  $strict
-                >
-              >
-            >
-          >,
-        ]
-      >;
-    },
-    $strict
-  >
->;
+const approvedGrantSchema: ZodReadonly<ZodObject<{
+  capability: ZodPipe<ZodUnknown, ZodTransform<
+     | "approvals"
+     | "agent.list"
+     | "agent.manage"
+     | "agent.rename"
+     | "agent.avatar"
+     | "agent.toolPolicy"
+     | "agent.read"
+     | "agent.send"
+     | "computer.list"
+     | "computer.readFile"
+     | "computer.writeFile"
+     | "computer.execute"
+     | "llm.generation"
+     | "media.generation"
+     | "games:servers"
+     | "git.repository"
+     | "apps.open"
+     | "apps.call"
+     | "app.storage"
+     | "app.events.emit"
+     | "team.workbenchHost"
+     | "marketplace.browse"
+     | "marketplace.purchase"
+     | "workflow.run"
+     | "workflow.publish"
+     | "workflow.arm"
+     | "world"
+     | "channels.read"
+    | "channels.personal.manage", unknown>>;
+  capabilityApproved: ZodLiteral<true>;
+  operations: ZodLazy<ZodReadonly<ZodArray<ZodString>>>;
+  resources: ZodUnion<readonly [ZodLiteral<"tenant-scope">, ZodReadonly<ZodArray<ZodLazy<ZodReadonly<ZodObject<{
+     kind: ...;
+     id: ...;
+  }, $strict>>>>>]>;
+}, $strict>>;
 ```
 
 Consent approves capabilities, with explicit operation and resource ceilings. A
@@ -740,82 +984,188 @@ Release adding a method that requires an already-approved capability needs no
 new consent; a new capability does. Release selection intersects stored
 operations instead of adding approvals. Each Worker call is still restricted to
 that method's declared requires, never the App's complete capability set. Only
-an approved install or set-grants command mints capabilityApproved. Empty
+an approved install or change-grants command mints capabilityApproved. Empty
 operation rows retain that consent; removing the capability revokes it.
 route:app.methods rows record approval detail, not a method allowlist: narrowing
-them in set-grants does not restrict methods using an approved capability. Exact
-operation rows are enforced for capability routes and backend bindings.
+them in change-grants does not restrict methods using an approved capability.
+Exact operation rows are enforced for capability routes and backend bindings.
+
+---
+
+### grantChangeSchema
+
+```ts
+const grantChangeSchema: ZodReadonly<ZodObject<{
+  capability: ZodPipe<ZodUnknown, ZodTransform<
+     | "approvals"
+     | "agent.list"
+     | "agent.manage"
+     | "agent.rename"
+     | "agent.avatar"
+     | "agent.toolPolicy"
+     | "agent.read"
+     | "agent.send"
+     | "computer.list"
+     | "computer.readFile"
+     | "computer.writeFile"
+     | "computer.execute"
+     | "llm.generation"
+     | "media.generation"
+     | "games:servers"
+     | "git.repository"
+     | "apps.open"
+     | "apps.call"
+     | "app.storage"
+     | "app.events.emit"
+     | "team.workbenchHost"
+     | "marketplace.browse"
+     | "marketplace.purchase"
+     | "workflow.run"
+     | "workflow.publish"
+     | "workflow.arm"
+     | "world"
+     | "channels.read"
+    | "channels.personal.manage", unknown>>;
+  grant: ZodNullable<ZodReadonly<ZodObject<{
+     operations: ZodLazy<ZodReadonly<ZodArray<ZodString>>>;
+     resources: ZodUnion<readonly [ZodLiteral<"tenant-scope">, ZodReadonly<ZodArray<...>>]>;
+  }, $strict>>>;
+}, $strict>>;
+```
+
+A bounded owner edit. Unnamed approvals are not part of the command.
+
+---
+
+### appAuthoritySchema
+
+```ts
+const appAuthoritySchema: ZodObject<{
+  authorityVersion: ZodLazy<ZodNumber>;
+  declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  approvedGrants: ZodLazy<ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+     capability: ZodPipe<ZodUnknown, ZodTransform<
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+       | ..., unknown>>;
+     capabilityApproved: ZodLiteral<true>;
+     operations: ZodLazy<ZodReadonly<ZodArray<...>>>;
+     resources: ZodUnion<readonly [ZodLiteral<...>, ZodReadonly<...>]>;
+  }, $strict>>>>>;
+  approval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
+     by: ZodMiniDiscriminatedUnion<[ZodMiniObject<{
+        kind: ...;
+        memberId: ...;
+      }, $strip>, ZodMiniObject<{
+        kind: ...;
+        agentId: ...;
+      }, $strip>, ZodMiniObject<{
+        kind: ...;
+        keyId: ...;
+     }, $strip>], "kind">;
+     at: ZodNumber;
+     authorityVersion: ZodLazy<ZodNumber>;
+  }, $strict>>>>;
+}, $strict>;
+```
+
+The complete grant state. Hosts own storage and compare-and-set commits.
+
+---
+
+### grantCommandSchema
+
+```ts
+const grantCommandSchema: ZodDiscriminatedUnion<[ZodObject<{
+  kind: ZodLiteral<"install">;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"change-grants">;
+  changes: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+     capability: ZodPipe<ZodUnknown, ZodTransform<..., ...>>;
+     grant: ZodNullable<ZodReadonly<...>>;
+  }, $strict>>>>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"select-release">;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"delete">;
+}, $strict>], "kind">;
+```
+
+Installation records and pure admission rules; tenant state and commits stay
+host-owned.
 
 ---
 
 ### declaredOperationsSchema
 
 ```ts
-const declaredOperationsSchema: ZodObject<
-  {
-    artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-    digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-    anonymousMethods: ZodReadonly<
-      ZodArray<
-        ZodReadonly<
-          ZodObject<
-            {
-              name: ZodPipe<ZodUnknown, ZodTransform<string, unknown>>;
-              digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-            },
-            $strict
-          >
-        >
-      >
-    >;
-    capabilities: ZodReadonly<
-      ZodArray<
-        ZodReadonly<
-          ZodObject<
-            {
-              capability: ZodPipe<
-                ZodUnknown,
-                ZodTransform<
-                  | "agent.list"
-                  | "agent.manage"
-                  | "agent.rename"
-                  | "agent.toolPolicy"
-                  | "agent.read"
-                  | "agent.send"
-                  | "computer.list"
-                  | "computer.readFile"
-                  | "computer.writeFile"
-                  | "computer.execute"
-                  | "llm.generation"
-                  | "media.generation"
-                  | "games:servers"
-                  | "git.repository"
-                  | "apps.open"
-                  | "apps.call"
-                  | "app.storage"
-                  | "app.events.emit"
-                  | "team.workbenchHost"
-                  | "marketplace.browse"
-                  | "marketplace.purchase"
-                  | "workflow.run"
-                  | "workflow.publish"
-                  | "workflow.arm"
-                  | "world"
-                  | "channels.read"
-                  | "channels.personal.manage",
-                  unknown
-                >
-              >;
-              operations: ZodReadonly<ZodArray<ZodString>>;
-            },
-            $strict
-          >
-        >
-      >
-    >;
-  },
-  $strict
->;
+const declaredOperationsSchema: ZodLazy<ZodObject<{
+  artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+     name: ZodPipe<ZodUnknown, ZodTransform<string, unknown>>;
+     digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  }, $strict>>>>;
+  capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+     capability: ZodPipe<ZodUnknown, ZodTransform<
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+        | ...
+       | ..., unknown>>;
+     operations: ZodLazy<ZodReadonly<ZodArray<...>>>;
+  }, $strict>>>>;
+}, $strict>>;
 ```
 
 Immutable operation facts derived from descriptor methods and the binding
@@ -827,7 +1177,7 @@ registry.
 
 ```ts
 const installationSchema: ZodObject<{
-  installationId: ZodString;
+  installationId: ZodLazy<ZodString>;
   instanceId: ZodNullable<ZodPipe<ZodUnknown, ZodTransform<InstanceId, unknown>>>;
   appId: ZodPipe<ZodUnknown, ZodTransform<AppId, unknown>>;
   release: ZodPipe<ZodUnknown, ZodTransform<{
@@ -847,7 +1197,21 @@ const installationSchema: ZodObject<{
      pinned: "pinned";
      floating: "floating";
   }>;
-  authorityVersion: ZodNumber;
+  authority: ZodObject<{
+     authorityVersion: ZodLazy<ZodNumber>;
+     declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+     approvedGrants: ZodLazy<ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+        capability: ZodPipe<..., ...>;
+        capabilityApproved: ZodLiteral<...>;
+        operations: ZodLazy<...>;
+        resources: ZodUnion<...>;
+     }, $strict>>>>>;
+     approval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
+        by: ZodMiniDiscriminatedUnion<[..., ..., ...], "kind">;
+        at: ZodNumber;
+        authorityVersion: ZodLazy<ZodNumber>;
+     }, $strict>>>>;
+  }, $strict>;
   status: ZodEnum<{
      enabled: "enabled";
      disabled: "disabled";
@@ -857,72 +1221,24 @@ const installationSchema: ZodObject<{
      private: "private";
      public: "public";
   }>;
-  declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-  approvedGrants: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
-     capability: ZodPipe<ZodUnknown, ZodTransform<
-        | "agent.list"
-        | "agent.manage"
-        | "agent.rename"
-        | "agent.toolPolicy"
-        | "agent.read"
-        | "agent.send"
-        | "computer.list"
-        | "computer.readFile"
-        | "computer.writeFile"
-        | "computer.execute"
-        | "llm.generation"
-        | "media.generation"
-        | "games:servers"
-        | "git.repository"
-        | "apps.open"
-        | "apps.call"
-        | "app.storage"
-        | "app.events.emit"
-        | "team.workbenchHost"
-        | "marketplace.browse"
-        | "marketplace.purchase"
-        | "workflow.run"
-        | "workflow.publish"
-        | "workflow.arm"
-        | "world"
-        | "channels.read"
-       | "channels.personal.manage", unknown>>;
-     capabilityApproved: ZodLiteral<true>;
-     operations: ZodReadonly<ZodArray<ZodString>>;
-     resources: ZodUnion<readonly [ZodLiteral<"tenant-scope">, ZodReadonly<ZodArray<...>>]>;
-  }, $strict>>>>;
-  approval: ZodNullable<ZodReadonly<ZodObject<{
-     by: ZodMiniDiscriminatedUnion<[ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        memberId: ZodMiniString<...>;
-      }, $strip>, ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        agentId: ZodMiniString<...>;
-      }, $strip>, ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        keyId: ZodMiniString<...>;
-     }, $strip>], "kind">;
-     at: ZodNumber;
-     authorityVersion: ZodNumber;
-  }, $strict>>>;
   approvedAnonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
      name: ZodPipe<ZodUnknown, ZodTransform<string, unknown>>;
      digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
   }, $strict>>>>;
-  anonymousApproval: ZodNullable<ZodReadonly<ZodObject<{
+  anonymousApproval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
      by: ZodMiniDiscriminatedUnion<[ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        memberId: ZodMiniString<...>;
+        kind: ...;
+        memberId: ...;
       }, $strip>, ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        agentId: ZodMiniString<...>;
+        kind: ...;
+        agentId: ...;
       }, $strip>, ZodMiniObject<{
-        kind: ZodMiniLiteral<...>;
-        keyId: ZodMiniString<...>;
+        kind: ...;
+        keyId: ...;
      }, $strip>], "kind">;
      at: ZodNumber;
-     authorityVersion: ZodNumber;
-  }, $strict>>>;
+     authorityVersion: ZodLazy<ZodNumber>;
+  }, $strict>>>>;
 }, $strict>;
 ```
 
@@ -933,57 +1249,82 @@ Resolved immutable Release plus host-owned installation and approval state.
 ### installationCommandSchema
 
 ```ts
-const installationCommandSchema: ZodDiscriminatedUnion<[ZodObject<{
-  release: ZodPipe<ZodUnknown, ZodTransform<{
-     releaseId: ReleaseId;
-     appId: AppId;
-     artifact: {
-        artifactRef: ArtifactRef;
-        artifactDigest: Sha256Digest;
-        provenance: {
-           sourceRevision: SourceRevision;
-           sourceTreeDigest: Sha256Digest;
-           buildRecipeDigest: Sha256Digest;
-        };
-     };
-  }, unknown>>;
-  releasePin: ZodEnum<{
-     pinned: "pinned";
-     floating: "floating";
-  }>;
-  kind: ZodLiteral<"install">;
-  grants: ZodUnion<readonly [ZodLiteral<"none">, ZodLiteral<"declared">, ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
-     capability: ...;
-     operations: ...;
-     resources: ...;
-  }, $strict>>>>]>;
-}, $strict>, ZodObject<{
-  release: ZodPipe<ZodUnknown, ZodTransform<{
-     releaseId: ReleaseId;
-     appId: AppId;
-     artifact: {
-        artifactRef: ArtifactRef;
-        artifactDigest: Sha256Digest;
-        provenance: {
-           sourceRevision: SourceRevision;
-           sourceTreeDigest: Sha256Digest;
-           buildRecipeDigest: Sha256Digest;
-        };
-     };
-  }, unknown>>;
-  releasePin: ZodEnum<{
-     pinned: "pinned";
-     floating: "floating";
-  }>;
-  kind: ZodLiteral<"select-release">;
-}, $strict>, ZodObject<{
-  kind: ZodLiteral<"set-status">;
-  status: ZodEnum<{
-     enabled: "enabled";
-     disabled: "disabled";
-     deleted: "deleted";
-  }>;
-}, $strict>], "kind">;
+const installationCommandSchema: ZodLazy<
+  ZodDiscriminatedUnion<
+    [
+      ZodObject<
+        {
+          release: ZodPipe<
+            ZodUnknown,
+            ZodTransform<
+              {
+                releaseId: ReleaseId;
+                appId: AppId;
+                artifact: {
+                  artifactRef: ArtifactRef;
+                  artifactDigest: Sha256Digest;
+                  provenance: {
+                    sourceRevision: SourceRevision;
+                    sourceTreeDigest: Sha256Digest;
+                    buildRecipeDigest: Sha256Digest;
+                  };
+                };
+              },
+              unknown
+            >
+          >;
+          releasePin: ZodEnum<{
+            pinned: "pinned";
+            floating: "floating";
+          }>;
+          kind: ZodLiteral<"install">;
+        },
+        $strict
+      >,
+      ZodObject<
+        {
+          release: ZodPipe<
+            ZodUnknown,
+            ZodTransform<
+              {
+                releaseId: ReleaseId;
+                appId: AppId;
+                artifact: {
+                  artifactRef: ArtifactRef;
+                  artifactDigest: Sha256Digest;
+                  provenance: {
+                    sourceRevision: SourceRevision;
+                    sourceTreeDigest: Sha256Digest;
+                    buildRecipeDigest: Sha256Digest;
+                  };
+                };
+              },
+              unknown
+            >
+          >;
+          releasePin: ZodEnum<{
+            pinned: "pinned";
+            floating: "floating";
+          }>;
+          kind: ZodLiteral<"select-release">;
+        },
+        $strict
+      >,
+      ZodObject<
+        {
+          kind: ZodLiteral<"set-status">;
+          status: ZodEnum<{
+            enabled: "enabled";
+            disabled: "disabled";
+            deleted: "deleted";
+          }>;
+        },
+        $strict
+      >,
+    ],
+    "kind"
+  >
+>;
 ```
 
 Host commands; floating targets have already been resolved to immutable
@@ -994,23 +1335,141 @@ Releases.
 ### installationRefusalSchema
 
 ```ts
-const installationRefusalSchema: ZodObject<
+const installationRefusalSchema: ZodLazy<
+  ZodObject<
+    {
+      kind: ZodLiteral<"refused">;
+      code: ZodEnum<{
+        unavailable: "unavailable";
+        stale_authority: "stale_authority";
+        not_declared: "not_declared";
+        release_app_mismatch: "release_app_mismatch";
+        not_owner: "not_owner";
+        invalid_command: "invalid_command";
+      }>;
+    },
+    $strict
+  >
+>;
+```
+
+Closed refusals: failed commands produce no installation update.
+
+---
+
+### appPermissionsWireSchema
+
+```ts
+const appPermissionsWireSchema: ZodObject<{
+  authority: ZodObject<{
+     authorityVersion: ZodLazy<ZodNumber>;
+     declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+     approvedGrants: ZodLazy<ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+        capability: ZodPipe<..., ...>;
+        capabilityApproved: ZodLiteral<...>;
+        operations: ZodLazy<...>;
+        resources: ZodUnion<...>;
+     }, $strict>>>>>;
+     approval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
+        by: ZodMiniDiscriminatedUnion<[..., ..., ...], "kind">;
+        at: ZodNumber;
+        authorityVersion: ZodLazy<ZodNumber>;
+     }, $strict>>>>;
+  }, $strict>;
+  declaredOperations: ZodLazy<ZodObject<{
+     artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+     digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+     anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+        name: ZodPipe<..., ...>;
+        digest: ZodPipe<..., ...>;
+     }, $strict>>>>;
+     capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+        capability: ZodPipe<..., ...>;
+        operations: ZodLazy<...>;
+     }, $strict>>>>;
+  }, $strict>>;
+}, $strict>;
+```
+
+Serializable host facts; the browser derives presentation, never authority.
+
+---
+
+### permissionPinsSchema
+
+```ts
+const permissionPinsSchema: ZodObject<
   {
-    kind: ZodLiteral<"refused">;
-    code: ZodEnum<{
-      unavailable: "unavailable";
-      stale_authority: "stale_authority";
-      not_declared: "not_declared";
-      release_app_mismatch: "release_app_mismatch";
-      not_owner: "not_owner";
-      invalid_command: "invalid_command";
-    }>;
+    storeGeneration: ZodString;
+    authorityVersion: ZodNumber;
+    artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
   },
   $strict
 >;
 ```
 
-Closed refusals: failed commands produce no installation update.
+Owner-direct permission page and JSON projection. Copy stays in the catalog.
+
+---
+
+### permissionSaveSchema
+
+```ts
+const permissionSaveSchema: ZodObject<{
+  storeGeneration: ZodString;
+  authorityVersion: ZodNumber;
+  artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  command: ZodDiscriminatedUnion<[ZodObject<{
+     kind: ZodLiteral<"install">;
+   }, $strict>, ZodObject<{
+     kind: ZodLiteral<"change-grants">;
+     changes: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+        capability: ...;
+        grant: ...;
+     }, $strict>>>>;
+   }, $strict>, ZodObject<{
+     kind: ZodLiteral<"select-release">;
+   }, $strict>, ZodObject<{
+     kind: ZodLiteral<"delete">;
+  }, $strict>], "kind">;
+}, $strict>;
+```
+
+Permission edit command coupled to the version pins read by the owner.
+
+---
+
+### appPermissionPageSchema
+
+```ts
+const appPermissionPageSchema: ZodObject<{
+  storeGeneration: ZodString;
+  installationId: ZodString;
+  appId: ZodString;
+  appName: ZodString;
+  artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+  permissions: ZodObject<{
+     authority: ZodObject<{
+        authorityVersion: ZodLazy<ZodNumber>;
+        declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+        approvedGrants: ZodLazy<ZodReadonly<ZodArray<ZodReadonly<ZodObject<..., ...>>>>>;
+        approval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
+           by: ...;
+           at: ...;
+           authorityVersion: ...;
+        }, $strict>>>>;
+     }, $strict>;
+     declaredOperations: ZodLazy<ZodObject<{
+        artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+        digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
+        anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<..., ...>>>>;
+        capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<..., ...>>>>;
+     }, $strict>>;
+  }, $strict>;
+}, $strict>;
+```
+
+Owner permission-page identity, artifact and current permission facts.
 
 ---
 
@@ -1039,12 +1498,15 @@ function grantsFor(
   declaration,
   snapshot,
   capability,
+  resource?,
 ): Readonly<
   Readonly<{
     capability:
+      | "approvals"
       | "agent.list"
       | "agent.manage"
       | "agent.rename"
+      | "agent.avatar"
       | "agent.toolPolicy"
       | "agent.read"
       | "agent.send"
@@ -1086,26 +1548,28 @@ resource selectors.
 
 #### Parameters
 
-| Parameter      | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `installation` | [`Installation`](#installation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `declaration`  | `AppDeclaration`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `snapshot`     | [`DeclaredOperations`](#declaredoperations)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `capability`   | \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"` |
+| Parameter      | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Default value |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `installation` | `Pick`\<[`GateFacts`](#gatefacts)\[`"installation"`\], `"status"` \| `"authority"` \| `"artifactDigest"`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `undefined`   |
+| `declaration`  | `AppDeclaration`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `undefined`   |
+| `snapshot`     | [`DeclaredOperations`](#declaredoperations)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`   |
+| `capability`   | \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"` | `undefined`   |
+| `resource`     | \| `"any"` \| `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `"any"`       |
 
 #### Returns
 
-\| `Readonly`\<`Readonly`\<\{ `capability`: \| `"agent.list"` \|
-`"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"`
-\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
-`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`;
-`operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly
-`Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>\> \| `null`
+\| `Readonly`\<`Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"`
+\| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
+readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{
+`kind`: `string`; `id`: `string`; \}\>[]; \}\>\> \| `null`
 
 ---
 
@@ -1120,10 +1584,10 @@ pin the selection/version/artifact and compare running frame grants as a subset.
 
 #### Parameters
 
-| Parameter      | Type                            |
-| -------------- | ------------------------------- |
-| `installation` | [`Installation`](#installation) |
-| `declaration`  | `AppDeclaration`                |
+| Parameter      | Type                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `installation` | `Pick`\<[`GateFacts`](#gatefacts)\[`"installation"`\], `"status"` \| `"authority"`\> |
+| `declaration`  | `AppDeclaration`                                                                     |
 
 #### Returns
 
@@ -1143,11 +1607,11 @@ resource authority.
 
 #### Parameters
 
-| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Default value |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `captured` | readonly `object`[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`   |
-| `method?`  | `Readonly`\<\{ `description`: `string`; `input`: `object`; `output`: `object`; `effect`: `"read"` \| `"write"` \| `"external"`; `requires`: readonly ( \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`)[]; `pending?`: `true`; `hidden?`: `true`; `anonymous?`: `true`; \}\> | `undefined`   |
-| `ceiling?` | `"read"` \| `"write"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `"write"`     |
+| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Default value |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `captured` | readonly `object`[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `undefined`   |
+| `method?`  | `Readonly`\<\{ `description`: `string`; `input`: `object`; `output`: `object`; `effect`: `"read"` \| `"write"` \| `"external"`; `requires`: readonly ( \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`)[]; `pending?`: `true`; `hidden?`: `true`; `anonymous?`: `true`; `present?`: `Readonly`\<\{ `verb`: `string`; \}\>; \}\> | `undefined`   |
+| `ceiling?` | `"read"` \| `"write"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `"write"`     |
 
 #### Returns
 
@@ -1212,14 +1676,123 @@ stay outside this pure gate.
 
 #### Parameters
 
-| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `facts`      | [`GateFacts`](#gatefacts)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `rawRequest` | \| \{ `kind`: `"method"`; `name`: `string`; `input`: `unknown`; `via`: `"ui"` \| `"agent"` \| `"mcp"` \| `"workflow"`; \} \| \{ `kind`: `"capability-route"`; `capability`: \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `operation`: `string`; \} \| \{ `kind`: `"binding"`; `binding`: \| `"BACKGROUND"` \| `"GIT"` \| `"EVENTS"` \| `"APPS"` \| `"WORKFLOWS"` \| `"APP_STORAGE"` \| `"MEDIA"` \| `"COMPUTER"` \| `"INBOX"` \| `"AGENTS"`; `operation`: `string`; \} \| \{ `kind`: `"list-tools"`; \} \| \{ `kind`: `"backend"`; \} |
+| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `facts`      | [`GateFacts`](#gatefacts)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `rawRequest` | \| \{ `kind`: `"method"`; `name`: `string`; `input`: `unknown`; `via`: `"agent"` \| `"mcp"` \| `"ui"` \| `"workflow"`; `resource?`: `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>; \} \| \{ `kind`: `"capability"`; `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `operation?`: `string`; `resource`: \| `"any"` \| `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>; \} \| \{ `kind`: `"capability-route"`; `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `operation`: `string`; \} \| \{ `kind`: `"binding"`; `binding`: \| `"BACKGROUND"` \| `"GIT"` \| `"EVENTS"` \| `"APPS"` \| `"WORKFLOWS"` \| `"APP_STORAGE"` \| `"MEDIA"` \| `"COMPUTER"` \| `"INBOX"` \| `"AGENTS"`; `operation`: `string`; \} \| \{ `kind`: `"list-tools"`; \} \| \{ `kind`: `"backend"`; \} |
 
 #### Returns
 
 [`GateDecision`](#gatedecision)
+
+---
+
+### applyGrantCommand()
+
+```ts
+function applyGrantCommand(
+  current,
+  rawCommand,
+  context,
+): Result<
+  {
+    authorityVersion: number;
+    declaredOperationsDigest: Sha256Digest;
+    approvedGrants: readonly Readonly<{
+      capability:
+        | "approvals"
+        | "agent.list"
+        | "agent.manage"
+        | "agent.rename"
+        | "agent.avatar"
+        | "agent.toolPolicy"
+        | "agent.read"
+        | "agent.send"
+        | "computer.list"
+        | "computer.readFile"
+        | "computer.writeFile"
+        | "computer.execute"
+        | "llm.generation"
+        | "media.generation"
+        | "games:servers"
+        | "git.repository"
+        | "apps.open"
+        | "apps.call"
+        | "app.storage"
+        | "app.events.emit"
+        | "team.workbenchHost"
+        | "marketplace.browse"
+        | "marketplace.purchase"
+        | "workflow.run"
+        | "workflow.publish"
+        | "workflow.arm"
+        | "world"
+        | "channels.read"
+        | "channels.personal.manage";
+      capabilityApproved: true;
+      operations: readonly string[];
+      resources:
+        | "tenant-scope"
+        | readonly Readonly<{
+            kind: string;
+            id: string;
+          }>[];
+    }>[];
+    approval: Readonly<{
+      by:
+        | {
+            kind: "member";
+            memberId: string;
+          }
+        | {
+            kind: "agent";
+            agentId: string;
+          }
+        | {
+            kind: "team-key";
+            keyId: string;
+          };
+      at: number;
+      authorityVersion: number;
+    }> | null;
+  },
+  Readonly<{
+    kind: "refused";
+    code: "stale_authority" | "not_declared" | "not_owner" | "invalid_command";
+  }>
+>;
+```
+
+One host-independent approval policy; selection only intersects existing grants.
+
+#### Parameters
+
+| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `current`    | \| \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} \| `null` |
+| `rawCommand` | \| \{ `kind`: `"install"`; \} \| \{ `kind`: `"change-grants"`; `changes`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly `string`[]; `resources`: `"tenant-scope"` \| readonly `Readonly`\<...\>[]; \}\> \| `null`; \}\>[]; \} \| \{ `kind`: `"select-release"`; \} \| \{ `kind`: `"delete"`; \}                                                                                                                                                                                                                                                    |
+| `context`    | [`GrantContext`](#grantcontext)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+#### Returns
+
+`Result`\<\{ `authorityVersion`: `number`; `declaredOperationsDigest`:
+`Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
+`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
+`"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
+readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{
+`kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{
+`by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`:
+`"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
+`string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \},
+`Readonly`\<\{ `kind`: `"refused"`; `code`: `"stale_authority"` \|
+`"not_declared"` \| `"not_owner"` \| `"invalid_command"`; \}\>\>
 
 ---
 
@@ -1252,11 +1825,11 @@ Pure transition; hosts retain transactions, receipts, epochs and delivery.
 
 #### Parameters
 
-| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `current`    | \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authorityVersion`: `number`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `rawCommand` | \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"install"`; `grants`: \| `"none"` \| `"declared"` \| readonly `Readonly`\<\{ `capability`: \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; \} \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"select-release"`; \} \| \{ `kind`: `"set-status"`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} \| \{ `kind`: `"set-visibility"`; `visibility`: `"private"` \| `"public"`; \} \| \{ `kind`: `"set-grants"`; `grants`: \| `"none"` \| `"declared"` \| readonly `Readonly`\<\{ `capability`: \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; \} \| \{ `kind`: `"approve-anonymous"`; `methods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; \} |
-| `context`    | [`InstallationContext`](#installationcontext)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `current`    | \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}\> \| `null` |
+| `rawCommand` | \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"install"`; \} \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"select-release"`; \} \| \{ `kind`: `"set-status"`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} \| \{ `kind`: `"set-visibility"`; `visibility`: `"private"` \| `"public"`; \} \| \{ `kind`: `"change-grants"`; `changes`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly `string`[]; `resources`: `"tenant-scope"` \| readonly `Readonly`\<...\>[]; \}\> \| `null`; \}\>[]; \} \| \{ `kind`: `"approve-anonymous"`; `methods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; \}                                                                                                                                                                                                                                                            |
+| `context`    | [`InstallationContext`](#installationcontext)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 #### Returns
 
@@ -1306,9 +1879,11 @@ function deriveDeclaredOperations(
     }>[];
     capabilities: readonly Readonly<{
       capability:
+        | "approvals"
         | "agent.list"
         | "agent.manage"
         | "agent.rename"
+        | "agent.avatar"
         | "agent.toolPolicy"
         | "agent.read"
         | "agent.send"
@@ -1364,12 +1939,288 @@ host adapters.
 `Promise`\<`Readonly`\<\{ `artifactDigest`: `Sha256Digest`; `digest`:
 `Sha256Digest`; `anonymousMethods`: readonly `Readonly`\<\{ `name`: `string`;
 `digest`: `Sha256Digest`; \}\>[]; `capabilities`: readonly `Readonly`\<\{
-`capability`: \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
-`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \|
+`"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"`
+\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
+`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`; `operations`: readonly
+`string`[]; \}\>[]; \}\>\>
+
+---
+
+### pendingCapabilities()
+
+```ts
+function pendingCapabilities(
+  authority,
+  declaration,
+  declaredOperations,
+): readonly (
+  | "approvals"
+  | "agent.list"
+  | "agent.manage"
+  | "agent.rename"
+  | "agent.avatar"
+  | "agent.toolPolicy"
+  | "agent.read"
+  | "agent.send"
+  | "computer.list"
+  | "computer.readFile"
+  | "computer.writeFile"
+  | "computer.execute"
+  | "llm.generation"
+  | "media.generation"
+  | "games:servers"
+  | "git.repository"
+  | "apps.open"
+  | "apps.call"
+  | "app.storage"
+  | "app.events.emit"
+  | "team.workbenchHost"
+  | "marketplace.browse"
+  | "marketplace.purchase"
+  | "workflow.run"
+  | "workflow.publish"
+  | "workflow.arm"
+  | "world"
+  | "channels.read"
+  | "channels.personal.manage"
+)[];
+```
+
+Includes newly declared operations and capabilities the owner has narrowed.
+
+#### Parameters
+
+| Parameter            | Type                                                          |
+| -------------------- | ------------------------------------------------------------- |
+| `authority`          | `Pick`\<[`AppAuthority`](#appauthority), `"approvedGrants"`\> |
+| `declaration`        | `Pick`\<`AppDeclaration`, `"capabilities"`\>                  |
+| `declaredOperations` | [`DeclaredOperations`](#declaredoperations)                   |
+
+#### Returns
+
+readonly ( \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \|
+`"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"`
+\| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \|
+`"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`)[]
+
+---
+
+### grantRequestFor()
+
+```ts
+function grantRequestFor(
+  authority,
+  facts,
+  request,
+  window,
+): GrantRequestDecision;
+```
+
+Bound the real SDK request; an Allow never silently widens selected resources.
+
+#### Parameters
+
+| Parameter                            | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authority`                          | \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} |
+| `authority.authorityVersion`         | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `authority.declaredOperationsDigest` | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `authority.approvedGrants`           | readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]                                                                                                                                                                                                                                                                                                                                                             |
+| `authority.approval`                 | \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `facts`                              | `Readonly`\<\{ `declaration`: `Pick`\<`AppDeclaration`, `"capabilities"`\>; `declaredOperations`: [`DeclaredOperations`](#declaredoperations); \}\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `request`                            | `AppPermissionRequest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `window`                             | `Readonly`\<\{ `computerId`: `string` \| `null`; \}\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+#### Returns
+
+[`GrantRequestDecision`](#grantrequestdecision)
+
+---
+
+### draftOf()
+
+```ts
+function draftOf(authority): PermissionDraft;
+```
+
+The saved operation ceiling is the starting point, including empty operation
+rows.
+
+#### Parameters
+
+| Parameter                            | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authority`                          | \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} |
+| `authority.authorityVersion`         | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `authority.declaredOperationsDigest` | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `authority.approvedGrants`           | readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]                                                                                                                                                                                                                                                                                                                                                             |
+| `authority.approval`                 | \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+#### Returns
+
+[`PermissionDraft`](#permissiondraft)
+
+---
+
+### editPermissions()
+
+```ts
+function editPermissions(draft, edit, declared): PermissionDraft;
+```
+
+An edit changes one capability; unrelated saved operations and scopes are
+retained.
+
+#### Parameters
+
+| Parameter  | Type                                        |
+| ---------- | ------------------------------------------- |
+| `draft`    | [`PermissionDraft`](#permissiondraft)       |
+| `edit`     | [`PermissionEdit`](#permissionedit)         |
+| `declared` | [`DeclaredOperations`](#declaredoperations) |
+
+#### Returns
+
+[`PermissionDraft`](#permissiondraft)
+
+---
+
+### planGrantChange()
+
+```ts
+function planGrantChange(
+  baseline,
+  draft,
+): readonly Readonly<{
+  capability:
+    | "approvals"
+    | "agent.list"
+    | "agent.manage"
+    | "agent.rename"
+    | "agent.avatar"
+    | "agent.toolPolicy"
+    | "agent.read"
+    | "agent.send"
+    | "computer.list"
+    | "computer.readFile"
+    | "computer.writeFile"
+    | "computer.execute"
+    | "llm.generation"
+    | "media.generation"
+    | "games:servers"
+    | "git.repository"
+    | "apps.open"
+    | "apps.call"
+    | "app.storage"
+    | "app.events.emit"
+    | "team.workbenchHost"
+    | "marketplace.browse"
+    | "marketplace.purchase"
+    | "workflow.run"
+    | "workflow.publish"
+    | "workflow.arm"
+    | "world"
+    | "channels.read"
+    | "channels.personal.manage";
+  grant: Readonly<{
+    operations: readonly string[];
+    resources:
+      | "tenant-scope"
+      | readonly Readonly<{
+          kind: string;
+          id: string;
+        }>[];
+  }> | null;
+}>[];
+```
+
+Only touched capability rows cross the save boundary.
+
+#### Parameters
+
+| Parameter                           | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseline`                          | \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} |
+| `baseline.authorityVersion`         | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `baseline.declaredOperationsDigest` | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `baseline.approvedGrants`           | readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]                                                                                                                                                                                                                                                                                                                                                             |
+| `baseline.approval`                 | \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `draft`                             | [`PermissionDraft`](#permissiondraft)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+#### Returns
+
+readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \|
+`"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"`
+\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
 `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
 `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
 `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
 `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
 `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
-`"channels.personal.manage"`; `operations`: readonly `string`[]; \}\>[]; \}\>\>
+`"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly
+`string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`:
+`string`; `id`: `string`; \}\>[]; \}\> \| `null`; \}\>[]
+
+---
+
+### rebaseDraft()
+
+```ts
+function rebaseDraft(draft, baseline, current): PermissionDraft;
+```
+
+A conflict preserves the person's edits while taking fresh untouched
+capabilities.
+
+#### Parameters
+
+| Parameter                           | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `draft`                             | [`PermissionDraft`](#permissiondraft)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `baseline`                          | \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} |
+| `baseline.authorityVersion`         | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `baseline.declaredOperationsDigest` | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `baseline.approvedGrants`           | readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]                                                                                                                                                                                                                                                                                                                                                             |
+| `baseline.approval`                 | \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `current`                           | \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} |
+| `current.authorityVersion`          | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `current.declaredOperationsDigest`  | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `current.approvedGrants`            | readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\>[]                                                                                                                                                                                                                                                                                                                                                             |
+| `current.approval`                  | \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+#### Returns
+
+[`PermissionDraft`](#permissiondraft)
+
+---
+
+### permissionScreen()
+
+```ts
+function permissionScreen(input): PermissionScreen;
+```
+
+Every declared permission is visible, including removable saved resources no
+longer listed by the host.
+
+#### Parameters
+
+| Parameter | Type                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `input`   | `object` & `Readonly`\<\{ `resources`: readonly [`ResourceOption`](#resourceoption)[]; `canEdit`: `boolean`; \}\> |
+
+#### Returns
+
+[`PermissionScreen`](#permissionscreen)

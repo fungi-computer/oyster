@@ -1,3 +1,9 @@
+import { labComputer } from "./lab-computer.fixture.mjs";
+import {
+  nativeWorkflowRoot,
+  nativeAppClient,
+  until,
+} from "./workflow-native.fixture.mjs";
 // Standalone Storyboard, end to end: a real Workflows + Bonsai + Shed +
 // Inkcap + Prints Worker (wrangler dev/workerd), driving the bundled
 // templates/storyboard.json and templates/storyboard-save.json through the
@@ -7,30 +13,17 @@
 // engine, and real Bonsai git storage run unchanged. UNVERIFIED: authored
 // under a disk-capacity hold with builds paused; not yet run (see the
 // report alongside this change for the specific open questions).
-import process from "node:process";
+
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  stat,
-  writeFile,
-  rm,
-} from "node:fs/promises";
-import { createServer } from "node:net";
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseEnv } from "node:util";
+
 import * as z from "zod";
-import { build } from "esbuild";
-import { parse as parseJsonc } from "jsonc-parser";
-import { createAppBuild } from "@fungi.computer/puffball/app";
-import { backendMediaType } from "@fungi.computer/puffball/backend";
-import { sha256 } from "@fungi.computer/oyster/host";
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
 import { appBackend as workflowsBackend } from "../../../../apps/trellis/backend/methods.ts";
 import workflowsMetadata from "../../../../apps/trellis/package.json" with { type: "json" };
@@ -65,31 +58,15 @@ const printsDeclaration = buildAppDeclaration(
 );
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/storyboard-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
+
 // Same boot shape as workflows.native.mjs: an isolated proof of the real
 // production root, with its own storage, releases and App artifacts.
-config.main = `${root}test/standalone/storyboard-root.fixture.ts`;
-config.r2_buckets = config.r2_buckets.map((bucket) =>
-  bucket.binding === "APP_ARTIFACTS"
-    ? { ...bucket, bucket_name: "storyboard-proof-app-artifacts" }
-    : bucket,
-);
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
+
 // The in-process provider below serves Bonsai's own git smart-HTTP/Artifacts
 // REST on this same event loop; every git/HTTP call in this script must
 // stay async, never sync, or the provider's own server can never answer
 // (reviews/git-fork-push-hang-2026-10-14.md).
-const provider = await workflowGitProvider();
+
 // Save's Shed `clone`/`commitPush` need a REAL Computer process backend
 // (reviews/storyboard-save-revoked-rootcause-2026-10-14.md: with none
 // attached, the clone process never starts, Shed's completion poll throws,
@@ -101,196 +78,30 @@ const provider = await workflowGitProvider();
 // OYSTER_PROOF_ENV_FILE at all to exercise that scenario alone (the
 // save-to-git scenario will then fail for the known, pre-existing reason --
 // no Computer backend attached at all -- rather than being skipped).
-const computerVmFixturePath = process.env.OYSTER_PROOF_ENV_FILE;
-let computerVmVars = {};
+
 // The lab vmd's /ws callback targets a fixed worker slot port baked into
 // its own config at bring-up (COMPUTER_PROOF_PORT in the fixture, the same
 // value shed-terminal-proof.mjs binds wrangler to), not whatever free port
 // this script happens to pick. Picking our own random port here, as this
 // script did before, means the guest's /ws upgrade can never reach this
 // Worker -- the "/ws upgrade did not arrive within 30000ms" Opus-VM traced.
-let fixedPort;
-if (computerVmFixturePath !== undefined) {
-  assert.equal((await stat(computerVmFixturePath)).mode & 0o777, 0o600);
-  const computerVmFixture = z
-    .object({
-      COMPUTER_PROOF_PORT: z.coerce.number().int().min(1).max(65535),
-      COMPUTER_VM_ORIGIN: z.url(),
-      COMPUTER_VM_DEFAULT_HOST: z.string().min(1),
-      COMPUTER_VM_HOSTS: z.string().min(1),
-      COMPUTER_VM_SIGNING_KEY: z.string().min(1),
-    })
-    .safeParse(parseEnv(await readFile(computerVmFixturePath, "utf8")));
-  assert.ok(
-    computerVmFixture.success,
-    "Computer VM fixture configuration is invalid",
-  );
-  const { COMPUTER_PROOF_PORT, ...computerVars } = computerVmFixture.data;
-  fixedPort = COMPUTER_PROOF_PORT;
-  computerVmVars = computerVars;
-}
-if (fixedPort !== undefined) {
-  // There is exactly one worker slot the lab vmd calls back to; a
-  // collision with another proof (e.g. Sonnet-LS's own run) must fail
-  // loudly here, not show up 30 seconds later as an inexplicable /ws
-  // upgrade timeout once wrangler silently can't bind it.
-  await new Promise((resolve, reject) => {
-    const socket = createServer()
-      .once("error", (cause) =>
-        reject(
-          new Error(
-            `Worker slot port ${String(fixedPort)} is already bound -- coordinate with whoever holds it (CLAIMED line in claude-seams-ready.md) before retrying`,
-            { cause },
-          ),
-        ),
-      )
-      .listen(fixedPort, "127.0.0.1", () => socket.close(resolve));
-  });
-}
-const port =
-  fixedPort ??
-  (await new Promise((resolve) => {
-    const socket = createServer().listen(0, "127.0.0.1", () => {
-      const { port: free } = socket.address();
-      socket.close(() => resolve(free));
-    });
-  }));
-const origin = `http://127.0.0.1:${port}`;
-const tenantHost = "oyster.test";
-const tenantOrigin = `https://${tenantHost}`;
-const auth = { Authorization: `Bearer ${key}` };
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/storyboard-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--local-upstream",
-    tenantHost,
-    "--upstream-protocol",
-    "https",
-    "--var",
-    `OYSTER_OWNER_KEY:${key}`,
-    "--var",
-    `OYSTER_ORIGIN:${tenantOrigin}`,
-    "--var",
-    `GIT_ORIGIN:${provider.origin}`,
-    ...Object.entries(computerVmVars).flatMap(([name, value]) => [
-      "--var",
-      `${name}:${value}`,
-    ]),
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-let output = "";
-worker.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-worker.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
 
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    { method: "PUT", headers: auth, body: bytes },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
-async function install(installationId, entry, exportName, declaration) {
-  const bundled = await build({
-    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName,
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  const artifact = await persist(createAppBuild(null, backend, declaration));
-  const release = {
-    appId: `app_${installationId}`,
-    releaseId: `rel_${installationId}`,
-    artifact: {
-      artifactRef: artifact.artifactRef,
-      artifactDigest: artifact.digest,
-      provenance: {
-        sourceRevision: `git:${"a".repeat(40)}`,
-        sourceTreeDigest: artifact.digest,
-        buildRecipeDigest: artifact.digest,
-      },
-    },
-  };
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ installationId, release }),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
-async function publish(workflowId, expectedRevision) {
-  const reply = await call("trellis", "publishWorkflow", {
-    workflowId,
-    expectedRevision,
-  });
-  if (reply.kind !== "publishing") return reply;
-  return until(
-    () =>
-      call("trellis", "publicationStatus", {
-        workflowId,
-        publicationId: reply.publicationId,
-      }),
-    (status) => status.kind !== "publishing",
-    `${workflowId} publication`,
-  );
-}
-async function until(read, accepts, label) {
-  const deadline = Date.now() + 90_000;
-  for (;;) {
-    const value = await read();
-    if (accepts(value)) return value;
-    assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
-    await delay(250);
-  }
-}
+const nativeHost = await nativeWorkflowRoot({
+  root,
+  prefix: "storyboard-native-",
+  main: "storyboard-root.fixture.ts",
+  artifactBucket: "storyboard-proof-app-artifacts",
+  computer: await labComputer({ required: false }),
+  ai: false,
+});
+const { runtime, computerVmVars, key, origin, auth } = nativeHost;
+
+const { call, install, installFirstParty, publish } = nativeAppClient(
+  origin,
+  auth,
+  { key, publicationMilliseconds: 90_000 },
+);
+
 /** Wait for exactly one pending review on this run and return its record. */
 /**
  * Wait for exactly one pending review. runStatus's `reviews` accumulates
@@ -316,6 +127,7 @@ async function awaitReview(runId, label, excludeIteration) {
     () => call("trellis", "runStatus", { runId }),
     (value) => Array.isArray(value.reviews) && pendingReviews(value).length > 0,
     label,
+    90_000,
   );
   const pending = pendingReviews(status);
   assert.equal(
@@ -367,14 +179,10 @@ try {
     },
     (ready) => ready,
     "Worker boot",
+    90_000,
   );
 
-  await install(
-    "trellis",
-    "../../../../apps/trellis/backend/index.ts",
-    "Trellis",
-    workflowsDeclaration,
-  );
+  await installFirstParty("trellis", workflowsDeclaration);
   // "BonsaiApp", not "Bonsai": the bundled backend's own code already
   // declares a type/binding named Bonsai (apps/bonsai/backend/methods.ts),
   // and reusing that exact name as the generated facet class's exportName
@@ -382,27 +190,22 @@ try {
   // backend_execution (confirmed by bisecting against this exact change;
   // workflows.native.mjs and workflow-provider.native.mjs already use
   // "BonsaiApp" for the same install).
-  await install(
-    "bonsai",
-    "../../../../apps/bonsai/backend/index.ts",
-    "BonsaiApp",
-    bonsaiDeclaration,
-  );
+  await installFirstParty("bonsai", bonsaiDeclaration);
   await install(
     "shed",
-    "../../../../apps/shed/backend/index.ts",
+    new URL("../../../../apps/shed/backend/index.ts", import.meta.url),
     "Shed",
     shedDeclaration,
   );
   await install(
     "inkcap",
-    "../../../../apps/inkcap/backend/index.ts",
+    new URL("../../../../apps/inkcap/backend/index.ts", import.meta.url),
     "Inkcap",
     inkcapDeclaration,
   );
   await install(
     "prints",
-    "../../../../apps/prints/backend/index.ts",
+    new URL("../../../../apps/prints/backend/index.ts", import.meta.url),
     "Prints",
     printsDeclaration,
   );
@@ -481,6 +284,7 @@ try {
     () => call("trellis", "runStatus", { runId }),
     (status) => status.outcome === "terminal",
     "storyboard-plain completion",
+    90_000,
   );
   assert.equal(finished.error, null, JSON.stringify(finished.error));
   const plainOutput = finished.output;
@@ -572,6 +376,7 @@ try {
     () => call("trellis", "runStatus", { runId: saveRunId }),
     (status) => status.outcome === "terminal",
     "storyboard-save completion",
+    90_000,
   );
   assert.equal(saveFinished.error, null, JSON.stringify(saveFinished.error));
   const saveOutput = saveFinished.output;
@@ -620,7 +425,7 @@ try {
   // precaution shed-terminal-proof.mjs takes for the same fixture.
   const redacted = Object.values(computerVmVars).reduce(
     (text, value) => text.replaceAll(value, "<redacted>"),
-    output,
+    nativeHost.output(),
   );
   await writeFile(diagnostic, redacted, { mode: 0o600 });
   error(
@@ -628,8 +433,5 @@ try {
   );
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }

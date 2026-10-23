@@ -1,3 +1,4 @@
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // Real standalone root, immutable captured Tourtois composed as the trusted
 // top-level shell, and each child App's sandboxed frame inside its window.
 import assert from "node:assert/strict";
@@ -27,8 +28,12 @@ import {
 } from "@fungi.computer/agar/storage-wire";
 import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
 import { sha256 } from "@fungi.computer/oyster/host";
+import { installOnOyster } from "../../dist/installation-client.js";
 import { createAppBuild } from "@fungi.computer/puffball/app";
-import { workbenchDirectorySchema } from "@fungi.computer/oyster/shell/workbench-directory";
+import {
+  workbenchDirectorySchema,
+  workbenchComputerDirectorySchema,
+} from "@fungi.computer/nacre/workbench-directory";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
 import { labComputer } from "./lab-computer.fixture.mjs";
 import { workflowGitProvider } from "./workflow-git.fixture.mjs";
@@ -69,7 +74,7 @@ if (!appSet)
         cwd: repository,
         encoding: "utf8",
       }).trim(),
-      recipe: tourtois.recipe,
+      recipe: committedAppRecipe(repository, tourtois, revision),
       outDirectory: releaseDirectory,
     });
     packed = { revision, ...result };
@@ -268,12 +273,14 @@ async function installChild(installationId, displayName) {
       },
     },
   };
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ installationId, release }),
+  const operation = await installOnOyster({
+    url: origin,
+    key,
+    installationId,
+    release,
   });
-  assert.equal(response.status, 201, await response.text());
+  assert.equal(operation.state, "succeeded", JSON.stringify(operation));
+  assert.equal(operation.creation, "fresh");
 }
 const appFrameSandbox = "allow-scripts allow-modals allow-popups allow-forms";
 const paneOf = (page, name) =>
@@ -479,6 +486,65 @@ async function proveStarterApps(page, shot) {
       .click();
     await expect(pane).toBeHidden();
   }
+}
+
+/** The real picker drives the host's JSON configuration, not a story catalog. */
+async function proveFleetPicker(page, shot, configured, computers) {
+  await restoreApp(page, "Shed");
+  const picker = paneOf(page, "Shed").getByRole("button", {
+    name: "Choose Computer for Shed",
+    exact: true,
+  });
+  for (const [index, computer] of computers.entries()) {
+    await expect(picker).toBeEnabled();
+    await picker.click();
+    for (const choice of [configured, ...computers])
+      await expect(
+        page.getByRole("option", { name: choice.name, exact: true }),
+      ).toBeVisible();
+    await expect(
+      page.getByRole("option", {
+        name: index === 0 ? configured.name : computers[index - 1].name,
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-selected", "true");
+    await page.screenshot({
+      path: `${shots}/native-fleet-picker-${String(index)}-${shot}.png`,
+    });
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) => {
+        const target = new URL(candidate.url());
+        return (
+          target.pathname === "/apps/shed/" &&
+          target.searchParams.get("computerId") === computer.computerId &&
+          candidate.request().headers().accept === "application/json"
+        );
+      }),
+      page.getByRole("option", { name: computer.name, exact: true }).click(),
+    ]);
+    assert.equal(response.status(), 200);
+    assert.equal((await response.json()).computerId, computer.computerId);
+    await starterContent.Shed(page, childOf(page, "Shed"));
+    await expect(picker).toBeEnabled();
+    await picker.click();
+    await expect(
+      page.getByRole("option", { name: computer.name, exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+    await page.screenshot({
+      path: `${shots}/native-fleet-attached-${String(index)}-${shot}.png`,
+    });
+  }
+  const unchanged = await globalThis.fetch(
+    `${origin}/api/workbench/directory`,
+    { headers },
+  );
+  assert.equal(unchanged.status, 200);
+  assert.equal(
+    workbenchDirectorySchema.parse(await unchanged.json()).computer?.computerId,
+    configured.computerId,
+    "Window picker choices must not mutate the durable default",
+  );
 }
 
 /** Bring a running App back through the shell's own running-App control. */
@@ -823,7 +889,7 @@ async function packShellFork() {
       cwd: repository,
       encoding: "utf8",
     }).trim(),
-    recipe: tourtois.recipe,
+    recipe: committedAppRecipe(clone, tourtois, forkRevision),
     outDirectory: directory,
   });
   await rm(clone, { recursive: true, force: true });
@@ -910,6 +976,7 @@ try {
       .map(([, name]) => name),
   );
   let installedDirectory;
+  const nativeFleet = [];
   if (appSet) {
     const response = await globalThis.fetch(
       `${origin}/api/workbench/directory`,
@@ -917,6 +984,22 @@ try {
     );
     assert.equal(response.status, 200);
     installedDirectory = workbenchDirectorySchema.parse(await response.json());
+    assert.ok(installedDirectory.computer);
+    // Create real inventory through the existing owner route. Do not start
+    // another host, substitute a provider, or mutate the configured default.
+    for (const name of ["Fleet A", "Fleet B"]) {
+      const created = await globalThis.fetch(`${origin}/api/computers`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ name, requestId: `tourtois-home-${name}` }),
+      });
+      assert.equal(created.status, 200, await created.clone().text());
+      nativeFleet.push(
+        workbenchComputerDirectorySchema.shape.computers.element.parse(
+          await created.json(),
+        ),
+      );
+    }
     assert.equal(installedDirectory.apps.length, 7);
     for (const [installationId, name] of Object.entries(expectedApps)) {
       const row = installedDirectory.apps.find(
@@ -995,12 +1078,15 @@ try {
     await expect(
       desktop.locator("#oyster-shell [data-tourtois-shell]"),
     ).toBeVisible();
-    // The home Release's own shell module, served by this host, mounted it.
+    // The host's approval-checked entry, then the home Release's own module.
     const home = appSet
       ? null
-      : `/ui/tourtois/${packed.release.releaseId}/shell.js`;
-    assert.equal(modules.length, 1, JSON.stringify(modules));
-    if (home !== null) assert.equal(modules[0], home);
+      : [
+          `/ui-entry/tourtois/${packed.release.releaseId}/shell.js`,
+          `/ui/tourtois/${packed.release.releaseId}/shell.js`,
+        ];
+    assert.equal(modules.length, 2, JSON.stringify(modules));
+    if (home !== null) assert.deepEqual(modules, home);
     await expect(page.locator("#oyster-shell")).not.toHaveAttribute(
       "data-shell-fork",
       /./u,
@@ -1163,8 +1249,15 @@ try {
       page.off("request", observe);
     }
 
-    if (appSet) await proveStarterApps(page, shot);
-    else await proveAppWindows(page, width, shot);
+    if (appSet) {
+      await proveStarterApps(page, shot);
+      await proveFleetPicker(
+        page,
+        shot,
+        installedDirectory.computer,
+        nativeFleet,
+      );
+    } else await proveAppWindows(page, width, shot);
     await page.close();
   }
   assert.deepEqual(errors, []);
@@ -1202,6 +1295,7 @@ try {
       ),
     ).toBeVisible();
     assert.deepEqual(modules, [
+      `/ui-entry/tourtois-fork/${fork.release.releaseId}/shell.js`,
       `/ui/tourtois-fork/${fork.release.releaseId}/shell.js`,
     ]);
     assert.equal(page.frames().length, 1, "The shell is the top-level page");

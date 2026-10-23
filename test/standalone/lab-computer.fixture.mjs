@@ -8,8 +8,9 @@ import { createServer } from "node:net";
 import { parseEnv } from "node:util";
 import * as z from "zod";
 
-export async function labComputer() {
+export async function labComputer({ required = true } = {}) {
   const fixturePath = process.env.OYSTER_PROOF_ENV_FILE;
+  if (!required && fixturePath === undefined) return null;
   assert.ok(fixturePath, "OYSTER_PROOF_ENV_FILE must name the lab VM fixture");
   assert.equal((await stat(fixturePath)).mode & 0o777, 0o600);
   const { COMPUTER_PROOF_PORT: port, ...vars } = z

@@ -2,8 +2,6 @@ import {
   standaloneTenancy,
   type StandaloneTenancyEnv,
 } from "../../src/standalone/tenancy.js";
-export { StandaloneTenants } from "../../src/standalone/tenancy.js";
-export { OysterKeys } from "@fungi.computer/oyster/workers-git";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -11,17 +9,18 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { standaloneAgents } from "../../src/standalone/agents.js";
 import standalone, {
-  StandaloneAgent,
+  StandaloneAgent as NativeAgent,
   type StandaloneEnv,
 } from "../../src/standalone/worker.js";
-export { AgentDirectory } from "../../src/standalone/agents.js";
 import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/host";
 
-export { OysterRegistry, OysterInstance } from "@fungi.computer/oyster/workers";
+// The standalone root's own Durable Object classes, as its Wrangler config
+// binds them (the root's workspace reads StandaloneRegistry.selectedComputer).
+export * from "../../src/standalone/worker.js";
 
 // Only the model is deterministic. The inherited agent options, installed
 // App tools, Shiitake runtime and Worker Loader sandbox run unchanged.
-export class SandboxAgent extends StandaloneAgent {
+export class SandboxAgent extends NativeAgent {
   protected override modelSource() {
     const faux = fauxProvider();
     faux.setResponses([
@@ -36,6 +35,7 @@ export class SandboxAgent extends StandaloneAgent {
     return {
       acquire: () =>
         Promise.resolve({
+          retryable: () => false,
           model: faux.getModel(),
           stream: faux.provider.streamSimple.bind(faux.provider),
           release: () => Promise.resolve(),
@@ -77,8 +77,38 @@ export class SandboxAgent extends StandaloneAgent {
   }
 }
 
+// The same deterministic-model seam, with the production tool lease, App
+// admission and native Computer unchanged. Only this first prompt uses Shed.
+export class StandaloneAgent extends NativeAgent {
+  protected override modelSource() {
+    const faux = fauxProvider();
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("execute", {
+          code: `await forage.describe({path: "SHED.runCommand"});
+return await env.SHED.runCommand({
+  command: "mkdir /tmp/oyster-first-shed && printf 'oyster-first-shed\\n'",
+  timeoutMs: 10000
+});`,
+        }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Shed first reply completed."),
+    ]);
+    return {
+      acquire: () =>
+        Promise.resolve({
+          retryable: () => false,
+          model: faux.getModel(),
+          stream: faux.provider.streamSimple.bind(faux.provider),
+          release: () => Promise.resolve(),
+        }),
+    };
+  }
+}
+
 // Real Luna composition: Session creation acquires no provider inference.
-export class LunaAgent extends StandaloneAgent {}
+export class LunaAgent extends NativeAgent {}
 
 export default {
   async fetch(

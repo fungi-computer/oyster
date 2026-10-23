@@ -42,7 +42,10 @@ test("the page's fresh admission reports current Computer permission and refuses
   const installation = await host.installations.get("context-probe");
   host.installations.get = async () => ({
     ...installation,
-    approvedGrants: [],
+    authority: {
+      ...installation.authority,
+      approvedGrants: [],
+    },
   });
   assert.deepEqual((await (await request()).json()).capabilities, []);
   host.installations.get = async () => ({

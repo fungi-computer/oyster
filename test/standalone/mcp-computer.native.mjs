@@ -1,3 +1,4 @@
+import { nativeMcpConnector } from "../native-mcp-client.fixture.mjs";
 // Oyster's shared MCP owner reaches the standalone Computer through Knapsack.
 // The real ComputerDO, workspace and MCP owner run under `wrangler dev`
 // (workerd); the Worker shell answers `exec`, so no container starts.
@@ -12,11 +13,9 @@ import { join } from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import {
-  Client,
-  StreamableHTTPClientTransport,
-} from "@modelcontextprotocol/client";
+
 import { z } from "zod";
+import { installOnOyster } from "../../dist/installation-client.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 await mkdir(join(root, ".botanical"), { recursive: true });
@@ -83,42 +82,10 @@ const stopped = new Promise((resolve) => child.once("exit", resolve));
 
 // `headless` is shaped like `claude -p`: a bare elicitation capability, and
 // every elicitation cancelled because no person can answer it.
-async function connect(credential, headless = false) {
-  const client = new Client(
-    { name: "Oyster MCP Computer proof", version: "1" },
-    { capabilities: { elicitation: headless ? {} : { form: {} } } },
-  );
-  let asked = 0;
-  client.setRequestHandler("elicitation/create", () => {
-    asked += 1;
-    return headless
-      ? { action: "cancel" }
-      : { action: "accept", content: { approve: true } };
-  });
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`${origin}/mcp`),
-    {
-      requestInit: { headers: { Authorization: `Bearer ${credential}` } },
-    },
-  );
-  await client.connect(transport);
-  const execute = async (code) => {
-    const result = await client.callTool({
-      name: "execute",
-      arguments: { code },
-    });
-    return { ...result, text: JSON.stringify(result.content) };
-  };
-  return {
-    client,
-    execute,
-    asked: () => asked,
-    close: async () => {
-      await transport.terminateSession();
-      await client.close();
-    },
-  };
-}
+const connect = nativeMcpConnector({
+  origin,
+  name: "Oyster MCP Computer proof",
+});
 
 try {
   for (let attempt = 0; ; attempt += 1) {
@@ -279,30 +246,26 @@ try {
       }),
     ),
   );
-  const installed = await fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      installationId: "probe",
-      release: {
-        appId: "app_probe",
-        releaseId: "rel_probe",
-        artifact: {
-          artifactRef: build.artifactRef,
-          artifactDigest: build.digest,
-          provenance: {
-            sourceRevision: `git:${"a".repeat(40)}`,
-            sourceTreeDigest: build.digest,
-            buildRecipeDigest: build.digest,
-          },
+  const installed = await installOnOyster({
+    url: origin,
+    key,
+    installationId: "probe",
+    release: {
+      appId: "app_probe",
+      releaseId: "rel_probe",
+      artifact: {
+        artifactRef: build.artifactRef,
+        artifactDigest: build.digest,
+        provenance: {
+          sourceRevision: `git:${"a".repeat(40)}`,
+          sourceTreeDigest: build.digest,
+          buildRecipeDigest: build.digest,
         },
       },
-    }),
+    },
   });
-  assert.equal(installed.status, 201, await installed.text());
+  assert.equal(installed.state, "succeeded", JSON.stringify(installed));
+  assert.equal(installed.creation, "fresh");
   const authentications = async () =>
     z
       .object({ resolve: z.number(), authenticate: z.number() })

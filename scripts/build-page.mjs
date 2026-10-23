@@ -23,9 +23,10 @@ async function stylesheet(...entries) {
   if (output === undefined) throw new Error("Page styles produced no output");
   return output.text;
 }
-const [styles, fonts] = await Promise.all([
+const [styles, fonts, loginFonts] = await Promise.all([
   stylesheet("@fungi.computer/caps/styles.css"),
   stylesheet("@fungi.computer/caps/fonts.css"),
+  stylesheet("@fungi.computer/caps/fonts-sans.css"),
 ]);
 
 const result = await build({
@@ -46,6 +47,27 @@ const [output] = result.outputFiles;
 if (output === undefined) throw new Error("Shell bundle produced no output");
 const dist = new URL("../dist/", import.meta.url);
 await mkdir(dist, { recursive: true });
+const boot = await build({
+  entryPoints: [new URL("../src/page/boot-host.ts", import.meta.url).pathname],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  minify: true,
+  write: false,
+  legalComments: "none",
+  logLevel: "warning",
+});
+const [bootOutput] = boot.outputFiles;
+if (bootOutput === undefined) throw new Error("Boot parent produced no output");
+await writeFile(
+  new URL("boot-host-script.js", dist),
+  `export const bootHostScript = ${JSON.stringify(bootOutput.text)};\n`,
+);
+await copyFile(
+  new URL("../src/boot-host-script.d.ts", import.meta.url),
+  new URL("boot-host-script.d.ts", dist),
+);
 const wire = await build({
   entryPoints: [
     new URL("../src/frame-binding-wire.ts", import.meta.url).pathname,
@@ -148,7 +170,7 @@ if (consentOutput === undefined)
   throw new Error("Consent bundle produced no output");
 await writeFile(
   new URL("page-script.js", dist),
-  `export const pageScript = ${JSON.stringify(output.text)};\nexport const publicHomeScript = ${JSON.stringify(publicHomeOutput.text)};\nexport const grantConsentScript = ${JSON.stringify(consentOutput.text)};\nexport const fontStyles = ${JSON.stringify(fonts)};\nexport const shellStyles = ${JSON.stringify(styles)};\n`,
+  `export const pageScript = ${JSON.stringify(output.text)};\nexport const publicHomeScript = ${JSON.stringify(publicHomeOutput.text)};\nexport const grantConsentScript = ${JSON.stringify(consentOutput.text)};\nexport const fontStyles = ${JSON.stringify(fonts)};\nexport const loginFontStyles = ${JSON.stringify(loginFonts)};\nexport const shellStyles = ${JSON.stringify(styles)};\n`,
 );
 await copyFile(
   new URL("../src/page-script.d.ts", import.meta.url),

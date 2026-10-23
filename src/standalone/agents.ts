@@ -1,9 +1,48 @@
+import { observeProviderStatus } from "@fungi.computer/mule/effect";
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import {
   standaloneTenancy,
   type StandaloneTenancy,
   type StandaloneTenancyEnv,
 } from "./tenancy.js";
 import { AcceptedSchema } from "@fungi.computer/shiitake/client";
+import { createShiitakeClient } from "@fungi.computer/shiitake/client";
+import {
+  AgentCreateRefused,
+  type AgentControlDirectory,
+} from "@fungi.computer/shiitake/agent-control";
+import {
+  AgentDelegation,
+  AgentDisclosureRefused,
+  machineAgentCodecs,
+} from "@fungi.computer/shiitake/delegation";
+import type { createConversationAgents } from "@fungi.computer/shiitake-extensions/roster/conversation-agents";
+import type { PostEnvelope } from "@fungi.computer/carrier/post";
+import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
+import { agentMail } from "./agent-mail.js";
+import {
+  createStandaloneMachineEnrollment,
+  standaloneMachineAgentHome,
+  standaloneMachineLinkAuthority,
+  type StandaloneMachineLinkBindings,
+  type StandaloneMachineJoinResult,
+} from "./machine-link.js";
+import {
+  createMachineLinkFences,
+  MachineEnrollmentRefused,
+  MachineLinkRefused,
+  createMachineAgentClient,
+  type MachineAgentSettlementPrincipal,
+  type MachineAgentHome,
+  type MachineEnrollment,
+  type MachineLinkCaller,
+  type MachineLinkIdentity,
+} from "../machine-link/index.js";
 import { memberInboxItemSchema } from "@fungi.computer/puffball/inbox";
 /**
  * Agents on a standalone Oyster Worker. Each agent is Shiitake's public
@@ -16,8 +55,9 @@ import { agentDirectoryForScope } from "./agent-directory.js";
 import { DurableObject } from "cloudflare:workers";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
+import { agentStoreKeeping } from "./agent-store.js";
+import { standaloneBrowserSource } from "./browser.js";
 import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import {
   configuredProviderEgress,
   providerFetch,
@@ -47,15 +87,12 @@ import {
   agentIds,
   createAgentDirectory,
   createFleetSessions,
+  commandSettlementSchema,
   DirectoryError,
   type AgentGrant,
   type FleetMessage,
 } from "@fungi.computer/shiitake/fleet";
-import {
-  appSurfaceCache,
-  oysterAppMethods,
-  type AppSurfaceCache,
-} from "../mcp.js";
+import type { AppSurfaceCache } from "../mcp.js";
 import { appToolPolicySchema, type AppToolPolicy } from "../apps/index.js";
 import {
   oysterPrincipalIsOwner,
@@ -74,7 +111,10 @@ import type { ReadonlyTenancy } from "../tenancy/index.js";
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { OysterWorkerEnv } from "../workers.js";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
-import { Knapsack, type McpServerConnection } from "@fungi.computer/knapsack";
+import type {
+  McpServerConnection,
+  UiConnection,
+} from "@fungi.computer/knapsack";
 import {
   maxAgentMcpServers,
   type AgentMcpServer,
@@ -95,6 +135,48 @@ export type StandaloneModelSource = CloudflareShiitakeOptions["model"];
 /** Default Workers AI chat model: one that reliably calls tools. */
 const defaultAgentModel = "@cf/moonshotai/kimi-k2.6";
 
+/** Own transport evidence and exact-message decisions for one model lease. */
+function observedModels(
+  model: Model<Api>,
+  defaults: SimpleStreamOptions,
+): StandaloneModelSource {
+  return {
+    acquire: async ({ signal }) => {
+      const streamSimple = await loadStreamSimple();
+      const retryableMessages = new WeakSet<AssistantMessage>();
+      return {
+        model,
+        retryable: (message) =>
+          !signal.aborted &&
+          message.stopReason === "error" &&
+          retryableMessages.has(message),
+        stream: (selected, context, options) => {
+          const upstream = { ...options, ...defaults };
+          const observed = observeProviderStatus(upstream);
+          const response = streamSimple(selected, context, {
+            ...upstream,
+            fetch: observed.fetch,
+            onProviderStreamEvent: observed.onProviderStreamEvent,
+          });
+          // Observe Pi's ordinary settled-result interface without replacing
+          // its stream, iterator, result or transport.
+          void response.result().then((message) => {
+            if (
+              message.stopReason === "error" &&
+              !signal.aborted &&
+              !upstream.signal?.aborted &&
+              observed.rejection()?.code === "provider_unavailable"
+            )
+              retryableMessages.add(message);
+          });
+          return response;
+        },
+        release: () => Promise.resolve(),
+      };
+    },
+  };
+}
+
 /**
  * Workers AI over the AI binding. Requests go through AI Gateway's
  * `workers-ai` passthrough on the binding, so no API token is needed.
@@ -114,27 +196,16 @@ function workersAiModels(
     baseUrl: `https://workers-binding.ai/ai-gateway/gateways/${options.gateway ?? "default"}/workers-ai/v1`,
   };
   const fetch = createAiBindingFetch(ai);
-  return {
-    acquire: async () => {
-      const streamSimple = await loadStreamSimple();
-      return {
-        model,
-        stream: (selected, context, streamOptions) =>
-          streamSimple(selected, context, {
-            ...streamOptions,
-            fetch,
-            apiKey: CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
-            headers: {
-              "cf-aig-authorization": `Bearer ${CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL}`,
-              // The binding carries identity; a request auth header would be
-              // taken as a provider key that overrides the gateway's own.
-              Authorization: null,
-            },
-          }),
-        release: () => Promise.resolve(),
-      };
+  return observedModels(model, {
+    fetch,
+    apiKey: CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
+    headers: {
+      "cf-aig-authorization": `Bearer ${CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL}`,
+      // The binding carries identity; a request auth header would be
+      // taken as a provider key that overrides the gateway's own.
+      Authorization: null,
     },
-  };
+  });
 }
 
 /**
@@ -150,6 +221,7 @@ type WorkersAiOptions = Readonly<{ model?: string; gateway?: string }>;
 /** One directory entry: an agent's id, display name and own avatar. */
 export type AgentEntry = Readonly<{
   agentId: string;
+  createdBy: string | null;
   name: string;
   avatar: Avatar;
 }>;
@@ -182,7 +254,8 @@ export type StandaloneAgentsEnv = Readonly<{
 /** An agent host's whole env: its own bindings and the Oyster's. */
 export type StandaloneAgentEnv = StandaloneAgentsEnv &
   OysterWorkerEnv &
-  StandaloneComputerEnv;
+  StandaloneComputerEnv &
+  StandaloneMachineLinkBindings;
 
 const policyDirectorySchema = Schema.Struct({
   directoryName: Schema.NonEmptyString,
@@ -245,9 +318,229 @@ export abstract class StandaloneAgentBase<
   Env extends StandaloneAgentEnv = StandaloneAgentEnv,
 > extends ShiitakeDO<Env> {
   /** The deployable root's host for this Agent's pinned tenant. */
-  protected abstract hostFor(scope: TenantScope): OysterHost;
+  protected abstract hostFor(scope: TenantScope): Promise<OysterHost>;
   /** Each installed Release's verified catalog surface, built once per Release for this Agent's lifetime. */
   #appSurfaces: AppSurfaceCache | undefined;
+  private uiOwner: UiConnection | undefined;
+  private async machineClient() {
+    const pin = await this.policyDirectory();
+    const agentId = this.ctx.id.name;
+    const identity = () =>
+      pin === null || agentId === undefined
+        ? null
+        : { teamId: pin.directoryName, agentId };
+    return createMachineAgentClient({
+      identity,
+      home: standaloneMachineAgentHome({
+        identity,
+        directory: this.env.AGENT_DIRECTORY,
+      }),
+      links: this.env.MACHINE_LINK,
+      codecs: machineAgentCodecs,
+      // Lend the client only the three hosted Agent entry points it routes to.
+      hosted: {
+        getByName: (agentId) => {
+          const agent = this.env.AGENTS.getByName(agentId);
+          return {
+            deliver: (envelope) => agent.deliver(envelope),
+            fetch: (request) => agent.fetch(request),
+            settlement: (principal, sessionId, commandId) =>
+              agent.settlement(principal, sessionId, commandId),
+          };
+        },
+      },
+    });
+  }
+
+  private async ui(): Promise<UiConnection> {
+    const { Knapsack } = await import("@fungi.computer/knapsack");
+    return (this.uiOwner ??= Knapsack.ui({
+      id: "oyster-ui",
+      hasSession: (sessionId) => this.hasStoredSession(sessionId),
+    }));
+  }
+
+  protected override hostFetch(
+    request: Request,
+  ): Promise<Response> | undefined {
+    return new URL(request.url).pathname.startsWith("/browser/")
+      ? this.ui().then((connection) => connection.fetch(request))
+      : undefined;
+  }
+
+  protected override async closeShiitake(): Promise<void> {
+    try {
+      await (await this.ui()).close();
+    } finally {
+      await super.closeShiitake();
+    }
+  }
+
+  private controlDirectory(): AgentControlDirectory {
+    const list = async (signal: AbortSignal) => {
+      signal.throwIfAborted();
+      const pin = await this.policyDirectory();
+      if (pin === null) throw new Error("Agent directory is unavailable");
+      const agents = await this.env.AGENT_DIRECTORY.getByName(
+        pin.directoryName,
+      ).list();
+      if (!agents.some((agent) => agent.agentId === this.ctx.id.name))
+        throw new Error("Agent is outside this scope");
+      signal.throwIfAborted();
+      return agents;
+    };
+    return {
+      list,
+      create: async (input, signal) => {
+        await list(signal);
+        const { assertOrdinaryAgentCreation } =
+          await import("@fungi.computer/shiitake-extensions/roster/conversation-agents");
+        assertOrdinaryAgentCreation(input);
+        const pin = await this.policyDirectory();
+        const createdBy = this.ctx.id.name;
+        if (pin === null || createdBy === undefined)
+          throw new AgentCreateRefused(
+            "no_creator",
+            "Agent directory is unavailable",
+          );
+        const directory = this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+        const owner = await directory.readCreator(createdBy);
+        if (owner === null)
+          throw new AgentCreateRefused(
+            "no_creator",
+            "Agent credential owner is unavailable",
+          );
+        const entry = await directory.create(
+          input.name ?? `Agent ${input.requestId}`,
+          input.requestId,
+          { actor: { kind: "member", memberId: owner }, role: "owner" },
+          "owner-direct",
+          undefined,
+          createdBy,
+        );
+        await this.env.AGENTS.getByName(entry.agentId).usePolicyDirectory(pin);
+        return entry;
+      },
+      send: (input, sessionId, signal, invocation) =>
+        this.delegation().send(input, sessionId, signal, invocation),
+      recall: (input, sessionId, signal) =>
+        this.delegation().recall(input, sessionId, signal),
+      open: async (agentId, signal) => {
+        const admit = async () => {
+          if (!(await list(signal)).some((agent) => agent.agentId === agentId))
+            throw new Error("Agent is outside this scope");
+        };
+        await admit();
+        const agent = createShiitakeClient({
+          baseUrl: "https://agent.internal",
+          fetch: async (input, init) => {
+            await admit();
+            const request = new Request(input, init);
+            if (new URL(request.url).origin !== "https://agent.internal")
+              throw new Error("Agent transport origin is invalid");
+            return (await this.machineClient()).dispatch(agentId, request);
+          },
+        });
+        return { agent, release: () => agent.close() };
+      },
+    };
+  }
+
+  private delegationOwner: AgentDelegation | undefined;
+  private delegation(): AgentDelegation {
+    return (this.delegationOwner ??= new AgentDelegation({
+      storage: this.ctx.storage,
+      expiresAt: () => Date.now() + 60_000,
+      identity: async () => {
+        const pin = await this.policyDirectory();
+        const agentId = this.ctx.id.name;
+        return pin === null || agentId === undefined
+          ? null
+          : { scopeId: pin.directoryName, agentId };
+      },
+      directory: () => this.controlDirectory(),
+      deliver: (mail) => this.mail().deliver(mail),
+      prepare: () => Promise.resolve(),
+      accept: async (mail, reply) =>
+        (await this.shiitake()).acceptMail(mail, mail.meta, reply),
+    }));
+  }
+
+  /** Host-only mail admission; an HTTP caller never receives this binding. */
+  async deliver(envelope: PostEnvelope) {
+    return this.delegation().receive(envelope);
+  }
+
+  private mailOwner: ReturnType<typeof agentMail> | undefined;
+  private conversationAgentsOwner:
+    ReturnType<typeof createConversationAgents> | undefined;
+  /** The Agents each of this Agent's conversations created or sent work to. */
+  private async conversationAgents() {
+    const { createConversationAgents } =
+      await import("@fungi.computer/shiitake-extensions/roster/conversation-agents");
+    return (this.conversationAgentsOwner ??= createConversationAgents(
+      this.ctx.storage,
+    ));
+  }
+  private mail() {
+    return (this.mailOwner ??= agentMail({
+      storage: this.ctx.storage,
+      namespace: {
+        getByName: (agentId) => ({
+          deliver: async (envelope) =>
+            (await this.machineClient()).namespace
+              .getByName(agentId)
+              .deliver(envelope),
+        }),
+      },
+      identity: async () => {
+        const pin = await this.policyDirectory();
+        const agentId = this.ctx.id.name;
+        return pin === null || agentId === undefined
+          ? null
+          : { scopeId: pin.directoryName, agentId };
+      },
+      replySettlement: async (mail) => {
+        const pin = await this.policyDirectory();
+        if (pin === null || mail.reply === undefined)
+          throw new Error("Delegated reply identity is unavailable");
+        return (await this.machineClient()).settlement(
+          mail.from.agentId,
+          mail.from.sessionId,
+          mail.reply.commandId,
+          mail.to.agentId,
+        );
+      },
+      wake: () => this.wakeRuntime(),
+    }));
+  }
+
+  /** Undefined is disclosure refusal; unavailable evidence fails before RPC. */
+  async settlement(
+    principal: MachineAgentSettlementPrincipal,
+    sessionId: string,
+    commandId: string,
+  ): Promise<string | undefined> {
+    const pin = await this.policyDirectory();
+    if (pin?.directoryName !== principal.teamId) return undefined;
+    try {
+      const facts = await this.delegation().settlement(
+        { scopeId: principal.teamId, agentId: principal.actor.id },
+        sessionId,
+        commandId,
+        await this.shiitake(),
+      );
+      if (facts === undefined)
+        throw new Error("Settled delegated command evidence is unavailable");
+      return Schema.encodeSync(Schema.fromJsonString(commandSettlementSchema))(
+        facts,
+      );
+    } catch (cause) {
+      // A disclosure refusal is data before crossing the DO RPC boundary.
+      if (cause instanceof AgentDisclosureRefused) return undefined;
+      throw cause;
+    }
+  }
 
   /** The root host for this Agent's pinned policy directory; unpinned Agents have no App tools. */
   private async appHost(): Promise<OysterHost | null> {
@@ -269,26 +562,20 @@ export abstract class StandaloneAgentBase<
         throw new Error(
           "Configure the Luna AI Gateway Worker secret and gateway",
         );
-      const provider = openaiProvider();
-      const listed = provider
-        .getModels()
-        .find((item) => item.id === "gpt-6-luna");
-      if (listed === undefined)
-        throw new Error("The OpenAI catalog has no Luna model");
-      const model = { ...listed, id: "openai/gpt-6-luna", baseUrl };
       return {
-        acquire: async () => {
-          const streamSimple = await loadStreamSimple();
-          return {
-            model,
-            stream: (selected, context, options) =>
-              streamSimple(selected, context, {
-                ...options,
-                apiKey: "oyster-provider-egress",
-                fetch: providerFetch(egress, "ai-gateway"),
-              }),
-            release: () => Promise.resolve(),
-          };
+        acquire: async (input) => {
+          const { openaiProvider } =
+            await import("@earendil-works/pi-ai/providers/openai");
+          const listed = openaiProvider()
+            .getModels()
+            .find((item) => item.id === "gpt-6-luna");
+          if (listed === undefined)
+            throw new Error("The OpenAI catalog has no Luna model");
+          const model = { ...listed, id: "openai/gpt-6-luna", baseUrl };
+          return observedModels(model, {
+            apiKey: "oyster-provider-egress",
+            fetch: providerFetch(egress, "ai-gateway"),
+          }).acquire(input);
         },
       };
     }
@@ -378,12 +665,22 @@ export abstract class StandaloneAgentBase<
     return true;
   }
 
-  protected override shiitakeOptions(): CloudflareShiitakeOptions {
+  protected override async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
+    const [{ oysterAgentExtensions }, { Knapsack }] = await Promise.all([
+      import("@fungi.computer/shiitake-extensions/roster/conversation-agents"),
+      import("@fungi.computer/knapsack"),
+    ]);
+    const conversationAgents = await this.conversationAgents();
+    const keeping = agentStoreKeeping(this.ctx.storage, (request) =>
+      this.readColdSessions(request),
+    );
     const principal = {
       actor: { kind: "agent", agentId: this.ctx.id.name ?? "agent" },
     } as const;
     return {
       model: this.modelSource(),
+      meta: { schema: FungiMessageMetaSchema },
+      ...this.mail().host,
       instructions: {
         load: () =>
           Promise.resolve({ revision: "oyster-4", text: instructions }),
@@ -403,6 +700,8 @@ export abstract class StandaloneAgentBase<
                 };
               const policy =
                 (await host.appToolPolicy?.(principal.actor)) ?? null;
+              const { appSurfaceCache, oysterAppMethods } =
+                await import("../mcp.js");
               this.#appSurfaces ??= appSurfaceCache(host);
               const source = await oysterAppMethods(
                 host,
@@ -438,10 +737,20 @@ export abstract class StandaloneAgentBase<
             // The Worker's own egress: public internet only.
             fetch: (url, init) => fetch(url, init),
           }),
+          conversationAgents.control(() => this.controlDirectory()),
+          (await this.ui()).source,
+          standaloneBrowserSource(this.env.BROWSER, () => ({
+            teamId: this.env.OYSTER_ORIGIN,
+            agentId: principal.actor.agentId,
+          })),
         ],
         sandbox: createCodemodeSandbox(this.env.LOADER, "oyster-workerd"),
       },
-      extensions: { roster: [], grants: [] },
+      extensions: oysterAgentExtensions(
+        conversationAgents.source(this.controlDirectory()),
+      ),
+      ...keeping,
+      hostWork: [...this.mail().host.hostWork, ...keeping.hostWork],
     };
   }
 
@@ -508,12 +817,6 @@ const storedPolicySchema = Schema.Union([
 ]);
 type StoredPolicy = typeof storedPolicySchema.Type;
 
-const requestIds = defineIdFamily({
-  family: "oyster-agent",
-  version: 1,
-  kinds: { request: { prefix: "request" } },
-});
-
 const visitRow = Schema.Struct({
   agent_id: Schema.String,
   session_id: Schema.String,
@@ -526,6 +829,165 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private readonly directory: ReturnType<typeof createAgentDirectory>;
   private readonly avatars: AgentAvatarStore;
   private composedTenancy: Promise<StandaloneTenancy> | undefined;
+  private machineEnrollmentOwner:
+    ReturnType<typeof createStandaloneMachineEnrollment> | undefined;
+  private machineFencesOwner:
+    ReturnType<typeof createMachineLinkFences> | undefined;
+
+  private machineScope() {
+    return tenantScope(defaultTenant, this.env.OYSTER_ORIGIN);
+  }
+
+  private machineEnrollment() {
+    const env = this.env;
+    const scope = this.machineScope();
+    return (this.machineEnrollmentOwner ??= createStandaloneMachineEnrollment({
+      owner: this.ctx.storage,
+      scopeId: scope.durableName("agents"),
+      ownerId: async () => {
+        if (env.TENANTS === undefined) return null;
+        if (this.ctx.id.name !== scope.durableName("agents")) return null;
+        // An inactive/missing scope must not cold-start tenancy's seed path.
+        const tenant =
+          await env.TENANTS.getByName("registry").get(defaultTenant);
+        if (tenant?.status !== "active") return null;
+        const tenancy = await standaloneTenancy({
+          ...env,
+          TENANTS: env.TENANTS,
+        });
+        return (await tenancy.owner())?.actor.memberId ?? null;
+      },
+      liveKey: (keyId) =>
+        env.KEYS.getByName(scope.durableName("keys")).live(keyId),
+      onAgentCreated: () => {
+        this.bump();
+      },
+    }));
+  }
+
+  /** Host-only join: consumption, enrollment and directory share one commit. */
+  async enrollMachine(
+    keyId: string,
+    input: MachineEnrollment,
+  ): Promise<StandaloneMachineJoinResult> {
+    try {
+      return {
+        kind: "enrolled",
+        value: await this.machineEnrollment().enrollWithKey(keyId, input),
+      };
+    } catch (cause) {
+      if (cause instanceof MachineEnrollmentRefused)
+        return {
+          kind: "refused",
+          error:
+            cause.reason === "request_conflict" || cause.reason === "capacity"
+              ? cause.reason
+              : "not_allowed",
+        };
+      if (cause instanceof MachineLinkRefused)
+        return { kind: "refused", error: "not_allowed" };
+      if (cause instanceof DOMException && cause.name === "DataError")
+        return { kind: "refused", error: "invalid_enrollment" };
+      throw cause;
+    }
+  }
+
+  machineDevice(id: MachineLinkIdentity) {
+    return this.machineEnrollment().admitDevice(id);
+  }
+
+  machineFence(id: MachineLinkIdentity) {
+    return this.machineEnrollment().currentFence(id);
+  }
+
+  machineDirectory(id: MachineLinkIdentity) {
+    return this.machineEnrollment().publicDirectory(id);
+  }
+
+  machineTarget(
+    caller: MachineLinkCaller,
+    agentId: string,
+    requester: string | null,
+  ) {
+    return this.machineEnrollment().target(caller, agentId, requester);
+  }
+
+  machineKeyRetired(deviceId: string) {
+    return this.machineEnrollment().keyRetired(deviceId);
+  }
+
+  /** Catalog home only; no hosted DO is opened to discover a machine home. */
+  agentHome(agentId: string): Promise<MachineAgentHome | null> {
+    if (!this.has(agentId)) return Promise.resolve(null);
+    if (
+      this.ctx.id.name !==
+      tenantScope(defaultTenant, this.env.OYSTER_ORIGIN).durableName("agents")
+    )
+      return Promise.resolve({ kind: "hosted" });
+    return Promise.resolve(
+      this.machineEnrollment().home(agentId) ?? { kind: "hosted" },
+    );
+  }
+
+  private machineFences() {
+    if (this.env.TENANTS === undefined)
+      throw new MachineLinkRefused("actor_not_allowed");
+    const env = { ...this.env, TENANTS: this.env.TENANTS };
+    const enrollment = this.machineEnrollment();
+    const authority = () => standaloneMachineLinkAuthority(env);
+    return (this.machineFencesOwner ??= createMachineLinkFences({
+      owner: this.ctx.storage,
+      enrollment,
+      readFact: (deviceId) =>
+        authority().currentFence({
+          teamId: this.machineScope().durableName("agents"),
+          deviceId,
+        }),
+      push: (fact) => authority().deliverControlFact(fact),
+      wakeNow: () => {
+        this.ctx.waitUntil(
+          this.ctx.storage.setAlarm(Date.now()).catch((cause: unknown) => {
+            console.error("machine-link.first-fence-wake", cause);
+          }),
+        );
+      },
+      retryDelayMs: (failures) =>
+        Math.min(60_000, 1_000 * 2 ** Math.min(failures, 6)),
+      report: (operation, cause) => {
+        console.error(operation, cause);
+      },
+    }));
+  }
+
+  private async armMachineFenceAlarm() {
+    const due = this.machineFences().family.nextDue();
+    if (due === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(due);
+  }
+
+  /** Only the current canonical owner can retire a device, before fence push. */
+  async revokeMachineDevice(memberId: string, deviceId: string) {
+    if (this.env.TENANTS === undefined)
+      throw new MachineLinkRefused("actor_not_allowed");
+    const owner = await (
+      await standaloneTenancy({ ...this.env, TENANTS: this.env.TENANTS })
+    ).owner();
+    if (owner?.actor.memberId !== memberId)
+      throw new MachineLinkRefused("actor_not_allowed");
+    try {
+      return await this.machineFences().revoke(memberId, deviceId);
+    } finally {
+      await this.armMachineFenceAlarm();
+    }
+  }
+
+  override async alarm() {
+    try {
+      await this.machineFences().family.deliver();
+    } finally {
+      await this.armMachineFenceAlarm();
+    }
+  }
 
   private grant(): AgentGrant {
     return {
@@ -555,8 +1017,9 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return this.directory
       .list(this.grant())
       .toReversed()
-      .map(({ agentId, name }) => ({
+      .map(({ agentId, name, createdBy }) => ({
         agentId,
+        createdBy,
         name,
         avatar: this.avatars.read(agentId),
       }));
@@ -591,6 +1054,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
         this.bump();
         return {
           agentId: renamed.agentId,
+          createdBy: renamed.createdBy,
           name: renamed.name,
           avatar: this.avatars.read(renamed.agentId),
         };
@@ -620,6 +1084,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       this.bump();
       return {
         agentId: agent.agentId,
+        createdBy: agent.createdBy,
         name: agent.name,
         avatar: this.avatars.read(agent.agentId),
       };
@@ -632,16 +1097,26 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     principal: OysterPrincipal,
     actor: AgentPolicyActor,
     avatar?: Avatar,
+    createdBy: string | null = null,
   ): AgentEntry & { policyRevision: string | null } {
     if (!oysterPrincipalIsOwner(principal))
       throw new Error("Only the authenticated owner creates Agents");
+    if (
+      createdBy !== null &&
+      (!this.has(createdBy) ||
+        this.readCreator(createdBy) !== oysterPrincipalId(principal))
+    )
+      throw new AgentCreateRefused(
+        "no_creator",
+        "Agent is outside this credential owner's scope",
+      );
     return this.ctx.storage.transactionSync(() => {
       const { agent, fact } = this.directory.create(
         {
           ...this.grant(),
           provenance: { actor: oysterPrincipalId(principal) },
         },
-        { name, requestId, configuration: "none" },
+        { name, requestId, configuration: "none", createdBy },
       );
       if (fact !== null) {
         if (avatar !== undefined) this.avatars.write(agent.agentId, avatar);
@@ -656,6 +1131,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       const stored = this.storedPolicy(agent.agentId);
       return {
         agentId: agent.agentId,
+        createdBy: agent.createdBy,
         name: agent.name,
         avatar: this.avatars.read(agent.agentId),
         policyRevision:
@@ -963,10 +1439,16 @@ export function standaloneAgents(
     removeMcpServer: async (agentId, serverId) =>
       (await directory().has(agentId)) &&
       (await env.AGENTS.getByName(agentId).removeMcpServer(serverId)),
-    fetch: async (agentId, request) =>
-      (await directory().has(agentId))
+    fetch: async (agentId, request) => {
+      const home = await directory().agentHome(agentId);
+      if (home?.kind === "machine") {
+        const refusal = new MachineLinkRefused("actor_not_allowed");
+        return Response.json({ error: refusal.reason }, { status: 409 });
+      }
+      return home?.kind === "hosted"
         ? await env.AGENTS.getByName(agentId).fetch(request)
-        : null,
+        : null;
+    },
     inbox: async () => {
       const [agents, visits, directoryRevision] = await Promise.all([
         directory().list(),
@@ -1036,7 +1518,15 @@ const agentBindingArgs = {
   },
   AGENTS: {
     send: z.tuple([
-      agentTarget.extend({ text: z.string(), delivery: z.literal("followUp") }),
+      agentTarget.extend({
+        requestId: z
+          .string()
+          .min(1)
+          .max(256)
+          .refine((value) => new TextEncoder().encode(value).byteLength <= 256),
+        text: z.string(),
+        delivery: z.literal("followUp"),
+      }),
     ]),
   },
 };
@@ -1114,12 +1604,16 @@ export async function dispatchAgentBinding(
   } else if (props.binding === "AGENTS" && method === "send") {
     const [input] = agentBindingArgs.AGENTS.send.parse(args);
     if (!(await directory.has(input.agentId))) throw new Error("No such agent");
+    const home = await directory.agentHome(input.agentId);
+    if (home?.kind === "machine")
+      throw new MachineLinkRefused("actor_not_allowed");
+    if (home === null) throw new AppInstanceError("revoked");
     frame.signal.throwIfAborted();
     const accepted = await env.AGENTS.getByName(input.agentId).sendFromApp(
       installationId,
       input.sessionId,
       {
-        requestId: requestIds.request.generate(),
+        requestId: input.requestId,
         text: input.text,
         delivery: input.delivery,
       },

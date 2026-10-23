@@ -380,12 +380,12 @@ it("refuses a request whose build policy is not this builder's", async () => {
       buildPolicy: workspaceBuildPolicy,
     })),
   ).toEqual({ exitCode: 1, built: true });
-  // A host that predates the policy, or expects a later one, builds nothing.
+  // Missing or superseded policy metadata builds nothing.
   expect(await runCli(request)).toEqual({ exitCode: 1, built: false });
   expect(
     await runCli((revision) => ({
       ...request(revision),
-      buildPolicy: "package-json-fungi-build-v3",
+      buildPolicy: "package-json-fungi-build-v2",
     })),
   ).toEqual({ exitCode: 1, built: false });
 }, 60_000);

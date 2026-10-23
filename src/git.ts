@@ -113,7 +113,6 @@ export async function webhookHeaders(
 
 export { createGitDoor, gitDoorRoute, smartHttpExchange } from "./git-door.js";
 export type { GitDoorHost, GitDoorTarget } from "./git-door.js";
-export { workflowGitPassPrefix } from "./git-auth.js";
 export {
   createAdmittedGit,
   createInstallationGitAdmission,

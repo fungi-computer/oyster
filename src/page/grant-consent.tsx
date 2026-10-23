@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   CenteredCard,
   CardHeader,
@@ -9,20 +9,23 @@ import {
 import { Field, Form, FormFooter } from "@fungi.computer/caps/components/field";
 import { Checkbox } from "@fungi.computer/caps/components/checkbox";
 import { Button } from "@fungi.computer/caps/components/button";
-import * as Schema from "effect/Schema";
+import { installationSchema } from "../apps/installation.js";
+import { permissionCatalog } from "../apps/catalog.js";
 import {
-  capabilityLabels,
-  installationConsentSchema,
-} from "../installation-consent.js";
+  appPermissionPageSchema,
+  permissionScreen,
+  draftOf,
+  editPermissions,
+  planGrantChange,
+  rebaseDraft,
+} from "../apps/permissions.js";
 
 declare const OYSTER_SHELL_STYLES: string;
 const element = document.getElementById("oyster-consent-config");
 const root = document.getElementById("oyster-consent");
 if (element === null || root === null)
   throw new Error("Consent configuration missing");
-const config = Schema.decodeUnknownSync(
-  Schema.fromJsonString(installationConsentSchema),
-)(element.textContent);
+const config = appPermissionPageSchema.parse(JSON.parse(element.textContent));
 const styles = document.createElement("style");
 styles.textContent = OYSTER_SHELL_STYLES;
 document.head.append(styles);
@@ -36,55 +39,83 @@ setTheme();
 appearance.addEventListener("change", setTheme);
 
 function Consent() {
-  const [selected, setSelected] = useState(
-    new Set(
-      config.capabilities
-        .filter((row) => row.approved)
-        .map((row) => row.request.capability),
-    ),
+  const [view, setView] = useState(config);
+  const [draft, setDraft] = useState(() =>
+    draftOf(config.permissions.authority),
   );
-  const [version, setVersion] = useState(config.authorityVersion);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState<Readonly<{ cause: unknown }> | null>(
     null,
   );
+  const screen = permissionScreen({
+    ...view.permissions,
+    resources: [],
+    canEdit: true,
+  });
+  const columns = screen.groups.flatMap((group) => [
+    ...group.columns,
+    ...group.switches,
+  ]);
   async function save() {
+    const changes = planGrantChange(view.permissions.authority, draft);
+    if (changes.length === 0) {
+      setMessage("No permission changes");
+      return;
+    }
     setSaving(true);
     setMessage("");
     setFailure(null);
+    const path =
+      "/api/installations/" +
+      encodeURIComponent(view.installationId) +
+      "/grants";
     try {
-      const response = await fetch(
-        `/api/installations/${encodeURIComponent(config.installationId)}/grants`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            authorityVersion: version,
-            artifactDigest: config.artifactDigest,
-            command: {
-              kind: "set-grants",
-              grants: config.capabilities
-                .filter((row) => selected.has(row.request.capability))
-                .map((row) => row.request),
-            },
-          }),
-        },
-      );
-      if (!response.ok) {
+      const response = await fetch(path, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeGeneration: view.storeGeneration,
+          authorityVersion: view.permissions.authority.authorityVersion,
+          artifactDigest: view.artifactDigest,
+          command: { kind: "change-grants", changes },
+        }),
+      });
+      if (response.status === 409) {
+        const refreshed = await fetch(path, {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (!refreshed.ok) {
+          setMessage(
+            "This App is no longer available. Reload before trying again.",
+          );
+          return;
+        }
+        const current = appPermissionPageSchema.parse(await refreshed.json());
+        setDraft(
+          rebaseDraft(
+            draft,
+            view.permissions.authority,
+            current.permissions.authority,
+          ),
+        );
+        setView(current);
         setMessage(
-          response.status === 409
-            ? "This App changed. Reload to review its current permissions."
-            : "Permissions could not be saved. Try again.",
+          "This App changed. Review your changes against its current permissions before saving again.",
         );
         return;
       }
-      const installation = Schema.decodeUnknownSync(
-        Schema.Struct({
-          authorityVersion: installationConsentSchema.fields.authorityVersion,
-        }),
-      )(await response.json());
-      setVersion(installation.authorityVersion);
+      if (!response.ok) {
+        setMessage("Permissions could not be saved. Try again.");
+        return;
+      }
+      const installation = installationSchema.parse(await response.json());
+      setView({
+        ...view,
+        permissions: { ...view.permissions, authority: installation.authority },
+      });
+      setDraft(draftOf(installation.authority));
       setMessage("Permissions saved");
     } catch (cause) {
       setFailure({ cause });
@@ -95,15 +126,15 @@ function Consent() {
   return (
     <CenteredCard>
       <CardHeader>
-        <CardTitle>{config.appName} permissions</CardTitle>
+        <CardTitle>{view.appName} permissions</CardTitle>
         <p>
-          {config.installationId} · {config.appId}
+          {view.installationId} · {view.appId}
         </p>
       </CardHeader>
       <CardContent>
         <p>
-          Choose what this App can do on your Oyster. Only you can approve its
-          permissions.
+          Choose what this App can access. Unchanged permissions keep their
+          existing operations and resource limits.
         </p>
         <Form
           onSubmit={(event) => {
@@ -111,28 +142,42 @@ function Consent() {
             void save();
           }}
         >
-          {config.capabilities.map((row) => (
-            <Field
-              key={row.request.capability}
-              label={capabilityLabels[row.request.capability]}
-              orientation="inline"
-              description={`${row.description} Scope: ${row.scope}.`}
-            >
-              <Checkbox
-                disabled={saving}
-                checked={selected.has(row.request.capability)}
-                onChange={(event) => {
-                  const next = new Set(selected);
-                  if (event.target.checked) next.add(row.request.capability);
-                  else next.delete(row.request.capability);
-                  setSelected(next);
-                }}
-              />
-            </Field>
+          {columns.map((column) => (
+            <Fragment key={column.capability}>
+              <Field
+                label={column.label}
+                orientation="inline"
+                description={column.description}
+              >
+                <Checkbox
+                  disabled={
+                    saving ||
+                    permissionCatalog[column.capability].consent ===
+                      "affordance"
+                  }
+                  checked={
+                    permissionCatalog[column.capability].consent ===
+                      "affordance" || draft.get(column.capability) != null
+                  }
+                  onChange={(event) => {
+                    setDraft(
+                      editPermissions(
+                        draft,
+                        {
+                          kind: "switch",
+                          capability: column.capability,
+                          on: event.target.checked,
+                        },
+                        view.permissions.declaredOperations,
+                      ),
+                    );
+                  }}
+                />
+              </Field>
+              {column.warning !== null && <p>{column.warning}</p>}
+            </Fragment>
           ))}
-          {config.capabilities.length === 0 && (
-            <p>This App requests no permissions.</p>
-          )}
+          {columns.length === 0 && <p>This App requests no permissions.</p>}
           <p role="status" aria-live="polite">
             {failure === null
               ? message

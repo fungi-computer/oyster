@@ -1,197 +1,59 @@
-import process from "node:process";
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import { URL, fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
-import { build } from "esbuild";
-import { parse as parseJsonc } from "jsonc-parser";
-import { createAppBuild } from "@fungi.computer/puffball/app";
-import { backendMediaType } from "@fungi.computer/puffball/backend";
-import { sha256 } from "@fungi.computer/oyster/host";
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
+import { createHmac } from "node:crypto";
+import { z } from "zod";
+import { contentDigest } from "@fungi.computer/braid";
+import { runListItemSchema } from "@fungi.computer/workflows-wire";
+import { workflowNativeFixture, until } from "./workflow-native.fixture.mjs";
 import { appBackend as workflowsBackend } from "../../../../apps/trellis/backend/methods.ts";
 import workflowsMetadata from "../../../../apps/trellis/package.json" with { type: "json" };
 const workflowsDeclaration = buildAppDeclaration(
   workflowsBackend,
   workflowsMetadata.fungi.app,
 );
-
-const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/workflows-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
-config.main = `${root}test/standalone/loader-workflows-root.fixture.ts`;
-config.services = [
-  ...(config.services ?? []),
-  {
-    binding: "CANONICAL_ROOT",
-    service: config.name,
-    entrypoint: "CanonicalRoot",
-  },
-];
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
-const provider = await workflowGitProvider();
-const port = await new Promise((resolve) => {
-  const socket = createServer().listen(0, "127.0.0.1", () => {
-    const { port: free } = socket.address();
-    socket.close(() => resolve(free));
-  });
-});
-const origin = `http://127.0.0.1:${port}`;
-const auth = { Authorization: `Bearer ${key}` };
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/loader-workflows-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--var",
-    `OYSTER_OWNER_KEY:${key}`,
-    "--var",
-    "OYSTER_ORIGIN:https://oyster.test",
-    "--var",
-    `GIT_ORIGIN:${provider.origin}`,
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-if (process.env.CELLD_PLATFORM_CELLD)
-  assert.equal(
-    worker.spawnfile,
-    process.env.CELLD_PLATFORM_CELLD,
-    "the proof actually launched the pinned celld binary, not in-process Miniflare",
-  );
-let output = "";
-worker.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-worker.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
-
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    {
-      method: "PUT",
-      headers: auth,
-      body: bytes,
-    },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
-async function install(installationId, entry, exportName, declaration) {
-  // These are digest-verified test Releases of the real backend source. App
-  // publication tooling is not under test; draft row persistence below is.
-  const bundled = await build({
-    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName,
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  const artifact = await persist(createAppBuild(null, backend, declaration));
-  const release = {
-    appId: `app_${installationId}`,
-    releaseId: `rel_${installationId}`,
-    artifact: {
-      artifactRef: artifact.artifactRef,
-      artifactDigest: artifact.digest,
-      provenance: {
-        sourceRevision: `git:${"a".repeat(40)}`,
-        sourceTreeDigest: artifact.digest,
-        buildRecipeDigest: artifact.digest,
+const fixture = await workflowNativeFixture({
+  main: "loader-workflows-root.fixture.ts",
+  oysterOrigin: "https://oyster.test",
+  installationMilliseconds: 60_000,
+  configure(config) {
+    config.services = [
+      ...(config.services ?? []),
+      {
+        binding: "CANONICAL_ROOT",
+        service: config.name,
+        entrypoint: "CanonicalRoot",
       },
-    },
-  };
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ installationId, release }),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
-async function until(read, accepts, label) {
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const value = await read();
-    if (accepts(value)) return value;
-    assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
-    await delay(100);
-  }
-}
+    ];
+    // Local maintained rate bindings; production is closed without operator policy.
+    config.ratelimits = [
+      {
+        name: "WORKFLOW_WEBHOOK_HOST_RATE",
+        namespace_id: "901",
+        simple: { limit: 100, period: 60 },
+      },
+      {
+        name: "WORKFLOW_WEBHOOK_BINDING_RATE",
+        namespace_id: "902",
+        simple: { limit: 100, period: 60 },
+      },
+    ];
+  },
+});
+const {
+  config,
+  origin,
+  auth,
+  provider,
+  runtime,
+  call,
+  approve,
+  installFirstParty,
+} = fixture;
 try {
-  await until(
-    async () =>
-      globalThis
-        .fetch(`${origin}/login`, {
-          signal: globalThis.AbortSignal.timeout(1000),
-        })
-        .then(
-          (r) => r.ok,
-          () => false,
-        ),
-    (ready) => ready,
-    "standalone root readiness",
-  );
-  await install(
-    "trellis",
-    "../../../../apps/trellis/backend/index.ts",
-    "Trellis",
-    workflowsDeclaration,
-  );
+  await installFirstParty("trellis", workflowsDeclaration);
+  await approve("trellis");
   const draft = {
     definition: {
       format: "fungi.workflow/v1",
@@ -201,6 +63,15 @@ try {
       nodes: [],
       edges: [],
       output: {},
+      triggers: [
+        {
+          id: "clock",
+          on: "schedule",
+          cron: { expression: "0 0 * * *", timeZone: "UTC" },
+          input: {},
+        },
+        { id: "hook", on: "webhook", input: {} },
+      ],
     },
     layout: {},
   };
@@ -238,13 +109,142 @@ try {
   log(
     `PASS Workflows saveDraft twice ${runtime}: real backend, revisions 1/2, stale CAS preserves row, zero Git requests`,
   );
+  const publication = await call("trellis", "publishWorkflow", {
+    workflowId: "pond",
+    expectedRevision: 2,
+  });
+  const published =
+    publication.kind === "publishing"
+      ? await until(
+          () =>
+            call("trellis", "publicationStatus", {
+              workflowId: "pond",
+              publicationId: publication.publicationId,
+            }),
+          (value) => value.kind !== "publishing",
+          "real Trellis publication completion",
+        )
+      : publication;
+  assert.equal(published.kind, "published", JSON.stringify(published));
+  const document = await call("trellis", "loadWorkflow", {
+    workflowId: "pond",
+    at: { commit: published.commit },
+  });
+  assert.deepEqual(document.definition, updated.definition);
+  assert.ok(
+    provider.requests.length > gitBefore,
+    "the real publisher wrote Git before indexing its immutable publication",
+  );
+  const target = {
+    workflowId: "pond",
+    commit: published.commit,
+    triggerId: "clock",
+    bindings: {},
+  };
+  const armed = await call("trellis", "arm", target);
+  assert.equal(armed.kind, "armed", JSON.stringify(armed));
+  log(
+    `PASS ${runtime}: actual Trellis publication/index and same-installation Git/Artifacts/Instance schedule admission`,
+  );
+  // Only after the existing producer and live trigger owner have succeeded
+  // does this assertion name the missing external-webhook behavior.
+  const webhook = await globalThis.fetch(
+    `${origin}/api/installations/trellis/workflows/webhooks`,
+    {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "create",
+        target: {
+          ...target,
+          installationId: "trellis",
+          triggerId: "hook",
+          digest: await contentDigest(document.definition),
+        },
+        computerId: config.vars.OYSTER_COMPUTER_ID,
+        verifier: "github",
+      }),
+    },
+  );
+  assert.equal(webhook.status, 200, "published Workflow webhook control");
+  assert.equal(webhook.headers.get("cache-control"), "no-store");
+  const disclosure = z
+    .strictObject({
+      kind: z.literal("created"),
+      bindingId: z.string().min(1),
+      installationId: z.literal("trellis"),
+      secret: z.string().min(1),
+    })
+    .parse(await webhook.json());
+  log(
+    `PASS ${runtime}: published Workflow owner creates a no-store webhook disclosure`,
+  );
+  const body = "{}";
+  const signature = createHmac("sha256", disclosure.secret)
+    .update(body)
+    .digest("hex");
+  const deliver = () =>
+    globalThis.fetch(
+      `${origin}/api/installations/trellis/workflows/webhooks/${disclosure.bindingId}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Delivery": "b2d64a8a-9890-4d91-a38b-000000000001",
+          "X-Hub-Signature-256": `sha256=${signature}`,
+        },
+        body,
+      },
+    );
+  const readRuns = async () =>
+    z
+      .array(runListItemSchema)
+      .parse(await call("trellis", "listRuns", { workflowId: "pond" }));
+  const accepted = await deliver();
+  const runs = await until(
+    readRuns,
+    (rows) => rows.some((row) => row.triggerId === "hook"),
+    "native webhook starts its durable Braid run",
+  );
+  const [run] = runs.filter((row) => row.triggerId === "hook");
+  assert.equal(run.source, "event");
+  assert.equal(run.commit, published.commit);
+  await until(
+    () => call("trellis", "runStatus", { runId: run.runId }),
+    (status) => status.status === "complete",
+    "native webhook run completes in its real engine",
+  );
+  assert.equal(runs.filter((row) => row.triggerId === "hook").length, 1);
+  log(
+    `Observed ${runtime}: recovery completed one signed-delivery run after native wake acknowledgement loss; HTTP ${accepted.status}`,
+  );
+  assert.equal(
+    accepted.status,
+    202,
+    "durable signed admission survives a lost native wake acknowledgement",
+  );
+  assert.equal(accepted.headers.get("cache-control"), "no-store");
+  const receipt = z
+    .strictObject({ accepted: z.literal(true), deliveryId: z.string().min(1) })
+    .parse(await accepted.json());
+  // Restart the actual local Worker over its own persisted state. A replay
+  // must retain the same run, not manufacture another engine or reservation.
+  await fixture.restart();
+  const replay = await deliver();
+  assert.equal(replay.status, 202);
+  assert.equal(replay.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await replay.json(), receipt);
+  const replayed = (await readRuns()).filter((row) => row.triggerId === "hook");
+  assert.deepEqual(
+    replayed.map((row) => row.runId),
+    [run.runId],
+  );
+  log(
+    `PASS ${runtime}: lost native wake acknowledgement remains accepted; recovery completes one Braid run; restart/replay preserves delivery and run identity`,
+  );
 } catch (cause) {
-  error(output.replaceAll(key, "[redacted]"));
-  error(provider.requests);
+  error(fixture.diagnostics());
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await fixture.close();
 }

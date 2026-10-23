@@ -16,6 +16,7 @@
 type OysterAgent = Readonly<{
   agentId: string;
   name: string;
+  avatar: Avatar;
   sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
 }>;
 ```
@@ -160,6 +161,7 @@ type OysterAgents = Readonly<{
     readonly Readonly<{
       agentId: string;
       name: string;
+      avatar: Avatar;
       sessionOperations: readonly (
         "agent.read" | "agent.send" | "agent.manage"
       )[];
@@ -169,6 +171,7 @@ type OysterAgents = Readonly<{
     Readonly<{
       agentId: string;
       name: string;
+      avatar: Avatar;
       sessionOperations: readonly (
         "agent.read" | "agent.send" | "agent.manage"
       )[];
@@ -178,12 +181,26 @@ type OysterAgents = Readonly<{
     | Readonly<{
         agentId: string;
         name: string;
+        avatar: Avatar;
         sessionOperations: readonly (
           "agent.read" | "agent.send" | "agent.manage"
         )[];
       }>
     | Readonly<{
         error: "not_found" | "name_taken" | "not_granted";
+      }>
+  >;
+  setAvatar: Promise<
+    | Readonly<{
+        agentId: string;
+        name: string;
+        avatar: Avatar;
+        sessionOperations: readonly (
+          "agent.read" | "agent.send" | "agent.manage"
+        )[];
+      }>
+    | Readonly<{
+        error: "not_found" | "not_granted";
       }>
   >;
   policyStatus: Promise<Readonly<{

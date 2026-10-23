@@ -2,6 +2,14 @@
   "name": "oyster-notes-example",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@fungi.computer/agar": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "8.2.2"
+  },
   "fungi": {
     "app": {
       "displayName": "Notes",
@@ -20,7 +28,7 @@
           "projections": {
             "bindings": {
               "values": [
-                "<leader> s"
+                "<leader>s"
               ],
               "order": 0
             },
@@ -35,5 +43,42 @@
       ]
     },
     "backendDefinition": "backend/methods.ts"
+  },
+  "botanical": {
+    "role": "example",
+    "operations": {
+      "lint": {
+        "status": "not-applicable",
+        "reason": "Oyster's lint command includes examples/notes-app."
+      },
+      "typecheck": {
+        "status": "not-applicable",
+        "reason": "Oyster's typecheck includes the Notes backend and ui/tsconfig.json."
+      },
+      "build": {
+        "status": "not-applicable",
+        "reason": "Oyster's standalone native proof builds Notes from captured source, not an independent dist."
+      },
+      "test": {
+        "status": "not-applicable",
+        "reason": "Oyster's standalone native proof exercises Notes methods, backend, capabilities and UI."
+      },
+      "docs": {
+        "status": "not-applicable",
+        "reason": "Notes is documented as an example in Oyster's README."
+      },
+      "pack": {
+        "status": "not-applicable",
+        "reason": "This private example is not published as an npm package."
+      },
+      "smoke": {
+        "status": "not-applicable",
+        "reason": "Oyster's standalone native proof installs and runs the captured Notes Release."
+      },
+      "stranger": {
+        "status": "not-applicable",
+        "reason": "This private example is not an independently installed npm package."
+      }
+    }
   }
 }

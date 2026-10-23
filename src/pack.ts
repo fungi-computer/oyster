@@ -12,6 +12,12 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import {
+  installOnOyster,
+  installationObservationSignal,
+  completedInstallationResponse,
+  type InstallationObservationBudget,
+} from "./installation-client.js";
+import {
   parseArtifactRef,
   parseReleaseId,
   parseSha256Digest,
@@ -38,6 +44,8 @@ import {
 } from "./source/template-seed.js";
 import { pushTemplateSource } from "./source/template-push.js";
 import { sha256 } from "./release.js";
+import type { InstallationOperation } from "./installation-operations.js";
+export { InstallationObservationError } from "./installation-client.js";
 
 /** One committed repository and its canonical App build recipe. */
 export type PackOptions = Readonly<{
@@ -85,9 +93,11 @@ async function packCapturedSource(
   const preparer = createAppCandidatePreparer({
     config: { appId: options.appId, recipe: options.recipe },
     sourceCapture,
-    buildExecutor: createLocalBuildExecutor({
-      packageStoreDirectory: options.packageStoreDirectory,
-    }),
+    buildExecutor: createLocalBuildExecutor(
+      options.packageStoreDirectory === undefined
+        ? {}
+        : { packageStoreDirectory: options.packageStoreDirectory },
+    ),
   });
   const prepared = await Effect.runPromise(
     Effect.scoped(
@@ -139,6 +149,8 @@ export async function packRelease(
  * Capture an Artifacts Git commit, build its Release, upload it to an Oyster,
  * and install it, or switch an existing installation to it
  * ({@link installRelease}).
+ * `waitMs` starts with the upload/observation phase after packing; a supplied
+ * caller signal retains its original lifetime through that phase.
  */
 export async function installFromSource(
   input: Readonly<{
@@ -153,30 +165,42 @@ export async function installFromSource(
     /** Destination Oyster owner key; distinct from the source Git credential. */
     key: string;
     installationId: string;
-  }>,
+  }> &
+    InstallationObservationBudget,
 ): Promise<Response> {
   const outDirectory = await mkdtemp(join(tmpdir(), "oyster-source-release-"));
   try {
-    await packCapturedSource(
-      {
-        appId: input.appId,
-        releaseId: input.releaseId,
-        recipe: input.recipe,
-        sourceRevision: input.source.sourceRevision,
+    let options: Omit<PackOptions, "sourceDirectory"> = {
+      appId: input.appId,
+      recipe: input.recipe,
+      sourceRevision: input.source.sourceRevision,
+      outDirectory,
+    };
+    if (input.releaseId !== undefined)
+      options = { ...options, releaseId: input.releaseId };
+    if (input.packageStoreDirectory !== undefined)
+      options = {
+        ...options,
         packageStoreDirectory: input.packageStoreDirectory,
-        outDirectory,
-      },
+      };
+    await packCapturedSource(
+      options,
       createArtifactsSourceCapture({
         ...input.source,
         sourceRevision: parseSourceRevision(input.source.sourceRevision),
       }),
     );
-    return await installRelease({
+    let installation: Parameters<typeof installRelease>[0] = {
       directory: outDirectory,
       url: input.url,
       key: input.key,
       installationId: input.installationId,
-    });
+    };
+    if (input.waitMs !== undefined)
+      installation = { ...installation, waitMs: input.waitMs };
+    if (input.signal !== undefined)
+      installation = { ...installation, signal: input.signal };
+    return await installRelease(installation);
   } finally {
     await rm(outDirectory, { recursive: true, force: true });
   }
@@ -185,7 +209,11 @@ export async function installFromSource(
 /**
  * Upload a packed Release to an Oyster and install it. The host installs a
  * new installation (201) or switches an existing one to this Release (200),
- * keeping its state; both go through its one install-or-select owner.
+ * keeping its state. Uploads precede admission; this helper then waits for the
+ * correlated terminal owner receipt, not merely the HTTP acknowledgement.
+ * Uploads and observation share the caller signal or explicit `waitMs`; absent
+ * either, the installer owns a twenty-minute default. Expiry does not cancel
+ * admitted work and is reported as an unconfirmed observation, not refusal.
  */
 export async function installRelease(
   input: Readonly<{
@@ -194,8 +222,14 @@ export async function installRelease(
     /** The Oyster owner key. */
     key: string;
     installationId?: string;
-  }>,
+    /** Report owner-correlated admission without shortening the completion wait. */
+    onAdmitted?: (operation: InstallationOperation) => void;
+  }> &
+    InstallationObservationBudget,
 ): Promise<Response> {
+  // One installer budget for uploads + observation, not an App authority grant.
+  const signal = installationObservationSignal(input);
+  signal.throwIfAborted();
   const directory = resolve(input.directory);
   const release = Schema.decodeUnknownSync(
     Schema.fromJsonString(releaseSchema),
@@ -210,21 +244,24 @@ export async function installRelease(
         `/api/artifacts/${encodeURIComponent(artifactRef)}?digest=${digest}`,
         input.url,
       ),
-      { method: "PUT", headers: authorization, body: bytes },
+      { method: "PUT", headers: authorization, body: bytes, signal },
     );
     if (!response.ok)
       throw new Error(
         `Artifact upload failed (${String(response.status)}): ${artifactRef}`,
       );
   }
-  return fetch(new URL("/api/installations", input.url), {
-    method: "POST",
-    headers: { ...authorization, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      release: Schema.encodeUnknownSync(releaseSchema)(release),
-      installationId: input.installationId,
-    }),
-  });
+  let installation: Parameters<typeof installOnOyster>[0] = {
+    url: input.url,
+    key: input.key,
+    release,
+    installationId: input.installationId ?? release.appId.replaceAll("_", "-"),
+    signal,
+  };
+  if (input.onAdmitted !== undefined)
+    installation = { ...installation, onAdmitted: input.onAdmitted };
+  const operation = await installOnOyster(installation);
+  return completedInstallationResponse(operation);
 }
 
 /** Project one exact first-party commit's editable source, `git push` it to

@@ -1,5 +1,49 @@
-import { installationSchema, type Installation } from "./apps/installation.js";
+import type {
+  Approvals,
+  ApprovalListInput,
+  ApprovalAnswerInput,
+  AutoApproveInput,
+} from "@fungi.computer/approvals";
+import type { HostActor } from "@fungi.computer/puffball/app";
+import { approvalCapability } from "./approval-capability.js";
+import { createInstallationStoreGeneration } from "./installation-store-generation.js";
+import {
+  OysterApprovalHome,
+  type OysterApprovalCall,
+} from "./approval-home.js";
+import { timingSafeEqual } from "node:crypto";
+import { z } from "zod";
+import {
+  bootCapabilityGrantSchema,
+  bootCapabilityLeaseSchema,
+  reportBootPage,
+  validateCapabilityAssetSet,
+  type BootCapabilityGrant,
+  type BootCapabilityLease,
+  type BootCapabilityStore,
+} from "./boot-capability.js";
+import { serveBootCapability } from "./boot-capability-route.js";
+import {
+  installationSchema,
+  isCommittedInstallation,
+  type Installation,
+} from "./apps/installation.js";
+import {
+  BOOT_DEADLINE_MS,
+  BOOT_TRANSPORT_GRACE_MS,
+  readBootUi,
+  type UiBootCheckOutcome,
+} from "./boot-gate.js";
+import { checkBootPage } from "./browser/boot.js";
+import { bindingSessions, type BrowserBinding } from "./browser/sessions.js";
 import { registryInstallations } from "./internal/registry-installations.js";
+import {
+  createInstallationOperations,
+  type InstallationOperationRequest,
+  type InstallationOperationReply,
+} from "./installation-operations.js";
+import { installationWorkerEntrypoint } from "./installation-execution.js";
+export { installationWorkerEntrypoint };
 import { approvedBindingGrants, scopedBindings } from "./apps/gate.js";
 import { appMethodReplySchema } from "@fungi.computer/agar/backend";
 import {
@@ -67,6 +111,7 @@ import {
 } from "./index.js";
 import {
   createCloudflareAppInstance,
+  r2ArtifactStore,
   createCloudflareInvocationGate,
   decodeFrameBindingProps,
   captureFrameBindingReply,
@@ -114,13 +159,7 @@ import {
   appStorageResetSchema,
 } from "@fungi.computer/agar/storage";
 import { createOysterRootData, type OysterRootDirectory } from "./root-data.js";
-import {
-  backendCache,
-  resolveBackend,
-  type ArtifactHeads,
-  type ArtifactStore,
-} from "./release.js";
-import { headContentObject } from "./build/content-objects.js";
+import { backendCache, resolveBackend } from "./release.js";
 import type { AppApi } from "@fungi.computer/puffball";
 import type { AppDeclaration } from "@fungi.computer/puffball/app";
 import {
@@ -130,7 +169,7 @@ import {
   createOysterArtifactsRepositoryMetadataStore,
 } from "./app-sources.js";
 
-export { r2FileSource, ownerKeyAuth };
+export { r2ArtifactStore, r2FileSource, ownerKeyAuth };
 
 /** Native values returned by the standalone Git, event and JSON binding owners. */
 export type OysterBindingResult =
@@ -156,6 +195,8 @@ export type OysterStorageAgentDirectory = Readonly<{
 
 /** Bindings a standalone Oyster Worker declares in its Wrangler config. */
 export type OysterWorkerEnv = Readonly<{
+  /** Cloudflare Browser Run binding for the UI boot check and the agent browser. */
+  BROWSER?: BrowserBinding;
   /** The owner's sign-in key, at least 24 characters (a secret). */
   OYSTER_OWNER_KEY: string;
   /** The single-tenant owner's identity, also recorded by the existing fleet creator. */
@@ -177,31 +218,142 @@ export type OysterWorkerEnv = Readonly<{
   LOADER: WorkerLoader;
 }>;
 
-/** Store Release artifacts in an R2 bucket. */
-export function r2ArtifactStore(
-  bucket: R2Bucket,
-): ArtifactStore & ArtifactHeads {
-  return {
-    head: (artifactRef) => headContentObject(bucket, artifactRef),
-    async get(artifactRef) {
-      const object = await bucket.get(artifactRef);
-      return object === null
-        ? null
-        : new Uint8Array(await object.arrayBuffer());
-    },
-    async put(artifactRef, bytes) {
-      await bucket.put(artifactRef, bytes);
-    },
-  };
-}
-
 const recordRow = Schema.Struct({
   installation_id: Schema.String,
   record: Schema.String,
 });
+const bootCapabilityRows = z.array(
+  z.strictObject({
+    token_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    expires_at: z.number().int(),
+    record: z.string().max(2_000_000),
+  }),
+);
+
+const approvalHomePinRow = Schema.Struct({
+  tenant_id: tenantIdSchema,
+  origin: Schema.String,
+});
 
 /** The installation registry: one SQLite-backed Durable Object per Oyster. */
-export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
+export class OysterRegistry<
+  Env extends OysterWorkerEnv = OysterWorkerEnv,
+> extends DurableObject<Env> {
+  readonly #generation: () => string;
+  #approval: OysterApprovalHome | undefined;
+  readonly #installationOperations: ReturnType<
+    typeof createInstallationOperations
+  >;
+
+  /** The plain root has the same single owner-key host as OysterInstance. */
+  protected hostFor(scope: TenantScope): Promise<OysterHost> {
+    return Promise.resolve(ownerKeyRootHost(this.env, { scope }));
+  }
+
+  /** Trusted host RPC; an operation input cannot select actor, namespace or tenant. */
+  approvalSubmit(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    call: OysterApprovalCall,
+  ) {
+    return this.approvalHome(pin).submit(call);
+  }
+
+  private approvalHome(pin: Readonly<{ tenantId: string; origin: string }>) {
+    const scope = tenantScope(
+      Schema.decodeUnknownSync(tenantIdSchema)(pin.tenantId),
+      pin.origin,
+    );
+    if (this.ctx.id.name !== scope.durableName("registry"))
+      throw new Error("Approval home namespace does not match tenant");
+    this.ctx.storage.transactionSync(() => {
+      const raw = this.ctx.storage.sql
+        .exec("SELECT tenant_id, origin FROM oyster_approval_home WHERE id = 1")
+        .toArray()[0];
+      if (raw === undefined) {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO oyster_approval_home (id, tenant_id, origin) VALUES (1, ?, ?)",
+          scope.tenantId,
+          scope.origin,
+        );
+        return;
+      }
+      const retained = Schema.decodeUnknownSync(approvalHomePinRow)(raw);
+      if (
+        retained.tenant_id !== scope.tenantId ||
+        retained.origin !== scope.origin
+      )
+        throw new Error("Approval home cannot change tenant or origin");
+    });
+    this.#approval ??= new OysterApprovalHome({
+      owner: {
+        sql: this.ctx.storage.sql,
+        transactionSync: (body) => this.ctx.storage.transactionSync(body),
+      },
+      scope,
+      current: () => this.hostFor(scope),
+      commit: (write, nextWakeAt) =>
+        this.ctx.storage.transaction(async (transaction) => {
+          const result = await write();
+          const at = nextWakeAt();
+          const current = await transaction.getAlarm();
+          if (at !== null && (current === null || current > at))
+            await transaction.setAlarm(at);
+          return result;
+        }),
+    });
+    return this.#approval;
+  }
+
+  /** Recover approved work from the durable home, not a last-request memory pin. */
+  private async approvalAlarm(): Promise<void> {
+    const raw = this.ctx.storage.sql
+      .exec("SELECT tenant_id, origin FROM oyster_approval_home WHERE id = 1")
+      .toArray()[0];
+    if (raw === undefined) return;
+    const pin = Schema.decodeUnknownSync(approvalHomePinRow)(raw);
+    const at = await this.approvalHome({
+      tenantId: pin.tenant_id,
+      origin: pin.origin,
+    }).reconcile();
+    if (at !== null) {
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || current > at) await this.ctx.storage.setAlarm(at);
+    }
+  }
+
+  /** Read a bounded page for the current member of the pinned native home. */
+  approvalList(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    actor: HostActor,
+    input: ApprovalListInput,
+  ) {
+    return this.approvalHome(pin).capability(actor).list(input);
+  }
+  /** Read one member-scoped view; the native home resolves membership again. */
+  approvalGet(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    actor: HostActor,
+    input: Readonly<{ recordId: string }>,
+  ) {
+    return this.approvalHome(pin).capability(actor).get(input);
+  }
+  /** Persist an eligible answer and attempt its native decision work once. */
+  approvalAnswer(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    actor: HostActor,
+    input: ApprovalAnswerInput,
+  ) {
+    return this.approvalHome(pin).capability(actor).answer(input);
+  }
+  /** Policy never grants operation authority; only the live Oyster owner may change it. */
+  approvalSetAutoApprove(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    actor: HostActor,
+    input: AutoApproveInput,
+  ) {
+    return this.approvalHome(pin).capability(actor).setAutoApprove(input);
+  }
+
   readonly #rootData: ReturnType<typeof createOysterRootData>;
   /** Append-only App source seed receipts; a Git-capable subclass forks over these. */
   protected readonly appSourceReceipts: ReturnType<
@@ -215,12 +367,41 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
   protected readonly artifactsRepositories: ReturnType<
     typeof createOysterArtifactsRepositoryMetadataStore
   >;
-  constructor(ctx: DurableObjectState, env: OysterWorkerEnv) {
+  constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS oyster_approval_home (id INTEGER PRIMARY KEY CHECK (id = 1), tenant_id TEXT NOT NULL, origin TEXT NOT NULL) STRICT",
+    );
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS installations (installation_id TEXT PRIMARY KEY, record TEXT NOT NULL) STRICT",
     );
+    this.#generation = createInstallationStoreGeneration(ctx.storage.sql);
+    ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS boot_capabilities (id TEXT PRIMARY KEY, token_digest TEXT NOT NULL, expires_at INTEGER NOT NULL, record TEXT NOT NULL) STRICT",
+    );
     ensureAppSourceTables(ctx.storage.sql);
+    this.#installationOperations = createInstallationOperations({
+      owner: ctx.storage,
+      registryName: ctx.id.name ?? "",
+      generation: () => this.generation(),
+      get: (installationId) => this.get(installationId),
+      compareAndPut: (installation, version, generation, scope) =>
+        this.compareAndPut(installation, version, generation, scope.tenantId),
+      execute: (command) =>
+        ctx.exports
+          .OysterInstallationExecutor({
+            props: {
+              requestId: command.admission.requestId,
+              scope: command.scope,
+            },
+          })
+          .run(),
+      scheduleWake: (at) =>
+        ctx.storage.transaction(async (transaction) => {
+          const current = await transaction.getAlarm();
+          if (current === null || at < current) await transaction.setAlarm(at);
+        }),
+    });
     this.appSourceReceipts = createOysterAppSourceReceipts(ctx.storage.sql);
     this.appRegistrations = createOysterAppRegistrations(ctx.storage.sql);
     this.artifactsRepositories = createOysterArtifactsRepositoryMetadataStore(
@@ -247,6 +428,25 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
           false,
         ),
     });
+  }
+  /** The installation owner's RPC: admit, read, load, plan or commit one
+   * retained command for the caller's tenant scope. */
+  async installationOperation(
+    input: InstallationOperationRequest,
+  ): Promise<InstallationOperationReply> {
+    return (await this.#installationOperations).dispatch(input);
+  }
+  /**
+   * One Registry wake serves both owners: installation work, then the native
+   * approval home. Each re-arms only an earlier wake, so neither postpones the
+   * other, and one owner's failure never skips the other's quantum.
+   */
+  override async alarm(): Promise<void> {
+    try {
+      await (await this.#installationOperations).tick();
+    } finally {
+      await this.approvalAlarm();
+    }
   }
   /** Current desktop metadata; roles are the ADR's derived default, never Hub's stored choice. */
   directory(): Promise<OysterRootDirectory> {
@@ -427,7 +627,7 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
             (expected !== undefined &&
               (expected.selection.owner.kind !== "installation" ||
                 installation.instanceId !== expected.instanceId ||
-                installation.authorityVersion !==
+                installation.authority.authorityVersion !==
                   expected.selection.authorityVersion ||
                 installation.release.releaseId !==
                   expected.selection.releaseId ||
@@ -453,7 +653,8 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
             const current = this.get(installationId);
             if (
               current?.status !== "enabled" ||
-              current.authorityVersion !== installation.authorityVersion ||
+              current.authority.authorityVersion !==
+                installation.authority.authorityVersion ||
               current.release.releaseId !== installation.release.releaseId ||
               current.release.artifact.artifactDigest !==
                 installation.release.artifact.artifactDigest
@@ -497,17 +698,15 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
       .toArray()[0];
     return row === undefined ? null : this.decode(row);
   }
-  /** Create or replace one installation record. */
-  async put(
-    installation: Installation,
-    tenantId: TenantId = defaultTenant,
-  ): Promise<void> {
-    await this.writeInstallation(installation, tenantId);
+  /** Durable store identity, regenerated only when the store itself is replaced. */
+  generation(): string {
+    return this.#generation();
   }
   /** Native RPC returns a closed result; callers never classify a transported Error. */
   async compareAndPut(
     installation: Installation,
     expectedAuthorityVersion: number,
+    expectedGeneration: string,
     tenantId: TenantId = defaultTenant,
   ): Promise<InstallationCommit> {
     try {
@@ -515,6 +714,7 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
         installation,
         tenantId,
         expectedAuthorityVersion,
+        expectedGeneration,
       );
       return { ok: true };
     } catch (cause) {
@@ -526,12 +726,16 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
   private async writeInstallation(
     installation: Installation,
     tenantId: TenantId,
-    expectedAuthorityVersion?: number,
+    expectedAuthorityVersion: number,
+    expectedGeneration: string,
   ): Promise<void> {
+    // Version 0 names an absent record.
+    const versionOf = (record: Installation | null) =>
+      record?.authority.authorityVersion ?? 0;
     const previous = this.get(installation.installationId);
     if (
-      expectedAuthorityVersion !== undefined &&
-      previous?.authorityVersion !== expectedAuthorityVersion
+      this.generation() !== expectedGeneration ||
+      versionOf(previous) !== expectedAuthorityVersion
     )
       throw new AppInstanceError("stale_authority");
     const encode = (value: Installation) =>
@@ -542,7 +746,8 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
       previous !== null &&
       previous.instanceId !== null &&
       (previous.instanceId !== installation.instanceId ||
-        previous.authorityVersion !== installation.authorityVersion ||
+        previous.authority.authorityVersion !==
+          installation.authority.authorityVersion ||
         previous.status !== installation.status ||
         previous.release.artifact.artifactDigest !==
           installation.release.artifact.artifactDigest)
@@ -554,8 +759,8 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
         )) !== null
       ) {
         if (
-          expectedAuthorityVersion !== undefined &&
-          this.get(installation.installationId)?.authorityVersion !==
+          this.generation() !== expectedGeneration ||
+          versionOf(this.get(installation.installationId)) !==
             expectedAuthorityVersion
         )
           throw new AppInstanceError("stale_authority");
@@ -568,8 +773,8 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
     this.ctx.storage.transactionSync(() => {
       const current = this.get(installation.installationId);
       if (
-        expectedAuthorityVersion !== undefined &&
-        current?.authorityVersion !== expectedAuthorityVersion
+        this.generation() !== expectedGeneration ||
+        versionOf(current) !== expectedAuthorityVersion
       )
         throw new AppInstanceError("stale_authority");
       if ((current === null ? null : encode(current)) !== previousRecord)
@@ -588,6 +793,75 @@ export class OysterRegistry extends DurableObject<OysterWorkerEnv> {
   private decode(row: unknown): Installation {
     const { record } = Schema.decodeUnknownSync(recordRow)(row);
     return installationSchema.parse(JSON.parse(record));
+  }
+
+  /** Issue, resolve, or revoke one bounded capability without storing its token. */
+  bootCapability(
+    input:
+      | Readonly<{ kind: "issue"; grant: BootCapabilityGrant }>
+      | Readonly<{ kind: "resolve"; tokenDigest: string; now: number }>
+      | Readonly<{ kind: "revoke"; id: string }>,
+  ): BootCapabilityLease | null | undefined {
+    if (input.kind === "issue") {
+      const { lease, tokenDigest } = bootCapabilityGrantSchema.parse(
+        input.grant,
+      );
+      validateCapabilityAssetSet(lease);
+      const now = Date.now();
+      if (
+        lease.expiresAt <= now ||
+        lease.expiresAt > now + BOOT_DEADLINE_MS + BOOT_TRANSPORT_GRACE_MS
+      )
+        throw new Error("Boot capability lease is outside its deadline");
+      this.ctx.storage.sql.exec(
+        "DELETE FROM boot_capabilities WHERE expires_at <= ?",
+        now,
+      );
+      const count = this.ctx.storage.sql
+        .exec("SELECT id FROM boot_capabilities LIMIT 8")
+        .toArray().length;
+      if (count >= 8) throw new Error("Boot capability lease capacity reached");
+      this.ctx.storage.sql.exec(
+        "INSERT INTO boot_capabilities (id, token_digest, expires_at, record) VALUES(?,?,?,?)",
+        lease.id,
+        tokenDigest,
+        lease.expiresAt,
+        JSON.stringify(lease),
+      );
+      return undefined;
+    }
+    if (input.kind === "revoke") {
+      const id = z.string().min(1).max(128).parse(input.id);
+      this.ctx.storage.sql.exec(
+        "DELETE FROM boot_capabilities WHERE id = ?",
+        id,
+      );
+      return undefined;
+    }
+    const tokenDigest = z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .parse(input.tokenDigest);
+    const now = z.number().int().parse(input.now);
+    const rows = bootCapabilityRows.parse(
+      this.ctx.storage.sql
+        .exec(
+          "SELECT token_digest, expires_at, record FROM boot_capabilities LIMIT 8",
+        )
+        .toArray(),
+    );
+    const encoder = new TextEncoder();
+    const candidate = encoder.encode(tokenDigest);
+    let matched: BootCapabilityLease | null = null;
+    for (const row of rows) {
+      const digest = encoder.encode(row.token_digest);
+      const equal =
+        digest.byteLength === candidate.byteLength &&
+        timingSafeEqual(candidate, digest);
+      if (equal && row.expires_at > now)
+        matched = bootCapabilityLeaseSchema.parse(JSON.parse(row.record));
+    }
+    return matched;
   }
 }
 
@@ -739,6 +1013,11 @@ export class OysterBinding extends oysterBindingEntrypoint(oysterBindings) {}
 
 /** The Instance surface a host reaches, in-process or over its RPC stub. */
 type InstanceTarget = Readonly<{
+  prepare(
+    ...args: Parameters<OysterInstance["prepare"]>
+  ): Promise<
+    InstanceResult<import("./boot-gate.js").UiBootCheckOutcome | null>
+  >;
   apply(
     ...args: Parameters<OysterInstance["apply"]>
   ): Promise<InstanceResult<Instance>>;
@@ -766,6 +1045,8 @@ function instanceHandle(
 ): InstanceHandle {
   const { tenantId, origin } = scope;
   return {
+    prepare: (state, release) =>
+      target.prepare(state, release, budget, { tenantId, origin }),
     apply: (state, release) =>
       target.apply(state, release, budget, { tenantId, origin }),
     fetch: (facts, request) => target.backend(facts, request, budget, tenantId),
@@ -900,8 +1181,8 @@ export class OysterInstance<
     );
   }
   /** The deployable root's host for one pinned tenant; this plain root is the single owner key. */
-  protected hostFor(scope: TenantScope): OysterHost {
-    return ownerKeyRootHost(this.env, { scope });
+  protected hostFor(scope: TenantScope): Promise<OysterHost> {
+    return Promise.resolve(ownerKeyRootHost(this.env, { scope }));
   }
   /** Reconstruct current host admission for each wake; non-default tenants get no wakes. */
   protected backgroundHost(): Promise<OysterHost | null> {
@@ -949,6 +1230,8 @@ export class OysterInstance<
   }
   private createRuntime(
     limits: GuestLimits,
+    candidate?: Release,
+    bootScope?: TenantScope,
   ): AppInstance<OysterInvocationHost> {
     return createCloudflareAppInstance<
       DurableObjectClass,
@@ -960,7 +1243,9 @@ export class OysterInstance<
         Effect.tryPromise({
           try: async () => {
             if (scope.kind === "invocation") return scope.frame.host.artifact;
-            const release = this.release(releaseId);
+            const release = candidate ?? this.release(releaseId);
+            if (release.releaseId !== releaseId)
+              throw new AppInstanceError("instance_release_mismatch");
             const resolved = await this.backends(release);
             if (resolved === null) throw new Error("Release has no backend");
             return { release, ...resolved };
@@ -969,6 +1254,7 @@ export class OysterInstance<
             cause instanceof Error ? cause : new Error("Release unavailable"),
         }),
       (frame) => this.guestEnv(frame),
+      (release) => oysterBootUi(this.env, bootScope ?? this.scope())(release),
       limits,
     );
   }
@@ -1125,6 +1411,16 @@ export class OysterInstance<
     runId?: string,
     tenantId: TenantId = defaultTenant,
   ): Promise<void> {
+    // CAS can complete without the first apply ever arriving. An unclaimed
+    // Instance cannot admit work: withFrame requires both ownership pins.
+    // There is nothing to revoke, and this must not invent a tenant/receipt.
+    if (
+      this.installationId() === null &&
+      this.ctx.storage.sql
+        .exec("SELECT id FROM oyster_tenant WHERE id = 1")
+        .toArray().length === 0
+    )
+      return;
     this.requireTenant(tenantId);
     if (installationId !== this.installationId())
       throw new AppInstanceError("instance_owner_mismatch");
@@ -1148,7 +1444,7 @@ export class OysterInstance<
       "kind" in current ||
       current.status !== "enabled" ||
       current.instanceId !== selected.instanceId ||
-      current.authorityVersion !== selected.authorityVersion ||
+      current.authority.authorityVersion !== selected.authorityVersion ||
       current.release.releaseId !== selected.releaseId ||
       current.release.artifact.artifactDigest !==
         frame.host.artifact.release.artifact.artifactDigest
@@ -1265,7 +1561,52 @@ export class OysterInstance<
       Schema.decodeUnknownSync(releaseRow)(row).release,
     );
   }
-  /** Remember `release`, then apply the owner state under the host's tenant pin. */
+  private rememberRelease(release: Release): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO oyster_releases(release_id, release) VALUES(?,?) ON CONFLICT(release_id) DO NOTHING",
+      release.releaseId,
+      Schema.encodeUnknownSync(Schema.fromJsonString(releaseSchema))(release),
+    );
+  }
+  /** Reuse lifecycle preflight without changing the active runtime or its budgets. */
+  async prepare(
+    state: OwnerState,
+    release: Release,
+    limits?: GuestLimits,
+    tenant?: Pick<TenantScope, "tenantId" | "origin">,
+  ): Promise<
+    InstanceResult<import("./boot-gate.js").UiBootCheckOutcome | null>
+  > {
+    let bootScope: TenantScope | undefined;
+    if (tenant !== undefined) {
+      bootScope = tenantScope(
+        Schema.decodeUnknownSync(tenantIdSchema)(tenant.tenantId),
+        tenant.origin,
+      );
+      const stored = this.ctx.storage.sql
+        .exec("SELECT tenant_id, origin FROM oyster_tenant WHERE id = 1")
+        .toArray()[0];
+      if (stored !== undefined) {
+        const pin = this.scope();
+        if (
+          pin.tenantId !== bootScope.tenantId ||
+          pin.origin !== bootScope.origin
+        )
+          throw new AppInstanceError("installation_tenant_mismatch");
+        const owner = this.installationId();
+        if (owner !== null && owner !== state.owner.id)
+          throw new AppInstanceError("instance_owner_mismatch");
+      } else if (this.installationId() !== null) {
+        throw new AppInstanceError("installation_tenant_mismatch");
+      }
+    }
+    return result(
+      this.createRuntime(guestLimits(limits), release, bootScope).prepare(
+        state,
+      ),
+    );
+  }
+  /** Activate the exact committed selection under the host's tenant pin. */
   async apply(
     state: OwnerState,
     release: Release,
@@ -1288,30 +1629,45 @@ export class OysterInstance<
       const pin = this.scope();
       if (pin.tenantId !== selected.tenantId || pin.origin !== selected.origin)
         throw new AppInstanceError("installation_tenant_mismatch");
+      const owner = this.installationId();
+      if (owner !== null && owner !== state.owner.id)
+        throw new AppInstanceError("instance_owner_mismatch");
     };
-    checkTenant();
-    await this.frames.revoke();
-    return this.frames.exclusive(async () => {
-      checkTenant();
-      this.ctx.storage.sql.exec(
-        "INSERT INTO oyster_releases(release_id, release) VALUES(?,?) ON CONFLICT(release_id) DO NOTHING",
-        release.releaseId,
-        Schema.encodeUnknownSync(Schema.fromJsonString(releaseSchema))(release),
-      );
-      const applied = await result(this.runtimeFor(limits).apply(state));
-      if (applied.ok) {
-        this.ctx.storage.sql.exec(
-          "INSERT INTO oyster_tenant (id, tenant_id, origin) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING",
-          selected.tenantId,
-          selected.origin,
-        );
-        this.ctx.storage.sql.exec(
-          "INSERT INTO oyster_owner (id, installation_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET installation_id = excluded.installation_id",
+    const committed = async () =>
+      isCommittedInstallation(
+        await this.env.REGISTRY.getByName(selected.durableName("registry")).get(
           state.owner.id,
-        );
-      }
-      return applied;
-    });
+        ),
+        state,
+        release,
+      );
+    checkTenant();
+    if (!(await committed())) return { ok: false, code: "stale_authority" };
+    await this.frames.revoke();
+    return this.frames.exclusive(
+      async (): Promise<InstanceResult<Instance>> => {
+        checkTenant();
+        if (!(await committed())) return { ok: false, code: "stale_authority" };
+        // These pins attest the committed owner, not successful activation.
+        // Persist before boot so a failed first activation can be retried or
+        // revoked/deleted without ever claiming an active lifecycle receipt.
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec(
+            "INSERT INTO oyster_tenant (id, tenant_id, origin) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING",
+            selected.tenantId,
+            selected.origin,
+          );
+          this.ctx.storage.sql.exec(
+            "INSERT INTO oyster_owner (id, installation_id) VALUES (1, ?) ON CONFLICT(id) DO NOTHING",
+            state.owner.id,
+          );
+        });
+        this.rememberRelease(release);
+        const applied = await result(this.runtimeFor(limits).apply(state));
+        if (!(await committed())) return { ok: false, code: "stale_authority" };
+        return applied;
+      },
+    );
   }
   /** Forward an admitted HTTP request to the App backend. */
   async backend(
@@ -1451,19 +1807,105 @@ export type OysterWorkspace = Readonly<{
 }>;
 
 /** Host adapters for a standalone Oyster Worker over its own bindings. */
+function registryBootCapabilities(
+  env: OysterWorkerEnv,
+  scope: TenantScope,
+): BootCapabilityStore {
+  const registry = () => env.REGISTRY.getByName(scope.durableName("registry"));
+  return {
+    issue: async (grant) => {
+      await registry().bootCapability({ kind: "issue", grant });
+    },
+    resolve: async (tokenDigest, now) => {
+      const result = await registry().bootCapability({
+        kind: "resolve",
+        tokenDigest,
+        now,
+      });
+      if (result === undefined)
+        throw new Error("Boot capability lookup returned no result");
+      return result === null ? null : bootCapabilityLeaseSchema.parse(result);
+    },
+    revoke: async (id) => {
+      await registry().bootCapability({ kind: "revoke", id });
+    },
+  };
+}
+
+/** Resolve a scoped boot URL through the registry-backed HTTPS asset route. */
+export function serveOysterBootCapability(
+  request: Request,
+  env: OysterWorkerEnv,
+  scope: TenantScope,
+): Promise<Response | null> {
+  return serveBootCapability(request, {
+    configuredOrigin: scope.origin,
+    bucket: env.RELEASES,
+    capabilities: registryBootCapabilities(env, scope),
+  });
+}
+
+/**
+ * The standalone UI boot check: the Worker's own BROWSER binding opens the
+ * pinned `/_boot/` page on the host-selected origin, with a capability in
+ * that tenant's registry. Without a BROWSER binding the UI is not checked.
+ */
+function oysterBootUi(
+  env: OysterWorkerEnv,
+  scope: TenantScope,
+): (release: Release) => Promise<UiBootCheckOutcome> {
+  const artifacts = r2ArtifactStore(env.RELEASES);
+  const capabilities = registryBootCapabilities(env, scope);
+  const sessions =
+    env.BROWSER === undefined ? null : bindingSessions(env.BROWSER);
+  return (release) =>
+    reportBootPage({
+      origin: scope.origin,
+      check:
+        sessions === null ? null : (target) => checkBootPage(sessions, target),
+      readUi: () => readBootUi(artifacts, release),
+      bucket: env.RELEASES,
+      capabilities,
+      now: Date.now,
+    });
+}
+
+/**
+ * Create an Oyster host backed by this Worker environment's registry,
+ * artifacts, Instances, and boot-check service.
+ */
 export function oysterWorkerHost(
   env: OysterWorkerEnv,
   auth: OysterAuth,
   options: Pick<OysterHost, "guestLimits" | "appToolPolicy"> &
-    Readonly<{ workspace?: OysterWorkspace; scope?: TenantScope }> = {},
+    Readonly<{
+      workspace?: OysterWorkspace;
+      scope?: TenantScope;
+    }> = {},
 ): OysterHost {
   const scope = options.scope ?? tenantScope(defaultTenant, env.OYSTER_ORIGIN);
   const registry = () => env.REGISTRY.getByName(scope.durableName("registry"));
   const installations = registryInstallations(env, scope);
+  const artifacts = r2ArtifactStore(env.RELEASES);
   const originSecret = Schema.decodeUnknownOption(Schema.NonEmptyString)(
     env.OYSTER_OWNER_KEY,
   );
+  const pin = { tenantId: scope.tenantId, origin: scope.origin };
+  const approvalControl = (actor: HostActor): Approvals => ({
+    list: (input) => registry().approvalList(pin, actor, input),
+    get: (input) => registry().approvalGet(pin, actor, input),
+    answer: (input) => registry().approvalAnswer(pin, actor, input),
+    setAutoApprove: (input) =>
+      registry().approvalSetAutoApprove(pin, actor, input),
+  });
   let host: OysterHost = {
+    approvals: {
+      submit: (call) =>
+        registry().approvalSubmit(
+          { tenantId: scope.tenantId, origin: scope.origin },
+          call,
+        ),
+    },
     auth,
     workbench: {
       directory: async () => {
@@ -1480,12 +1922,16 @@ export function oysterWorkerHost(
       }),
     },
     guestLimits: guestLimits(options.guestLimits),
-    artifacts: r2ArtifactStore(env.RELEASES),
+    artifacts,
+    bootUi: oysterBootUi(env, scope),
     // File-only hosts may keep workspace files beside their Release artifacts.
-    capabilities: fileCapabilities(
-      options.workspace?.files ??
-        r2FileSource(env.RELEASES, scope.workspacePrefix),
-    ),
+    capabilities: [
+      ...fileCapabilities(
+        options.workspace?.files ??
+          r2FileSource(env.RELEASES, scope.workspacePrefix),
+      ),
+      approvalCapability(approvalControl),
+    ],
     installations,
     instances: {
       get: (instanceId, limits) =>
@@ -1522,13 +1968,21 @@ export function oysterWorkerHost(
  */
 function ownerKeyRootHost(
   env: OysterWorkerEnv,
-  options: Pick<OysterHost, "guestLimits"> & Readonly<{ scope?: TenantScope }>,
+  options: Pick<OysterHost, "guestLimits"> &
+    Readonly<{
+      scope?: TenantScope;
+    }>,
 ): OysterHost {
   return oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY), options);
 }
 
 /** The non-git standalone root's MCP owner. */
 export class OysterMcp extends createOysterMcpOwner<OysterWorkerEnv>(
+  (env, scope) => ownerKeyRootHost(env, { scope }),
+) {}
+
+/** Ordinary Worker execution; REGISTRY receives references and receipts only. */
+export class OysterInstallationExecutor extends installationWorkerEntrypoint<OysterWorkerEnv>(
   (env, scope) => ownerKeyRootHost(env, { scope }),
 ) {}
 
@@ -1542,10 +1996,18 @@ export function createOysterWorker(
   const limits = guestLimits(options.guestLimits);
   const apps = new WeakMap<OysterWorkerEnv, ReturnType<typeof createOyster>>();
   return {
-    fetch(request, env) {
+    async fetch(request, env) {
+      const scope = tenantScope(defaultTenant, env.OYSTER_ORIGIN);
+      const boot = await serveOysterBootCapability(request, env, scope);
+      if (boot !== null) return boot;
       let app = apps.get(env);
       if (app === undefined) {
-        app = createOyster(ownerKeyRootHost(env, { guestLimits: limits }));
+        app = createOyster(
+          ownerKeyRootHost(env, {
+            guestLimits: limits,
+            scope,
+          }),
+        );
         apps.set(env, app);
       }
       return app.fetch(request);

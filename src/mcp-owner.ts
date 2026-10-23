@@ -4,7 +4,6 @@ import type { Mcp, McpPersistence } from "@fungi.computer/mycelium/mcp";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
 import type { EventStore } from "@modelcontextprotocol/server";
 import * as Schema from "effect/Schema";
-import { oysterMcpCatalogLoad } from "./mcp.js";
 import type { OysterHost, OysterMcp } from "./host.js";
 import { tenantIdSchema, tenantScope, type TenantScope } from "./tenant.js";
 
@@ -14,13 +13,17 @@ import { tenantIdSchema, tenantScope, type TenantScope } from "./tenant.js";
  * (which every request and every deploy pays) never does.
  */
 const loadMcpProtocol = async () => {
-  const [mycelium, sdk] = await Promise.all([
+  const [mycelium, sdk, catalog] = await Promise.all([
     import("@fungi.computer/mycelium/mcp"),
     import("@modelcontextprotocol/server"),
+    import("./mcp.js"),
   ]);
-  return { mycelium, sdk };
+  return { mycelium, sdk, catalog };
 };
 type McpProtocol = Awaited<ReturnType<typeof loadMcpProtocol>>;
+type McpEventProtocol = Readonly<{
+  sdk: Pick<McpProtocol["sdk"], "serializeMessage" | "parseJSONRPCMessage">;
+}>;
 
 /** Worker Loader used by the existing Mycelium sandbox. */
 export type OysterMcpOwnerEnv = Readonly<{ LOADER: WorkerLoader }>;
@@ -45,12 +48,18 @@ const eventSchema = Schema.Struct({
 export class OysterMcpOwner<
   Env extends OysterMcpOwnerEnv = OysterMcpOwnerEnv,
 > extends DurableObject<Env> {
-  #mcp: Mcp | undefined;
-  readonly #createHost: (env: Env, scope: TenantScope) => OysterHost;
+  #mcp: Promise<Mcp> | undefined;
+  readonly #createHost: (
+    env: Env,
+    scope: TenantScope,
+  ) => OysterHost | Promise<OysterHost>;
   constructor(
     ctx: DurableObjectState,
     env: Env,
-    createHost: (env: Env, scope: TenantScope) => OysterHost,
+    createHost: (
+      env: Env,
+      scope: TenantScope,
+    ) => OysterHost | Promise<OysterHost>,
   ) {
     super(ctx, env);
     this.#createHost = createHost;
@@ -71,7 +80,7 @@ export class OysterMcpOwner<
     });
   }
 
-  #eventStore(catalogId: string, { sdk }: McpProtocol): EventStore {
+  #eventStore(catalogId: string, { sdk }: McpEventProtocol): EventStore {
     const sql = this.ctx.storage.sql;
     const find = (eventId: string) => {
       const row = sql
@@ -147,53 +156,67 @@ export class OysterMcpOwner<
         scope.origin,
       );
     }
-    // Loaded before the check so the session map is still created exactly once.
-    const protocol = await loadMcpProtocol();
     if (this.#mcp === undefined) {
-      const host = this.#createHost(this.env, scope);
-      const persistence: McpPersistence = {
-        eventStore: (id) => this.#eventStore(id, protocol),
-        initialized: (id, session) => {
-          sql.exec(
-            "INSERT INTO oyster_mcp_sessions (protocol_id, catalog_id, principal) VALUES (?,?,?)",
-            id,
-            session.id,
-            JSON.stringify(session.principal),
-          );
-          return Promise.resolve();
-        },
-        closed: (id, session) => {
-          this.ctx.storage.transactionSync(() => {
-            sql.exec(
-              "DELETE FROM oyster_mcp_events WHERE catalog_id=?",
-              session.id,
-            );
-            sql.exec("DELETE FROM oyster_mcp_sessions WHERE protocol_id=?", id);
+      // Publish the flight before any await: live SDK sessions belong to one owner.
+      this.#mcp = loadMcpProtocol()
+        .then(async (protocol) => {
+          const host = await this.#createHost(this.env, scope);
+          const persistence: McpPersistence = {
+            eventStore: (id) => this.#eventStore(id, protocol),
+            initialized: (id, session) => {
+              sql.exec(
+                "INSERT INTO oyster_mcp_sessions (protocol_id, catalog_id, principal) VALUES (?,?,?)",
+                id,
+                session.id,
+                JSON.stringify(session.principal),
+              );
+              return Promise.resolve();
+            },
+            closed: (id, session) => {
+              this.ctx.storage.transactionSync(() => {
+                sql.exec(
+                  "DELETE FROM oyster_mcp_events WHERE catalog_id=?",
+                  session.id,
+                );
+                sql.exec(
+                  "DELETE FROM oyster_mcp_sessions WHERE protocol_id=?",
+                  id,
+                );
+              });
+              return Promise.resolve();
+            },
+          };
+          return protocol.mycelium.createMcp({
+            persistence,
+            catalog: protocol.mycelium.createMcpCatalog({
+              // Each acquisition captures the current durable selection. Existing
+              // operation handles retain the Computer captured by their own catalog.
+              load: async (principal) =>
+                protocol.catalog.oysterMcpCatalogLoad(
+                  await this.#createHost(this.env, scope),
+                )(principal),
+              sandbox: createCodemodeSandbox(this.env.LOADER),
+            }),
+            authenticate: async (incoming) => {
+              const admission = await host.auth.authenticate(incoming);
+              return admission.kind === "refused"
+                ? admission
+                : { kind: "admitted", principal: admission.principal };
+            },
           });
-          return Promise.resolve();
-        },
-      };
-      this.#mcp = protocol.mycelium.createMcp({
-        persistence,
-        catalog: protocol.mycelium.createMcpCatalog({
-          load: oysterMcpCatalogLoad(host),
-          sandbox: createCodemodeSandbox(this.env.LOADER),
-        }),
-        authenticate: async (incoming) => {
-          const admission = await host.auth.authenticate(incoming);
-          return admission.kind === "refused"
-            ? admission
-            : { kind: "admitted", principal: admission.principal };
-        },
-      });
+        })
+        .catch((error: unknown) => {
+          this.#mcp = undefined;
+          throw error;
+        });
     }
-    return this.#mcp.handleRequest(request);
+    return (await this.#mcp).handleRequest(request);
   }
 }
 
 /** Bind the owner to the deployment's existing host factory and options. */
 export function createOysterMcpOwner<Env extends OysterMcpOwnerEnv>(
-  host: (env: Env, scope: TenantScope) => OysterHost,
+  host: (env: Env, scope: TenantScope) => OysterHost | Promise<OysterHost>,
 ): new (ctx: DurableObjectState, env: Env) => OysterMcpOwner<Env> {
   return class extends OysterMcpOwner<Env> {
     constructor(ctx: DurableObjectState, env: Env) {

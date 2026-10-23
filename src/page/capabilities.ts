@@ -5,6 +5,7 @@ import { AppError, type CapabilityContract } from "@fungi.computer/agar";
 import type { AppHostLaunch } from "@fungi.computer/agar/host";
 import { parseJsonValue } from "@fungi.computer/whistle/wire";
 import type { CapabilityDescriptor } from "../capability-descriptor.js";
+import { computerTargetUrl } from "./computer-target.js";
 
 const queryInput = Schema.Record(
   Schema.String,
@@ -205,6 +206,7 @@ function capabilityRequest(
   installationId: string,
   route: CapabilityDescriptor["methods"][string],
   raw: CapabilityInput,
+  computerTarget?: string,
 ) {
   const resolved = resolveRoute(route.path, raw);
   const input = resolved.input;
@@ -226,9 +228,12 @@ function capabilityRequest(
   if (route.kind === "json" && route.method !== "GET") {
     headers.set("Content-Type", "application/json");
     init.body = JSON.stringify(input);
-    return { url, init };
+    return { url: computerTargetUrl(url, computerTarget), init };
   }
-  return { url: `${url}${query(input)}`, init };
+  return {
+    url: computerTargetUrl(`${url}${query(input)}`, computerTarget),
+    init,
+  };
 }
 
 async function jsonReply(url: string, init: RequestInit) {
@@ -242,6 +247,7 @@ async function jsonReply(url: string, init: RequestInit) {
 export function capabilityJsonCaller(
   descriptor: CapabilityDescriptor,
   installationId: string,
+  computerTarget?: string,
 ) {
   return async (
     method: string,
@@ -260,6 +266,7 @@ export function capabilityJsonCaller(
       installationId,
       route,
       input,
+      computerTarget,
     );
     return jsonReply(url, { ...init, signal: options?.signal });
   };
@@ -272,6 +279,7 @@ export type CapabilityJsonCaller = ReturnType<typeof capabilityJsonCaller>;
 function capabilityTransportOpener(
   descriptor: CapabilityDescriptor,
   installationId: string,
+  computerTarget?: string,
 ) {
   return (method: string, raw?: unknown): WebSocket => {
     const route = descriptor.methods[method];
@@ -288,6 +296,7 @@ function capabilityTransportOpener(
       installationId,
       route,
       Schema.decodeUnknownSync(capabilityInputSchema)(raw),
+      computerTarget,
     );
     const target = new URL(url, "https://oyster.invalid");
     // Browser WebSockets cannot send the installation header used by Fetch.
@@ -306,6 +315,7 @@ export type CapabilityTransportOpener = (
 export function capabilityHandle(
   descriptor: CapabilityDescriptor,
   installationId: string,
+  computerTarget?: string,
 ): HostCapabilityHandle {
   // Cap'n Web exposes prototype methods, never an instance's own properties.
   // Only input crosses RPC; AbortSignal options belong to the local caller.
@@ -322,6 +332,7 @@ export function capabilityHandle(
             installationId,
             route,
             input,
+            computerTarget,
           );
           if (route.kind === "read") return new ReadHandle(url, init);
           if (route.kind === "write") return new WriteHandle(url, init);
@@ -348,11 +359,12 @@ export async function registeredCapabilityHandle(
   registration: CapabilityRegistration,
   descriptor: CapabilityDescriptor,
   installationId: string,
+  computerTarget?: string,
 ): Promise<HostCapabilityHandle> {
   if (registration.createHandle === undefined)
-    return capabilityHandle(descriptor, installationId);
+    return capabilityHandle(descriptor, installationId, computerTarget);
   return await registration.createHandle(
-    capabilityJsonCaller(descriptor, installationId),
-    capabilityTransportOpener(descriptor, installationId),
+    capabilityJsonCaller(descriptor, installationId, computerTarget),
+    capabilityTransportOpener(descriptor, installationId, computerTarget),
   );
 }

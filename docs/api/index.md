@@ -28,10 +28,10 @@ new AppInstanceError(code, options?): AppInstanceError;
 
 ###### Parameters
 
-| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code`     | \| `"stale_authority"` \| `"invalid_owner_state"` \| `"invalid_invocation_facts"` \| `"revoked"` \| `"binding_not_granted"` \| `"binding_unavailable"` \| `"expired"` \| `"reentrant"` \| `"instance_identity_mismatch"` \| `"instance_owner_mismatch"` \| `"conflicting_owner_state"` \| `"instance_deleted"` \| `"release_app_mismatch"` \| `"state_schema_migration_unsupported"` \| `"instance_inactive"` \| `"instance_authority_version_mismatch"` \| `"release_no_longer_matches_instance"` \| `"instance_release_mismatch"` \| `"installation_tenant_mismatch"` |
-| `options?` | `ErrorOptions`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code`     | \| `"disabled"` \| `"stale_authority"` \| `"invalid_owner_state"` \| `"invalid_invocation_facts"` \| `"revoked"` \| `"binding_not_granted"` \| `"binding_unavailable"` \| `"expired"` \| `"reentrant"` \| `"instance_identity_mismatch"` \| `"instance_owner_mismatch"` \| `"conflicting_owner_state"` \| `"instance_deleted"` \| `"release_app_mismatch"` \| `"state_schema_migration_unsupported"` \| `"instance_inactive"` \| `"instance_authority_version_mismatch"` \| `"release_no_longer_matches_instance"` \| `"instance_release_mismatch"` \| `"installation_tenant_mismatch"` \| `"backend_load_failed"` \| `"backend_construction_failed"` \| `"ui_mount_failed"` \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` |
+| `options?` | `ErrorOptions`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ###### Returns
 
@@ -61,6 +61,7 @@ Error.name;
 
 ```ts
 readonly code:
+  | "disabled"
   | "stale_authority"
   | "invalid_owner_state"
   | "invalid_invocation_facts"
@@ -79,18 +80,63 @@ readonly code:
   | "instance_authority_version_mismatch"
   | "release_no_longer_matches_instance"
   | "instance_release_mismatch"
-  | "installation_tenant_mismatch";
+  | "installation_tenant_mismatch"
+  | "backend_load_failed"
+  | "backend_construction_failed"
+  | "ui_mount_failed"
+  | "boot_runner_unavailable"
+  | "boot_browser_binding_missing"
+  | "boot_clone_unavailable"
+  | "boot_timeout"
+  | "boot_cleanup_failed";
 ```
 
 ## Type Aliases
 
-### InstanceId
+### AgentAvatarStore
 
 ```ts
-type InstanceId = CairnId<"app-instance", "instance">;
+type AgentAvatarStore = Readonly<{
+  read: {
+    v: z.ZodLiteral<1>;
+    character: z.ZodEnum<{
+      mushroom: "mushroom";
+      cat: "cat";
+      burger: "burger";
+    }>;
+    appearance: z.ZodRecord<
+      z.ZodString,
+      z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>
+    >;
+    expression: z.ZodString;
+    renderStyle: z.ZodEnum<{
+      plain: "plain";
+      pencil: "pencil";
+      manga: "manga";
+      riso: "riso";
+      halftone: "halftone";
+      blueprint: "blueprint";
+      crt: "crt";
+      watercolor: "watercolor";
+    }>;
+  };
+  write: void;
+  remove: void;
+}>;
 ```
 
-A stable App Instance ID minted by [instanceIds](#instanceids).
+One owner-local store of chosen Agent avatars.
+
+---
+
+### UiBootCheckOutcome
+
+```ts
+type UiBootCheckOutcome = z.output<typeof uiBootCheckOutcomeSchema>;
+```
+
+A UI check result recorded on an installation operation, never installation
+authority.
 
 ---
 
@@ -182,7 +228,12 @@ type InstancePorts<Host> = Readonly<{
   read: () => Effect.Effect<Instance | null, Error>;
   write: (instance) => Effect.Effect<void, Error>;
   resolve: (release, scope) => Effect.Effect<Backend, Error>;
-  abort: () => Effect.Effect<void, Error>;
+  boot: (
+    backend,
+    priorStateSchema,
+    uiCheck,
+  ) => Effect.Effect<UiBootCheckOutcome | null, Error>;
+  abort: (reason) => Effect.Effect<void, Error>;
   purge: () => Effect.Effect<void, Error>;
   connect: (backend, frame) => Effect.Effect<AppBackendConnection, Error>;
 }>;
@@ -220,6 +271,7 @@ One admitted connection to a running App backend.
 ```ts
 type AppInstance<Host> = Readonly<{
   apply: (input) => Effect.Effect<Instance, Error>;
+  prepare: (input) => Effect.Effect<UiBootCheckOutcome | null, Error>;
   fetch: (frame, request) => Effect.Effect<Response, Error>;
   call: (frame, api, name, input) => Effect.Effect<AppMethodReply, Error>;
   gill: (frame, api, source, input) => Effect.Effect<GillReply, Error>;
@@ -238,28 +290,196 @@ The lifecycle and admission operations of one App Instance.
 | -------------- |
 | `Host`         |
 
-## Variables
+---
 
-### instanceIds
+### InstanceId
 
 ```ts
-const instanceIds: Readonly<{
-  instance: IdCodec<"app-instance", "instance", 1>;
-}>;
+type InstanceId = CairnId<"app-instance", "instance">;
 ```
 
-The Cairn ID family that mints and recognizes App Instance IDs (`instance_…`).
+A stable App Instance ID minted by [instanceIds](#instanceids).
+
+## Variables
+
+### agentAvatarSchema
+
+```ts
+const agentAvatarSchema: ZodObject<
+  {
+    v: ZodLiteral<1>;
+    character: ZodEnum<{
+      mushroom: "mushroom";
+      cat: "cat";
+      burger: "burger";
+    }>;
+    appearance: ZodRecord<
+      ZodString,
+      ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+    >;
+    expression: ZodString;
+    renderStyle: ZodEnum<{
+      plain: "plain";
+      pencil: "pencil";
+      manga: "manga";
+      riso: "riso";
+      halftone: "halftone";
+      blueprint: "blueprint";
+      crt: "crt";
+      watercolor: "watercolor";
+    }>;
+  },
+  $strict
+> = avatarSchema;
+```
+
+The catalog-valid avatar an owner may choose for an Agent.
 
 ---
 
-### instanceIdSchema
+### agentAvatarProjectionSchema
 
 ```ts
-const instanceIdSchema: Schema.Codec<InstanceId, string>;
+const agentAvatarProjectionSchema: ZodDiscriminatedUnion<
+  [
+    ZodObject<
+      {
+        v: ZodLiteral<1>;
+        character: ZodLiteral<"mushroom">;
+        appearance: ZodObject<
+          {
+            [key: string]: ZodOptional<
+              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+            >;
+          },
+          $strict
+        >;
+        expression: ZodString;
+        renderStyle: ZodEnum<{
+          plain: "plain";
+          pencil: "pencil";
+          manga: "manga";
+          riso: "riso";
+          halftone: "halftone";
+          blueprint: "blueprint";
+          crt: "crt";
+          watercolor: "watercolor";
+        }>;
+      },
+      $strict
+    >,
+    ZodObject<
+      {
+        v: ZodLiteral<1>;
+        character: ZodLiteral<"cat">;
+        appearance: ZodObject<
+          {
+            [key: string]: ZodOptional<
+              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+            >;
+          },
+          $strict
+        >;
+        expression: ZodString;
+        renderStyle: ZodEnum<{
+          plain: "plain";
+          pencil: "pencil";
+          manga: "manga";
+          riso: "riso";
+          halftone: "halftone";
+          blueprint: "blueprint";
+          crt: "crt";
+          watercolor: "watercolor";
+        }>;
+      },
+      $strict
+    >,
+    ZodObject<
+      {
+        v: ZodLiteral<1>;
+        character: ZodLiteral<"burger">;
+        appearance: ZodObject<
+          {
+            [key: string]: ZodOptional<
+              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+            >;
+          },
+          $strict
+        >;
+        expression: ZodString;
+        renderStyle: ZodEnum<{
+          plain: "plain";
+          pencil: "pencil";
+          manga: "manga";
+          riso: "riso";
+          halftone: "halftone";
+          blueprint: "blueprint";
+          crt: "crt";
+          watercolor: "watercolor";
+        }>;
+      },
+      $strict
+    >,
+  ],
+  "character"
+>;
 ```
 
-Decodes a string into an [InstanceId](#instanceid), rejecting any other ID
-family.
+The avatar as a closed record, for contracts that refuse open maps (Hub
+projections): each character's appearance names only its own controls, then the
+catalog refines it exactly as `agentAvatarSchema` does.
+
+---
+
+### uiBootCheckOutcomeSchema
+
+```ts
+const uiBootCheckOutcomeSchema: ZodDiscriminatedUnion<[ZodObject<{
+  kind: ZodLiteral<"passed">;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"failed">;
+  code: ZodLiteral<"ui_mount_failed">;
+  diagnostics: ZodOptional<ZodObject<{
+     failedPredicate: ZodEnum<{
+        unexpected_candidate_request: "unexpected_candidate_request";
+        response_status: "response_status";
+        request_failed: "request_failed";
+        page_error: "page_error";
+        candidate_not_mounted: "candidate_not_mounted";
+     }>;
+     errorName: ZodOptional<ZodEnum<{
+        TypeError: "TypeError";
+        RangeError: "RangeError";
+        SyntaxError: "SyntaxError";
+        AbortError: "AbortError";
+        TimeoutError: "TimeoutError";
+        Other: "Other";
+        Error: "Error";
+     }>>;
+     finalUrlPath: ZodString;
+     consoleErrors: ZodArray<ZodPipe<ZodPipe<ZodString, ZodTransform<..., ...>>, ZodString>>;
+     pageErrors: ZodArray<ZodPipe<ZodPipe<ZodString, ZodTransform<..., ...>>, ZodString>>;
+     failedRequests: ZodArray<ZodObject<{
+        path: ZodString;
+        status: ZodOptional<...>;
+        failureKind: ZodOptional<...>;
+     }, $strict>>;
+     droppedCount: ZodNumber;
+  }, $strict>>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"not_checked">;
+  code: ZodEnum<{
+     boot_runner_unavailable: "boot_runner_unavailable";
+     boot_browser_binding_missing: "boot_browser_binding_missing";
+     boot_clone_unavailable: "boot_clone_unavailable";
+     boot_timeout: "boot_timeout";
+     boot_cleanup_failed: "boot_cleanup_failed";
+     ui_check_not_run_on_host: "ui_check_not_run_on_host";
+  }>;
+}, $strict>], "kind">;
+```
+
+A UI check recorded on an installation operation, never installation authority.
 
 ---
 
@@ -349,6 +569,7 @@ const appInstanceErrorCodeSchema: Literals<
     "invalid_owner_state",
     "invalid_invocation_facts",
     "revoked",
+    "disabled",
     "binding_not_granted",
     "binding_unavailable",
     "expired",
@@ -365,13 +586,94 @@ const appInstanceErrorCodeSchema: Literals<
     "release_no_longer_matches_instance",
     "instance_release_mismatch",
     "installation_tenant_mismatch",
+    (
+      | "backend_load_failed"
+      | "backend_construction_failed"
+      | "ui_mount_failed"
+      | "boot_runner_unavailable"
+      | "boot_browser_binding_missing"
+      | "boot_clone_unavailable"
+      | "boot_timeout"
+      | "boot_cleanup_failed"
+    ),
   ]
 >;
 ```
 
 The runtime owns the bounded rejection grammar, including across RPC.
 
+---
+
+### instanceIds
+
+```ts
+const instanceIds: Readonly<{
+  instance: IdCodec<"app-instance", "instance", 1>;
+}>;
+```
+
+The Cairn ID family that mints and recognizes App Instance IDs (`instance_…`).
+
+---
+
+### instanceIdSchema
+
+```ts
+const instanceIdSchema: Schema.Codec<InstanceId, string>;
+```
+
+Decodes a string into an [InstanceId](#instanceid), rejecting any other ID
+family.
+
 ## Functions
+
+### avatarFromProjection()
+
+```ts
+function avatarFromProjection(projected): object;
+```
+
+A projected avatar as the Avatar descriptor Sprite draws.
+
+#### Parameters
+
+| Parameter   | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projected` | \| \{ `v`: `1`; `character`: `"mushroom"`; `appearance`: `Record`\<`string`, `string` \| `number` \| `boolean` \| `undefined`\>; `expression`: `string`; `renderStyle`: \| `"plain"` \| `"pencil"` \| `"manga"` \| `"riso"` \| `"halftone"` \| `"blueprint"` \| `"crt"` \| `"watercolor"`; \} \| \{ `v`: `1`; `character`: `"cat"`; `appearance`: `Record`\<`string`, `string` \| `number` \| `boolean` \| `undefined`\>; `expression`: `string`; `renderStyle`: \| `"plain"` \| `"pencil"` \| `"manga"` \| `"riso"` \| `"halftone"` \| `"blueprint"` \| `"crt"` \| `"watercolor"`; \} \| \{ `v`: `1`; `character`: `"burger"`; `appearance`: `Record`\<`string`, `string` \| `number` \| `boolean` \| `undefined`\>; `expression`: `string`; `renderStyle`: \| `"plain"` \| `"pencil"` \| `"manga"` \| `"riso"` \| `"halftone"` \| `"blueprint"` \| `"crt"` \| `"watercolor"`; \} |
+
+#### Returns
+
+`object`
+
+| Name          | Type                                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `v`           | `1`                                                                                                               |
+| `character`   | `"mushroom"` \| `"cat"` \| `"burger"`                                                                             |
+| `appearance`  | `z.ZodRecord`\<`z.ZodString`, `z.ZodUnion`\<readonly \[`z.ZodString`, `z.ZodNumber`, `z.ZodBoolean`\]\>\>         |
+| `expression`  | `string`                                                                                                          |
+| `renderStyle` | \| `"plain"` \| `"pencil"` \| `"manga"` \| `"riso"` \| `"halftone"` \| `"blueprint"` \| `"crt"` \| `"watercolor"` |
+
+---
+
+### createAgentAvatarStore()
+
+```ts
+function createAgentAvatarStore(sql): AgentAvatarStore;
+```
+
+Open the chosen-avatar table in the Agent directory's own SQLite.
+
+#### Parameters
+
+| Parameter | Type                                                                                |
+| --------- | ----------------------------------------------------------------------------------- |
+| `sql`     | `Readonly`\<\{ `exec`: (`statement`, ...`bindings`) => `WatchdogSqliteCursor`; \}\> |
+
+#### Returns
+
+[`AgentAvatarStore`](#agentavatarstore)
+
+---
 
 ### selectionOf()
 

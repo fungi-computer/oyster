@@ -27,6 +27,8 @@ import {
   type AssetBuildPolicy,
 } from "@fungi.computer/puffball/assets";
 import {
+  appBuildRecipe,
+  readBuildManifest,
   resolveWorkspaceBuild,
   workspaceProjectsArguments,
   type WorkspaceBuild,
@@ -498,10 +500,17 @@ function capturedWorkspaceBuild(
   snapshot: string,
   entry: string,
   run: (args: readonly string[]) => Effect.Effect<string, unknown>,
+  backendEntry?: string | null,
 ): Effect.Effect<WorkspaceBuild, unknown> {
   return Effect.flatMap(run(workspaceProjectsArguments), (projects) =>
     Effect.tryPromise({
-      try: () => resolveWorkspaceBuild({ root: snapshot, entry, projects }),
+      try: () =>
+        resolveWorkspaceBuild({
+          root: snapshot,
+          entry,
+          projects,
+          backendEntry,
+        }),
       catch: (error) => error,
     }),
   );
@@ -777,6 +786,37 @@ export function createFirstPartyAppSourceDistribution(options: {
           await collect(relativePath);
         for (const relativePath of sourceDistributionRootFiles)
           await collect(relativePath);
+        // The projected repository is one App, even though its source keeps
+        // workspace-relative paths. Preserve npm metadata and publish that
+        // App's current identity/recipe at the root registration reads.
+        const jsonObject = Schema.Record(Schema.String, Schema.Json);
+        const rootPackage = Schema.decodeUnknownSync(
+          Schema.fromJsonString(jsonObject),
+        )(await readFile(join(snapshot, "package.json"), "utf8"));
+        const rootFungi =
+          rootPackage.fungi === undefined
+            ? {}
+            : Schema.decodeUnknownSync(jsonObject)(rootPackage.fungi);
+        const manifest = readBuildManifest(
+          await readFile(join(snapshot, appDirectory, "package.json"), "utf8"),
+        );
+        collected.set(
+          "package.json",
+          Buffer.from(
+            JSON.stringify(
+              {
+                ...rootPackage,
+                fungi: {
+                  ...rootFungi,
+                  appId,
+                  build: appBuildRecipe(manifest, appDirectory),
+                },
+              },
+              null,
+              2,
+            ),
+          ),
+        );
         await collect("patches");
         if (collected.has("pnpm-lock.yaml"))
           collected.set(
@@ -923,6 +963,8 @@ function snapshotBuildEnvironment(
 /** How one build executor is composed; never part of a recipe or request. */
 export type LocalBuildExecutorOptions = Readonly<{
   packageStoreDirectory?: string;
+  /** Host-hydrated metadata; supplied only for a cache-only pnpm install. */
+  packageCacheDirectory?: string;
   /**
    * `run` executes a dependency's declared `fungi.build.script`. Only the
    * admitted Computer build sets it; every other composition refuses a source
@@ -951,6 +993,7 @@ function rebuildViteSnapshot(
       sourceSnapshotPath,
       recipe.entry,
       run,
+      recipe.backend?.entry ?? null,
     );
     yield* Effect.tryPromise({
       try: () =>
@@ -969,7 +1012,10 @@ function rebuildViteSnapshot(
     const installStarted = performance.now();
     yield* run([
       ...productionWorkspaceSelectors(html),
-      ...frozenSnapshotInstallArguments(options.packageStoreDirectory),
+      ...frozenSnapshotInstallArguments(
+        options.packageStoreDirectory,
+        options.packageCacheDirectory,
+      ),
     ]);
     const buildStarted = performance.now();
     options.onPhase?.("install", buildStarted - installStarted);
@@ -1443,7 +1489,10 @@ export function createLocalBuildExecutor(
                   new Error("Publisher requires pnpm 11.24.0"),
                 );
               yield* runHtmlCommand(
-                frozenSnapshotInstallArguments(options.packageStoreDirectory),
+                frozenSnapshotInstallArguments(
+                  options.packageStoreDirectory,
+                  options.packageCacheDirectory,
+                ),
                 source.snapshotPath,
                 environment,
               );

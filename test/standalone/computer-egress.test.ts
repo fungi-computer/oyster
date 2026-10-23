@@ -87,13 +87,18 @@ function r2Fake(objects: Map<string, Uint8Array>): ContentObjectBucket {
 
 async function egress(
   request: Request,
-  options: { publicEgress?: string; build?: OysterComputerBuildPort } = {},
+  options: {
+    publicEgress?: string;
+    build?: OysterComputerBuildPort;
+    internetAccess?: () => Promise<boolean>;
+  } = {},
 ) {
   const forwarded: Request[] = [];
   const response = await serveOysterComputerEgress(request, {
     origin,
     computerId: "computer-object",
     publicEgress: options.publicEgress,
+    internetAccess: options.internetAccess ?? (() => Promise.resolve(true)),
     build: options.build ?? liveBuild(),
     forward: (admitted) => {
       forwarded.push(admitted);
@@ -219,9 +224,53 @@ describe("standalone Oyster Computer egress", () => {
     });
     const { response } = await egress(
       new Request("https://registry.npmjs.org/react"),
-      { publicEgress: "disabled" },
+      {
+        publicEgress: "disabled",
+        internetAccess: () =>
+          Promise.reject(
+            new Error("Global off must win before a Computer read"),
+          ),
+      },
     );
     expect(response.status).toBe(403);
+  });
+
+  it("reads the Computer's live switch on every public request without changing other lanes", async () => {
+    let enabled = true;
+    let downloads = 0;
+    vi.stubGlobal("fetch", () => {
+      downloads++;
+      return Promise.resolve(new Response("package"));
+    });
+    const options = { internetAccess: () => Promise.resolve(enabled) };
+    const request = () => new Request("https://registry.npmjs.org/react");
+    expect((await egress(request(), options)).response.status).toBe(200);
+    enabled = false;
+    expect((await egress(request(), options)).response.status).toBe(403);
+    expect(downloads).toBe(1);
+    const ownGit = await egress(
+      new Request(
+        "https://oyster.test/git/bonsai/my-app.git/info/refs?service=git-upload-pack",
+      ),
+      options,
+    );
+    expect(ownGit.response.status).toBe(200);
+    enabled = true;
+    expect((await egress(request(), options)).response.status).toBe(200);
+    expect(downloads).toBe(2);
+  });
+
+  it("fails closed when this Computer's live setting cannot be read", async () => {
+    vi.stubGlobal("fetch", () => {
+      throw new Error("No public request may escape a failed settings read");
+    });
+    const { response } = await egress(
+      new Request("https://registry.npmjs.org/react"),
+      {
+        internetAccess: () => Promise.reject(new Error("Computer unavailable")),
+      },
+    );
+    expect(response.status).toBe(503);
   });
 
   it("clones a live build job's one repository with the host-held pass", async () => {

@@ -45,9 +45,10 @@ export function createStandaloneWorkflowInstallationGitCapture(
         current?.status !== "enabled" ||
         current.installationId !== installation.installationId ||
         current.instanceId !== installation.instanceId ||
-        current.authorityVersion !== installation.authorityVersion ||
-        current.declaredOperationsDigest !==
-          installation.declaredOperationsDigest ||
+        current.authority.authorityVersion !==
+          installation.authority.authorityVersion ||
+        current.authority.declaredOperationsDigest !==
+          installation.authority.declaredOperationsDigest ||
         current.release.appId !== installation.release.appId ||
         current.release.releaseId !== installation.release.releaseId ||
         current.release.artifact.artifactRef !==

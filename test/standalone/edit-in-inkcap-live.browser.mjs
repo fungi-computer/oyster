@@ -1,3 +1,4 @@
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // Edit in Inkcap on the production standalone root: captured Tourtois, Bonsai
 // and Inkcap Releases, a local real Git provider, and a real browser.
 import assert from "node:assert/strict";
@@ -84,7 +85,7 @@ for (const installationId of installations) {
       sourceDirectory: repository,
       sourceRevision: `git:${revision}`,
       packageStoreDirectory: store,
-      recipe: app.recipe,
+      recipe: committedAppRecipe(repository, app, revision),
       outDirectory: directory,
     });
   }

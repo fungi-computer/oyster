@@ -11,7 +11,7 @@ import {
   type GitPushVerdict,
 } from "@fungi.computer/agar/git";
 import * as Semaphore from "effect/Semaphore";
-import { defineIdFamily, type CairnId } from "@fungi.computer/cairn/id";
+import { instanceIdSchema } from "./instance-id.js";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { releaseIdSchema, appIdSchema } from "@fungi.computer/puffball/effect";
@@ -23,6 +23,15 @@ import { appApiSchema } from "@fungi.computer/puffball/app";
 import type { AppApi } from "@fungi.computer/puffball";
 import type { InvocationFrame } from "./invocation.js";
 import type { Installation } from "./apps/installation.js";
+import {
+  bootFailureSchema,
+  BootGateError,
+  type UiBootCheckOutcome,
+} from "./boot-gate.js";
+/** Runtime validator for report-only installation UI-check outcomes. */
+export { uiBootCheckOutcomeSchema } from "./boot-gate.js";
+/** A report-only UI-check result stored with an installation operation. */
+export type { UiBootCheckOutcome } from "./boot-gate.js";
 import {
   gillCallSchema,
   gillReplySchema,
@@ -38,21 +47,11 @@ export {
   type AgentAvatarStore,
 } from "./agent-avatars.js";
 
-/** The Cairn ID family that mints and recognizes App Instance IDs (`instance_…`). */
-export const instanceIds = defineIdFamily({
-  family: "app-instance",
-  version: 1,
-  kinds: { instance: { prefix: "instance" } },
-});
-/** A stable App Instance ID minted by {@link instanceIds}. */
-export type InstanceId = CairnId<"app-instance", "instance">;
-/** Decodes a string into an {@link InstanceId}, rejecting any other ID family. */
-export const instanceIdSchema: Schema.Codec<InstanceId, string> =
-  Schema.String.pipe(
-    Schema.refine((value): value is InstanceId =>
-      instanceIds.instance.is(value),
-    ),
-  );
+export {
+  instanceIds,
+  instanceIdSchema,
+  type InstanceId,
+} from "./instance-id.js";
 
 /**
  * The owner that issues authority for an Instance: an `installation` of an App
@@ -105,7 +104,7 @@ export function selectionOf(installation: Installation): Selection {
     owner: { kind: "installation", id: installation.installationId },
     appId: installation.release.appId,
     releaseId: installation.release.releaseId,
-    authorityVersion: installation.authorityVersion,
+    authorityVersion: installation.authority.authorityVersion,
   };
 }
 /** A decoded {@link instanceSchema} record, as returned by `apply` and `inspect`. */
@@ -121,6 +120,7 @@ export const appInstanceErrorCodeSchema = Schema.Literals([
   "invalid_owner_state",
   "invalid_invocation_facts",
   "revoked",
+  "disabled",
   "binding_not_granted",
   "binding_unavailable",
   "expired",
@@ -137,14 +137,27 @@ export const appInstanceErrorCodeSchema = Schema.Literals([
   "release_no_longer_matches_instance",
   "instance_release_mismatch",
   "installation_tenant_mismatch",
+  ...bootFailureSchema.options,
 ]);
 /** One of the bounded {@link appInstanceErrorCodeSchema} rejection codes. */
 export type AppInstanceErrorCode = typeof appInstanceErrorCodeSchema.Type;
 
 const APP_INSTANCE_ERROR_MESSAGES = {
+  backend_load_failed: new BootGateError("backend_load_failed").message,
+  backend_construction_failed: new BootGateError("backend_construction_failed")
+    .message,
+  ui_mount_failed: new BootGateError("ui_mount_failed").message,
+  boot_runner_unavailable: new BootGateError("boot_runner_unavailable").message,
+  boot_browser_binding_missing: new BootGateError(
+    "boot_browser_binding_missing",
+  ).message,
+  boot_clone_unavailable: new BootGateError("boot_clone_unavailable").message,
+  boot_timeout: new BootGateError("boot_timeout").message,
+  boot_cleanup_failed: new BootGateError("boot_cleanup_failed").message,
   invalid_owner_state: "Invalid owner state",
   invalid_invocation_facts: "Invalid invocation facts",
   revoked: "Invocation authority revoked",
+  disabled: "App disabled",
   binding_not_granted: "Binding operation not granted",
   binding_unavailable: "Binding operation unavailable on this host",
   expired: "Invocation deadline exceeded",
@@ -192,8 +205,23 @@ export type InstancePorts<Host> = Readonly<{
     release: Selection["releaseId"],
     scope: BackendResolution<Host>,
   ) => Effect.Effect<Backend, Error>;
-  /** Abort in-flight backend work and invalidate existing connections. */
-  abort: () => Effect.Effect<void, Error>;
+  /**
+   * Host-owned backend construction gate plus UI-check report. Backend
+   * construction errors block selection; the returned UI outcome is advisory.
+   * `null` means this executor deliberately did not run a UI check. The prior
+   * schema comes from this operation's persisted read, not the candidate.
+   * Prepare asks for the UI check (`"run"`); apply proves construction again
+   * but `"reuse"`s prepare's recorded result and never opens a browser.
+   * UI artifacts are verified during preparation, not re-read on apply-only
+   * lifecycle changes; Releases and their artifacts are content-addressed.
+   */
+  boot: (
+    backend: Backend,
+    priorStateSchema: Instance["stateSchema"],
+    uiCheck: "run" | "reuse",
+  ) => Effect.Effect<UiBootCheckOutcome | null, Error>;
+  /** Abort in-flight work after fencing its authority and invalidate connections. */
+  abort: (reason: AppInstanceError) => Effect.Effect<void, Error>;
   /** Delete the backend's own state. */
   purge: () => Effect.Effect<void, Error>;
   /**
@@ -241,6 +269,10 @@ export type AppInstance<Host> = Readonly<{
    * changed input at the same version conflicts and older versions are stale.
    */
   apply: (input: OwnerState) => Effect.Effect<Instance, Error>;
+  /** Run the same lifecycle and boot checks without writing, aborting or purging. */
+  prepare: (
+    input: OwnerState,
+  ) => Effect.Effect<UiBootCheckOutcome | null, Error>;
   /** Admit the frame's selection and forward an HTTP request to the active backend. */
   fetch: (
     frame: InvocationFrame<Host>,
@@ -298,49 +330,84 @@ export function createAppInstance<Host>(
     }
     return current;
   });
+  type Transition =
+    | Readonly<{ kind: "unchanged"; receipt: Instance }>
+    | Readonly<{
+        kind: "apply";
+        desired: OwnerState;
+        stateSchema: number | null;
+        bootCheck: UiBootCheckOutcome | null;
+      }>;
+  const preflight = (
+    input: OwnerState,
+    readCurrent: Effect.Effect<Instance | null, Error>,
+    uiCheck: "run" | "reuse",
+  ): Effect.Effect<Transition, Error> =>
+    Effect.gen(function* () {
+      const desired = yield* Schema.decodeUnknownEffect(ownerStateSchema)(
+        input,
+      ).pipe(
+        Effect.mapError(() => new AppInstanceError("invalid_owner_state")),
+      );
+      if (desired.instanceId !== ports.instanceId)
+        return yield* failure("instance_identity_mismatch");
+      const current = yield* readCurrent;
+      if (current && !sameOwner(current, desired))
+        return yield* failure("instance_owner_mismatch");
+      const retry =
+        current !== null &&
+        current.authorityVersion === desired.authorityVersion;
+      if (
+        retry &&
+        (current.releaseId !== desired.releaseId ||
+          current.desiredStatus !== desired.status)
+      )
+        return yield* failure("conflicting_owner_state");
+      if (current && desired.authorityVersion < current.authorityVersion)
+        return yield* failure("stale_authority");
+      if (current?.status === "deleted" || current?.status === "deleting") {
+        if (retry && desired.status === "deleted")
+          return { kind: "unchanged", receipt: current };
+        return yield* failure("instance_deleted");
+      }
+      if (retry && current.status === "active")
+        return { kind: "unchanged", receipt: current };
+      let stateSchema = current?.stateSchema ?? null;
+      let bootCheck: UiBootCheckOutcome | null = null;
+      if (desired.status === "enabled") {
+        const resolved = yield* ports.resolve(desired.releaseId, {
+          kind: "metadata",
+        });
+        if (resolved.release.appId !== desired.appId)
+          return yield* failure("release_app_mismatch");
+        if (
+          stateSchema !== null &&
+          stateSchema !== resolved.backend.runtime.stateSchema
+        )
+          return yield* failure("state_schema_migration_unsupported");
+        stateSchema = resolved.backend.runtime.stateSchema;
+        bootCheck = yield* ports.boot(
+          resolved,
+          current?.stateSchema ?? null,
+          uiCheck,
+        );
+      }
+      return { kind: "apply", desired, stateSchema, bootCheck };
+    });
+  const prepare = (input: OwnerState) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        // The one UI check for this selection; apply reuses its result.
+        const transition = yield* preflight(input, ports.read(), "run");
+        return transition.kind === "apply" ? transition.bootCheck : null;
+      }),
+    );
   const apply = (input: OwnerState) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
-        const desired = yield* Schema.decodeUnknownEffect(ownerStateSchema)(
-          input,
-        ).pipe(
-          Effect.mapError(() => new AppInstanceError("invalid_owner_state")),
-        );
-        if (desired.instanceId !== ports.instanceId)
-          return yield* failure("instance_identity_mismatch");
-        const current = yield* read;
-        if (current && !sameOwner(current, desired))
-          return yield* failure("instance_owner_mismatch");
-        const retry =
-          current !== null &&
-          current.authorityVersion === desired.authorityVersion;
-        if (
-          retry &&
-          (current.releaseId !== desired.releaseId ||
-            current.desiredStatus !== desired.status)
-        )
-          return yield* failure("conflicting_owner_state");
-        if (current && desired.authorityVersion < current.authorityVersion)
-          return yield* failure("stale_authority");
-        if (current?.status === "deleted") {
-          if (retry && desired.status === "deleted") return current;
-          return yield* failure("instance_deleted");
-        }
-        if (retry && current.status === "active") return current;
-        let stateSchema = current?.stateSchema ?? null;
-        if (desired.status === "enabled") {
-          const resolved = yield* ports.resolve(desired.releaseId, {
-            kind: "metadata",
-          });
-          if (resolved.release.appId !== desired.appId)
-            return yield* failure("release_app_mismatch");
-          if (
-            stateSchema !== null &&
-            stateSchema !== resolved.backend.runtime.stateSchema
-          )
-            return yield* failure("state_schema_migration_unsupported");
-          stateSchema = resolved.backend.runtime.stateSchema;
-        }
+        const transition = yield* preflight(input, read, "reuse");
+        if (transition.kind === "unchanged") return transition.receipt;
+        const { desired, stateSchema } = transition;
         const next = {
           ...desired,
           desiredStatus: desired.status,
@@ -352,7 +419,11 @@ export function createAppInstance<Host>(
         };
         // Persist the exact owner fact before stopping runtime; no resource-issued version.
         yield* ports.write(next);
-        yield* ports.abort();
+        yield* ports.abort(
+          new AppInstanceError(
+            desired.status === "disabled" ? "disabled" : "revoked",
+          ),
+        );
         if (desired.status === "deleted") yield* ports.purge();
         const receipt = {
           ...next,
@@ -568,6 +639,7 @@ export function createAppInstance<Host>(
     );
   return {
     syncRefused,
+    prepare,
     apply,
     fetch,
     call,

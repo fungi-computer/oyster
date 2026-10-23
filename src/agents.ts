@@ -3,7 +3,8 @@
  * the App page calls. Apps reach agents through Agar's `agent.list`,
  * `agent.manage`, `agent.read` and `agent.send` contracts, so an App written
  * for the Hub (Grove) runs unchanged. Each agent's own transport is
- * Shiitake's HTTP routes (`/sessions…`, `/acp`), served by the adapter.
+ * Shiitake's HTTP routes (`/sessions…`, `/acp`) and Knapsack's Session browser
+ * transport (`/browser/…`), served by the adapter behind the same App grants.
  */
 import { Hono, type MiddlewareHandler } from "hono";
 import type { AppToolPolicy } from "./apps/tools.js";
@@ -174,7 +175,7 @@ export type OysterAgents = Readonly<{
   ): Promise<AgentMcpServer | AgentMcpServerRefusal>;
   /** Disconnect one MCP server; `false` when the Agent or server is unknown. */
   removeMcpServer(agentId: string, serverId: string): Promise<boolean>;
-  /** Serve one Shiitake transport request (`/sessions…`, `/acp`) for an agent. */
+  /** Serve this Agent's Shiitake and Knapsack Session browser transports. */
   fetch(agentId: string, request: Request): Promise<Response | null>;
   /** This member's Session and Workflow review rows, admitted by the host. */
   inbox(): Promise<OysterInbox>;
@@ -382,7 +383,8 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
     if (!(
       path === "/acp" ||
       path === "/sessions" ||
-      path.startsWith("/sessions/")
+      path.startsWith("/sessions/") ||
+      path.startsWith("/browser/")
     ))
       return refusal(404, "Not found");
     const length = Number(incoming.headers.get("content-length") ?? "0");

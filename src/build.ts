@@ -11,6 +11,10 @@ export { readBundledHtml } from "./build/bundled-html.js";
 export { bundledHtmlRecipe, boundedBundlePolicy } from "./build/html-recipe.js";
 export {
   resolveWorkspaceBuild,
+  readBuildManifest,
+  appBuildRecipe,
+  type BuildManifest,
+  WorkspaceBuildError,
   workspaceBuildPolicySchema,
   workspaceProjectsArguments,
   type WorkspaceBuild,

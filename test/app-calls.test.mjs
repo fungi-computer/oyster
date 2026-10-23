@@ -53,7 +53,7 @@ async function fixture({
     declaration: declared,
     descriptors: [],
   });
-  if (!grant) callerInstallation.approvedGrants = [];
+  if (!grant) callerInstallation.authority.approvedGrants = [];
   const targetInstallations = Array.from({ length: targets }, (_, i) => ({
     ...targetSource,
     installationId: `bonsai-${i}`,
@@ -118,7 +118,7 @@ test("a declared member call reaches only the target with member facts and no ca
     targetDeclaration,
   } = await fixture({ targetBindings: true });
   assert.ok(
-    callerInstallation.approvedGrants.some(
+    callerInstallation.authority.approvedGrants.some(
       (grant) => grant.capability === "agent.list",
     ),
   );
@@ -205,8 +205,11 @@ test("caller approval revoked while resolving the target stops dispatch", async 
     onList(rows) {
       rows[0] = {
         ...rows[0],
-        approvedGrants: [],
-        authorityVersion: rows[0].authorityVersion + 1,
+        authority: {
+          ...rows[0].authority,
+          approvedGrants: [],
+          authorityVersion: rows[0].authority.authorityVersion + 1,
+        },
       };
     },
   });
@@ -221,7 +224,10 @@ test("a changed or disabled target after the directory read stops dispatch", asy
         rows[1] = {
           ...rows[1],
           status,
-          authorityVersion: rows[1].authorityVersion + 1,
+          authority: {
+            ...rows[1].authority,
+            authorityVersion: rows[1].authority.authorityVersion + 1,
+          },
         };
         return before;
       },
@@ -275,8 +281,11 @@ test("revoked caller is refused before consuming its body", async () => {
     onList(rows) {
       rows[0] = {
         ...rows[0],
-        approvedGrants: [],
-        authorityVersion: rows[0].authorityVersion + 1,
+        authority: {
+          ...rows[0].authority,
+          approvedGrants: [],
+          authorityVersion: rows[0].authority.authorityVersion + 1,
+        },
       };
     },
   });
@@ -315,7 +324,7 @@ test("body-read revocation of either installation refuses before target dispatch
           rows[index] = {
             ...rows[index],
             status: "disabled",
-            authorityVersion: rows[index].authorityVersion + 1,
+            authorityVersion: rows[index].authority.authorityVersion + 1,
           };
           controller.enqueue(new globalThis.TextEncoder().encode("{}"));
           controller.close();

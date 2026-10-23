@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import {
+  attachedBackendId,
+  hostedBackingSchema,
+} from "@fungi.computer/computer/backing";
+import {
   appMethodRefusalStatus,
   appMethodRefusedReplySchema,
   type AppMethodRefusedReply,
 } from "@fungi.computer/agar/backend";
-import {
-  workflowGitPassResultSchema,
-  type WorkflowGitPassResult,
-} from "@fungi.computer/agar/computer-contracts";
 import * as Schema from "effect/Schema";
 import {
   computerPortsSchema,
@@ -35,11 +35,15 @@ import {
   computerCapabilities,
   computerToolResultSchema,
   readOutputSchema,
-} from "@fungi.computer/computer/operations";
+} from "@fungi.computer/computer-contract";
 import {
   ComputerDO as NativeComputerDO,
-  ComputerFileConflict,
   ComputerOperationConflictError,
+  type AttachedBackend,
+  type ComputerEnv,
+} from "@fungi.computer/computer";
+import {
+  ComputerFileConflict,
   computerExecutionRequestSchema,
   computerValueSchema,
   computerPortInputSchema,
@@ -58,16 +62,22 @@ import {
   computerOperationResultSchema,
   mintComputerRequestId,
   processIdInputSchema,
-  type AttachedBackend,
-  type ComputerEnv,
+  type ComputerExecutionHostHooks,
   type ComputerValue,
-} from "@fungi.computer/computer";
+} from "@fungi.computer/computer-contract";
+import {
+  workflowGitExecutionEnvironment,
+  workflowGitPassGrantSchema,
+  type WorkflowGitCredential,
+  type WorkflowGitPassGrant,
+} from "@fungi.computer/braid/runtime";
 import {
   checkComputerGrant,
   computerActionSchema,
   computerGrantSchema,
   createFleetBacking,
   FleetGrantRefused,
+  FleetLifecycle,
   type ComputerAction,
   type ComputerGrant,
 } from "@fungi.computer/computer/fleet";
@@ -90,8 +100,16 @@ import type {
 } from "../workers.js";
 import type { OysterKeys, OysterKeysLivePort } from "../workers-git.js";
 import { keyAllowsComputerUse } from "../keys.js";
-import { oysterAppBuildTimeoutMs } from "../app-builds.js";
+import {
+  oysterAppBuildTimeoutMs,
+  type OysterBuildBackend,
+} from "../app-builds.js";
 import type { StandaloneRegistry } from "./registry.js";
+import type { TenantScope } from "../tenant.js";
+import {
+  workflowGitStepGrant,
+  type WorkflowGitStepEnv,
+} from "./workflow-binding.js";
 
 /** Native bindings selected by the standalone composition, never by an App. */
 export type StandaloneComputerEnv = ComputerEnv &
@@ -110,7 +128,6 @@ export type StandaloneComputerEnv = ComputerEnv &
 
 /** Finite native results cross the Workers RPC mapping without recursive JSON types. */
 export type StandaloneComputerResult =
-  | WorkflowGitPassResult
   | z.output<typeof listOutputSchema>
   | Readonly<{
       path: string;
@@ -250,12 +267,45 @@ const previewRefusal = appMethodRefusedReplySchema.parse({
  * registry that names the live canonical owner a port preview must belong to.
  */
 export type StandaloneComputerOwnerEnv = StandaloneComputerEnv &
-  StandaloneTenancyEnv;
+  StandaloneTenancyEnv &
+  Readonly<{
+    /** Each Workflows library's run owner issues its own Git credentials. */
+    WORKFLOW_RUNS: Readonly<{
+      getByName(libraryId: string): StandaloneWorkflowGitIssuer;
+    }>;
+  }>;
+
+/** The library run owner's per-invocation Workflow Git credential ports. */
+export type StandaloneWorkflowGitIssuer = Readonly<{
+  issueWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<WorkflowGitCredential>;
+  renewWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<void>;
+  closeWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<void>;
+}>;
+
+/** The non-secret context a native command carries for its admitted Git step. */
+const workflowGitExecutionContextSchema = z.lazy(() =>
+  z.strictObject({ workflowGit: workflowGitPassGrantSchema }),
+);
+
+/** The Worker's terminal route reaches this native fetch through the stub. */
+export type ComputerFetch = {
+  fetch(request: Request): Promise<Response>;
+};
 
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
-export class ComputerDO extends NativeComputerDO {
+export class ComputerDO extends NativeComputerDO implements ComputerFetch {
   #backends: readonly AttachedBackend[] | undefined;
   #preview: ReturnType<typeof createStandalonePreview> | undefined;
+  #lifecycle: FleetLifecycle | undefined;
 
   constructor(
     state: DurableObjectState,
@@ -267,6 +317,55 @@ export class ComputerDO extends NativeComputerDO {
       ...previewBindings,
       COMPUTER_EGRESS: (options) =>
         state.exports.OysterComputerEgress({ props: options.props }),
+    });
+  }
+
+  #fleetLifecycle(): FleetLifecycle {
+    if (this.#lifecycle !== undefined) return this.#lifecycle;
+    this.#lifecycle = new FleetLifecycle({
+      storage: this.state.storage,
+      alarm: this.state,
+      computerId: this.#id(),
+      runtimeWatchMs: undefined,
+      backend: {
+        state: this.state,
+        onBoxVmHost: (hostId) => this.onBoxVmHost(hostId),
+        hostedContainerHost: (backing) => this.hostedContainerHost(backing),
+        readyWorkspace: () => this.readyWorkspace(),
+        workspace: () => this.workspace(),
+        syncRecycledWorkspace: async (backing) => {
+          const workspace = await this.readyWorkspace();
+          const id = attachedBackendId(backing);
+          await workspace.push(id);
+          await workspace.pull(id);
+        },
+        attachedBackends: () => this.attachedBackends(),
+        describeBackends: () => this.describeBackends(),
+        requireHostedRoute: () => this.requireHostedRoute(),
+        containerRunning: (backing) => this.containerRunning(backing),
+        // Standalone boots use the native host directly, not Hub's admission queue.
+        vmQueuePosition: () => Promise.resolve(null),
+      },
+    });
+    return this.#lifecycle;
+  }
+
+  /** Install the fleet's creation projection before exposing its new identity. */
+  initializeFleetBackings(backings: readonly AttachedBackend[]): void {
+    const owner = createFleetBacking(this.state.storage);
+    owner.ensure();
+    this.#backends = owner.computerCreated(
+      this.#id(),
+      z.array(hostedBackingSchema).parse(backings),
+    ).backends;
+  }
+
+  /** An admitted fleet control starts exactly this Computer's hosted backend. */
+  async startHostedComputer(authority: ComputerGrant) {
+    this.#accept(authority, "start");
+    return this.#fleetLifecycle().startHostedComputer(async (_backing, run) => {
+      this.#accept(authority, "start");
+      await run();
     });
   }
 
@@ -336,6 +435,13 @@ export class ComputerDO extends NativeComputerDO {
     return this.#preview;
   }
 
+  /** A read-only preflight over the maintained hosted-route selector. */
+  buildBackend(): OysterBuildBackend {
+    return this.hostedRoute() === undefined
+      ? { kind: "no_backend" }
+      : { kind: "hosted" };
+  }
+
   /**
    * Run one App build job's fixed command, under the build budget. The
    * registry that minted the job re-admits it for this Computer first.
@@ -359,7 +465,7 @@ export class ComputerDO extends NativeComputerDO {
         requestId: mintComputerRequestId(),
       },
       () => undefined,
-      "bash",
+      "hosted",
       { maximumTimeMs: oysterAppBuildTimeoutMs },
     );
     const output = z
@@ -421,6 +527,40 @@ export class ComputerDO extends NativeComputerDO {
     return workspaceId.parse(this.state.id.name);
   }
 
+  /**
+   * The host side of native execution (Computer ABI 0edb0e4a): the grant's
+   * library run owner issues one credential for the invocation and the
+   * Computer hands it only to that command's Git environment.
+   */
+  protected override executionHooks(): ComputerExecutionHostHooks {
+    const issuer = (context: ComputerValue) => {
+      const grant =
+        workflowGitExecutionContextSchema.parse(context).workflowGit;
+      return {
+        grant,
+        runs: this.previewBindings.WORKFLOW_RUNS.getByName(grant.teamId),
+      };
+    };
+    return {
+      async open(invocation, context) {
+        const { grant, runs } = issuer(context);
+        return {
+          env: workflowGitExecutionEnvironment(
+            await runs.issueWorkflowGit(invocation.id, grant),
+          ),
+        };
+      },
+      async renew(invocation, context) {
+        const { grant, runs } = issuer(context);
+        await runs.renewWorkflowGit(invocation.id, grant);
+      },
+      async close(invocation, context) {
+        const { grant, runs } = issuer(context);
+        await runs.closeWorkflowGit(invocation.id, grant);
+      },
+    };
+  }
+
   protected override attachedBackends(): readonly AttachedBackend[] {
     if (this.#backends !== undefined) return this.#backends;
     const owner = createFleetBacking(this.state.storage);
@@ -473,7 +613,15 @@ export class ComputerDO extends NativeComputerDO {
     authority: ComputerGrant,
     action: ComputerAction,
     input: ComputerValue,
+    executionContext?: ComputerValue,
   ): Promise<StandaloneComputerResult> {
+    // Only an exact public grant rides along, and only on a native command.
+    if (
+      executionContext !== undefined &&
+      ((action !== "exec" && action !== "processStart") ||
+        !workflowGitExecutionContextSchema.safeParse(executionContext).success)
+    )
+      throw new AppInstanceError("binding_unavailable");
     const accept = () => {
       this.#accept(authority, action);
     };
@@ -494,7 +642,11 @@ export class ComputerDO extends NativeComputerDO {
         return this.listProcessesAfterAcceptance(accept);
       case "processStart":
         try {
-          return await this.startProcessAfterAcceptance(input, accept);
+          return await this.startProcessAfterAcceptance(
+            input,
+            accept,
+            executionContext,
+          );
         } catch (cause) {
           if (
             cause instanceof ComputerOperationConflictError ||
@@ -514,6 +666,8 @@ export class ComputerDO extends NativeComputerDO {
           accept,
           "bash",
           { maximumTimeMs: 45_000 },
+          undefined,
+          executionContext,
         );
       case "files.list":
         return listOutputSchema.parse(
@@ -684,8 +838,9 @@ export class ComputerDO extends NativeComputerDO {
 export function standaloneWorkspace(
   env: StandaloneComputerEnv,
   keysLive?: OysterKeysLivePort,
+  selectedComputerId: string = env.OYSTER_COMPUTER_ID,
 ): OysterWorkspace {
-  const computerId = workspaceId.parse(env.OYSTER_COMPUTER_ID);
+  const computerId = workspaceId.parse(selectedComputerId);
   const computer = () => env.COMPUTER.getByName(computerId);
   const authority = () => grant(computerId, "oyster-workspace");
   return {
@@ -859,11 +1014,6 @@ export type ComputerFrameMethods = Readonly<{
 /** Closed COMPUTER binding codecs, joined into the standalone Instance. */
 export const computerFrameMethods: ComputerFrameMethods = {
   COMPUTER: {
-    workflowGitPass: {
-      decodeArgs: (args) => z.tuple([empty]).parse(args),
-      decodeResult: (value) => workflowGitPassResultSchema.parse(value),
-      requiredOperations: () => ["workflowGitPass"],
-    },
     list: {
       decodeArgs: (args) => z.tuple([listInputSchema]).parse(args),
       decodeResult: (value) => listOutputSchema.parse(value),
@@ -932,7 +1082,6 @@ async function computerPreviewInvocation(
   args: readonly unknown[],
 ): Promise<ComputerPorts["ports"][number]> {
   const subject = frame.facts.subject;
-  const computerId = workspaceId.parse(env.OYSTER_COMPUTER_ID);
   const owner = frame.facts.selection.owner;
   if (
     subject.kind !== "call" ||
@@ -941,6 +1090,7 @@ async function computerPreviewInvocation(
     owner.kind !== "installation"
   )
     throw new AppInstanceError("revoked");
+  const computerId = workspaceId.parse(subject.context.computerId);
   // The admitted owner's member ID; the Computer owner proves it is still
   // the live canonical owner before issuing any ticket.
   const ownerId = subject.context.actor.memberId;
@@ -967,18 +1117,51 @@ async function computerPreviewInvocation(
   return preview;
 }
 
-/** Dispatch one admitted COMPUTER operation under its captured frame. */
-export function computerInvocation(
+/** Re-admit the Computer captured by this invocation, never the current UI selection. */
+async function frameComputerId(
   env: StandaloneComputerEnv,
+  scope: TenantScope,
+  frame: InvocationFrame<OysterInvocationHost>,
+): Promise<string> {
+  frame.signal.throwIfAborted();
+  const subject = frame.facts.subject;
+  if (subject.kind !== "call" || subject.context.computerId === null)
+    throw new AppInstanceError("revoked");
+  const computerId = workspaceId.parse(subject.context.computerId);
+  if (
+    !(await env.REGISTRY.getByName(scope.durableName("registry")).ownsComputer(
+      computerId,
+    ))
+  )
+    throw new AppInstanceError("revoked");
+  frame.signal.throwIfAborted();
+  return computerId;
+}
+
+/** Media and Computer bindings capture the same inventory-admitted workspace. */
+export async function standaloneFrameWorkspace(
+  env: StandaloneComputerEnv,
+  scope: TenantScope,
+  frame: InvocationFrame<OysterInvocationHost>,
+): Promise<OysterWorkspace> {
+  return standaloneWorkspace(
+    env,
+    undefined,
+    await frameComputerId(env, scope, frame),
+  );
+}
+
+/** Dispatch one admitted COMPUTER operation under its captured frame. */
+export async function computerInvocation(
+  env: StandaloneComputerEnv & WorkflowGitStepEnv,
+  scope: TenantScope,
   frame: InvocationFrame<OysterInvocationHost>,
   method: string,
   args: readonly unknown[],
 ): Promise<StandaloneComputerResult> {
-  frame.signal.throwIfAborted();
+  const computerId = await frameComputerId(env, scope, frame);
   const subject = frame.facts.subject;
-  const computerId = workspaceId.parse(env.OYSTER_COMPUTER_ID);
-  if (subject.kind !== "call" || subject.context.computerId !== computerId)
-    throw new AppInstanceError("revoked");
+  if (subject.kind !== "call") throw new AppInstanceError("revoked");
   const actor = subject.context.actor;
   if (method === "preview") return computerPreviewInvocation(env, frame, args);
   const actorId =
@@ -1054,6 +1237,15 @@ export function computerInvocation(
     default:
       throw new AppInstanceError("revoked");
   }
+  // A Workflow Git step's native commands carry only its public grant.
+  const grant =
+    action === "exec" || action === "processStart"
+      ? await workflowGitStepGrant(
+          env,
+          env.REGISTRY.getByName(scope.durableName("registry")),
+          frame,
+        )
+      : null;
   const native = env.COMPUTER.getByName(computerId);
   frame.signal.throwIfAborted();
   return native.value(
@@ -1065,5 +1257,10 @@ export function computerInvocation(
     },
     action,
     input,
+    grant === null
+      ? undefined
+      : computerValueSchema.parse(
+          JSON.parse(JSON.stringify({ workflowGit: grant })),
+        ),
   );
 }

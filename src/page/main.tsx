@@ -1,9 +1,13 @@
 import { observeDesktopGill } from "./gill-observation.js";
+import { createShellAppAccess } from "./app-access.js";
 import { createWindowLaunchTracker } from "./window-launch.js";
+import { computerTargetUrl } from "./computer-target.js";
 import { createGillClient } from "@fungi.computer/gills";
 import { createRoot } from "react-dom/client";
 import { Alert } from "@fungi.computer/caps/components/alert";
 import { AppError } from "@fungi.computer/agar";
+import { keyWire } from "@fungi.computer/ear-tag/keys";
+import { oysterKeyVocabulary } from "../keys.js";
 import {
   WorkbenchHost,
   appOpenRequestSchema,
@@ -11,16 +15,20 @@ import {
   type WorkbenchHostControls,
   type WorkbenchResolvedChild,
   type WorkbenchHostServices,
-} from "../shell/workbench.js";
+} from "@fungi.computer/nacre/workbench";
 import {
   importShellModule,
   type ShellPlatformControls,
-} from "../shell/shell-module.js";
-import { workbenchDirectorySchema } from "../shell/workbench-directory.js";
+} from "@fungi.computer/nacre/shell-module";
+import {
+  workbenchDirectorySchema,
+  workbenchComputerDirectorySchema,
+} from "@fungi.computer/nacre/workbench-directory";
 import {
   appSandbox,
   applyOysterPageTheme,
   connectOysterApp,
+  OysterAgentBrowserHost,
   mountOysterPage,
   oysterAppCapabilities,
   oysterAppConfigSchema,
@@ -87,9 +95,12 @@ function resolveLaunch(
       appId: input.appId,
       releaseId: input.releaseId,
       surfaceId: input.surfaceId,
-      // Tourtois adds presentation query fields; live host admission below
-      // chooses the Release and Computer, never those caller-supplied fields.
-      href: url.pathname,
+      // Release/presentation fields are never authority. Retain only the
+      // Computer hint; the owner/fleet admission below must accept it.
+      href: computerTargetUrl(
+        url.pathname,
+        url.searchParams.get("computerId") ?? undefined,
+      ),
       openRequest: input.openRequest,
     },
   };
@@ -97,25 +108,33 @@ function resolveLaunch(
   return { ...resolved, title: input.title };
 }
 async function currentChild(launch: WorkbenchResolvedChild["launch"]) {
+  const address = new URL(launch.href, window.location.origin);
   const row = (await directory()).apps.find(
     (app) =>
       app.surfaceId === launch.surfaceId && app.availability === "available",
   );
   if (
-    row?.surfacePath !== launch.href ||
+    row?.surfacePath !== address.pathname ||
     row.appId !== launch.appId ||
     row.releaseId !== launch.releaseId
   )
     throw unavailable("that App selection");
-  const config = await configuration(row.surfacePath);
+  const computerTarget =
+    row.computer === "owner-fleet"
+      ? (address.searchParams.get("computerId") ?? undefined)
+      : undefined;
+  const config = await configuration(
+    computerTargetUrl(row.surfacePath, computerTarget),
+  );
   if (
     config.appId !== row.appId ||
     config.releaseId !== row.releaseId ||
     config.installationId !== row.installationId ||
-    config.authorityVersion !== row.authorityVersion
+    config.authorityVersion !== row.authorityVersion ||
+    (computerTarget !== undefined && config.computerId !== computerTarget)
   )
     throw unavailable("that changed App selection");
-  return config;
+  return { ...config, computerTarget };
 }
 
 /** A shell without Settings of its own: this host offers none. */
@@ -152,6 +171,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
   const theme = applyOysterPageTheme();
   const mountController = new AbortController();
   const mountSignal = mountController.signal;
+  const agentBrowser = new OysterAgentBrowserHost(mountSignal);
   const own = oysterShellHandles(config);
   if (own.storage === null)
     throw new Error("The home shell must declare its desktop storage");
@@ -165,6 +185,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
       ? noSettings
       : await shell.mountPlatformControls(settings, {
           teamId: window.location.origin,
+          keysWire: keyWire(oysterKeyVocabulary),
+          requestAppAccess: createShellAppAccess(directory),
         });
   const controls = platform.controls;
   const gillWatches = new Set<() => void>();
@@ -198,6 +220,15 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
     directory: async () => S.decodeUnknownSync(S.Json)(await directory()),
     computers: async ({ limit, offset }) => {
       const current = await directory();
+      if (current.computerContext === "owner-fleet")
+        return workbenchComputerDirectorySchema.parse(
+          await json(
+            `/api/workbench/computers?${new URLSearchParams({
+              limit: String(limit),
+              offset: String(offset),
+            })}`,
+          ),
+        );
       return {
         computers:
           current.computer !== undefined && offset === 0 && limit > 0
@@ -306,7 +337,10 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
               ? { open: onAppOpen, role: onAppRole }
               : undefined;
           const host = await connectOysterApp({
+            agentBrowser,
+            agentCommands: options.commands.agentCommands,
             config: childConfig,
+            computerTarget: childConfig.computerTarget,
             ...(appOpen && { appOpen }),
             frame,
             signal,
@@ -326,7 +360,10 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                 Promise.reject(unavailable("file navigation")),
               openDesktopSettings: () =>
                 options.onDesktopSettings(launch.surfaceId),
-              requestAppPermissions: options.onPermissionRequest,
+              requestAppPermissions: (input) =>
+                options.onPermissionRequest(input, {
+                  computerId: launchTracker.current().computerId,
+                }),
               requestComputerChoice: () =>
                 options.events.onComputerChoice?.() ??
                 Promise.reject(unavailable("Computer choice")),
@@ -370,6 +407,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
               const fresh = await currentChild(next);
               const capabilities = await oysterAppCapabilities({
                 config: fresh,
+                computerTarget: fresh.computerTarget,
                 signal,
                 ...(appOpen && { appOpen }),
               });

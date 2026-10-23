@@ -1,6 +1,6 @@
 /**
  * Oyster's own Ear Tag vocabulary: named keys an owner issues for its
- * installed Apps and, optionally, its Computer. A key's id is its name, so
+ * installed Apps, its Computer or machine enrollment. A key's id is its name, so
  * forks and other name-derived identities stay stable across the cutover.
  */
 import { defineGrants } from "@fungi.computer/ear-tag/grants";
@@ -17,17 +17,20 @@ import type {
 import type { AppToolPolicy } from "./apps/tools.js";
 
 /** Every capability an Oyster key may carry. */
-export type OysterKeyCapability = "apps.read" | "apps.use" | "computer.use";
+export type OysterKeyCapability =
+  "apps.read" | "apps.use" | "computer.use" | "machine.enroll";
 
 /**
  * `apps.use` also reaches `apps.read` (one level, per `defineGrants`'s own
  * `implies`): a key that may change an App's data may also read it.
  * `computer.use` has no narrower capability under it; the Computer is on or
  * off, host-wide.
+ * `machine.enroll` admits enrollment only; it implies no App or Computer access.
+ * The enrollment owner, not this vocabulary, owns one-use consumption.
  */
 export const oysterKeyVocabulary: GrantVocabulary<OysterKeyCapability> =
   defineGrants({
-    capabilities: ["apps.read", "apps.use", "computer.use"],
+    capabilities: ["apps.read", "apps.use", "computer.use", "machine.enroll"],
     implies: { "apps.use": ["apps.read"] },
   });
 
@@ -99,4 +102,13 @@ export function keyAppAccess(
 /** Whether a live key's own grants turn its Computer access on. Off by default. */
 export function keyAllowsComputerUse(key: LiveOysterKey): boolean {
   return oysterKeyVocabulary.grantsAllow(key.grants, "computer.use");
+}
+
+/** Whether a live key's grants permit a one-use device enrollment. */
+export function keyAllowsMachineEnroll(key: LiveOysterKey): boolean {
+  return (
+    key.grants.length === 1 &&
+    key.grants[0]?.capability === "machine.enroll" &&
+    oysterKeyVocabulary.grantsAllow(key.grants, "machine.enroll")
+  );
 }

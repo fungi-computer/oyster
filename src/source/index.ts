@@ -14,6 +14,7 @@ export {
   readTeamAppSeedProvenance,
   privateTeamBuildSource,
   TeamAppSourceError,
+  type TeamAppSeedProvenance,
 } from "./team-source.js";
 export {
   parseTemplateSeedClaim,

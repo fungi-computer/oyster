@@ -1,3 +1,7 @@
+import {
+  nativeLabAppHost,
+  nativeAppClient,
+} from "./workflow-native.fixture.mjs";
 // Standalone Oyster's Computer egress, end to end on a real on-box VM: the
 // production root (wrangler dev, landed-push-root.fixture.ts) with real
 // Bonsai installed, a real lab vmd Computer, and a guest `git` reaching
@@ -9,247 +13,59 @@
 // Requires OYSTER_PROOF_ENV_FILE (mode 0600) naming an already-running lab
 // vmd and the worker slot port it calls back to, as shed-terminal-proof.mjs
 // and storyboard.native.mjs do. Claim that slot first.
-import process from "node:process";
+
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  stat,
-  writeFile,
-  rm,
-} from "node:fs/promises";
-import { createServer } from "node:net";
+
+import { mkdir, writeFile } from "node:fs/promises";
+
 import { URL, fileURLToPath } from "node:url";
-import { parseEnv } from "node:util";
+
 import { setTimeout as delay } from "node:timers/promises";
-import { build } from "esbuild";
+
 import * as z from "zod";
-import { parse as parseJsonc } from "jsonc-parser";
+
 import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { createAppBuild } from "@fungi.computer/puffball/app";
-import { backendMediaType } from "@fungi.computer/puffball/backend";
-import { sha256 } from "@fungi.computer/oyster/host";
+
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
 import { appBackend } from "../../../../apps/bonsai/backend/methods.ts";
 import packageMetadata from "../../../../apps/bonsai/package.json" with { type: "json" };
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
-
-const fixturePath = process.env.OYSTER_PROOF_ENV_FILE;
-assert.ok(fixturePath, "OYSTER_PROOF_ENV_FILE must name the lab VM fixture");
-assert.equal((await stat(fixturePath)).mode & 0o777, 0o600);
-const fixture = z
-  .object({
-    COMPUTER_PROOF_PORT: z.coerce.number().int().min(1).max(65535),
-    COMPUTER_VM_ORIGIN: z.url(),
-    COMPUTER_VM_DEFAULT_HOST: z.string().min(1),
-    COMPUTER_VM_HOSTS: z.string().min(1),
-    COMPUTER_VM_SIGNING_KEY: z.string().min(1),
-  })
-  .parse(parseEnv(await readFile(fixturePath, "utf8")));
-const { COMPUTER_PROOF_PORT: port, ...computerVars } = fixture;
-// The lab vmd calls back to exactly this slot; a holder must fail loudly.
-await new Promise((resolve, reject) => {
-  const socket = createServer()
-    .once("error", (cause) =>
-      reject(new Error(`Worker slot ${String(port)} is taken`, { cause })),
-    )
-    .listen(port, "127.0.0.1", () => socket.close(resolve));
-});
 
 const appDeclaration = buildAppDeclaration(
   appBackend,
   packageMetadata.fungi.app,
 );
 const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/computer-egress-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
-config.main = `${root}test/standalone/landed-push-root.fixture.ts`;
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const provider = await workflowGitProvider();
-const origin = `http://127.0.0.1:${String(port)}`;
-const tenantHost = "oyster.test";
-const auth = { Authorization: `Bearer ${key}` };
-const vars = {
-  ...computerVars,
-  OYSTER_OWNER_KEY: key,
-  OYSTER_ORIGIN: `https://${tenantHost}`,
-  GIT_ORIGIN: provider.origin,
-};
-const redact = (text) =>
-  Object.values(vars).reduce(
-    (message, value) => message.replaceAll(value, "[REDACTED]"),
-    String(text),
-  );
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/landed-push-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--local-upstream",
-    tenantHost,
-    "--upstream-protocol",
-    "https",
-    ...Object.entries(vars).flatMap(([name, value]) => [
-      "--var",
-      `${name}:${value}`,
-    ]),
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-let output = "";
-// Redacted worker log, kept after the run for diagnosis.
-const workerLog = `${root}.botanical/computer-egress-native.log`;
-await writeFile(workerLog, "");
-const capture = (chunk) => {
-  output += chunk;
-  void appendFile(workerLog, redact(chunk));
-};
-worker.stdout.on("data", capture);
-worker.stderr.on("data", capture);
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
 
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    {
-      method: "PUT",
-      headers: auth,
-      body: bytes,
-      signal: globalThis.AbortSignal.timeout(120_000),
-    },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
+// Redacted worker log, kept after the run for diagnosis.
+
+const nativeHost = await nativeLabAppHost(root, "computer-egress-native");
+const {
+  work,
+  tenantHost,
+  key,
+  origin,
+  auth,
+  redact,
+  git: hostGit,
+} = nativeHost;
+
+const { call, installFirstParty } = nativeAppClient(origin, auth, {
+  key,
+  requestMilliseconds: 120_000,
+  installationMilliseconds: 120_000,
+});
+
 async function installBonsai() {
-  const bundled = await build({
-    entryPoints: [
-      fileURLToPath(
-        new URL("../../../../apps/bonsai/backend/index.ts", import.meta.url),
-      ),
-    ],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName: "BonsaiApp",
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  log("step: backend persisted");
-  const artifact = await persist(createAppBuild(null, backend, appDeclaration));
-  log("step: build persisted; installing");
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      installationId: "bonsai",
-      release: {
-        appId: "app_bonsai",
-        releaseId: "rel_bonsai",
-        artifact: {
-          artifactRef: artifact.artifactRef,
-          artifactDigest: artifact.digest,
-          provenance: {
-            sourceRevision: `git:${"a".repeat(40)}`,
-            sourceTreeDigest: artifact.digest,
-            buildRecipeDigest: artifact.digest,
-          },
-        },
-      },
-    }),
-    signal: globalThis.AbortSignal.timeout(120_000),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
-// Always async: the in-process Git provider answers on this event loop.
-async function hostGit(...args) {
-  const child = spawn("git", args, {
-    cwd: work,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const status = await new Promise((resolve) => child.once("exit", resolve));
-  assert.equal(status, 0, redact(stderr));
-  return stdout.trim();
+  await installFirstParty("bonsai", appDeclaration);
 }
 
 const timings = {};
 try {
-  const deadline = Date.now() + 90_000;
-  while (
-    !(await globalThis
-      .fetch(`${origin}/login`, {
-        signal: globalThis.AbortSignal.timeout(2_000),
-      })
-      .then(
-        (response) => response.ok,
-        () => false,
-      ))
-  ) {
-    assert.equal(worker.exitCode, null, "Standalone Oyster exited");
-    assert.ok(Date.now() < deadline, "Standalone Oyster did not start");
-    await delay(200);
-  }
+  await nativeHost.ready();
   log("step: Oyster ready; installing Bonsai");
   await installBonsai();
   log("step: Bonsai installed; creating pond");
@@ -383,17 +199,14 @@ try {
     await client.close();
   }
   assert.match(
-    output,
+    nativeHost.output(),
     /"event":"computer\.egress".*"lane":"origin-git"/u,
     "The gateway recorded the admitted Oyster Git lane",
   );
   log(`PASS computer egress native proof ${JSON.stringify(timings)}`);
 } catch (cause) {
-  error(redact(output));
+  error(redact(nativeHost.output()));
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }

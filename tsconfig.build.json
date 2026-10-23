@@ -7,5 +7,5 @@
     "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/page/**", "src/shell/**", "src/build/snapshot-programs/**"]
+  "exclude": ["src/page/**", "src/build/snapshot-programs/**"]
 }

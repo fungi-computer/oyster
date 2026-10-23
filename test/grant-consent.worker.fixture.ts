@@ -8,35 +8,23 @@ import {
   OysterRegistry as Registry,
   type OysterWorkerEnv,
 } from "@fungi.computer/oyster/workers";
-export { OysterInstance } from "@fungi.computer/oyster/workers";
+export {
+  OysterInstance,
+  OysterInstallationExecutor,
+} from "@fungi.computer/oyster/workers";
 
 type RetainedStorage = readonly Readonly<{ value: string }>[];
 
-/** Fixture-only raw storage producer: the previous grant contract omitted this field. */
+/** Fixture-only App data producer; installation authority stays in the current contract. */
 export class OysterRegistry extends Registry {
   async fetch(request: Request): Promise<Response> {
-    if (request.method === "POST") await this.makeStale("proof");
+    if (request.method === "POST") await this.seedStorage("proof");
     return Response.json(await this.retainedData());
   }
-  private makeStale(installationId: string): Promise<void> {
+  private seedStorage(installationId: string): Promise<void> {
     const current = this.get(installationId);
     if (current === null || "kind" in current)
       throw new Error("Expected installed proof");
-    const record = {
-      ...current,
-      approvedGrants: [
-        {
-          capability: "app.events.emit",
-          operations: [],
-          resources: "tenant-scope",
-        },
-      ],
-    };
-    this.ctx.storage.sql.exec(
-      "UPDATE installations SET record=? WHERE installation_id=?",
-      JSON.stringify(record),
-      installationId,
-    );
     this.ctx.storage.sql.exec(
       "INSERT INTO hub_app_storage VALUES(?,?,?,?,?,?,?,?,?)",
       `installation:${installationId}`,
@@ -83,7 +71,7 @@ type Env = OysterWorkerEnv & {
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
-    if (url.pathname === "/__stale-proof") {
+    if (url.pathname === "/__storage-proof") {
       if (
         request.headers.get("Authorization") !==
         `Bearer ${env.OYSTER_OWNER_KEY}`
@@ -110,13 +98,17 @@ export default {
     );
     const installations: OysterHost["installations"] = {
       ...host.installations,
-      compareAndPut: async (record, expected) => {
+      compareAndPut: async (record, expected, expectedGeneration) => {
         if (request.headers.has("X-Proof-Race")) {
           const barrier: Pick<ApprovalBarrier, "join"> =
             env.APPROVAL_BARRIER.getByName("pair");
           await barrier.join();
         }
-        return host.installations.compareAndPut(record, expected);
+        return host.installations.compareAndPut(
+          record,
+          expected,
+          expectedGeneration,
+        );
       },
     };
     return createOyster({ ...host, installations }).fetch(request);

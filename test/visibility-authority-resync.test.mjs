@@ -27,23 +27,30 @@ test("an owner App method call still succeeds after a visibility change", async 
   });
   let record = await host.installations.get("context-probe");
   assert.ok(record);
+  const generation = await host.installations.generation();
   // The Instance's own view of its authority, set only by `apply`. A real
   // Instance refuses `call` the moment this disagrees with the installation's
   // current authority version.
-  let applied = null;
+  let appliedAuthorityVersion = null;
   const app = createOyster({
     ...host,
     installations: {
       ...host.installations,
       get: async (id) => (id === record.installationId ? record : null),
-      put: async (next) => {
+      compareAndPut: async (next, expected, expectedGeneration) => {
+        if (expectedGeneration !== generation)
+          return { ok: false, code: "stale_authority" };
+        if (record.authority.authorityVersion !== expected)
+          return { ok: false, code: "stale_authority" };
         record = next;
+        return { ok: true };
       },
     },
     instances: {
       get: () => ({
+        prepare: () => Promise.resolve({ ok: true, value: { kind: "passed" } }),
         apply: async (state) => {
-          applied = state;
+          appliedAuthorityVersion = state.authorityVersion;
           return {
             ok: true,
             value: {
@@ -55,8 +62,8 @@ test("an owner App method call still succeeds after a visibility change", async 
           };
         },
         call: async (facts) =>
-          applied !== null &&
-          applied.authorityVersion === facts.selection.authorityVersion
+          appliedAuthorityVersion !== null &&
+          appliedAuthorityVersion === facts.selection.authorityVersion
             ? { ok: true, value: { kind: "ok", value: { probed: true } } }
             : { ok: false, code: "instance_authority_version_mismatch" },
       }),
@@ -70,9 +77,9 @@ test("an owner App method call still succeeds after a visibility change", async 
     });
   // Prime the Instance at its install-time authority, exactly like a real
   // install does, so the test starts from a Instance that already agrees.
-  applied = { ...record, authorityVersion: record.authorityVersion };
+  appliedAuthorityVersion = record.authority.authorityVersion;
   assert.equal((await probe()).status, 200, "A fresh install must agree");
-  const authorityBeforeChange = record.authorityVersion;
+  const authorityBeforeChange = record.authority.authorityVersion;
   const changed = await app.request(
     "/api/installations/context-probe/visibility",
     {
@@ -87,7 +94,7 @@ test("an owner App method call still succeeds after a visibility change", async 
   assert.equal(changed.status, 200, "The visibility PUT itself must succeed");
   assert.equal(record.visibility, "public");
   assert.equal(
-    record.authorityVersion,
+    record.authority.authorityVersion,
     authorityBeforeChange + 1,
     "Changing visibility must bump the installation's authority version",
   );

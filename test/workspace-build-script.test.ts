@@ -1,15 +1,26 @@
 import { execFileSync } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   parseSha256Digest,
   parseSourceRevision,
 } from "@fungi.computer/puffball";
 import {
+  readBuildManifest,
   resolveWorkspaceBuild,
+  WorkspaceBuildError,
   workspaceProjectsArguments,
 } from "../src/build/workspace-build.js";
 import { normalizeAppPublisherRecipe } from "../src/build/effect.js";
@@ -18,8 +29,11 @@ import { createLocalBuildExecutor } from "../src/build/local-build.js";
 import { packageScriptArguments } from "../src/build/snapshot-package-store.js";
 
 let root: string;
+/** Fixture discovery only; the real executor still owns its pnpm commands. */
+let pnpmListings = 0;
 
 beforeEach(async () => {
+  pnpmListings = 0;
   root = await mkdtemp(join(tmpdir(), "workspace-build-script-"));
 });
 afterEach(async () => {
@@ -48,8 +62,30 @@ type FixtureManifest = Readonly<{
 
 const json = (value: FixtureManifest) => `${JSON.stringify(value, null, 2)}\n`;
 
-/** A pnpm workspace: App `apps/page` depending on package `packages/dep`. */
-async function workspace(dependency: FixtureManifest) {
+/** The three projects written by workspace(), in pnpm's inventory shape. */
+const fixtureProjects = () =>
+  JSON.stringify([
+    { name: "fixture-root", path: root },
+    { name: "@fixture/page", path: join(root, "apps/page") },
+    { name: "@fixture/dep", path: join(root, "packages/dep") },
+  ]);
+
+const pnpmProjects = () => {
+  pnpmListings += 1;
+  return execFileSync("pnpm", [...workspaceProjectsArguments], {
+    cwd: root,
+    encoding: "utf8",
+  });
+};
+
+/**
+ * Write a real workspace; manifest-policy cases do not need a CLI bootstrap.
+ * The adapter case below checks the inventory against the maintained pnpm CLI.
+ */
+async function workspace(
+  dependency: FixtureManifest,
+  projects: () => string = fixtureProjects,
+) {
   await writeFile(
     join(root, "package.json"),
     json({
@@ -73,7 +109,11 @@ async function workspace(dependency: FixtureManifest) {
       devDependencies: { vite: "8.2.2", "vite-plugin-singlefile": "2.3.3" },
     }),
   );
-  await writeFile(join(root, "apps/page/index.html"), "<!doctype html>");
+  await writeFile(
+    join(root, "apps/page/index.html"),
+    '<!doctype html><script type="module" src="./main.ts"></script>',
+  );
+  await writeFile(join(root, "apps/page/main.ts"), 'import "@fixture/dep";');
   await writeFile(
     join(root, "packages/dep/package.json"),
     json({ name: "@fixture/dep", ...dependency }),
@@ -82,10 +122,7 @@ async function workspace(dependency: FixtureManifest) {
   return resolveWorkspaceBuild({
     root,
     entry: "apps/page/index.html",
-    projects: execFileSync("pnpm", [...workspaceProjectsArguments], {
-      cwd: root,
-      encoding: "utf8",
-    }),
+    projects: projects(),
   });
 }
 
@@ -97,6 +134,32 @@ const scripted = {
   },
   fungi: { build: { script: "build" } },
 };
+
+it("resolves the fixture inventory exactly as the real pnpm workspace listing", async () => {
+  const decodeProjects = Schema.decodeUnknownSync(
+    Schema.fromJsonString(
+      Schema.Array(Schema.Struct({ name: Schema.String, path: Schema.String })),
+    ),
+  );
+  const normalizedProjects = (projects: string) =>
+    decodeProjects(projects)
+      .map(({ name, path }) => ({ name, path: normalize(path) }))
+      .sort(
+        (left, right) =>
+          left.path.localeCompare(right.path) ||
+          left.name.localeCompare(right.name),
+      );
+  const fromPnpm = await workspace(scripted, () => {
+    const projects = pnpmProjects();
+    expect(normalizedProjects(projects)).toEqual(
+      normalizedProjects(fixtureProjects()),
+    );
+    return projects;
+  });
+  expect(pnpmListings).toBe(1);
+  expect(fromPnpm).toEqual(await workspace(scripted));
+  expect(pnpmListings).toBe(1);
+});
 
 it("builds a dependency that names its package script with that script, in order", async () => {
   const build = await workspace(scripted);
@@ -116,6 +179,7 @@ it("selects any name its manifest's own scripts define, literally", async () => 
       { kind: "script", directory: "packages/dep", script },
     ]);
   }
+  expect(pnpmListings).toBe(0);
 });
 
 it("keeps the inferred TypeScript step for a dependency without a script", async () => {
@@ -123,6 +187,34 @@ it("keeps the inferred TypeScript step for a dependency without a script", async
   expect(build.steps).toEqual([
     { kind: "typescript", config: "packages/dep/tsconfig.build.json" },
   ]);
+});
+
+it("ignores erased types and authoring imports, but retains inline and selected backend runtime imports", async () => {
+  await workspace(scripted);
+  await writeFile(
+    join(root, "apps/page/main.ts"),
+    'import type { Host } from "@fixture/dep"; export type Local = Host;',
+  );
+  await writeFile(join(root, "apps/page/release.ts"), 'import "@fixture/dep";');
+  const options = {
+    root,
+    entry: "apps/page/index.html",
+    projects: fixtureProjects(),
+  };
+  expect((await resolveWorkspaceBuild(options)).steps).toEqual([]);
+  await writeFile(join(root, "apps/page/backend.ts"), 'import "@fixture/dep";');
+  const backend = await resolveWorkspaceBuild({
+    ...options,
+    backendEntry: "apps/page/backend.ts",
+  });
+  expect(backend.steps).toEqual([
+    { kind: "script", directory: "packages/dep", script: "build" },
+  ]);
+  await writeFile(
+    join(root, "apps/page/index.html"),
+    '<script type="module">import "@fixture/dep";</script>',
+  );
+  expect((await resolveWorkspaceBuild(options)).steps).toEqual(backend.steps);
 });
 
 it.each([
@@ -190,6 +282,7 @@ it("refuses a source that needs a package script outside a Computer build, befor
     "packages/dep/installed",
   ])
     await expect(access(join(root, path))).rejects.toThrow();
+  expect(pnpmListings).toBe(0);
 });
 
 it("refuses a recipe pinned under another build policy before building", async () => {
@@ -295,7 +388,166 @@ it("builds an App's own repository, the App at its root, with registry packages"
   });
 });
 
+it.each([false, true])(
+  "refuses a nested non-workspace package instead of inheriting its host closure (declared dependencies: %s)",
+  async (declaresDependencies) => {
+    await workspace(scripted);
+    const directory = "apps/page/examples/notes";
+    await mkdir(join(root, directory, "ui"), { recursive: true });
+    await writeFile(
+      join(root, directory, "package.json"),
+      json(
+        declaresDependencies
+          ? { name: "@fixture/notes", dependencies: {} }
+          : { name: "@fixture/notes" },
+      ),
+    );
+    await writeFile(join(root, directory, "ui/index.html"), "<!doctype html>");
+    const build = resolveWorkspaceBuild({
+      root,
+      entry: `${directory}/ui/index.html`,
+      projects: fixtureProjects(),
+    });
+    try {
+      await build;
+      expect.fail(
+        "A nested non-workspace package must refuse the host closure",
+      );
+    } catch (error) {
+      if (!(error instanceof WorkspaceBuildError)) throw error;
+      expect(error.code).toBe("non_workspace_package");
+      expect(error).toMatchObject({
+        name: "WorkspaceBuildError",
+        directory,
+        ownerDirectory: "apps/page",
+      });
+    }
+  },
+);
+
+it("uses a nested workspace package's own dependencies, not its parent workspace's", async () => {
+  await workspace(scripted);
+  const directory = "apps/page/examples/notes";
+  await mkdir(join(root, directory, "ui"), { recursive: true });
+  await writeFile(
+    join(root, directory, "package.json"),
+    json({ name: "@fixture/notes", dependencies: {} }),
+  );
+  await writeFile(join(root, directory, "ui/index.html"), "<!doctype html>");
+  const build = await resolveWorkspaceBuild({
+    root,
+    entry: `${directory}/ui/index.html`,
+    projects: JSON.stringify([
+      { name: "fixture-root", path: root },
+      { name: "@fixture/page", path: join(root, "apps/page") },
+      { name: "@fixture/dep", path: join(root, "packages/dep") },
+      { name: "@fixture/notes", path: join(root, directory) },
+    ]),
+  });
+  expect(build).toEqual({
+    directory,
+    packageName: "@fixture/notes",
+    react: false,
+    dependencies: [],
+    steps: [],
+  });
+});
+
+it("allows an entry below its workspace manifest when no nested package intervenes", async () => {
+  const expected = await workspace(scripted);
+  await mkdir(join(root, "apps/page/web"));
+  await writeFile(
+    join(root, "apps/page/web/index.html"),
+    '<!doctype html><script type="module" src="../main.ts"></script>',
+  );
+  expect(
+    await resolveWorkspaceBuild({
+      root,
+      entry: "apps/page/web/index.html",
+      projects: fixtureProjects(),
+    }),
+  ).toEqual(expected);
+});
+
+it("resolves the real Notes SDK dependencies and pinned UI toolchain without Oyster's host runtime", async () => {
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const directory = "packages/oyster/examples/notes-app";
+  const notes = Schema.decodeUnknownSync(
+    Schema.fromJsonString(
+      Schema.Struct({
+        dependencies: Schema.Record(Schema.String, Schema.String),
+        devDependencies: Schema.Record(Schema.String, Schema.String),
+      }),
+    ),
+  )(await readFile(join(repository, directory, "package.json"), "utf8"));
+  expect(notes.dependencies["@fungi.computer/agar"]).toBe("workspace:*");
+  expect(notes.dependencies).toHaveProperty("zod");
+  expect(notes.devDependencies.vite).toBe("8.2.2");
+  expect(notes.devDependencies.typescript).toBe("5.9.3");
+  const build = await resolveWorkspaceBuild({
+    root: repository,
+    entry: `${directory}/ui/index.html`,
+    projects: execFileSync("pnpm", [...workspaceProjectsArguments], {
+      cwd: repository,
+      encoding: "utf8",
+    }),
+  });
+  expect(build.directory).toBe(directory);
+  expect(build.packageName).toBe("oyster-notes-example");
+  expect(build.dependencies).toContain("packages/agar");
+  for (const host of [
+    "packages/oyster",
+    "packages/computer",
+    "forks/cloudflare-computer",
+  ])
+    expect(build.dependencies).not.toContain(host);
+  expect(build.steps.filter((step) => step.kind === "script")).toEqual([]);
+});
+
+it("builds Bonsai's App closure without compiling Oyster's standalone Computer host", async () => {
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const build = await resolveWorkspaceBuild({
+    root: repository,
+    entry: "apps/bonsai/web/index.html",
+    projects: execFileSync("pnpm", [...workspaceProjectsArguments], {
+      cwd: repository,
+      encoding: "utf8",
+    }),
+  });
+  expect(build.steps.filter((step) => step.kind === "script")).toEqual([]);
+  expect(build.dependencies).toContain("packages/agar");
+  expect(build.dependencies).toContain("packages/caps");
+  expect(build.dependencies).not.toContain("packages/oyster");
+  expect(build.dependencies).not.toContain("packages/computer");
+  const oyster = readBuildManifest(
+    await readFile(join(repository, "packages/oyster/package.json"), "utf8"),
+  );
+  const computer = readBuildManifest(
+    await readFile(join(repository, "packages/computer/package.json"), "utf8"),
+  );
+  expect(oyster.dependencies?.["@fungi.computer/computer"]).toBe("workspace:*");
+  expect(computer.dependencies?.["@fungi.computer/cloudflare-computer"]).toBe(
+    "workspace:*",
+  );
+});
+
+it("plans Games' runtime imports while leaving its WebP assets to Vite", async () => {
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const build = await resolveWorkspaceBuild({
+    root: repository,
+    entry: "apps/games/index.html",
+    projects: execFileSync("pnpm", [...workspaceProjectsArguments], {
+      cwd: repository,
+      encoding: "utf8",
+    }),
+  });
+  expect(build.dependencies).toContain("packages/agar");
+  expect(build.dependencies).toContain("packages/caps");
+  expect(build.steps.filter((step) => step.kind === "script")).toEqual([]);
+});
+
 it("keeps a registry package's built stylesheet and compiles only workspace ones", async () => {
+  await writeFile(join(root, "index.html"), "<!doctype html>");
   await writeFile(
     join(root, "package.json"),
     `${JSON.stringify(
@@ -325,6 +577,7 @@ it("keeps a registry package's built stylesheet and compiles only workspace ones
 });
 
 it("still refuses a stylesheet package that is neither a workspace nor a dependency", async () => {
+  await writeFile(join(root, "index.html"), "<!doctype html>");
   await writeFile(
     join(root, "package.json"),
     `${JSON.stringify(

@@ -78,17 +78,19 @@ export async function serveOysterComputerEgress(
     computerId: string;
     /** `COMPUTER_PUBLIC_EGRESS`; only `disabled` closes the public lane. */
     publicEgress: string | undefined;
+    /** Live setting from the Computer identified by the host's loopback props. */
+    internetAccess(): Promise<boolean>;
     build: OysterComputerBuildPort;
     forward(request: Request): Promise<Response>;
   }>,
 ): Promise<Response> {
-  const deny = (host: string, decision: string) =>
+  const deny = (host: string, decision: string, status = 403) =>
     computerEgressDenied({
       computerId: options.computerId,
       teamId: null,
       host,
       method: request.method,
-      status: 403,
+      status,
       decision,
     });
   let url: URL;
@@ -106,10 +108,18 @@ export async function serveOysterComputerEgress(
   if (decision.kind === "origin-git")
     response = await options.forward(originGitRequest(request, url));
   else if (decision.kind === "public") {
+    let enabled: boolean;
+    let globalEnabled: boolean;
+    try {
+      globalEnabled = publicEgressEnabled(options.publicEgress);
+      enabled = globalEnabled ? await options.internetAccess() : true;
+    } catch {
+      return deny(url.hostname, "policy-unavailable", 503);
+    }
     const lane = decidePublicLane({
-      publicEgressEnabled: publicEgressEnabled(options.publicEgress),
+      publicEgressEnabled: globalEnabled,
       teamDisabled: false,
-      computerInternetAccessEnabled: true,
+      computerInternetAccessEnabled: enabled,
     });
     if (lane.kind === "denied") return deny(url.hostname, lane.reason);
     response = anonymousResponse(await fetch(anonymousRequest(request, url)));

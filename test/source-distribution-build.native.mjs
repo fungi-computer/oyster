@@ -5,17 +5,18 @@
 // the steps from the distribution's package graph alone.
 import assert from "node:assert/strict";
 import console from "node:console";
-import process from "node:process";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { TextDecoder } from "node:util";
+import { TextDecoder, parseArgs } from "node:util";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { parseReleaseId, parseSourceRevision } from "@fungi.computer/puffball";
 import {
+  appBuildRecipe,
+  readBuildManifest,
   createAppCandidatePreparer,
   createFirstPartyAppSourceDistribution,
   createLocalBuildExecutor,
@@ -47,16 +48,14 @@ const apps = {
   trellis: ["apps/trellis/index.html", "Trellis"],
 };
 const names = Object.keys(apps);
+const { values, positionals } = parseArgs({
+  allowPositionals: true,
+  options: { "project-only": { type: "boolean", default: false } },
+});
 const selected =
-  process.argv[2] === undefined
+  positionals[0] === undefined
     ? names
-    : [Schema.decodeUnknownSync(Schema.Literals(names))(process.argv[2])];
-const assets = {
-  maxManifestBytes: 1048576,
-  maxObjects: 1024,
-  maxObjectBytes: 16777216,
-  maxTotalBytes: 67108864,
-};
+    : [Schema.decodeUnknownSync(Schema.Literals(names))(positionals[0])];
 
 for (const name of selected) {
   const [entry, exportName] = apps[name];
@@ -70,6 +69,33 @@ for (const name of selected) {
       ),
     ),
   );
+  const rootPackage = distribution.files.find(
+    (file) => file.path === "package.json",
+  );
+  assert.ok(rootPackage, "Projected repository has a root package.json");
+  const manifest = readBuildManifest(
+    new TextDecoder().decode(rootPackage.contents),
+  );
+  assert.equal(
+    manifest.fungi.appId,
+    appId,
+    "Root metadata carries the projected App identity",
+  );
+  const recipe = appBuildRecipe(manifest, "");
+  assert.equal(
+    recipe.entry,
+    entry,
+    "Root recipe addresses the projected entry",
+  );
+  assert.equal(recipe.backend?.exportName, exportName);
+  if (values["project-only"]) {
+    console.log(
+      "PASS " +
+        name +
+        ": projected root App identity/recipe; candidate build UNRUN (--project-only)",
+    );
+    continue;
+  }
   const template = await mkdtemp(join(tmpdir(), `oyster-${name}-source-`));
   try {
     for (const file of distribution.files) {
@@ -98,18 +124,7 @@ for (const name of selected) {
         createAppCandidatePreparer({
           config: {
             appId,
-            recipe: {
-              entry,
-              assets,
-              assetBase: "./",
-              maxOutputBytes: assets.maxTotalBytes,
-              backend: {
-                entry: `${entry.slice(0, entry.indexOf("/", "apps/".length))}/backend/index.ts`,
-                exportName,
-                compatibilityDate: "2026-09-04",
-                runtime: { kind: "durable-facet", stateSchema: 1 },
-              },
-            },
+            recipe,
           },
           sourceCapture: createLocalCommitSourceCapture(template, seed),
           buildExecutor: createLocalBuildExecutor({

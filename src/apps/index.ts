@@ -1,5 +1,12 @@
 /** Installation records and pure admission rules; tenant state and commits stay host-owned. */
 export {
+  applyGrantCommand,
+  appAuthoritySchema,
+  grantCommandSchema,
+  type AppAuthority,
+  type GrantCommand,
+  type GrantContext,
+  type GrantRefusal,
   applyInstallationCommand,
   approvedGrantSchema,
   declaredOperationsSchema,
@@ -11,7 +18,8 @@ export {
   type ApprovedGrant,
   type CapabilityOperationDescriptor,
   type DeclaredOperations,
-  type GrantRequest,
+  grantChangeSchema,
+  type GrantChange,
   type Installation,
   type InstallationCommand,
   type InstallationContext,
@@ -20,6 +28,26 @@ export {
   type InstallationUpdate,
   type ResourceRef,
 } from "./installation.js";
+export {
+  permissionPinsSchema,
+  permissionSaveSchema,
+  type PermissionPins,
+  appPermissionsWireSchema,
+  appPermissionPageSchema,
+  permissionScreen,
+  draftOf,
+  editPermissions,
+  planGrantChange,
+  rebaseDraft,
+  type PermissionDraft,
+  type PermissionEdit,
+  type PermissionScreen,
+  type AppPermissionsWire,
+  grantRequestFor,
+  pendingCapabilities,
+  type GrantRequestDecision,
+  type ResourceOption,
+} from "./permissions.js";
 export {
   admits,
   admitMethodMetadata,
@@ -45,3 +73,5 @@ export {
   type AppToolEntry,
   type AppToolPolicy,
 } from "./tools.js";
+
+export { permissionCatalog, type PermissionCatalogEntry } from "./catalog.js";

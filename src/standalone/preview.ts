@@ -3,7 +3,7 @@ import * as z from "zod";
 import { ComputerPortPreview } from "@fungi.computer/computer/preview";
 import { selectionSchema } from "../index.js";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
-import { computerPortInputSchema } from "@fungi.computer/computer/operations";
+import { computerPortInputSchema } from "@fungi.computer/computer-contract";
 
 export const previewSelectorSchema = Schema.Struct({
   ownerId: Schema.NonEmptyString,
@@ -191,8 +191,9 @@ export async function passivePreviewResponse(
 export async function standalonePreviewRequest(
   request: Request,
   env: StandalonePreviewEnv,
-  computerId: string,
+  ownsComputer: (computerId: string) => Promise<boolean>,
   forward: (
+    computerId: string,
     signature: string,
     port: number,
     request: Request,
@@ -212,27 +213,49 @@ export async function standalonePreviewRequest(
     request.headers.has("Upgrade")
   )
     return new Response(null, { status: 404 });
-  const path = /^\/preview\/([^/]+)\/([0-9]{1,5})\/([a-z2-7]{20})(\/.*)$/u.exec(
-    incoming.pathname,
-  );
+  const path = new URLPattern({
+    pathname: "/preview/:computerId/:port/:signature/*",
+  }).exec(incoming)?.pathname.groups;
+  if (path === undefined) return new Response(null, { status: 404 });
+  if (previewOrigins(env) === null) return new Response(null, { status: 404 });
+  const ticket = z
+    .object({
+      computerId: z.string().min(1),
+      port: z.string().regex(/^[0-9]{1,5}$/u),
+      signature: z.string().regex(/^[a-z2-7]{20}$/u),
+      "0": z.string(),
+    })
+    .safeParse(path);
+  if (!ticket.success) return new Response(null, { status: 404 });
+  let computerId: string;
+  try {
+    computerId = decodeURIComponent(ticket.data.computerId);
+  } catch (cause) {
+    if (cause instanceof URIError) return new Response(null, { status: 404 });
+    throw cause;
+  }
   if (
-    path?.[1] !== encodeURIComponent(computerId) ||
-    path[3] === undefined ||
-    path[4] === undefined
+    computerId.length === 0 ||
+    computerId.length > 256 ||
+    encodeURIComponent(computerId) !== ticket.data.computerId
   )
     return new Response(null, { status: 404 });
-  if (previewOrigins(env) === null) return new Response(null, { status: 404 });
-  const input = computerPortInputSchema.safeParse({ port: Number(path[2]) });
-  if (!input.success || String(input.data.port) !== path[2])
+  const input = computerPortInputSchema.safeParse({
+    port: Number(ticket.data.port),
+  });
+  if (!input.success || String(input.data.port) !== ticket.data.port)
+    return new Response(null, { status: 404 });
+  if (!(await ownsComputer(computerId)))
     return new Response(null, { status: 404 });
   const service = new URL("http://localhost");
-  service.pathname = path[4];
+  service.pathname = `/${ticket.data["0"]}`;
   service.search = incoming.search;
   const headers = new Headers(request.headers);
   for (const name of ["cookie", "authorization", "proxy-authorization", "host"])
     headers.delete(name);
   return forward(
-    path[3],
+    computerId,
+    ticket.data.signature,
     input.data.port,
     new Request(service, {
       method: request.method,

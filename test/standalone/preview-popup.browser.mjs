@@ -12,12 +12,21 @@ import { URL } from "node:url";
 const { Response, Request, Headers } = globalThis;
 import { chromium } from "playwright";
 import * as z from "zod";
+import * as Result from "effect/Result";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { assetBuildMediaType } from "@fungi.computer/puffball/assets";
-import { createOyster, sha256 } from "@fungi.computer/oyster/host";
+import {
+  createOyster,
+  sha256,
+  verifyRelease,
+} from "@fungi.computer/oyster/host";
 import { ownerKeyAuth } from "../../src/auth.ts";
 import { computerSlots } from "@fungi.computer/oyster/computer";
-import { instanceIds } from "@fungi.computer/oyster";
+import { instanceIds, selectionOf } from "@fungi.computer/oyster";
+import {
+  applyInstallationCommand,
+  deriveDeclaredOperations,
+} from "../../src/apps/index.ts";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 
 const hooks = registerHooks({
@@ -37,6 +46,8 @@ const hooks = registerHooks({
 const { ComputerDO, standaloneComputerCapabilities } =
   await import("../../src/standalone/computer.ts");
 const { default: worker } = await import("../../src/standalone/worker.ts");
+const { StandaloneTenants, standaloneTenancy } =
+  await import("../../src/standalone/tenancy.ts");
 
 const work = new URL("../../.botanical/preview-popup/", import.meta.url);
 await mkdir(work, { recursive: true });
@@ -99,30 +110,36 @@ const build = createAppBuild({ ...ui, mediaType: assetBuildMediaType }, null, {
   roles: [],
 });
 const root = await put(new TextEncoder().encode(JSON.stringify(build)));
-const installation = {
-  installationId: "shed",
-  instanceId: instanceIds.instance.generate(),
-  authorityVersion: 1,
-  status: "enabled",
-  release: {
-    appId: "app_shed",
-    releaseId: "rel_shed",
-    artifact: {
-      artifactRef: root.artifactRef,
-      artifactDigest: root.digest,
-      provenance: {
-        sourceRevision: `git:${"a".repeat(40)}`,
-        sourceTreeDigest: root.digest,
-        buildRecipeDigest: root.digest,
-      },
+const release = {
+  appId: "app_shed",
+  releaseId: "rel_shed",
+  artifact: {
+    artifactRef: root.artifactRef,
+    artifactDigest: root.digest,
+    provenance: {
+      sourceRevision: `git:${"a".repeat(40)}`,
+      sourceTreeDigest: root.digest,
+      buildRecipeDigest: root.digest,
     },
   },
 };
+let installation = null;
 const ownerKey = randomBytes(32).toString("hex");
-const ownerAuth = ownerKeyAuth(ownerKey);
 const calls = [];
 let previewOrigin;
 const database = new DatabaseSync(":memory:");
+const tenantsDatabase = new DatabaseSync(":memory:");
+const tenantValues = new Map();
+const tenants = new StandaloneTenants({
+  storage: {
+    ...fromNodeSqlite(tenantsDatabase),
+    get: async (name) => tenantValues.get(name),
+    put: async (name, value) => {
+      tenantValues.set(name, value);
+    },
+  },
+  blockConcurrencyWhile: (work) => work(),
+});
 const secrets = new Map();
 let exposed = true;
 let forwarded = 0;
@@ -156,8 +173,10 @@ let artifactBarrier;
 const env = {
   OYSTER_OWNER_KEY: ownerKey,
   OYSTER_COMPUTER_ID: "workspace",
+  TENANTS: { getByName: () => tenants },
   REGISTRY: {
     getByName: () => ({
+      ownsComputer: (id) => id === env.OYSTER_COMPUTER_ID,
       get: async (id) =>
         id === installation.installationId ? installation : null,
     }),
@@ -197,23 +216,6 @@ env.COMPUTER = {
     return native;
   },
 };
-const app = createOyster({
-  auth: ownerAuth,
-  computerId: "workspace",
-  artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
-  installations: {
-    get: async (id) => (id === "shed" ? installation : null),
-    list: async () => [installation],
-  },
-  instances: {
-    get: () => {
-      throw new Error("No backend call belongs in the preview popup gate");
-    },
-  },
-  capabilities: standaloneComputerCapabilities(env, {
-    computerId: "workspace",
-  }).filter((capability) => capability.id === computerSlots.ports.id),
-});
 let canonicalOrigin;
 const server = createServer(
   { key: await readFile(key), cert: await readFile(certificate) },
@@ -259,6 +261,71 @@ canonicalOrigin = `https://oyster.shiit.app:${address.port}`;
 previewOrigin = `https://oyster-contest.levi-fe0.workers.dev:${address.port}`;
 env.OYSTER_ORIGIN = canonicalOrigin;
 env.OYSTER_PREVIEW_ORIGIN = previewOrigin;
+const owner = await (await standaloneTenancy(env)).owner();
+assert.ok(owner);
+const capabilities = standaloneComputerCapabilities(env, {
+  computerId: "workspace",
+}).filter((capability) => capability.id === computerSlots.ports.id);
+const verified = await verifyRelease(
+  { get: async (ref) => artifacts.get(ref) ?? null },
+  release,
+  undefined,
+  false,
+);
+assert.ok(verified.declaration);
+const declaredOperations = await deriveDeclaredOperations(
+  release,
+  verified.declaration,
+  capabilities,
+);
+const identity = {
+  installationId: "shed",
+  instanceId: instanceIds.instance.generate(),
+};
+const commit = (command) => {
+  const result = applyInstallationCommand(installation, command, {
+    by: owner.actor,
+    role: owner.role,
+    expectedVersion:
+      installation === null ? null : selectionOf(installation).authorityVersion,
+    declaration: verified.declaration,
+    declaredOperations,
+    now: Date.now(),
+    identity,
+  });
+  if (Result.isFailure(result))
+    throw new Error(`Preview fixture approval refused: ${result.failure.code}`);
+  installation = result.success.next;
+};
+commit({ kind: "install", release, releasePin: "pinned", grants: [] });
+commit({
+  kind: "set-grants",
+  grants: declaredOperations.capabilities.map((row) => ({
+    ...row,
+    resources: "tenant-scope",
+  })),
+});
+const advanceAuthority = () => {
+  const before = selectionOf(installation).authorityVersion;
+  commit({ kind: "set-status", status: "disabled" });
+  commit({ kind: "set-status", status: "enabled" });
+  assert.notEqual(selectionOf(installation).authorityVersion, before);
+};
+const app = createOyster({
+  auth: ownerKeyAuth(ownerKey, owner.actor.memberId),
+  computerId: "workspace",
+  artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
+  installations: {
+    get: async (id) => (id === "shed" ? installation : null),
+    list: async () => [installation],
+  },
+  instances: {
+    get: () => {
+      throw new Error("No backend call belongs in the preview popup gate");
+    },
+  },
+  capabilities,
+});
 // With OYSTER_PREVIEW_ORIGIN correctly naming previewOrigin, that host stays
 // fenced off from the normal router even when the rest of the pair (the
 // owner origin) is broken or missing — misconfiguration never falls through.
@@ -414,16 +481,21 @@ try {
     const wrongPort = new URL(ticketUrl);
     wrongPort.pathname = wrongPort.pathname.replace("/3000/", "/3001/");
     assert.equal((await popup.goto(wrongPort.href))?.status(), 403);
-    const originalInstance = installation.instanceId;
-    installation.instanceId = instanceIds.instance.generate();
+    const originalInstallation = installation;
+    installation = {
+      ...installation,
+      instanceId: instanceIds.instance.generate(),
+    };
     assert.equal((await popup.goto(ticketUrl))?.status(), 403);
-    installation.instanceId = originalInstance;
-    installation.authorityVersion++;
+    installation = originalInstallation;
+    const beforeDrift = forwarded;
+    advanceAuthority();
     assert.equal((await popup.goto(ticketUrl))?.status(), 403);
-    installation.authorityVersion--;
-    installation.status = "disabled";
+    assert.equal(forwarded, beforeDrift, "Stale authority must not forward");
+    installation = originalInstallation;
+    commit({ kind: "set-status", status: "disabled" });
     assert.equal((await popup.goto(ticketUrl))?.status(), 403);
-    installation.status = "enabled";
+    installation = originalInstallation;
     for (const change of ["disable", "version"]) {
       const reading = Promise.withResolvers();
       const release = Promise.withResolvers();
@@ -434,8 +506,9 @@ try {
       };
       const navigation = popup.goto(ticketUrl);
       await reading.promise;
-      if (change === "disable") installation.status = "disabled";
-      else installation.authorityVersion++;
+      if (change === "disable")
+        commit({ kind: "set-status", status: "disabled" });
+      else advanceAuthority();
       release.resolve();
       try {
         assert.equal((await navigation)?.status(), 403);
@@ -446,8 +519,7 @@ try {
         );
       } finally {
         artifactBarrier = undefined;
-        if (change === "disable") installation.status = "enabled";
-        else installation.authorityVersion--;
+        installation = originalInstallation;
       }
     }
     exposed = false;
@@ -502,5 +574,6 @@ try {
     server.close((cause) => (cause ? reject(cause) : resolve())),
   );
   database.close();
+  tenantsDatabase.close();
   hooks.deregister();
 }

@@ -4,6 +4,10 @@ import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { URL } from "node:url";
+import { withBackendConstruction } from "../boot-construction.fixture.ts";
+import { fauxModel } from "@fungi.computer/mule/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { cloudflareStorageFixture } from "./cloudflare-storage.fixture.ts";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -28,16 +32,22 @@ const bindingWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
 const { approvedInstallation } = await import("@fungi.computer/oyster/testing");
 const { createAppBuild } = await import("@fungi.computer/puffball/app");
 const { backendMediaType } = await import("@fungi.computer/puffball/backend");
-const { standaloneWorkspace, standaloneComputerCapabilities, ComputerDO } =
-  await import("../../src/standalone/computer.ts");
-const { StandaloneInstance } = await import("../../src/standalone/worker.ts");
-const { ComputerFileConflict } = await import("@fungi.computer/computer");
 const {
+  standaloneWorkspace,
+  standaloneComputerCapabilities,
+  ComputerDO,
+  computerInvocation,
+} = await import("../../src/standalone/computer.ts");
+const { StandaloneInstance, StandaloneAgent } =
+  await import("../../src/standalone/worker.ts");
+const {
+  ComputerFileConflict,
   mintComputerProcessId,
   ComputerPortConflictError,
   computerCapabilities,
-} = await import("@fungi.computer/computer/operations");
-const { FleetGrantRefused } = await import("@fungi.computer/computer/fleet");
+} = await import("@fungi.computer/computer-contract");
+const { FleetGrantRefused, createFleetComputers } =
+  await import("@fungi.computer/computer/fleet");
 const { OysterBinding, standaloneBindings } =
   await import("../../src/standalone/instance.ts");
 const { defaultTenant, tenantScope } =
@@ -60,6 +70,101 @@ const { AgentDirectory, agentFrameMethods } =
 const { StandaloneTenants, standaloneTenancy } =
   await import("../../src/standalone/tenancy.ts");
 hooks.deregister();
+
+test("captured fleet frames keep A and B files and processes isolated from the configured default", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const fleet = createFleetComputers(fromNodeSqlite(database), {
+      limit: 2,
+      retryAfterSeconds: 30,
+    });
+    fleet.ensure();
+    const actor = { kind: "owner", id: "owner" };
+    const a = fleet.create(actor, { name: "A", requestId: "A" }, []).computer;
+    const b = fleet.create(actor, { name: "B", requestId: "B" }, []).computer;
+    const files = new Map();
+    const processes = new Map();
+    const scope = scopeOf({ OYSTER_ORIGIN: "https://fleet.test" });
+    const env = {
+      OYSTER_COMPUTER_ID: "configured-build-computer",
+      REGISTRY: {
+        getByName: (name) => {
+          assert.equal(name, scope.durableName("registry"));
+          return { ownsComputer: (id) => fleet.read(id) !== null };
+        },
+      },
+      COMPUTER: {
+        getByName: (id) => ({
+          value: async (authority, action, input) => {
+            assert.equal(authority.computerId, id);
+            if (action === "files.write") {
+              files.set(id, input.content);
+              return { path: input.path, bytesWritten: input.content.length };
+            }
+            if (action === "files.readBytes") return { content: files.get(id) };
+            if (action === "processStart") {
+              processes.set(id, input.command);
+              return { command: input.command };
+            }
+            throw new Error(`Unexpected action ${action}`);
+          },
+        }),
+      },
+    };
+    const frame = (computerId) => ({
+      signal: new globalThis.AbortController().signal,
+      facts: {
+        subject: {
+          kind: "call",
+          context: {
+            computerId,
+            actor: { kind: "member", memberId: "owner" },
+            idempotencyKey: "start",
+          },
+        },
+        selection: { owner: { kind: "installation", id: "shed" } },
+        deadlineAt: Date.now() + 60_000,
+      },
+      host: { method: { name: "run" } },
+    });
+    const capturedA = frame(a.computerId);
+    const capturedB = frame(b.computerId);
+    for (const [captured, name] of [
+      [capturedA, "A"],
+      [capturedB, "B"],
+    ]) {
+      await computerInvocation(env, scope, captured, "write", [
+        { path: "/workspace/same.txt", content: name },
+      ]);
+      await computerInvocation(env, scope, captured, "processStart", [
+        { command: `echo ${name}` },
+      ]);
+    }
+    assert.deepEqual(
+      await computerInvocation(env, scope, capturedA, "read", [
+        { path: "/workspace/same.txt" },
+      ]),
+      { content: "A" },
+    );
+    assert.deepEqual(
+      await computerInvocation(env, scope, capturedB, "read", [
+        { path: "/workspace/same.txt" },
+      ]),
+      { content: "B" },
+    );
+    assert.equal(processes.get(a.computerId), "echo A");
+    assert.equal(processes.get(b.computerId), "echo B");
+    await assert.rejects(
+      computerInvocation(env, scope, frame("foreign"), "write", [
+        { path: "/workspace/same.txt", content: "foreign" },
+      ]),
+      { code: "revoked" },
+    );
+    assert.equal(files.size, 2);
+  } finally {
+    database.close();
+  }
+});
 
 for (const { name, env, expected } of [
   { name: "container", env: {}, expected: [{ kind: "platform-container" }] },
@@ -93,6 +198,54 @@ for (const { name, env, expected } of [
     }
   });
 }
+
+test("multiple Computers start independently on standalone and foreign grants wake neither", async () => {
+  const pushed = [];
+  class HostedComputer extends ComputerDO {
+    workspace() {
+      return {
+        push: async () => {
+          pushed.push(this.state.id.name);
+          return 0;
+        },
+      };
+    }
+    async containerRunning() {
+      return true;
+    }
+  }
+  for (const computerId of ["A", "B"]) {
+    const database = new DatabaseSync(":memory:");
+    try {
+      const computer = new HostedComputer(
+        {
+          id: { name: computerId },
+          storage: fromNodeSqlite(database),
+        },
+        {},
+      );
+      const authority = {
+        computerId,
+        actions: new Set(["start"]),
+        expiresAt: Date.now() + 60_000,
+        provenance: { actor: "owner" },
+      };
+      await assert.rejects(
+        computer.startHostedComputer({
+          ...authority,
+          computerId: "foreign",
+        }),
+        FleetGrantRefused,
+      );
+      assert.deepEqual(await computer.startHostedComputer(authority), {
+        state: "running",
+      });
+    } finally {
+      database.close();
+    }
+  }
+  assert.deepEqual(pushed, ["A", "B"]);
+});
 
 // Exercise the public Instance and real shared gate. Only the Worker Loader,
 // facet transport and native Computer port are supplied by this Node fixture.
@@ -185,21 +338,22 @@ async function instanceBinding(
   };
   const instanceId = instanceIds.instance.generate();
   const defaultScope = tenantScope(defaultTenant, "https://oyster.invalid");
-  const selected = {
-    instanceId,
-    appId: release.appId,
-    releaseId: release.releaseId,
-    authorityVersion: 1,
-    owner: { kind: "installation", id: installationId },
-  };
-  const installation = await approvedInstallation({
-    installationId: selected.owner.id,
+  let installation = await approvedInstallation({
+    installationId,
     instanceId,
     release,
     declaration,
   });
+  const selected = {
+    instanceId,
+    appId: release.appId,
+    releaseId: release.releaseId,
+    authorityVersion: installation.authority.authorityVersion,
+    owner: { kind: "installation", id: installationId },
+  };
   const registry = env.REGISTRY;
   const cache = new Map();
+  const loaded = [];
   let perform;
   let facet;
   let instance;
@@ -216,6 +370,8 @@ async function instanceBinding(
     },
     REGISTRY: {
       getByName: () => ({
+        ownsComputer: (computerId) => computerId === env.OYSTER_COMPUTER_ID,
+        selectedComputer: async () => env.OYSTER_COMPUTER_ID,
         get: async () => ({
           ...installation,
           status: (await registry.getByName("registry").get("computer-proof"))
@@ -237,61 +393,83 @@ async function instanceBinding(
     LOADER: {
       get: (id, configure) => {
         if (!cache.has(id)) cache.set(id, configure());
+        const configured = cache.get(id);
+        assert.deepEqual(configured.env, {});
+        assert.equal(configured.globalOutbound, null);
+        loaded.push({ name: id, limits: configured.limits });
         return { getDurableObjectClass: () => cache.get(id) };
       },
     },
   };
   const Instance = host.Instance ?? StandaloneInstance;
-  instance = new Instance(
-    {
-      id: { name: instanceId },
-      storage: fromNodeSqlite(database),
-      blockConcurrencyWhile: (work) => {
-        const result = work();
-        pending.push(result);
-        return result;
+  const context = {
+    id: { name: instanceId },
+    storage: fromNodeSqlite(database),
+    blockConcurrencyWhile: (work) => {
+      const result = work();
+      pending.push(result);
+      return result;
+    },
+    // Every binding in every frame is the root's one entrypoint.
+    exports: host.withoutBindingEntrypoint
+      ? {}
+      : {
+          OysterBinding: ({ props }) => new OysterBinding({ props }, bindings),
+        },
+    facets: {
+      // The binding Guest has no App storage; copying it is empty.
+      clone: (source, destination) => {
+        assert.equal(source, "app");
+        assert.equal(destination, "candidate");
       },
-      // Every binding in every frame is the root's one entrypoint.
-      exports: host.withoutBindingEntrypoint
-        ? {}
-        : {
-            OysterBinding: ({ props }) =>
-              new OysterBinding({ props }, bindings),
+      get: (_name, prepare) => {
+        facet ??= prepare().class;
+        return {
+          // A generated App method answers with its typed reply.
+          invoke: async (_name, _args, rawBindings) => {
+            const bindings = bindingWire.wrap(rawBindings);
+            return {
+              kind: "ok",
+              value: await perform(bindings.COMPUTER, bindings),
+            };
           },
-      facets: {
-        get: (_name, prepare) => {
-          facet ??= prepare().class;
-          return {
-            // A generated App method answers with its typed reply.
-            invoke: async (_name, _args, rawBindings) => {
-              const bindings = bindingWire.wrap(rawBindings);
-              return {
-                kind: "ok",
-                value: await perform(bindings.COMPUTER, bindings),
-              };
-            },
-            http: async (_input, rawBindings) => {
-              const bindings = bindingWire.wrap(rawBindings);
-              const value = await perform(bindings.COMPUTER, bindings);
-              return {
-                status: 200,
-                statusText: "OK",
-                headers: [],
-                body: globalThis.Response.json(value).body,
-              };
-            },
-          };
-        },
-        abort: () => {
-          facet = undefined;
-        },
-        delete: () => {
-          facet = undefined;
-        },
+          http: async (_input, rawBindings) => {
+            const bindings = bindingWire.wrap(rawBindings);
+            const value = await perform(bindings.COMPUTER, bindings);
+            return {
+              status: 200,
+              statusText: "OK",
+              headers: [],
+              body: globalThis.Response.json(value).body,
+            };
+          },
+        };
+      },
+      abort: () => {
+        facet = undefined;
+      },
+      delete: () => {
+        facet = undefined;
       },
     },
-    bindings,
-  );
+  };
+  const construction = withBackendConstruction(context.facets, bindings.LOADER);
+  bindings.LOADER = construction.loader;
+  context.facets = construction.facets;
+  t.after(() => {
+    assert.ok(construction.probes.length > 0);
+    for (const probe of construction.probes) {
+      assert.equal(probe.completed, true);
+      assert.equal(probe.aborted, true);
+      assert.equal(probe.deleted, true);
+      assert.equal(probe.name, "candidate");
+      assert.match(probe.loaderId, /^boot:/);
+      assert.ok(loaded.some((load) => load.name === probe.loaderId));
+    }
+    for (const load of loaded)
+      assert.deepEqual(load.limits, { cpuMs: 1000, subRequests: 50 });
+  });
+  instance = new Instance(context, bindings);
   assert.equal(
     (
       await instance.apply(
@@ -410,14 +588,22 @@ async function instanceBinding(
     releaseDigest: root.digest,
     installation,
     close: () => instance.revoke(installationId),
-    /** The host applies a disabled owner state, as it does on every status change. */
-    disable: async () =>
+    /** The host commits the new owner state before delivering its activation. */
+    disable: async () => {
+      installation = {
+        ...installation,
+        status: "disabled",
+        authority: {
+          ...installation.authority,
+          authorityVersion: installation.authority.authorityVersion + 1,
+        },
+      };
       assert.equal(
         (
           await instance.apply(
             {
               ...selected,
-              authorityVersion: selected.authorityVersion + 1,
+              authorityVersion: installation.authority.authorityVersion,
               status: "disabled",
             },
             release,
@@ -426,7 +612,8 @@ async function instanceBinding(
           )
         ).ok,
         true,
-      ),
+      );
+    },
   };
 }
 
@@ -478,7 +665,13 @@ async function nativeFileBinding(t) {
     }
   }
   const computerId = "host-selected-workspace";
-  const computer = new FilePorts({ id: { name: computerId } }, {});
+  // The native Computer keeps its durable execution record in its storage.
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const computer = new FilePorts(
+    { id: { name: computerId }, storage: fromNodeSqlite(database) },
+    {},
+  );
   const { binding } = await instanceBinding(
     t,
     {
@@ -1026,8 +1219,10 @@ test("native port conflicts become safe frame and HTTP conflict replies", async 
     }
   }
   const { env } = fixture();
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
   const native = new UnavailablePort(
-    { id: { name: env.OYSTER_COMPUTER_ID } },
+    { id: { name: env.OYSTER_COMPUTER_ID }, storage: fromNodeSqlite(database) },
     {},
   );
   env.COMPUTER = { getByName: () => native };
@@ -1869,12 +2064,154 @@ for (const computerId of [null, "another-workspace"]) {
   });
 }
 
+test("App send packets require a caller-owned requestId with the ordinary UTF-8 bound", () => {
+  const { decodeArgs } = agentFrameMethods.AGENTS.send;
+  const input = {
+    agentId: "morel",
+    sessionId: "conversation",
+    text: "Continue",
+    delivery: "followUp",
+  };
+  assert.throws(() => decodeArgs([input]));
+  for (const requestId of ["intent", "a".repeat(256), "é".repeat(128)]) {
+    assert.deepEqual(decodeArgs([{ ...input, requestId }]), [
+      { ...input, requestId },
+    ]);
+  }
+  for (const requestId of ["", "a".repeat(257), "é".repeat(129)]) {
+    assert.throws(() => decodeArgs([{ ...input, requestId }]));
+  }
+});
+
+test("App send retries the same intent after an UNKNOWN reply with one real Agent delivery", async (t) => {
+  const database = new DatabaseSync(":memory:");
+  const agentDatabase = new DatabaseSync(":memory:");
+  const tasks = [];
+  t.after(async () => {
+    for (const task of tasks) await task;
+    agentDatabase.close();
+    database.close();
+  });
+  // A named directory Durable Object, as the Worker addresses it.
+  const directory = new AgentDirectory(
+    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
+  );
+  const entry = directory.create(
+    "Morel",
+    "create-morel",
+    { actor: { kind: "member", memberId: "Levi" }, role: "owner" },
+    "owner-direct",
+  );
+  const model = fauxModel([
+    fauxAssistantMessage("Delivered once"),
+    fauxAssistantMessage("A second delivery would be a defect"),
+  ]);
+  class Receiver extends StandaloneAgent {
+    modelSource() {
+      return {
+        acquire: async () => ({
+          model: model.model,
+          stream: model.stream,
+          release: () => Promise.resolve(),
+        }),
+      };
+    }
+    client() {
+      return this.shiitake();
+    }
+    async shiitakeOptions() {
+      const options = await super.shiitakeOptions();
+      return {
+        ...options,
+        // This recipient replies with text; App/tool execution is not under test.
+        tools: [],
+      };
+    }
+  }
+  const { env } = fixture();
+  const values = new Map();
+  env.AGENT_DIRECTORY = { getByName: () => directory };
+  const receiver = new Receiver(
+    {
+      id: { name: entry.agentId },
+      storage: {
+        ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
+        get: async (key) => values.get(key),
+        put: async (key, value) => {
+          values.set(key, value);
+        },
+      },
+      waitUntil: (task) => tasks.push(task),
+    },
+    env,
+  );
+  await receiver.usePolicyDirectory({
+    directoryName: "agents",
+    tenantId: defaultTenant,
+  });
+  const client = await receiver.client();
+  const sessionId = await client.createSession("app-send-session");
+  let lostReceipt;
+  let attempts = 0;
+  env.AGENTS = {
+    getByName: (agentId) => {
+      assert.equal(agentId, entry.agentId);
+      return {
+        sendFromApp: async (...args) => {
+          attempts += 1;
+          const receipt = await receiver.sendFromApp(...args);
+          if (attempts === 1) {
+            lostReceipt = receipt;
+            throw new Error("UNKNOWN: receipt lost after real Agent admission");
+          }
+          return receipt;
+        },
+      };
+    },
+  };
+  const { run } = await instanceBinding(t, env, ["ports"], "computer-proof", [
+    { name: "AGENTS", operations: ["send"] },
+  ]);
+  // Mint once for this user intent, outside either invocation/retry.
+  const input = {
+    agentId: entry.agentId,
+    sessionId,
+    requestId: "app-intent-once",
+    text: "Deliver this once",
+    delivery: "followUp",
+  };
+  const send = (_computer, bindings) => bindings.AGENTS.send(input);
+  const unknown = await run(send);
+  assert.equal(unknown.status, 502);
+  assert.ok(
+    lostReceipt?.commandId,
+    "the real Agent admitted before reply loss",
+  );
+  const retry = await run(send);
+  assert.equal(retry.status, 200, await retry.clone().text());
+  const receipt = await retry.json();
+  assert.equal(attempts, 2, "the retry reaches the real recipient again");
+  for (const task of tasks) await task;
+  const snapshot = await client.session(sessionId).read();
+  assert.equal(
+    snapshot.messages.filter(({ value }) => value.role === "user").length,
+    1,
+  );
+  assert.equal(
+    snapshot.terminals.filter(({ outcome }) => outcome === "completed").length,
+    1,
+  );
+  assert.equal(receipt.commandId, lostReceipt.commandId);
+});
+
 test("cached Agent bindings admit only the current frame before fleet effects", async (t) => {
   const database = new DatabaseSync(":memory:");
   t.after(() => database.close());
+  // A named directory Durable Object, as the Worker addresses it.
   const directory = new AgentDirectory(
-    { storage: fromNodeSqlite(database) },
-    { OYSTER_OWNER_NAME: "Levi" },
+    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
   );
   const agent = directory.create(
     "Morel",
@@ -1912,6 +2249,7 @@ test("cached Agent bindings admit only the current frame before fleet effects", 
   const input = {
     agentId: agent.agentId,
     sessionId: "conversation",
+    requestId: "continue-work",
     text: "Continue the work",
     delivery: "followUp",
   };
@@ -1931,7 +2269,7 @@ test("cached Agent bindings admit only the current frame before fleet effects", 
   assert.equal(sends[0].sessionId, input.sessionId);
   assert.equal(sends[0].message.text, input.text);
   assert.equal(sends[0].message.delivery, input.delivery);
-  assert.ok(sends[0].message.requestId.length > 0);
+  assert.equal(sends[0].message.requestId, input.requestId);
   const missing = await run(async (_computer, bindings) => {
     await assert.rejects(
       bindings.AGENTS.send({ ...input, agentId: "unknown" }),
@@ -2074,7 +2412,10 @@ for (const tenantId of ["default", "alpha"]) {
           getByName: (name) => {
             directories.push(name);
             assert.equal(name, scope.durableName("agents"));
-            return { has: async () => true };
+            return {
+              has: async () => true,
+              agentHome: async () => ({ kind: "hosted" }),
+            };
           },
         },
         AGENTS: {
@@ -2096,6 +2437,7 @@ for (const tenantId of ["default", "alpha"]) {
       bindings.AGENTS.send({
         agentId: "morel",
         sessionId: "conversation",
+        requestId: "continue-work",
         text: "Continue",
         delivery: "followUp",
       }),
@@ -2222,6 +2564,159 @@ test("MCP Computer tools carry the HTTP routes' caller grant; visitors and Agent
   }
 });
 
+// The standalone Computer's native execution hooks: each library's run owner
+// issues, renews and closes its own credential; nothing is live before the
+// native Computer proves it.
+test("standalone execution hooks reach the grant's own library issuer; an unopened invocation is not live", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const calls = [];
+    const issuer = (library) => ({
+      async issueWorkflowGit(invocationId, grant) {
+        calls.push(["issue", library, invocationId, grant.runId]);
+        return {
+          bearer: "wgp." + library + "." + "d".repeat(64),
+          remote: "https://oyster.test/git/bonsai/pond.git",
+          expiresAt: 61_000,
+        };
+      },
+      async renewWorkflowGit(invocationId) {
+        calls.push(["renew", library, invocationId]);
+      },
+      async closeWorkflowGit(invocationId) {
+        calls.push(["close", library, invocationId]);
+      },
+    });
+    const computer = new ComputerDO(
+      { id: { name: "workspace" }, storage: fromNodeSqlite(database) },
+      { WORKFLOW_RUNS: { getByName: issuer } },
+    );
+    const grant = (library) => ({
+      teamId: library,
+      computerId: "workspace",
+      memberId: "owner",
+      runId: "run-" + library,
+      workflow: {
+        workflowId: "save",
+        runId: "run-" + library,
+        nodeId: "push",
+        armedBy: { kind: "member", memberId: "owner" },
+      },
+      nodeId: "push",
+      iteration: "0",
+      scope: "write",
+      gitAccess: {
+        repository: {
+          kind: "installation",
+          installationId: "bonsai",
+          repository: "pond",
+        },
+        branches: ["refs/heads/main"],
+      },
+    });
+    const hooks = computer.executionHooks();
+    const opened = await hooks.open(
+      { id: "exec:a", kind: "exec" },
+      { workflowGit: grant("library-a") },
+    );
+    assert.deepEqual(opened, {
+      env: {
+        FUNGI_GIT_REMOTE: "https://oyster.test/git/bonsai/pond.git",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0:
+          "http.https://oyster.test/git/bonsai/pond.git.extraHeader",
+        GIT_CONFIG_VALUE_0:
+          "Authorization: Bearer wgp.library-a." + "d".repeat(64),
+      },
+    });
+    await hooks.renew(
+      { id: "process:b", kind: "process" },
+      { workflowGit: grant("library-b") },
+    );
+    await hooks.close(
+      { id: "exec:a", kind: "exec" },
+      { workflowGit: grant("library-a") },
+      "native_exit",
+    );
+    assert.deepEqual(calls, [
+      ["issue", "library-a", "exec:a", "run-library-a"],
+      ["renew", "library-b", "process:b"],
+      ["close", "library-a", "exec:a"],
+    ]);
+    // A context that is not exactly a public grant reaches no issuer.
+    await assert.rejects(
+      hooks.open(
+        { id: "exec:c", kind: "exec" },
+        { workflowGit: { ...grant("library-a"), bearer: "wgp.x" } },
+      ),
+    );
+    assert.equal(calls.length, 3);
+    // No native subscriber was ever opened for this invocation.
+    assert.equal(await computer.executionIsLive("exec:a"), false);
+  } finally {
+    database.close();
+  }
+});
+
+test("only a native command carries an exact public Workflow Git context", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const computer = new ComputerDO(
+      { id: { name: "workspace" }, storage: fromNodeSqlite(database) },
+      {},
+    );
+    const grant = {
+      teamId: "library",
+      computerId: "workspace",
+      memberId: "owner",
+      runId: "run_1",
+      workflow: {
+        workflowId: "save",
+        runId: "run_1",
+        nodeId: "push",
+        armedBy: { kind: "member", memberId: "owner" },
+      },
+      nodeId: "push",
+      iteration: "0",
+      scope: "read",
+      gitAccess: {
+        repository: {
+          kind: "installation",
+          installationId: "bonsai",
+          repository: "pond",
+        },
+        access: "read",
+      },
+    };
+    const authority = {
+      computerId: "workspace",
+      actions: new Set(["exec"]),
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: "member:owner" },
+    };
+    const exec = { command: "git fetch" };
+    // Anything beyond the public grant is not an execution context at all.
+    await assert.rejects(
+      computer.value(authority, "exec", exec, {
+        workflowGit: { ...grant, bearer: "wgp.library." + "e".repeat(64) },
+      }),
+      { code: "binding_unavailable" },
+    );
+    // A file or port operation never carries one.
+    await assert.rejects(
+      computer.value(
+        { ...authority, actions: new Set(["files.list"]) },
+        "files.list",
+        { path: "/" },
+        { workflowGit: grant },
+      ),
+      { code: "binding_unavailable" },
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("the Computer owner refuses a tool call whose grant does not admit it", async () => {
   const database = new DatabaseSync(":memory:");
   try {
@@ -2250,6 +2745,47 @@ test("the Computer owner refuses a tool call whose grant does not admit it", asy
     await assert.rejects(
       computer.tool(grant, "terminal", {}),
       /Invalid option/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("App build preflight reports typed no_backend for a local-only Computer", async () => {
+  const { createFleetBacking } = await import("@fungi.computer/computer/fleet");
+  const { Buffer } = await import("node:buffer");
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = fromNodeSqlite(database);
+    const backing = createFleetBacking(storage);
+    backing.ensure();
+    backing.computerCreated("local-build", []);
+    backing.attachLocal("owner", {
+      computerId: "local-build",
+      requestId: "local-build-attach",
+      publicKey: Buffer.alloc(32, 7).toString("base64"),
+      hostLabel: "Laptop",
+      folderLabel: "App",
+    });
+    const computer = new ComputerDO(
+      {
+        id: { name: "local-build", toString: () => "local-build-object" },
+        storage,
+      },
+      {
+        REGISTRY: {
+          getByName: () => ({ admitBuildExecution: async () => true }),
+        },
+      },
+    );
+    assert.deepEqual(await computer.buildBackend(), { kind: "no_backend" });
+    await assert.rejects(
+      computer.runBuild({
+        jobId: "build_fixture",
+        command: "echo must-not-run",
+        timeoutMs: 1000,
+      }),
+      { code: "no_backend" },
     );
   } finally {
     database.close();

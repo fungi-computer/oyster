@@ -25,6 +25,7 @@ import { createOyster } from "../dist/host.js";
 import { admittedCallerFacts } from "../dist/invocation.js";
 import { verifyRelease } from "../dist/release.js";
 import * as Schema from "effect/Schema";
+import { withBackendConstruction } from "./boot-construction.fixture.ts";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -52,6 +53,39 @@ const { frameBindingPropsSchema, backgroundFrameMethods } =
   await import("../dist/cloudflare.js");
 const guestWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
 hooks.deregister();
+
+for (const target of [
+  { kind: "object", value: {} },
+  { kind: "callable", value: () => undefined },
+]) {
+  test(
+    "the wire selects methods from an opaque RPC " +
+      target.kind +
+      " namespace without reflected presence",
+    async () => {
+      const origin = await sealBackgroundOrigin(
+        await backgroundOriginKey("fixture-host-secret"),
+        { instanceId: "instance", lane: "member:owner", method: "files.save" },
+      );
+      // A native RPC method is selectable, not a reflected field on a plain record.
+      const stub = new Proxy(target.value, {
+        get(_target, method) {
+          if (method !== "admit") return undefined;
+          return async function (input) {
+            assert.equal(this, stub);
+            assert.deepEqual(input, origin);
+            return { kind: "result", value: { kind: "admitted" } };
+          };
+        },
+      });
+      assert.equal("admit" in stub, false);
+      const bindings = guestWire.wrap({ BACKGROUND: stub });
+      assert.deepEqual(await bindings.BACKGROUND.admit(origin), {
+        kind: "admitted",
+      });
+    },
+  );
+}
 
 test("a read-only Git grant refuses repository creation before contacting Artifacts", async () => {
   let calls = 0;
@@ -156,64 +190,77 @@ async function instanceFixture(
         : { ...host, backgroundOriginKey: providers.backgroundOriginKey };
     }
   }
-  const instance = new FixtureInstance(
-    {
-      id: { name: instanceId },
-      blockConcurrencyWhile: (initialize) => initialize(),
-      storage: fromNodeSqlite(database),
-      // Every binding, Agent sends included, is the one frame-gated entrypoint.
-      exports: providers.withoutBindingEntrypoint
-        ? {}
-        : {
-            OysterBinding: ({ props }) =>
-              work ? new OysterBinding({ props }, env) : { props },
+  const context = {
+    id: { name: instanceId },
+    blockConcurrencyWhile: (initialize) => initialize(),
+    storage: fromNodeSqlite(database),
+    // Every binding, Agent sends included, is the one frame-gated entrypoint.
+    exports: providers.withoutBindingEntrypoint
+      ? {}
+      : {
+          OysterBinding: ({ props }) =>
+            work ? new OysterBinding({ props }, env) : { props },
+        },
+    facets: {
+      // This binding fake has no guest storage: copying its App facet is empty.
+      // Native recovery-copy tests, not this provider fake, qualify SQLite copy.
+      clone: (source, destination) => {
+        assert.equal(source, "app");
+        assert.equal(destination, "candidate");
+      },
+      get: (_name, prepare) => {
+        facet ??= prepare().class;
+        return {
+          invoke: async (name, _args, bindings) => {
+            if (name === "fetch") throw new Error("App method unavailable");
+            try {
+              const value = work
+                ? await work(guestWire.wrap(bindings))
+                : bindings;
+              if (name === "authorizeGitPush") return { allowed: true };
+              if (name === "onGitPush") return undefined;
+              // A generated App method answers with its typed reply.
+              return name === "gill" ? value : { kind: "ok", value };
+            } catch (cause) {
+              guestFailure = cause;
+              throw cause;
+            }
           },
-      facets: {
-        get: (_name, prepare) => {
-          facet ??= prepare().class;
-          return {
-            invoke: async (name, _args, bindings) => {
-              if (name === "fetch") throw new Error("App method unavailable");
-              try {
-                const value = work
-                  ? await work(guestWire.wrap(bindings))
-                  : bindings;
-                if (name === "authorizeGitPush") return { allowed: true };
-                if (name === "onGitPush") return undefined;
-                // A generated App method answers with its typed reply.
-                return name === "gill" ? value : { kind: "ok", value };
-              } catch (cause) {
-                guestFailure = cause;
-                throw cause;
-              }
-            },
-            http: async (input, bindings) => {
-              if (facetReply !== undefined) return facetReply([input]);
-              try {
-                const value = work
-                  ? await work(guestWire.wrap(bindings))
-                  : bindings;
-                return {
-                  status: 200,
-                  statusText: "OK",
-                  headers: [],
-                  body: globalThis.Response.json(value).body,
-                };
-              } catch (cause) {
-                guestFailure = cause;
-                throw cause;
-              }
-            },
-          };
-        },
-        abort: () => {
-          facet = undefined;
-        },
-        delete: () => {
-          facet = undefined;
-        },
+          http: async (input, bindings) => {
+            if (facetReply !== undefined) return facetReply([input]);
+            try {
+              const value = work
+                ? await work(guestWire.wrap(bindings))
+                : bindings;
+              return {
+                status: 200,
+                statusText: "OK",
+                headers: [],
+                body: globalThis.Response.json(value).body,
+              };
+            } catch (cause) {
+              guestFailure = cause;
+              throw cause;
+            }
+          },
+        };
+      },
+      abort: () => {
+        facet = undefined;
+      },
+      delete: () => {
+        facet = undefined;
       },
     },
+  };
+  const construction = withBackendConstruction(context.facets, {
+    get: (id, configure) => {
+      if (!cache.has(id)) cache.set(id, configure());
+      return { getDurableObjectClass: () => cache.get(id) };
+    },
+  });
+  const instance = new FixtureInstance(
+    { ...context, facets: construction.facets },
     (env = {
       ...providers,
       OYSTER_OWNER_KEY:
@@ -244,12 +291,7 @@ async function instanceFixture(
             : { arrayBuffer: async () => bytes.buffer };
         },
       },
-      LOADER: {
-        get: (id, configure) => {
-          if (!cache.has(id)) cache.set(id, configure());
-          return { getDurableObjectClass: () => cache.get(id) };
-        },
-      },
+      LOADER: construction.loader,
     }),
   );
   const dispatchBinding = instance.bindingCall.bind(instance);
@@ -332,7 +374,13 @@ async function instanceFixture(
       release,
       declaration: verified.declaration,
     });
-    installed = { ...installed, authorityVersion: version };
+    installed = {
+      ...installed,
+      authority: {
+        ...installed.authority,
+        authorityVersion: version,
+      },
+    };
     const applied = await instance.apply(
       { ...selected, status: "enabled" },
       release,
@@ -369,7 +417,7 @@ async function instanceFixture(
       };
     }
     if (method?.backendPrincipal !== undefined) {
-      const host = gitRoot.hostFor(
+      const host = await gitRoot.hostFor(
         env,
         tenantScope(defaultTenant, env.OYSTER_ORIGIN),
       );
@@ -510,11 +558,16 @@ async function instanceFixture(
   };
   return Object.assign(run, {
     instanceId,
-    loaderCount: () => cache.size,
+    loaderIds: () => [...cache.keys()],
+    liveLoaderId: `${instanceId}:${backend.digest}:1000:50`,
+    probes: construction.probes,
     registryReads: () => registryReads,
     revokeFrame: () => instance.revoke("notes"),
     replaceGrants: (approvedGrants) => {
-      installed = { ...installed, approvedGrants };
+      installed = {
+        ...installed,
+        authority: { ...installed.authority, approvedGrants },
+      };
     },
     revoke: () => {
       version += 1;
@@ -666,6 +719,25 @@ async function assertBindings(run, bindings) {
   return environment;
 }
 
+function assertLoaderCache(run, { probes, live }) {
+  assert.equal(run.probes.length, probes);
+  for (const probe of run.probes) {
+    assert.equal(probe.name, "candidate");
+    assert.match(probe.loaderId, /^boot:/);
+    assert.equal(probe.completed, true);
+    assert.equal(probe.aborted, true);
+    assert.equal(probe.deleted, true);
+    assert.deepEqual(probe.limits, { cpuMs: 1000, subRequests: 50 });
+  }
+  assert.deepEqual(
+    new Set(run.loaderIds()),
+    new Set([
+      ...run.probes.map(({ loaderId }) => loaderId),
+      ...(live ? [run.liveLoaderId] : []),
+    ]),
+  );
+}
+
 test("declaration changes mint fresh frame stubs without retaining grants", async (t) => {
   const run = await instanceFixture(t);
   const frames = new Set();
@@ -679,7 +751,7 @@ test("declaration changes mint fresh frame stubs without retaining grants", asyn
     frames.add(env.GIT.props.frameId);
   }
   assert.equal(frames.size, 4);
-  assert.equal(run.loaderCount(), 1);
+  assertLoaderCache(run, { probes: 4, live: true });
 });
 
 test("every Git method refuses an undeclared operation before provider access", async () => {
@@ -871,7 +943,7 @@ test("clone URLs use the installation's host door without provider credentials",
   });
 });
 
-test("a Worker resolves one workspace for its base host and capability adapters", async () => {
+test("a Worker resolves one workspace per request for its base host and capability adapters", async () => {
   const files = {
     list: async () => ({ path: "/", entries: [], nextOffset: null }),
     read: async () => new globalThis.TextEncoder().encode("native workspace"),
@@ -930,7 +1002,7 @@ test("a Worker resolves one workspace for its base host and capability adapters"
     );
     assert.equal(response.status, 404);
   }
-  assert.equal(resolutions, 1);
+  assert.equal(resolutions, 2);
   assert.equal(captured, workspace);
 });
 
@@ -1125,7 +1197,7 @@ test("verified read then write calls retain their scopes through the reused Load
   });
   assert.equal(providerCalls, 1);
   // The static Loader is reused while each call retains its verified method scope.
-  assert.equal(run.loaderCount(), 1);
+  assertLoaderCache(run, { probes: 1, live: true });
 });
 
 test("native bindings receive the verified method label only for declared calls", async (t) => {
@@ -1234,7 +1306,7 @@ for (const name of ["__proto__", "constructor", "READ", "re%61d"]) {
       causeClass: "Error",
     });
     assert.equal(entries, 0);
-    assert.equal(run.loaderCount(), 0);
+    assertLoaderCache(run, { probes: 1, live: false });
     assert.deepEqual(methods, []);
     await run(bindings, observe, {
       effect: "read",
@@ -1265,7 +1337,7 @@ test("a read frame refuses ungranted operations through static bindings", async 
   });
 });
 
-test("a caller API cannot introduce an undeclared method before Loader or guest entry", async (t) => {
+test("a caller API cannot introduce an undeclared method before invocation loading or guest entry", async (t) => {
   let guestEntries = 0;
   const run = await instanceFixture(t);
   const result = await run(
@@ -1281,7 +1353,7 @@ test("a caller API cannot introduce an undeclared method before Loader or guest 
     code: "invalid_invocation_facts",
     causeClass: "Error",
   });
-  assert.equal(run.loaderCount(), 0);
+  assertLoaderCache(run, { probes: 1, live: false });
   assert.equal(guestEntries, 0);
 });
 
@@ -1463,7 +1535,7 @@ test("Gill uses the Instance verified API and refuses a caller-only source", asy
   assert.equal(reply.ok, false);
   assert.equal(reply.code, "invalid_invocation_facts");
   assert.equal(entries, 0);
-  assert.equal(run.loaderCount(), 0);
+  assertLoaderCache(run, { probes: 1, live: false });
 });
 
 test("Gill scopes captured grants to its verified read source and pins the method", async (t) => {
@@ -1516,7 +1588,7 @@ test("Gill refuses a foreign tenant or installation before guest entry", async (
         : "instance_identity_mismatch",
     );
     assert.equal(entries, 0);
-    assert.equal(run.loaderCount(), 0);
+    assertLoaderCache(run, { probes: 1, live: false });
   }
 });
 
@@ -2067,6 +2139,7 @@ test("replay refuses INBOX and AGENTS packets before claimed-origin admission", 
         AGENTS.send({
           agentId: "agent",
           sessionId: "session",
+          requestId: "send-before-admission",
           text: "before admission",
           delivery: "followUp",
         }),

@@ -1,6 +1,4 @@
 /** Credential parsing never logs the presented header or its decoding error. */
-/** A Workflow Git pass presented as `Authorization: Bearer` starts with this. */
-export const workflowGitPassPrefix = "wgp.";
 /** A build job's clone pass starts with this; only the host's egress presents it. */
 export const buildGitPassPrefix = "obp.";
 

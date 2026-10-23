@@ -181,11 +181,14 @@ const evidence = await provePackageStranger(packageDirectory, {
       command.length === 2 &&
       command[0] === process.execPath &&
       basename(command[1]) === "stranger-runtime.mjs";
+    // One compiler run per declared typecheck; every one must pass.
     const isDeclarations =
-      command[0] === process.execPath &&
-      basename(command.at(-1)) === "stranger-types.mts";
+      command[0] === process.execPath && basename(command[1]) === "tsc";
     if (isDeclarations)
-      declarationsStatus = commandSucceeded(result) ? "pass" : "fail";
+      declarationsStatus =
+        commandSucceeded(result) && declarationsStatus !== "fail"
+          ? "pass"
+          : "fail";
     if (isPortable) portableStatus = commandSucceeded(result) ? "pass" : "fail";
     if (!commandSucceeded(result)) return result;
     if (isPortable) {

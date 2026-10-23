@@ -9,14 +9,14 @@ import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
 import {
   appCatalogResponseSchema,
   appCatalogBrokerResultSchema,
-} from "../src/shell/app-directory.js";
+} from "@fungi.computer/nacre/app-directory";
 import { admits, type GateFacts } from "../src/apps/gate.js";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
 import { applyInstallationCommand } from "../src/apps/installation.js";
 import { instanceIds } from "../src/index.js";
 import { descriptors, release } from "./apps-fixture.js";
 
-it("admits catalog under team.workbenchHost and refuses the same binding without its manifest capability", async () => {
+it("catalog requires explicit full-access approval and its manifest capability", async () => {
   const backend = defineAppBackend({
     methods: {
       catalog: defineAppMethod({
@@ -43,7 +43,7 @@ it("admits catalog under team.workbenchHost and refuses the same binding without
   );
   const installed = applyInstallationCommand(
     null,
-    { kind: "install", release, releasePin: "pinned", grants: "declared" },
+    { kind: "install", release, releasePin: "pinned" },
     {
       by: { kind: "member", memberId: "owner" },
       role: "owner",
@@ -60,7 +60,10 @@ it("admits catalog under team.workbenchHost and refuses the same binding without
   if (Result.isFailure(installed)) throw new Error(installed.failure.code);
   const facts: GateFacts = {
     principal: { actor: { kind: "agent", agentId: "owner-agent" }, role: null },
-    installation: installed.success.next,
+    installation: {
+      ...installed.success.next,
+      artifactDigest: release.artifact.artifactDigest,
+    },
     declaration,
     declaredOperations,
     api: declaration.api ?? null,
@@ -77,6 +80,43 @@ it("admits catalog under team.workbenchHost and refuses the same binding without
     operation: "catalog",
   } as const;
   expect(admits(facts, request)).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+  const approved = applyInstallationCommand(
+    installed.success.next,
+    {
+      kind: "change-grants",
+      changes: declaredOperations.capabilities.map(
+        ({ capability, operations }) => ({
+          capability,
+          grant: { operations, resources: "tenant-scope" },
+        }),
+      ),
+    },
+    {
+      by: { kind: "member", memberId: "owner" },
+      role: "owner",
+      expectedVersion: installed.success.next.authority.authorityVersion,
+      declaration,
+      declaredOperations,
+      now: 2000,
+      identity: installed.success.next,
+    },
+  );
+  if (Result.isFailure(approved)) throw new Error(approved.failure.code);
+  expect(
+    admits(
+      {
+        ...facts,
+        installation: {
+          ...approved.success.next,
+          artifactDigest: release.artifact.artifactDigest,
+        },
+      },
+      request,
+    ),
+  ).toEqual({
     kind: "admitted",
     grants: [{ binding: "APPS", operations: ["catalog"] }],
   });

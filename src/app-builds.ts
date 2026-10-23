@@ -17,6 +17,8 @@
  * installed one, and records it; installing it is a separate owner act.
  */
 import * as Schema from "effect/Schema";
+import * as Data from "effect/Data";
+import * as Option from "effect/Option";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   parseArtifactRef,
@@ -31,6 +33,8 @@ import {
 } from "@fungi.computer/puffball/effect";
 import {
   capturedPinnedRecipeSchema,
+  normalizeAppPublisherRecipe,
+  type AppPublisherCoreConfigInput,
   digestPinnedRecipe,
   fitsPinnedRecipe,
   pinnedRecipeObjectBound,
@@ -104,6 +108,27 @@ export type OysterBuildSource = Schema.Schema.Type<
   typeof oysterBuildSourceSchema
 >;
 
+/** Installation is a build outcome, never a pending consent/approval record. */
+export const oysterBuildInstallationSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("pending"),
+    installationId: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literals(["installed", "needs_consent"]),
+    installationId: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("failed"),
+    installationId: Schema.String,
+    detail: Schema.String,
+  }),
+]);
+export type OysterBuildInstallation = Schema.Schema.Type<
+  typeof oysterBuildInstallationSchema
+>;
+const installationCodec = Schema.fromJsonString(oysterBuildInstallationSchema);
+
 /** What an owner sees of one build. */
 export type OysterBuildView = Readonly<{
   jobId: string;
@@ -113,7 +138,42 @@ export type OysterBuildView = Readonly<{
   status: "running" | "succeeded" | "failed" | "revoked";
   detail: string | null;
   release: Release | null;
+  installation: OysterBuildInstallation | null;
 }>;
+
+/** Known preflight refusals, before a job or Computer run exists. */
+export const oysterBuildStartReasonSchema = Schema.Literals([
+  "invalid_revision",
+  "no_source",
+  "not_template_seed",
+  "no_backend",
+]);
+export type OysterBuildStartReason = Schema.Schema.Type<
+  typeof oysterBuildStartReasonSchema
+>;
+export const oysterBuildStartMessages = {
+  invalid_revision:
+    "Source revision must be git: followed by a full commit hash",
+  no_source: "App has no build source",
+  no_backend: "No hosted build backend is attached to this Computer",
+  not_template_seed: "Revision is not a seed of this App's template",
+} satisfies Readonly<Record<OysterBuildStartReason, string>>;
+
+/** Local typed failure. The registry turns it into data before a DO RPC. */
+export class OysterBuildStartError extends Data.TaggedError(
+  "OysterBuildStartError",
+)<{
+  readonly reason: OysterBuildStartReason;
+  readonly message: string;
+}> {
+  constructor(reason: OysterBuildStartReason) {
+    super({ reason, message: oysterBuildStartMessages[reason] });
+  }
+}
+
+export type OysterBuildStartResult =
+  | Readonly<{ kind: "started"; build: OysterBuildView }>
+  | Readonly<{ kind: "refused"; reason: OysterBuildStartReason }>;
 
 /** One Computer as the build owner reaches it. */
 /** The Computer established no terminal result for a build command, for
@@ -124,7 +184,12 @@ class BuildOutcomeUnknown extends Error {
   }
 }
 
+export type OysterBuildBackend =
+  Readonly<{ kind: "hosted" }> | Readonly<{ kind: "no_backend" }>;
+
 export type OysterBuildComputer = Readonly<{
+  /** Read the configured hosted route without starting a machine. Local machines never build Apps. */
+  buildBackend(): Promise<OysterBuildBackend>;
   /** Run the fixed build command; the Computer re-admits the job first.
    * A missing `output` means no terminal result was established: the
    * command may still be running, so it is never read as an exit. */
@@ -174,10 +239,12 @@ const jobRow = Schema.Struct({
   requested_by: Schema.String,
   credential_id: Schema.String,
   upload_grant_digest: Schema.String,
+  request_id: Schema.NullOr(Schema.String),
   status: Schema.Literals(["running", "succeeded", "failed", "revoked"]),
   artifact_digest: Schema.NullOr(Schema.String),
   artifact_bytes: Schema.NullOr(Schema.Number),
   detail: Schema.NullOr(Schema.String),
+  installation: Schema.NullOr(installationCodec),
   issued_at: Schema.Number,
   expires_at: Schema.Number,
   executable_until: Schema.Number,
@@ -214,26 +281,12 @@ function sameDigest(left: string, right: string): boolean {
   return difference === 0;
 }
 
-/**
- * The SQLite tables one Oyster build owner keeps. Creation and any carrying
- * forward of retained facts run as one transaction of the owner's storage, so
- * an interrupted conversion leaves the facts as they were for a retry.
- */
+/** Create the current build tables and index atomically; never convert old stores. */
 export function migrateOysterAppBuilds(owner: WatchdogSqliteOwner): void {
   const { sql } = owner;
   owner.transactionSync(() => {
     sql.exec(
       "CREATE TABLE IF NOT EXISTS oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",
-    );
-    // Sources recorded before the location union named only an installation
-    // repository; carry each forward once, in place.
-    sql.exec(
-      `UPDATE oyster_build_sources SET source = json_set(
-       json_remove(source, '$.installationId', '$.repository'), '$.location',
-       json_object('kind', 'installation',
-         'installationId', json_extract(source, '$.installationId'),
-         'repository', json_extract(source, '$.repository')))
-     WHERE json_type(source, '$.location') IS NULL`,
     );
     const jobColumns = `
       job_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, release_id TEXT NOT NULL UNIQUE,
@@ -241,35 +294,14 @@ export function migrateOysterAppBuilds(owner: WatchdogSqliteOwner): void {
       recipe TEXT NOT NULL, recipe_digest TEXT NOT NULL, requested_by TEXT NOT NULL,
       credential_id TEXT NOT NULL, upload_grant_digest TEXT NOT NULL,
       status TEXT NOT NULL, artifact_digest TEXT, artifact_bytes INTEGER, detail TEXT,
+      installation TEXT, request_id TEXT,
       issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, executable_until INTEGER NOT NULL`;
     sql.exec(
       `CREATE TABLE IF NOT EXISTS oyster_build_jobs (${jobColumns}) STRICT`,
     );
-    // Jobs recorded before the location union named an installation repository
-    // in two columns; carry each into the one location column, once.
-    if (
-      sql
-        .exec(
-          "SELECT name FROM pragma_table_info('oyster_build_jobs') WHERE name='installation_id'",
-        )
-        .toArray().length > 0
-    ) {
-      sql.exec(`CREATE TABLE oyster_build_jobs_current (${jobColumns}) STRICT`);
-      sql.exec(
-        `INSERT INTO oyster_build_jobs_current SELECT job_id, app_id, release_id,
-         source_revision,
-         json_object('kind', 'installation', 'installationId', installation_id,
-           'repository', repository),
-         recipe, recipe_digest, requested_by, credential_id, upload_grant_digest,
-         status, artifact_digest, artifact_bytes, detail, issued_at, expires_at,
-         executable_until
-       FROM oyster_build_jobs`,
-      );
-      sql.exec("DROP TABLE oyster_build_jobs");
-      sql.exec(
-        "ALTER TABLE oyster_build_jobs_current RENAME TO oyster_build_jobs",
-      );
-    }
+    sql.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS oyster_build_request ON oyster_build_jobs(request_id)",
+    );
     sql.exec(
       "CREATE TABLE IF NOT EXISTS oyster_build_releases (release_id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE, release TEXT NOT NULL) STRICT",
     );
@@ -295,9 +327,13 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
   // job, so an owner restart must not fail it. A job that reaches its expiry
   // without a result can never settle, so it fails then instead of reading
   // as running for as long as anyone asks.
+  const failedInstallation = `CASE WHEN installation IS NULL THEN NULL ELSE
+    json_object('kind', 'failed', 'installationId', json_extract(installation, '$.installationId'),
+      'detail', COALESCE(?, 'Build did not succeed')) END`;
   const expire = () =>
     owner.sql.exec(
-      "UPDATE oyster_build_jobs SET status='failed', detail=? WHERE status='running' AND expires_at<=?",
+      `UPDATE oyster_build_jobs SET installation=${failedInstallation}, status='failed', detail=? WHERE status='running' AND expires_at<=?`,
+      "Build expired without a result",
       "Build expired without a result",
       now(),
     );
@@ -353,7 +389,10 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     detail: string | null,
   ) => {
     owner.sql.exec(
-      "UPDATE oyster_build_jobs SET status=?, detail=?, expires_at=MIN(expires_at, ?) WHERE job_id=? AND status='running'",
+      `UPDATE oyster_build_jobs SET installation=CASE WHEN ?='succeeded' THEN installation ELSE ${failedInstallation} END,
+        status=?, detail=?, expires_at=MIN(expires_at, ?) WHERE job_id=? AND status='running'`,
+      status,
+      detail,
       status,
       detail,
       now(),
@@ -459,59 +498,110 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     status: job.status,
     detail: job.detail,
     release: readRelease(job.job_id),
+    installation: job.installation,
   });
 
-  return Object.freeze({
-    /** Record (or replace) an App's build source; the caller is the owner. */
-    registerSource(source: OysterBuildSource): OysterBuildSource {
-      if (digestPinnedRecipe(source.recipe) !== source.buildRecipeDigest)
-        throw new Error("Build recipe digest does not match its recipe");
-      owner.sql.exec(
-        "INSERT INTO oyster_build_sources(app_id, source) VALUES(?, ?) ON CONFLICT(app_id) DO UPDATE SET source=excluded.source",
-        source.appId,
-        Schema.encodeUnknownSync(sourceCodec)(source),
-      );
-      return source;
-    },
-    readSource,
-    /**
-     * Mint one build job for an App's registered source at one exact commit.
-     * A template source builds only a seed revision recorded for its pinned
-     * recipe.
-     * Answers the job and its one run, which the caller keeps alive (the
-     * upload grant exists only inside that run's fixed command).
-     */
-    async start(input: {
-      appId: string;
-      sourceRevision: string;
-      requestedBy: string;
-    }): Promise<
-      Readonly<{ build: OysterBuildView; run: () => Promise<OysterBuildView> }>
-    > {
-      const sourceRevision = Schema.decodeUnknownSync(sourceRevisionSchema)(
-        input.sourceRevision,
-      );
-      const source = readSource(input.appId);
-      if (source === null) throw new Error("App has no build source");
-      if (source.location.kind === "template") {
-        const receipt = await options.templates.read(
-          source.appId,
-          sourceRevision,
+  const registerSource = (source: OysterBuildSource): OysterBuildSource => {
+    if (digestPinnedRecipe(source.recipe) !== source.buildRecipeDigest)
+      throw new Error("Build recipe digest does not match its recipe");
+    owner.sql.exec(
+      "INSERT INTO oyster_build_sources(app_id, source) VALUES(?, ?) ON CONFLICT(app_id) DO UPDATE SET source=excluded.source",
+      source.appId,
+      Schema.encodeUnknownSync(sourceCodec)(source),
+    );
+    return source;
+  };
+
+  const readRepositorySource = (
+    installationId: string,
+    repository: string,
+  ): OysterBuildSource | null => {
+    const [row] = owner.sql
+      .exec(
+        "SELECT source FROM oyster_build_sources WHERE json_extract(source, '$.location.kind')='installation' AND json_extract(source, '$.location.installationId')=? AND json_extract(source, '$.location.repository')=? LIMIT 1",
+        installationId,
+        repository,
+      )
+      .toArray();
+    return row === undefined
+      ? null
+      : Schema.decodeUnknownSync(sourceCodec)(
+          Schema.decodeUnknownSync(sourceRow)(row).source,
         );
-        if (receipt?.buildRecipeDigest !== source.buildRecipeDigest)
-          throw new Error("Revision is not a seed of this App's template");
-      }
-      const jobId = `build_${randomHex(16)}`;
-      const releaseId = parseReleaseId(
-        `rel_${sourceRevision.slice("git:".length, "git:".length + 12)}${randomHex(4)}`,
+  };
+
+  async function start(input: {
+    appId: string;
+    sourceRevision: string;
+    requestedBy: string;
+    /** The Workflow's installation target. Absence leaves manual builds manual. */
+    installAt?: string;
+    /** One host-owned Workflow node reuses its job, including after restart. */
+    requestId?: string;
+  }): Promise<
+    Readonly<{ build: OysterBuildView; run: () => Promise<OysterBuildView> }>
+  > {
+    const revision = Schema.decodeUnknownOption(sourceRevisionSchema)(
+      input.sourceRevision,
+    );
+    if (Option.isNone(revision))
+      throw new OysterBuildStartError("invalid_revision");
+    const sourceRevision = revision.value;
+    const source = readSource(input.appId);
+    if (source === null) throw new OysterBuildStartError("no_source");
+    if (source.location.kind === "template") {
+      const receipt = await options.templates.read(
+        source.appId,
+        sourceRevision,
       );
-      const uploadGrant = randomHex(32);
-      const issuedAt = now();
+      if (receipt?.buildRecipeDigest !== source.buildRecipeDigest)
+        throw new OysterBuildStartError("not_template_seed");
+    }
+    const reusedRequest = (): string | null => {
+      if (input.requestId !== undefined) {
+        const [row] = owner.sql
+          .exec(
+            "SELECT * FROM oyster_build_jobs WHERE request_id=?",
+            input.requestId,
+          )
+          .toArray();
+        if (row !== undefined) {
+          const existing = decodeJob(row);
+          if (
+            existing.app_id !== source.appId ||
+            existing.source_revision !== sourceRevision
+          )
+            throw new Error("Build request identity conflict");
+          return existing.job_id;
+        }
+      }
+      return null;
+    };
+    const existing = reusedRequest();
+    if (existing !== null)
+      return {
+        build: view(required(existing)),
+        run: () => Promise.resolve(view(required(existing))),
+      };
+    if ((await options.computer.port.buildBackend()).kind === "no_backend")
+      throw new OysterBuildStartError("no_backend");
+    const jobId = `build_${randomHex(16)}`;
+    const releaseId = parseReleaseId(
+      `rel_${sourceRevision.slice("git:".length, "git:".length + 12)}${randomHex(4)}`,
+    );
+    const uploadGrant = randomHex(32);
+    const issuedAt = now();
+    const uploadGrantDigest = await sha256Hex(
+      new TextEncoder().encode(uploadGrant),
+    );
+    const reused = owner.transactionSync(() => {
+      const existing = reusedRequest();
+      if (existing !== null) return existing;
       owner.sql.exec(
         `INSERT INTO oyster_build_jobs(job_id, app_id, release_id, source_revision, location,
           recipe, recipe_digest, requested_by, credential_id, upload_grant_digest,
-          status, artifact_digest, artifact_bytes, detail, issued_at, expires_at, executable_until)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL, ?, ?, 0)`,
+          status, artifact_digest, artifact_bytes, detail, installation, request_id, issued_at, expires_at, executable_until)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL, ?, ?, ?, ?, 0)`,
         jobId,
         source.appId,
         releaseId,
@@ -521,21 +611,160 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         source.buildRecipeDigest,
         input.requestedBy,
         randomHex(32),
-        await sha256Hex(new TextEncoder().encode(uploadGrant)),
+        uploadGrantDigest,
+        input.installAt === undefined
+          ? null
+          : Schema.encodeUnknownSync(installationCodec)({
+              kind: "pending",
+              installationId: input.installAt,
+            }),
+        input.requestId ?? null,
         issuedAt,
         issuedAt + jobTtlMs,
       );
-      // The grant leaves this owner only inside the fixed command.
-      const command = teamAppBuildCommand(
-        { appId: source.appId, sourceRevision, source },
-        uploadGrant,
+      return null;
+    });
+    if (reused !== null)
+      return {
+        build: view(required(reused)),
+        run: () => Promise.resolve(view(required(reused))),
+      };
+    // The grant leaves this owner only inside the fixed command.
+    const command = teamAppBuildCommand(
+      { appId: source.appId, sourceRevision, source },
+      uploadGrant,
+    );
+    return { build: view(required(jobId)), run: () => run(jobId, command) };
+  }
+
+  let installationBusy = false;
+  function recordInstallationOutcome(
+    jobId: string,
+    outcome: Exclude<OysterBuildInstallation, { kind: "pending" }>,
+  ): boolean {
+    return owner.transactionSync(() => {
+      const job = readJob(jobId);
+      if (
+        job?.status !== "succeeded" ||
+        readRelease(jobId) === null ||
+        job.installation?.kind !== "pending" ||
+        job.installation.installationId !== outcome.installationId
+      )
+        return false;
+      owner.sql.exec(
+        "UPDATE oyster_build_jobs SET installation=? WHERE job_id=?",
+        Schema.encodeUnknownSync(installationCodec)(outcome),
+        jobId,
       );
-      return { build: view(required(jobId)), run: () => run(jobId, command) };
+      return true;
+    });
+  }
+
+  return Object.freeze({
+    /** Record (or replace) an App's build source; the caller is the owner. */
+    registerSource,
+    /** Resolve repository identity and replace its current recipe as one transition.
+     * A fork's existing identity wins over the copied manifest's App id. */
+    registerRepositorySource(input: {
+      appId: string;
+      location: Extract<OysterBuildLocation, { kind: "installation" }>;
+      recipe: AppPublisherCoreConfigInput["recipe"];
+    }):
+      { kind: "registered"; source: OysterBuildSource } | { kind: "conflict" } {
+      return owner.transactionSync(() => {
+        const existing = readRepositorySource(
+          input.location.installationId,
+          input.location.repository,
+        );
+        const appId = Schema.decodeUnknownSync(appIdSchema)(
+          existing?.appId ?? input.appId,
+        );
+        if (existing === null && readSource(appId) !== null)
+          return { kind: "conflict" };
+        const pinned = normalizeAppPublisherRecipe({
+          appId,
+          recipe: input.recipe,
+        });
+        return {
+          kind: "registered",
+          source: registerSource({
+            appId,
+            location: input.location,
+            recipe: pinned.recipe,
+            buildRecipeDigest: pinned.buildRecipeDigest,
+          }),
+        };
+      });
     },
+    readSource,
+    readRepositorySource,
+    /**
+     * Mint one build job for an App's registered source at one exact commit.
+     * A template source builds only a seed revision recorded for its pinned
+     * recipe.
+     * Answers the job and its one run, which the caller keeps alive (the
+     * upload grant exists only inside that run's fixed command).
+     */
+    start,
     read(jobId: string): OysterBuildView | null {
       expire();
       const job = readJob(jobId);
       return job === null ? null : view(job);
+    },
+    /** Discover the current source's latest job from the caller's Git owner,
+     * never a job id remembered in a browser or another installation's repo. */
+    latestRepositoryBuild(
+      installationId: string,
+      repository: string,
+    ): OysterBuildView | null {
+      expire();
+      const source = readRepositorySource(installationId, repository);
+      if (source === null) return null;
+      const [row] = owner.sql
+        .exec(
+          "SELECT * FROM oyster_build_jobs WHERE app_id=? AND json_extract(location, '$.kind')='installation' AND json_extract(location, '$.installationId')=? AND json_extract(location, '$.repository')=? ORDER BY rowid DESC LIMIT 1",
+          source.appId,
+          installationId,
+          repository,
+        )
+        .toArray();
+      return row === undefined ? null : view(decodeJob(row));
+    },
+    /** One bounded host installation at a time. Only a verified successful
+     * build may reach the installer; the same existing row owns its outcome.
+     * A Workflow retry may resume a pending decision, never a terminal one. */
+    async install(
+      jobId: string,
+      decide: (
+        release: Release,
+        installationId: string,
+      ) => Promise<Exclude<OysterBuildInstallation, { kind: "pending" }>>,
+    ): Promise<boolean> {
+      const job = readJob(jobId);
+      const release = readRelease(jobId);
+      if (
+        installationBusy ||
+        job?.status !== "succeeded" ||
+        release === null ||
+        job.installation?.kind !== "pending"
+      )
+        return false;
+      installationBusy = true;
+      try {
+        let outcome: Exclude<OysterBuildInstallation, { kind: "pending" }>;
+        try {
+          outcome = await decide(release, job.installation.installationId);
+        } catch {
+          outcome = {
+            kind: "failed",
+            installationId: job.installation.installationId,
+            detail: "Automatic installation unavailable",
+          };
+        }
+        return recordInstallationOutcome(jobId, outcome);
+      } finally {
+        installationBusy = false;
+      }
     },
     /** A built Release by id, for an owner to install or select. */
     release(releaseId: string): Release | null {

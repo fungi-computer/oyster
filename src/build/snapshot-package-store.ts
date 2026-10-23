@@ -1,10 +1,15 @@
 import { isAbsolute } from "node:path";
 
 /** Frozen hydration policy. Cached bytes are verified and copied into each snapshot. */
-export function frozenSnapshotInstallArguments(packageStoreDirectory?: string) {
+export function frozenSnapshotInstallArguments(
+  packageStoreDirectory?: string,
+  packageCacheDirectory?: string,
+) {
   if (packageStoreDirectory !== undefined && !isAbsolute(packageStoreDirectory))
     throw new Error("Publisher package store must be an absolute host path");
-  return [
+  if (packageCacheDirectory !== undefined && !isAbsolute(packageCacheDirectory))
+    throw new Error("Publisher package cache must be an absolute host path");
+  const args = [
     "install",
     "--prod=false",
     "--frozen-lockfile",
@@ -19,6 +24,9 @@ export function frozenSnapshotInstallArguments(packageStoreDirectory?: string) {
     "--config.enable-global-virtual-store=false",
     "--reporter=append-only",
   ];
+  if (packageCacheDirectory !== undefined)
+    args.push("--offline", `--cache-dir=${packageCacheDirectory}`);
+  return args;
 }
 
 /**

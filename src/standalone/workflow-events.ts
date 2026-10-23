@@ -26,17 +26,17 @@ export function createStandaloneWorkflowEvents<Frame>(
     deliver: (fact: AppEventFact) => router.deliver(fact),
     async arm(frame: Frame, raw: TriggerArmTarget) {
       const target = triggerArmTargetSchema.parse(raw);
-      const { libraryId, context, installationAuthority } =
+      const { libraryId, context, installationAuthority, authority } =
         await options.admitInvocation(frame, "armEventTrigger");
-      if (context.actor.kind !== "member") return { error: "not_granted" };
+      if (authority === null) return { error: "not_granted" };
       if (context.computerId === null)
         return {
           kind: "refused" as const,
           reason: "Select a Computer before arming an event trigger",
         };
-      // Standalone has no Agent arming source: the owner arms as themself.
+
       return router.arm(
-        { armedBy: context.actor.memberId, armedVia: null },
+        authority.armer,
         { ...target, installationId: libraryId },
         context.computerId,
         installationAuthority,
@@ -44,28 +44,21 @@ export function createStandaloneWorkflowEvents<Frame>(
     },
     async disarm(frame: Frame, raw: EventDisarmInput) {
       const { eventTriggerId } = eventDisarmInputSchema.parse(raw);
-      const { libraryId, context } = await options.admitInvocation(
+      const { libraryId, authority } = await options.admitInvocation(
         frame,
         "disarmEventTrigger",
       );
-      if (context.actor.kind !== "member") return { error: "not_granted" };
-      return router.disarm(
-        { kind: "member", memberId: context.actor.memberId },
-        libraryId,
-        eventTriggerId,
-      );
+      if (authority === null) return { error: "not_granted" };
+      return router.disarm(authority.principal, libraryId, eventTriggerId);
     },
     async list(frame: Frame) {
-      const { libraryId, context } = await options.admitInvocation(
+      const { libraryId, authority } = await options.admitInvocation(
         frame,
         "eventTriggers",
       );
-      if (context.actor.kind !== "member") return { error: "not_granted" };
+      if (authority === null) return { error: "not_granted" };
       return {
-        eventTriggers: await router.list(
-          { kind: "member", memberId: context.actor.memberId },
-          libraryId,
-        ),
+        eventTriggers: await router.list(authority.principal, libraryId),
       };
     },
   };

@@ -39,19 +39,21 @@ import {
 } from "@fungi.computer/workflows-wire";
 
 import type { InvocationFacts } from "../invocation.js";
+import type { OysterPrincipal } from "../host.js";
+import { workflowAgentAuthority } from "../workflow-agent-authority.js";
 import type {
   OysterGitWorkerEnv,
   OysterGitWorkerHost,
 } from "../workers-git.js";
 import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
 import { AppInstanceError } from "../index.js";
-import { workflowGitPassPrefix } from "../git.js";
 import type { GitWriter, RepositoryRef } from "@fungi.computer/agar/git";
-import type { WorkflowGitPassResult } from "@fungi.computer/agar/computer-contracts";
 import {
   createWorkflowGitPasses,
   createWorkflowGitPassStore,
   workflowGitPassWriter,
+  type WorkflowGitCredential,
+  type WorkflowGitPassGrant,
   workflowRunReport,
   wireRunInitiator,
   type WorkflowRunDelivery,
@@ -72,6 +74,13 @@ import type { StandaloneComputerEnv } from "./computer.js";
 import type { StandaloneAgentsEnv } from "./agents.js";
 import { agentDirectoryForScope } from "./agent-directory.js";
 import type { OysterMediaEnv } from "./media.js";
+import {
+  createWorkflowWebhooks,
+  workflowWebhookCommandSchema,
+  workflowWebhookControlResponse,
+} from "../webhooks.js";
+import { workflowWebhookRefusal } from "../webhook-ingress.js";
+import { Hono } from "hono";
 
 export type StandaloneWorkflowEnv = OysterGitWorkerEnv &
   StandaloneComputerEnv &
@@ -80,6 +89,15 @@ export type StandaloneWorkflowEnv = OysterGitWorkerEnv &
   StandaloneTenancyEnv &
   GraphWorkflowBindings & {
     WORKFLOW_RUNS: DurableObjectNamespace<StandaloneWorkflowRunsBase>;
+    WORKFLOW_WEBHOOK_HOST_RATE?: Pick<RateLimit, "limit">;
+    WORKFLOW_WEBHOOK_BINDING_RATE?: Pick<RateLimit, "limit">;
+    /** Trusted configuration; absent admission closes the new webhook surface. */
+    WORKFLOW_WEBHOOK_POLICY?: {
+      limits: Parameters<typeof createWorkflowWebhooks>[0]["limits"];
+      concurrency: Parameters<
+        typeof createWorkflowWebhooks
+      >[0]["abuse"]["concurrency"];
+    };
   };
 /** Schedule time and the native alarm instant that delivers a due time. */
 export type StandaloneScheduleClock = Readonly<{
@@ -98,7 +116,7 @@ export abstract class StandaloneWorkflowRunsBase<
   };
   private readonly owner;
   /** The deployable root's host for one tenant; Workflow runs use the default tenant. */
-  protected abstract hostFor(scope: TenantScope): OysterGitWorkerHost;
+  protected abstract hostFor(scope: TenantScope): Promise<OysterGitWorkerHost>;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // This object is named by its Workflows library installation; the alarm
@@ -110,7 +128,9 @@ export abstract class StandaloneWorkflowRunsBase<
     ) STRICT`);
     this.composed = ctx.blockConcurrencyWhile(async () => {
       const shared = await standaloneTenancy(env);
-      const host = this.hostFor(tenantScope(defaultTenant, env.OYSTER_ORIGIN));
+      const host = await this.hostFor(
+        tenantScope(defaultTenant, env.OYSTER_ORIGIN),
+      );
       const agentToolPolicy = async (agentId: string) =>
         (await host.appToolPolicy?.({ kind: "agent", agentId })) ?? null;
       // A key's App access is its own grants (Ear Tag), read through
@@ -128,6 +148,15 @@ export abstract class StandaloneWorkflowRunsBase<
         ).has(delivery.agentId);
       const owner: ReturnType<typeof createStandaloneWorkflowHost> =
         createStandaloneWorkflowHost(ctx.storage, host, {
+          async lifecycleMember() {
+            const member = await shared.owner();
+            return member === null
+              ? null
+              : {
+                  memberId: member.actor.memberId,
+                  membershipVersion: member.membershipVersion,
+                };
+          },
           authority(libraryInstallationId) {
             return createStandaloneWorkflowRootAuthority({
               shared,
@@ -169,6 +198,7 @@ export abstract class StandaloneWorkflowRunsBase<
             sql: ctx.storage.sql,
             transactionSync: (body) => ctx.storage.transactionSync(body),
             teamId: () => libraryId,
+            now: () => this.scheduleClock.now(),
           },
           triggers: {
             published: createWorkflowPublishedDefinitionPort((git) => ({
@@ -188,10 +218,19 @@ export abstract class StandaloneWorkflowRunsBase<
                 memberId,
               });
             },
-            // Standalone has no Connector-attachment store (Hub's own
-            // mechanism for Agent arming); an Agent's owner-approved tool
-            // policy governs dispatch, not arming here. See W-1/B-4(b).
-            readAgentAccess: () => Promise.resolve(null),
+            readAgentAccess: async (lookup) => {
+              if (lookup.kind !== "policy") return null;
+              const policy = await agentToolPolicy(lookup.agentId);
+              return policy === null
+                ? null
+                : {
+                    kind: "policy",
+                    agentId: lookup.agentId,
+                    policyRevision: policy.revision,
+                    grantorMemberId: policy.grantedBy,
+                    level: policy.level,
+                  };
+            },
             // The member's current Workflows Git policy; mints no pass itself.
             admitGitAccess: async (memberId, repository, scope) => {
               if (!(await gitAccess(libraryId)(memberId, repository, scope)))
@@ -221,25 +260,84 @@ export abstract class StandaloneWorkflowRunsBase<
             const admitted = await owner.admitInvocation(facts, operation);
             if (admitted.libraryId !== libraryId)
               throw new AppInstanceError("revoked");
-            return admitted;
+            return {
+              ...admitted,
+              authority: await workflowAgentAuthority(
+                facts,
+                operation,
+                agentToolPolicy,
+              ),
+            };
           },
         };
-        return {
-          schedules: createStandaloneWorkflowSchedules<InvocationFacts>({
-            ...controls,
+        let webhooks: ReturnType<
+          typeof createWorkflowWebhooks<OysterPrincipal>
+        > | null = null;
+        const wake = async () => {
+          const due = [
+            schedules.nextWake(),
+            webhooks?.nextWake() ?? null,
+          ].filter((value): value is number => value !== null);
+          if (due.length === 0) await ctx.storage.deleteAlarm();
+          else
+            await ctx.storage.setAlarm(
+              this.scheduleClock.alarmAt(Math.min(...due)),
+            );
+        };
+        const schedules = createStandaloneWorkflowSchedules<InvocationFacts>({
+          ...controls,
+          now: () => this.scheduleClock.now(),
+          wake,
+          reportFailure: ({ source, cause }) => {
+            console.error("Standalone Workflow schedule failed", source, cause);
+          },
+        });
+        if (
+          env.WORKFLOW_WEBHOOK_HOST_RATE !== undefined &&
+          env.WORKFLOW_WEBHOOK_BINDING_RATE !== undefined &&
+          env.WORKFLOW_WEBHOOK_POLICY !== undefined
+        )
+          webhooks = createWorkflowWebhooks<OysterPrincipal>({
+            sql: ctx.storage.sql,
+            transactionSync: (body) => ctx.storage.transactionSync(body),
             now: () => this.scheduleClock.now(),
-            wake: (due) =>
-              due === null
-                ? ctx.storage.deleteAlarm()
-                : ctx.storage.setAlarm(this.scheduleClock.alarmAt(due)),
-            reportFailure: ({ source, cause }) => {
-              console.error(
-                "Standalone Workflow schedule failed",
-                source,
-                cause,
-              );
+            scope: { host: env.OYSTER_ORIGIN, tenant: libraryId },
+            owner: async (principal) => {
+              const current = await shared.owner();
+              return principal.actor.kind === "member" &&
+                current?.actor.memberId === principal.actor.memberId
+                ? principal.actor.memberId
+                : null;
             },
-          }),
+            runs: triggers.runs,
+            triggers: triggers.triggers,
+            launch: async (run) => {
+              const stored = triggers.runs.graph.read(run.runId);
+              if (stored === null)
+                throw new Error("Reserved Workflow run is missing");
+              // Recover the existing run's dispatch context after a crash between
+              // durable admission and the standalone adapter's caller write.
+              owner.recordTriggerCaller(
+                run.runId,
+                stored.actorId,
+                stored.computerId,
+              );
+              await this.launch(libraryId, run);
+            },
+            abuse: {
+              hostRate: env.WORKFLOW_WEBHOOK_HOST_RATE,
+              bindingRate: env.WORKFLOW_WEBHOOK_BINDING_RATE,
+              concurrency: env.WORKFLOW_WEBHOOK_POLICY.concurrency,
+            },
+            limits: env.WORKFLOW_WEBHOOK_POLICY.limits,
+            wake,
+            reportFailure: () => {
+              console.error("Standalone Workflow webhook failed");
+            },
+          });
+        return {
+          schedules,
+          webhooks,
           events: createStandaloneWorkflowEvents<InvocationFacts>(controls),
         };
       };
@@ -255,16 +353,12 @@ export abstract class StandaloneWorkflowRunsBase<
         transactionSync: (body) => ctx.storage.transactionSync(body),
         ownerId: () => this.libraryId(),
         computerId: () => computerId,
-        mintPassId: () =>
-          Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
-            byte.toString(16).padStart(2, "0"),
-          ).join(""),
-        remote: (_passId, repository) => {
+        remote: (repository) => {
           const libraryId = this.libraryId();
           if (repository.kind !== "installation" || libraryId === null)
             throw new AppInstanceError("revoked");
-          // The tenant's ordinary smart-HTTP door; the pass never enters the
-          // URL and travels only as the bearer header.
+          // The tenant's ordinary smart-HTTP door; the credential never
+          // enters the URL and travels only as the bearer header.
           return new URL(
             `/git/${repository.installationId}/${repository.repository}.git`,
             env.OYSTER_ORIGIN,
@@ -295,13 +389,6 @@ export abstract class StandaloneWorkflowRunsBase<
             if (!(await access(memberId, repository, scope)))
               throw new AppInstanceError("revoked");
           },
-          open: (_computer, grant) => {
-            const pass = passStore.openWorkflowPass(grant);
-            return Promise.resolve({
-              ...pass,
-              bearer: `${workflowGitPassPrefix}${libraryId}.${pass.passId}`,
-            });
-          },
           revoke: (_computer, input) => {
             passStore.revokeWorkflowRunGitPasses(input);
             return Promise.resolve();
@@ -311,8 +398,22 @@ export abstract class StandaloneWorkflowRunsBase<
           acknowledge: () => undefined,
         });
       };
-      return { owner, libraryTriggers, passStore, gitAccess, gitPasses };
+      return {
+        owner,
+        libraryTriggers,
+        passStore,
+        gitAccess,
+        gitPasses,
+        computerId,
+      };
     });
+    ctx.waitUntil(
+      this.composed.then(async ({ libraryTriggers }) => {
+        const libraryId = this.libraryId();
+        if (libraryId !== null)
+          await libraryTriggers(libraryId).webhooks?.recover();
+      }),
+    );
     this.owner = this.composed.then(({ owner }) => owner);
   }
   /** Record the library this object serves; another name is a revocation. */
@@ -327,13 +428,14 @@ export abstract class StandaloneWorkflowRunsBase<
       );
   }
   /**
-   * Mint (or renew) the Git pass for the Git step a node frame is executing.
-   * Null when this library dispatched no such step; a step that does not match
-   * the frame's attested Workflow, member and Computer is a revocation.
+   * Admit the Git step a node frame is executing: its public grant, never a
+   * credential. Null when this library dispatched no such step; a step that
+   * does not match the frame's attested Workflow, member and Computer is a
+   * revocation. Only NEW native admission then issues, through issueWorkflowGit.
    */
-  async openWorkflowGitPass(
+  async admitWorkflowGit(
     raw: WorkflowGitPassRequest,
-  ): Promise<WorkflowGitPassResult | null> {
+  ): Promise<WorkflowGitPassGrant | null> {
     const request = workflowGitPassRequestSchema.parse(raw);
     const { owner, gitPasses } = await this.composed;
     const libraryId = this.libraryId();
@@ -351,23 +453,52 @@ export abstract class StandaloneWorkflowRunsBase<
         canonicalJson(request.workflow.armedBy)
     )
       throw new AppInstanceError("revoked");
-    return gitPasses(libraryId).openWorkflowPass(node.context, {
+    return gitPasses(libraryId).admitWorkflowGit(node.context, {
       installationId: node.installationId,
       method: node.method,
     });
   }
-  /** The tenant Git door's per-request admission of a presented pass. */
+  /** One fresh credential for a NEW native invocation of an admitted step. */
+  async issueWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<WorkflowGitCredential> {
+    const { passStore } = await this.composed;
+    return await passStore.issue(invocationId, grant);
+  }
+  /** A live native replay extends its lease; it never issues another. */
+  async renewWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<void> {
+    const { passStore } = await this.composed;
+    passStore.renew(invocationId, grant);
+  }
+  /** Close an invocation's credential, even before its issue arrives. */
+  async closeWorkflowGit(
+    invocationId: string,
+    grant: WorkflowGitPassGrant,
+  ): Promise<void> {
+    const { passStore } = await this.composed;
+    passStore.close(invocationId, grant);
+  }
+  /** The tenant Git door's per-request admission of a presented bearer. */
   async admitWorkflowGitPass(
-    passId: string,
+    bearer: string,
     repository: RepositoryRef,
     scope: "read" | "write",
   ): Promise<Extract<GitWriter, { kind: "actor" }> | null> {
-    const { owner, passStore, gitAccess } = await this.composed;
+    const { owner, passStore, gitAccess, computerId } = await this.composed;
     const libraryId = this.libraryId();
-    const grant = passStore.admit({ passId, repository, scope });
+    const admitted = await passStore.admit({ bearer, repository, scope });
+    if (libraryId === null || admitted === null || computerId === undefined)
+      return null;
+    const { grant, invocationId } = admitted;
     if (
-      libraryId === null ||
-      grant === null ||
+      // The selected Computer proves the credential's native command live.
+      !(await this.env.COMPUTER.getByName(computerId).executionIsLive(
+        invocationId,
+      )) ||
       owner.store.outcome(grant.runId) !== "active" ||
       !(await gitAccess(libraryId)(grant.memberId, repository, scope))
     )
@@ -486,6 +617,52 @@ export abstract class StandaloneWorkflowRunsBase<
     const libraryId = this.libraryId();
     if (libraryId === null) return;
     await libraryTriggers(libraryId).schedules.alarm();
+    await libraryTriggers(libraryId).webhooks?.recover();
+  }
+  /** Signed traffic uses the native fetch interface; no sender principal is accepted. */
+  override async fetch(request: Request): Promise<Response> {
+    return new Hono()
+      .all("/webhooks/:bindingId", async (context) => {
+        const { libraryTriggers } = await this.composed;
+        const libraryId = this.libraryId();
+        const webhooks =
+          libraryId === null ? null : libraryTriggers(libraryId).webhooks;
+        return webhooks === null
+          ? workflowWebhookRefusal()
+          : webhooks.receive(context.req.param("bindingId"), context.req.raw);
+      })
+      .fetch(request);
+  }
+  async #isWebhookOwner(principal: OysterPrincipal) {
+    const shared = await standaloneTenancy(this.env);
+    const current = await shared.owner();
+    return (
+      principal.actor.kind === "member" &&
+      current?.actor.memberId === principal.actor.memberId
+    );
+  }
+  /** Root-authenticated owner RPC; command data cannot nominate an actor or pin. */
+  async webhookControl(
+    principal: OysterPrincipal,
+    installationId: string,
+    raw: unknown,
+  ): Promise<Response> {
+    if (!(await this.#isWebhookOwner(principal)))
+      return workflowWebhookRefusal();
+    const parsed = workflowWebhookCommandSchema.safeParse(raw);
+    if (!parsed.success) return workflowWebhookRefusal();
+    const { owner, libraryTriggers } = await this.composed;
+    const webhooks = libraryTriggers(installationId).webhooks;
+    if (webhooks === null) return workflowWebhookRefusal();
+    return workflowWebhookControlResponse(
+      webhooks,
+      principal,
+      parsed.data,
+      async (target) => ({
+        target: { ...target, installationId },
+        authority: (await owner.triggerAuthority(installationId)).pin,
+      }),
+    );
   }
   /**
    * The emitting App's Instance delivers each accepted event here. The
@@ -613,6 +790,12 @@ export abstract class StandaloneWorkflowRunsBase<
     ).admitInvocation(facts, "graphStatus");
     const run = owner.store.read(runId);
     if (run?.teamId !== installationId) return { error: "not_found" };
+    return this.runStatus(runId);
+  }
+  private async runStatus(runId: string) {
+    const owner = await this.owner;
+    const run = owner.store.read(runId);
+    if (run === null) return null;
     const outcome = owner.store.outcome(runId);
     let status: Pick<InstanceStatus, "status"> &
       Partial<Pick<InstanceStatus, "output" | "error">>;
@@ -648,6 +831,29 @@ export abstract class StandaloneWorkflowRunsBase<
     const run = owner.store.read(runId);
     if (run?.teamId !== installationId)
       return { kind: "refused", reason: "denied" };
+    return this.cancelRun(runId);
+  }
+  /** Host-only MCP control reopens the configured owner's authority on every call. */
+  async control(
+    principal: OysterPrincipal,
+    operation: "status" | "cancel",
+    runId: string,
+  ) {
+    const shared = await standaloneTenancy(this.env);
+    const current = await shared.owner();
+    if (
+      principal.actor.kind !== "member" ||
+      current?.actor.memberId !== principal.actor.memberId
+    )
+      throw new AppInstanceError("revoked");
+    const owner = await this.owner;
+    if (owner.store.read(runId) === null) return null;
+    return operation === "status"
+      ? this.runStatus(runId)
+      : this.cancelRun(runId);
+  }
+  private async cancelRun(runId: string) {
+    const owner = await this.owner;
     if (owner.store.outcome(runId) !== "active") return { kind: "terminal" };
     const instance = await this.env.GRAPH_WORKFLOWS.get(runId);
     try {

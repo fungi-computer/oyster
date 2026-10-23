@@ -159,6 +159,11 @@ assert.equal((await (await create("owner")).json()).agentId, "agent_1");
 assert.equal((await call("/agents", {}, "key")).status, 403);
 assert.equal((await call("/agents/agent_1/sessions?limit=5")).status, 200);
 assert.deepEqual(forwarded, ["/sessions"]);
+assert.equal(
+  (await call("/agents/agent_1/browser/sessions/s/browser/events")).status,
+  200,
+);
+assert.equal(forwarded.at(-1), "/browser/sessions/s/browser/events");
 assert.equal((await call("/agents/agent_1/extensions")).status, 404);
 assert.equal((await call("/agents/agent_9/sessions")).status, 404);
 assert.deepEqual(await (await call("/member/inbox")).json(), {
@@ -290,6 +295,29 @@ const readOnly = await capabilityFixture({
   adapters: capabilities,
   agents: adapter,
 });
+assert.equal(
+  (
+    await call(
+      "/agents/agent_1/browser/sessions/s/browser/events",
+      {},
+      "owner",
+      readOnly.app,
+    )
+  ).status,
+  200,
+);
+for (const operation of ["claims", "results"])
+  assert.equal(
+    (
+      await call(
+        `/agents/agent_1/browser/sessions/s/browser/${operation}`,
+        { method: "POST" },
+        "owner",
+        readOnly.app,
+      )
+    ).status,
+    403,
+  );
 assert.equal(
   (await call("/agents/agent_1/sessions", {}, "owner", readOnly.app)).status,
   200,

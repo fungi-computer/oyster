@@ -114,22 +114,25 @@ export function workersMedia(
     );
     if (!response.ok) {
       const failure = await readMediaFailure(response);
-      return context.json({
-        kind: "failed",
-        failure:
-          failure === null
-            ? {
-                message: "Invalid media service response",
-                code: "PROTOCOL",
-                retryable: false,
-              }
-            : {
-                message: failure.error,
-                code: failure.code,
-                stage: failure.stage,
-                retryable: failure.retryable,
-              },
-      });
+      const projected =
+        failure === null
+          ? {
+              message: "Invalid media service response",
+              code: "PROTOCOL",
+              retryable: false,
+            }
+          : {
+              message: failure.error,
+              code: failure.code,
+              stage: failure.stage,
+              retryable: failure.retryable,
+            };
+      if (failure?.provider !== undefined)
+        return context.json({
+          kind: "failed",
+          failure: { ...projected, provider: failure.provider },
+        });
+      return context.json({ kind: "failed", failure: projected });
     }
     if (response.status === 202) {
       const pending = mediaPendingSchema.parse(await response.json());
@@ -295,7 +298,7 @@ export async function dispatchMediaBinding(
   )
     throw new AppInstanceError("revoked");
   const parsed = parseMediaBindingCall(
-    Schema.decodeUnknownSync(Schema.Json)({
+    z.json().parse({
       operation: method,
       input: args[0],
     }),

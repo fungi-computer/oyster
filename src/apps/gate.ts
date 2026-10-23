@@ -17,6 +17,8 @@ import {
 import { appToolAccessSchema, type AppToolAccess } from "./tools.js";
 import {
   ownerCodec,
+  resourceRefSchema,
+  type ResourceRef,
   type DeclaredOperations,
   type Installation,
   type ApprovedGrant,
@@ -40,6 +42,13 @@ export const gateRequestSchema = z.lazy(() =>
       name: z.string(),
       input: z.unknown(),
       via: z.enum(["ui", "agent", "mcp", "workflow"]),
+      resource: resourceRefSchema.optional(),
+    }),
+    z.strictObject({
+      kind: z.literal("capability"),
+      capability: ownerCodec(appCapabilityIdSchema),
+      operation: z.string().min(1).optional(),
+      resource: z.union([resourceRefSchema, z.literal("any")]),
     }),
     z.strictObject({
       kind: z.literal("capability-route"),
@@ -60,7 +69,11 @@ export type GateRequest = z.output<typeof gateRequestSchema>;
 /** Immutable values the host already read; resource/grantor freshness remains host-owned. */
 export type GateFacts = Readonly<{
   principal: HostPrincipal;
-  installation: Installation;
+  installation: Readonly<
+    Pick<Installation, "status" | "visibility" | "instanceId" | "authority"> & {
+      artifactDigest: string;
+    }
+  >;
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
   api: AppApi | null;
@@ -120,19 +133,23 @@ export type GateDecision =
 
 /** Intersect stored approvals with the current verified Release without widening resource selectors. */
 export function grantsFor(
-  installation: Installation,
+  installation: Pick<
+    GateFacts["installation"],
+    "status" | "authority" | "artifactDigest"
+  >,
   declaration: AppDeclaration,
   snapshot: DeclaredOperations,
   capability: ApprovedGrant["capability"],
+  resource: ResourceRef | "any" = "any",
 ): ApprovedGrant | null {
   if (
     installation.status !== "enabled" ||
-    snapshot.digest !== installation.declaredOperationsDigest ||
-    snapshot.artifactDigest !== installation.release.artifact.artifactDigest ||
+    snapshot.digest !== installation.authority.declaredOperationsDigest ||
+    snapshot.artifactDigest !== installation.artifactDigest ||
     !declaration.capabilities.includes(capability)
   )
     return null;
-  const approved = installation.approvedGrants.find(
+  const approved = installation.authority.approvedGrants.find(
     (grant) => grant.capability === capability,
   );
   const declared =
@@ -140,7 +157,12 @@ export function grantsFor(
       ?.operations ?? [];
   if (
     !approved?.capabilityApproved ||
-    (approved.resources !== "tenant-scope" && approved.resources.length === 0)
+    (approved.resources !== "tenant-scope" &&
+      (resource === "any"
+        ? approved.resources.length === 0
+        : !approved.resources.some(
+            (ref) => ref.kind === resource.kind && ref.id === resource.id,
+          )))
   )
     return null;
   const operations = approved.operations.filter((operation) =>
@@ -152,7 +174,7 @@ export function grantsFor(
 /** Approved binding operations from an already verified declaration. Hosts still pin
  * the selection/version/artifact and compare running frame grants as a subset. */
 export function approvedBindingGrants(
-  installation: Installation,
+  installation: Pick<GateFacts["installation"], "status" | "authority">,
   declaration: AppDeclaration,
 ): InvocationGrants {
   if (installation.status !== "enabled") return [];
@@ -164,7 +186,7 @@ export function approvedBindingGrants(
         operation !== undefined &&
         operation.requires.length > 0 &&
         operation.requires.every((capability) => {
-          const approved = installation.approvedGrants.find(
+          const approved = installation.authority.approvedGrants.find(
             (grant) => grant.capability === capability,
           );
           return (
@@ -247,13 +269,13 @@ function admissionRefusal(
   )
     return refusal("unavailable");
   if (
-    facts.declaredOperations.digest !== installation.declaredOperationsDigest ||
-    facts.declaredOperations.artifactDigest !==
-      installation.release.artifact.artifactDigest ||
+    facts.declaredOperations.digest !==
+      installation.authority.declaredOperationsDigest ||
+    facts.declaredOperations.artifactDigest !== installation.artifactDigest ||
     (facts.pins !== undefined &&
-      (facts.pins.authorityVersion !== installation.authorityVersion ||
-        facts.pins.artifactDigest !==
-          installation.release.artifact.artifactDigest))
+      (facts.pins.authorityVersion !==
+        installation.authority.authorityVersion ||
+        facts.pins.artifactDigest !== installation.artifactDigest))
   )
     return refusal("stale_authority");
   if (
@@ -289,6 +311,7 @@ function methodMetadata(
 function methodGrantRefusal(
   facts: GateFacts,
   method: AppMethodDeclaration,
+  resource: ResourceRef | "any" = "any",
 ): z.output<typeof gateRefusalSchema> | null {
   const { installation } = facts;
   if (
@@ -299,6 +322,7 @@ function methodGrantRefusal(
           facts.declaration,
           facts.declaredOperations,
           capability,
+          resource,
         ) === null,
     )
   )
@@ -362,13 +386,38 @@ export function admits(
       } catch {
         return refusal("invalid_input");
       }
-      const grantDenied = methodGrantRefusal(facts, method);
+      const grantDenied = methodGrantRefusal(facts, method, request.resource);
       if (grantDenied !== null) return grantDenied;
       return {
         kind: "admitted",
         grants: admittedBindings(facts, method),
         method,
       };
+    }
+    case "capability": {
+      if (visitor) return refusal("visitor_read_only");
+      if (
+        !facts.declaration.capabilities.includes(request.capability) ||
+        (request.operation !== undefined &&
+          facts.declaredOperations.capabilities
+            .find((row) => row.capability === request.capability)
+            ?.operations.includes(request.operation) !== true)
+      )
+        return refusal("not_declared");
+      const grant = grantsFor(
+        installation,
+        facts.declaration,
+        facts.declaredOperations,
+        request.capability,
+        request.resource,
+      );
+      if (
+        grant === null ||
+        (request.operation !== undefined &&
+          !grant.operations.includes(request.operation))
+      )
+        return refusal("not_approved");
+      return { kind: "admitted", grants: [] };
     }
     case "capability-route": {
       if (visitor) return refusal("visitor_read_only");

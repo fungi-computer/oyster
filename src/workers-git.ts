@@ -1,4 +1,3 @@
-import * as z from "zod";
 import {
   defaultTenant,
   implicitTenancy,
@@ -33,6 +32,7 @@ import { AppInstanceError, selectionOf } from "./index.js";
 import { ownerOrKeyAuth } from "./auth.js";
 import { causeClass } from "./cause-class.js";
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import * as Schema from "effect/Schema";
 import { defineIdFamily } from "@fungi.computer/cairn";
 import {
@@ -55,7 +55,7 @@ import {
 } from "./git.js";
 import {
   createKeyStore,
-  type KeyRecord,
+  keyWire,
   type KeyStore,
 } from "@fungi.computer/ear-tag/keys";
 import type { Grant } from "@fungi.computer/ear-tag/grants";
@@ -92,6 +92,7 @@ import {
   createOyster,
   oysterPrincipalIsOwner,
   type OysterAuth,
+  type OysterAuthResult,
   type OysterCapability,
   type OysterEnv,
   type OysterGitHost,
@@ -112,6 +113,7 @@ import {
   type OysterWorkspace,
   type OysterWorkerEnv,
   type OysterInvocationHost,
+  serveOysterBootCapability,
 } from "./workers.js";
 import { registryInstallations } from "./internal/registry-installations.js";
 
@@ -640,7 +642,7 @@ export class OysterKeys extends DurableObject<OysterKeysEnv> {
 
   /** The live facts behind one key id, for the host's `keys.live` port; `null` for an unknown, revoked, expired or suspended key. */
   async live(keyId: string): Promise<LiveOysterKey | null> {
-    const result = await this.#store.read("host", keyId);
+    const result = await this.#store.live({ keyId });
     if (result.kind !== "ok") return null;
     return {
       keyId: result.value.keyId,
@@ -1096,41 +1098,7 @@ const subscribeSchema = Schema.Struct({
 const keyNamePattern = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 /** `invocation.ts:486` uses `team-key:visitor` for anonymous readers; a key can never claim that name. */
 const reservedKeyName = "visitor";
-const issueKeySchema = Schema.Struct({
-  name: Schema.String.check(Schema.isPattern(keyNamePattern)),
-  grants: Schema.Unknown,
-  expiresAt: Schema.optional(Schema.Number),
-});
-const revokeKeySchema = Schema.Struct({
-  keyId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
-  requestId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.:-]{1,112}$/u)),
-});
-const oysterGrantsArraySchema = z.lazy(() =>
-  z.array(oysterKeyVocabulary.grantSchema).min(1).max(64),
-);
-
-/** One listed or issued key's owner-facing summary; never its secret or owner id. */
-export type OysterKeySummary = Readonly<{
-  keyId: string;
-  name: string;
-  grants: readonly Grant<OysterKeyCapability>[];
-  expiresAt: number | null;
-  createdAt: number;
-  lastUsedAt: number | null;
-  revokedAt: number | null;
-}>;
-
-function keySummary(record: KeyRecord<OysterKeyCapability>): OysterKeySummary {
-  return {
-    keyId: record.keyId,
-    name: record.name,
-    grants: record.scope?.grants ?? [],
-    expiresAt: record.expiresAt,
-    createdAt: record.createdAt,
-    lastUsedAt: record.lastUsedAt,
-    revokedAt: record.revokedAt,
-  };
-}
+const keysWire = keyWire(oysterKeyVocabulary);
 
 /** Owner routes for keys and webhooks; `createOyster` mounts them owner-only. */
 export function gitAdminRoutes(
@@ -1146,26 +1114,27 @@ export function gitAdminRoutes(
     const listed = await keys().list(owner.actor.memberId);
     if (listed.kind === "error")
       return Response.json({ error: listed.error.code }, { status: 500 });
-    return Response.json({ keys: listed.value.map(keySummary) });
+    return Response.json({ keys: listed.value.map(keysWire.toSummary) });
   });
   routes.post("/api/keys", async (context) => {
-    const body = Schema.decodeUnknownOption(issueKeySchema)(
-      await context.req.json(),
-    );
-    if (body._tag === "None")
+    const body = keysWire.issue.safeParse(await context.req.json());
+    if (!body.success)
       return Response.json({ error: "Invalid key" }, { status: 400 });
-    if (body.value.name === reservedKeyName)
+    // Named identities and rate policy belong to this host, not the wire grammar.
+    if (
+      !keyNamePattern.test(body.data.name) ||
+      body.data.name === reservedKeyName ||
+      body.data.keyId !== undefined ||
+      body.data.rateLimit !== undefined
+    )
       return Response.json({ error: "Invalid key name" }, { status: 400 });
     const owner = context.get("principal");
     if (!oysterPrincipalIsOwner(owner))
       return Response.json({ error: "Owner only" }, { status: 403 });
-    const grants = oysterGrantsArraySchema.safeParse(body.value.grants);
-    if (!grants.success)
-      return Response.json({ error: "Invalid grants" }, { status: 400 });
     const issued = await keys().issue(owner.actor.memberId, {
-      name: body.value.name,
-      grants: grants.data,
-      expiresAt: body.value.expiresAt,
+      name: body.data.name,
+      grants: body.data.grants,
+      expiresAt: body.data.expiresAt,
     });
     if (issued.kind === "error")
       return Response.json(
@@ -1173,30 +1142,31 @@ export function gitAdminRoutes(
         { status: issued.error.code === "conflict" ? 409 : 400 },
       );
     return Response.json(
-      { plaintext: issued.value.key, key: keySummary(issued.value.record) },
+      {
+        plaintext: issued.value.key,
+        key: keysWire.toSummary(issued.value.record),
+      },
       { status: 201 },
     );
   });
   routes.post("/api/keys/revoke", async (context) => {
-    const body = Schema.decodeUnknownOption(revokeKeySchema)(
-      await context.req.json(),
-    );
-    if (body._tag === "None")
+    const body = keysWire.revoke.safeParse(await context.req.json());
+    if (!body.success)
       return Response.json({ error: "Invalid request" }, { status: 400 });
     const owner = context.get("principal");
     if (!oysterPrincipalIsOwner(owner))
       return Response.json({ error: "Owner only" }, { status: 403 });
     const revoked = await keys().revoke(
       owner.actor.memberId,
-      body.value.requestId,
-      body.value.keyId,
+      body.data.requestId,
+      body.data.keyId,
     );
     if (revoked.kind === "error")
       return Response.json(
         { error: revoked.error.code },
         { status: revoked.error.code === "denied" ? 404 : 400 },
       );
-    return Response.json({ key: keySummary(revoked.value) });
+    return Response.json({ key: keysWire.toSummary(revoked.value) });
   });
   routes.post("/api/webhooks", async (context) => {
     const body = Schema.decodeUnknownOption(subscribeSchema)(
@@ -1257,7 +1227,7 @@ export abstract class OysterGitInstance<
   protected override readonly bindings: OysterBindingTable<Env> = gitBindings;
 
   /** The deployable root's host for one pinned tenant: `root.hostFor(this.env, scope)`. */
-  protected abstract override hostFor(scope: TenantScope): OysterHost;
+  protected abstract override hostFor(scope: TenantScope): Promise<OysterHost>;
 }
 
 /**
@@ -1266,6 +1236,11 @@ export abstract class OysterGitInstance<
  * `oysterGitRoot(options).hostFor`.
  */
 export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
+  /** Workflow controls supplied by the host's existing run owner. */
+  workflows?: (
+    env: Env,
+    host: OysterGitWorkerHost,
+  ) => NonNullable<OysterHost["workflows"]>;
   /** Resolve one host-selected tenant before authentication; unknown origins refuse.
    * A single-owner root passes `ownerOrKeyTenancy`. */
   tenancy: (env: Env) => OysterTenancy;
@@ -1282,15 +1257,20 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
    * workspace, but whether that key's owner is still this tenant's live
    * owner is this one port's job, never reimplemented against `env.KEYS`.
    */
-  workspace?: (env: Env, keysLive: OysterKeysLivePort) => OysterWorkspace;
+  workspace?: (
+    env: Env,
+    keysLive: OysterKeysLivePort,
+    scope: TenantScope,
+    request?: Readonly<{ request: Request; auth: OysterAuth }>,
+  ) => OysterWorkspace | Promise<OysterWorkspace>;
   /** Additional capabilities share the exact workspace selected for the base host. */
   capabilities?: (
     env: Env,
     workspace: OysterWorkspace,
     keysLive: OysterKeysLivePort,
   ) => readonly OysterCapability[];
-  /** Admit a host-minted Workflow Git pass for one repository and scope;
-   * omit when this host mints no Workflow Git passes. */
+  /** Admit a presented Workflow Git credential for one repository and scope;
+   * omit when this host issues no Workflow Git credentials. */
   workflowGitPass?: (
     env: Env,
     scope: TenantScope,
@@ -1327,7 +1307,11 @@ export type OysterGitRoot<Env extends OysterGitWorkerEnv> = Readonly<{
   /** Select a request's tenant once; `hostFor` reuses that admission for the same request. */
   admit(env: Env, request: Request): Promise<ResolvedTenant | null>;
   /** One pinned tenant's host. HTTP, MCP, Agents, Workflows and background wakes all reach it here. */
-  hostFor(env: Env, scope: TenantScope): OysterGitWorkerHost;
+  hostFor(
+    env: Env,
+    scope: TenantScope,
+    request?: Request,
+  ): Promise<OysterGitWorkerHost>;
 }>;
 
 /** Compose a Git Worker's root from its one options value. */
@@ -1340,12 +1324,17 @@ export function oysterGitRoot<Env extends OysterGitWorkerEnv>(
       tenancy: OysterTenancy;
       /** Each request's one admission, taken at its top and consumed below. */
       admissions: WeakMap<Request, ResolvedTenant>;
+      authentications: WeakMap<Request, Promise<OysterAuthResult>>;
     }>
   >();
   const stateOf = (env: Env) => {
     let state = environments.get(env);
     if (state === undefined) {
-      state = { tenancy: options.tenancy(env), admissions: new WeakMap() };
+      state = {
+        tenancy: options.tenancy(env),
+        admissions: new WeakMap(),
+        authentications: new WeakMap(),
+      };
       environments.set(env, state);
     }
     return state;
@@ -1357,12 +1346,22 @@ export function oysterGitRoot<Env extends OysterGitWorkerEnv>(
       if (resolved !== null) state.admissions.set(request, resolved);
       return resolved;
     },
-    hostFor(env, scope) {
+    hostFor(env, scope, request) {
       const state = stateOf(env);
-      return oysterGitWorkerHost(env, options, {
-        scope,
-        auth: pinnedTenantAuth(state.tenancy, scope, state.admissions),
-      });
+      return oysterGitWorkerHost(
+        env,
+        options,
+        {
+          scope,
+          auth: pinnedTenantAuth(
+            state.tenancy,
+            scope,
+            state.admissions,
+            state.authentications,
+          ),
+        },
+        request,
+      );
     },
   };
 }
@@ -1399,7 +1398,16 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
       const resolved = await root.admit(env, request);
       if (resolved === null) return new Response("Not found", { status: 404 });
       const { scope } = resolved;
-      const key = `${scope.tenantId}:${scope.origin}`;
+      const boot = await serveOysterBootCapability(request, env, scope);
+      if (boot !== null) return boot;
+      let host: OysterGitWorkerHost;
+      try {
+        host = await root.hostFor(env, scope, request);
+      } catch (error) {
+        if (error instanceof HTTPException) return error.getResponse();
+        throw error;
+      }
+      const key = `${scope.tenantId}:${scope.origin}:${host.computerId ?? ""}`;
       let entry = hosts.get(key);
       let cache = true;
       if (entry === undefined) {
@@ -1410,7 +1418,7 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
             hosts.delete(idle[0]);
           }
         }
-        entry = { app: createOyster(root.hostFor(env, scope)), active: 0 };
+        entry = { app: createOyster(host), active: 0 };
         if (cache) hosts.set(key, entry);
       } else {
         hosts.delete(key);
@@ -1481,7 +1489,7 @@ export function oysterWorkerGit<Env extends OysterGitWorkerEnv>(
             selected.owner.kind !== "installation" ||
             selected.owner.id !== current.installationId ||
             selected.instanceId !== current.instanceId ||
-            selected.authorityVersion !== current.authorityVersion ||
+            selected.authorityVersion !== current.authority.authorityVersion ||
             selected.appId !== current.release.appId ||
             selected.releaseId !== current.release.releaseId ||
             captured.release.appId !== current.release.appId ||
@@ -1504,7 +1512,8 @@ export function oysterWorkerGit<Env extends OysterGitWorkerEnv>(
         if (
           current?.status !== "enabled" ||
           current.instanceId !== installation.instanceId ||
-          current.authorityVersion !== installation.authorityVersion ||
+          current.authority.authorityVersion !==
+            installation.authority.authorityVersion ||
           current.release.appId !== installation.release.appId ||
           current.release.releaseId !== installation.release.releaseId ||
           current.release.artifact.artifactRef !==
@@ -1622,11 +1631,12 @@ export function oysterWorkerGit<Env extends OysterGitWorkerEnv>(
  * One selected tenant's whole host from a root's options. Roots reach it through
  * `oysterGitRoot(options).hostFor`; a cold directory passes its own resolved tenant.
  */
-export function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
+export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   env: Env,
   options: OysterGitWorkerOptions<Env>,
   selected: ResolvedTenant,
-): OysterGitWorkerHost {
+  request?: Request,
+): Promise<OysterGitWorkerHost> {
   const { scope, auth } = selected;
   // The one path to a key's liveness: the stored owner id is re-checked
   // against the live, current owner on every read (S3 inherits this port,
@@ -1643,7 +1653,12 @@ export function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
     });
     return current !== null && oysterPrincipalIsOwner(current) ? key : null;
   };
-  const workspace = options.workspace?.(env, keysLive) ?? {
+  const workspace = (await options.workspace?.(
+    env,
+    keysLive,
+    scope,
+    request === undefined ? undefined : { request, auth },
+  )) ?? {
     computerId: scope.computerName("workspace"),
     files: r2FileSource(env.RELEASES, scope.workspacePrefix),
   };
@@ -1685,6 +1700,8 @@ export function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   };
   if (options.pageScript !== undefined)
     host = { ...host, pageScript: options.pageScript };
+  if (options.workflows !== undefined)
+    host = { ...host, workflows: options.workflows(env, host) };
   if (options.homeInstallationId !== undefined)
     host = { ...host, homeInstallationId: options.homeInstallationId(env) };
   return host;
@@ -1698,6 +1715,7 @@ function pinnedTenantAuth(
   tenancy: OysterTenancy,
   scope: TenantScope,
   admissions: WeakMap<Request, ResolvedTenant>,
+  authentications: WeakMap<Request, Promise<OysterAuthResult>>,
 ): OysterAuth {
   const admitted = async (incoming: Request) =>
     admissions.get(incoming) ?? (await tenancy.resolve(incoming));
@@ -1718,7 +1736,12 @@ function pinnedTenantAuth(
         current.scope.origin !== scope.origin
       )
         return { kind: "refused", status: 404 };
-      return current.auth.authenticate(incoming);
+      let authenticated = authentications.get(incoming);
+      if (authenticated === undefined) {
+        authenticated = current.auth.authenticate(incoming);
+        authentications.set(incoming, authenticated);
+      }
+      return authenticated;
     },
     login: async (incoming) => {
       const current = await admitted(incoming);

@@ -15,7 +15,10 @@ import {
 import type { AppMethodCallContext } from "@fungi.computer/puffball/app-method-runtime";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import { contentDigest, type WorkflowDefinition } from "@fungi.computer/braid";
-import { createStandaloneWorkflowSchedules } from "../../src/standalone/workflow-schedules.js";
+import {
+  createStandaloneWorkflowSchedules,
+  type TriggerAdmission,
+} from "../../src/standalone/workflow-schedules.js";
 import {
   createStandaloneWorkflowTriggerHost,
   standaloneTriggerErrors,
@@ -34,7 +37,10 @@ const installationAuthority: WorkflowInstallationAuthority =
     artifactDigest: "sha256:" + "c".repeat(64),
   });
 
-function fixture(context: AppMethodCallContext) {
+function fixture(
+  context: AppMethodCallContext,
+  agentAuthority: TriggerAdmission["authority"] = null,
+) {
   const database = new DatabaseSync(":memory:");
   const storage = fromNodeSqlite(database);
   const unexpected = (): never => {
@@ -81,6 +87,13 @@ function fixture(context: AppMethodCallContext) {
       return Promise.resolve({
         libraryId: "library",
         context,
+        authority:
+          context.actor.kind === "member"
+            ? {
+                armer: { armedBy: context.actor.memberId, armedVia: null },
+                principal: context.actor,
+              }
+            : agentAuthority,
         installationAuthority,
       });
     },
@@ -143,7 +156,7 @@ it.each([undefined, "not-a-digest"])(
   },
 );
 
-it("refuses an Agent even when its protected context names a Computer", async () => {
+it("refuses an Agent without admitted approval even when its protected context names a Computer", async () => {
   const f = fixture({
     actor: { kind: "agent", agentId: "agent" },
     computerId: "protected-computer",
@@ -155,6 +168,53 @@ it("refuses an Agent even when its protected context names a Computer", async ()
     expect(f.authorization).toEqual([]);
     expect(f.wakes).toEqual([]);
   } finally {
+    f.close();
+  }
+});
+
+it("an approved Agent controls schedules as its grantor and retains its policy source when arming", async () => {
+  const authority: NonNullable<TriggerAdmission["authority"]> = {
+    armer: {
+      armedBy: "owner",
+      armedVia: {
+        kind: "policy",
+        agentId: "agent",
+        policyRevision: "approval:1",
+        grantorMemberId: "owner",
+      },
+    },
+    principal: { kind: "agent", agentId: "agent", grantorMemberId: "owner" },
+  };
+  const f = fixture(
+    {
+      actor: { kind: "agent", agentId: "agent" },
+      computerId: "protected-computer",
+    },
+    authority,
+  );
+  const arm = vi.spyOn(f.triggers, "arm");
+  try {
+    await expect(f.adapter.list("protected-frame")).resolves.toEqual({
+      schedules: [],
+    });
+    await expect(
+      f.adapter.disarm("protected-frame", { scheduleId: "missing" }),
+    ).resolves.toEqual({ kind: "not_found" });
+    expect(f.authorization).toEqual([
+      { memberId: "owner", installationId: "library" },
+      { memberId: "owner", installationId: "library" },
+    ]);
+    await expect(f.adapter.arm("protected-frame", target)).rejects.toThrow(
+      "Missing Computer reached a trigger host port",
+    );
+    expect(arm).toHaveBeenCalledWith(
+      authority.armer,
+      { ...target, installationId: "library" },
+      "protected-computer",
+      installationAuthority,
+    );
+  } finally {
+    arm.mockRestore();
     f.close();
   }
 });

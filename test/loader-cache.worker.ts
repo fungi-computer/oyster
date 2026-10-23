@@ -330,13 +330,20 @@ export class LoaderProbe extends OysterInstance<Env> {
       installationId: "loader-proof",
       instanceId,
     });
-    await this.env.REGISTRY.getByName("registry").put(installation);
+    const committed = await this.env.REGISTRY.getByName(
+      "registry",
+    ).compareAndPut(
+      installation,
+      0,
+      await this.env.REGISTRY.getByName("registry").generation(),
+    );
+    if (!committed.ok) throw new Error(committed.code);
     const selection = {
       instanceId,
       owner: { kind: "installation" as const, id: "loader-proof" },
       appId: release.appId,
       releaseId: release.releaseId,
-      authorityVersion: installation.authorityVersion,
+      authorityVersion: installation.authority.authorityVersion,
     };
     const applied = await this.apply(
       { ...selection, status: "enabled" },

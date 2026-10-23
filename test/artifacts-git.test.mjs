@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { URL } from "node:url";
 import * as Schema from "effect/Schema";
 import { invokeNativeGit } from "@fungi.computer/agar/git-rpc";
+import { approvedInstallation } from "../dist/testing/index.js";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -617,14 +618,6 @@ test("repos.get binding sequence reuses only its verified frame backend and reop
       },
     },
   };
-  const installation = {
-    installationId: "notes",
-    instanceId: instanceIds.instance.generate(),
-    release,
-    authorityVersion: 1,
-    status: "enabled",
-  };
-  let current = installation;
   let registryReads = 0;
   let providerReads = 0;
   const bucket = {
@@ -643,6 +636,14 @@ test("repos.get binding sequence reuses only its verified frame backend and reop
     },
     release,
   );
+  assert.ok(resolved.declaration);
+  const installation = await approvedInstallation({
+    installationId: "notes",
+    instanceId: instanceIds.instance.generate(),
+    release,
+    declaration: resolved.declaration,
+  });
+  let current = installation;
   const { binding } = bindingFixture();
   const get = binding.get;
   binding.get = async (...args) => {
@@ -755,7 +756,13 @@ test("repos.get binding sequence reuses only its verified frame backend and reop
         },
       );
       assert.equal(providerReads, before);
-      current = { ...installation, authorityVersion: 2 };
+      current = {
+        ...installation,
+        authority: {
+          ...installation.authority,
+          authorityVersion: installation.authority.authorityVersion + 1,
+        },
+      };
       await assert.rejects(git.info("fork"));
       assert.equal(providerReads, before);
       current = { ...installation, status: "disabled" };

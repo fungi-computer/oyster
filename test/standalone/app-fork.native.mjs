@@ -17,7 +17,10 @@ import { seed as seedArtifacts } from "./app-fork-artifacts.fixture.mjs";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier === "cloudflare:workers")
+    if (
+      specifier === "cloudflare:workers" ||
+      specifier === "cloudflare:workflows"
+    )
       return {
         url: new URL("./app-fork-workers.fixture.mjs", import.meta.url).href,
         shortCircuit: true,
@@ -30,7 +33,8 @@ const hooks = registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { StandaloneRegistry } = await import("../../src/standalone/registry.js");
+const { OysterRegistry: StandaloneRegistry } =
+  await import("../../src/standalone/worker.ts");
 const { StandaloneTenants } = await import("../../src/standalone/tenancy.ts");
 hooks.deregister();
 
@@ -41,6 +45,7 @@ function state(database) {
     "CREATE TABLE fixture_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
   );
   return {
+    id: { name: "registry" },
     storage: {
       ...storage,
       get: async (key) => {

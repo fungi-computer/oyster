@@ -13,8 +13,11 @@ import {
   releaseSchema,
   sha256DigestSchema,
 } from "@fungi.computer/puffball/effect";
-import { instanceIdSchema } from "../index.js";
+import { instanceIdSchema } from "../instance-id.js";
+import type { OwnerState } from "../index.js";
 import type { CapabilityDescriptor } from "../capability-descriptor.js";
+import { permissionCatalog } from "./catalog.js";
+import type { HostPrincipal } from "./gate.js";
 
 /** Reuse the owning Effect codec at a JSON/storage boundary. */
 export function ownerCodec<A, I>(schema: Schema.Codec<A, I>) {
@@ -36,7 +39,7 @@ export const installationIdSchema = z.lazy(() =>
   z.string().regex(/^[a-z](?:[a-z0-9]|-(?!-)){0,62}$/u),
 );
 /** A resource identity minted and resolved by the host, never by this module. */
-const resourceRefSchema = z.lazy(() =>
+export const resourceRefSchema = z.lazy(() =>
   z
     .strictObject({
       kind: z.string().min(1),
@@ -63,10 +66,10 @@ const operationsSchema = z.lazy(() =>
  * no new consent; a new capability does. Release selection intersects stored
  * operations instead of adding approvals. Each Worker call is still restricted
  * to that method's declared requires, never the App's complete capability set.
- * Only an approved install or set-grants command mints capabilityApproved.
+ * Only an approved install or change-grants command mints capabilityApproved.
  * Empty operation rows retain that consent; removing the capability revokes it.
  * route:app.methods rows record approval detail, not a method allowlist: narrowing
- * them in set-grants does not restrict methods using an approved capability.
+ * them in change-grants does not restrict methods using an approved capability.
  * Exact operation rows are enforced for capability routes and backend bindings.
  */
 export const approvedGrantSchema = z
@@ -92,28 +95,28 @@ const approvedGrantsSchema = z.lazy(() =>
     )
     .readonly(),
 );
-/** Shorthand is accepted only on a command and expanded at approval time. */
-const grantRequestSchema = z.union([
-  z.literal("none"),
-  z.literal("declared"),
-  z
-    .array(
-      approvedGrantSchema
-        .unwrap()
-        .omit({ capabilityApproved: true })
-        .readonly(),
-    )
-    .refine(
-      (grants) =>
-        new Set(grants.map((grant) => grant.capability)).size === grants.length,
-      "Capabilities must be unique",
-    )
-    .readonly(),
-]);
-export type GrantRequest = Extract<
-  InstallationCommand,
-  { kind: "install" }
->["grants"];
+/** A bounded owner edit. Unnamed approvals are not part of the command. */
+export const grantChangeSchema = z
+  .strictObject({
+    capability: ownerCodec(appCapabilityIdSchema),
+    grant: approvedGrantSchema
+      .unwrap()
+      .omit({ capabilityApproved: true, capability: true })
+      .readonly()
+      .nullable(),
+  })
+  .readonly();
+export type GrantChange = z.output<typeof grantChangeSchema>;
+const grantChangesSchema = z
+  .array(grantChangeSchema)
+  .min(1)
+  .refine(
+    (changes) =>
+      new Set(changes.map((change) => change.capability)).size ===
+      changes.length,
+    "Capabilities must be unique",
+  )
+  .readonly();
 const versionSchema = z.lazy(() => z.number().int().positive());
 /** An owner's approval of a fixed operation snapshot. */
 const approvalSchema = z.lazy(() =>
@@ -125,7 +128,158 @@ const approvalSchema = z.lazy(() =>
     })
     .readonly(),
 );
-export type Approval = NonNullable<Installation["approval"]>;
+/** The owner and version that approved a fixed operation snapshot. */
+export type Approval = Readonly<{
+  by: HostActor;
+  at: number;
+  authorityVersion: number;
+}>;
+/** The complete grant state. Hosts own storage and compare-and-set commits. */
+export const appAuthoritySchema = z.strictObject({
+  authorityVersion: versionSchema,
+  declaredOperationsDigest: ownerCodec(sha256DigestSchema),
+  approvedGrants: approvedGrantsSchema,
+  approval: approvalSchema.nullable(),
+});
+export type AppAuthority = z.output<typeof appAuthoritySchema>;
+export const grantCommandSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("install") }),
+  z.strictObject({
+    kind: z.literal("change-grants"),
+    changes: grantChangesSchema,
+  }),
+  z.strictObject({ kind: z.literal("select-release") }),
+  z.strictObject({ kind: z.literal("delete") }),
+]);
+export type GrantCommand = z.output<typeof grantCommandSchema>;
+export type GrantContext = Readonly<{
+  principal: HostPrincipal;
+  expectedVersion: number | null;
+  declaration: AppDeclaration;
+  declaredOperations: DeclaredOperations;
+  now: number;
+}>;
+export type GrantRefusal = Readonly<{
+  kind: "refused";
+  code: "stale_authority" | "not_owner" | "not_declared" | "invalid_command";
+}>;
+
+/** One host-independent approval policy; selection only intersects existing grants. */
+export function applyGrantCommand(
+  current: AppAuthority | null,
+  rawCommand: GrantCommand,
+  context: GrantContext,
+): Result.Result<AppAuthority, GrantRefusal> {
+  const refuse = (code: GrantRefusal["code"]) =>
+    Result.fail<GrantRefusal>({ kind: "refused", code });
+  const parsed = grantCommandSchema.safeParse(rawCommand);
+  if (!parsed.success) return refuse("invalid_command");
+  const command = parsed.data;
+  if (
+    (current === null && command.kind !== "install") ||
+    (current !== null && command.kind === "install")
+  )
+    return refuse("invalid_command");
+  if (
+    (context.expectedVersion ?? 0) !== (current?.authorityVersion ?? 0) ||
+    (current !== null &&
+      command.kind !== "select-release" &&
+      current.declaredOperationsDigest !== context.declaredOperations.digest)
+  )
+    return refuse("stale_authority");
+  if (
+    context.principal.role === null ||
+    context.principal.actor.kind === "visitor" ||
+    (command.kind === "change-grants" && context.principal.role !== "owner")
+  )
+    return refuse("not_owner");
+  const declared = (capability: ApprovedGrant["capability"]) =>
+    context.declaredOperations.capabilities.find(
+      (row) => row.capability === capability,
+    )?.operations ?? [];
+  const version = (current?.authorityVersion ?? 0) + 1;
+  let grants = current?.approvedGrants ?? [];
+  let approval = current?.approval ?? null;
+  switch (command.kind) {
+    case "install":
+      grants =
+        context.principal.role === "owner"
+          ? context.declaration.capabilities
+              .filter(
+                (capability) =>
+                  permissionCatalog[capability].consent === "install",
+              )
+              .map((capability): ApprovedGrant => ({
+                capability,
+                capabilityApproved: true,
+                operations: declared(capability),
+                resources: "tenant-scope",
+              }))
+          : [];
+      break;
+    case "change-grants": {
+      for (const { capability, grant } of command.changes) {
+        if (
+          !context.declaration.capabilities.includes(capability) ||
+          grant?.operations.some(
+            (operation) => !declared(capability).includes(operation),
+          )
+        )
+          return refuse("not_declared");
+        const scope = permissionCatalog[capability].scope;
+        if (
+          grant !== null &&
+          grant.resources !== "tenant-scope" &&
+          (scope === null ||
+            grant.resources.some((resource) => resource.kind !== scope))
+        )
+          return refuse("invalid_command");
+      }
+      const changed = new Map(
+        command.changes.map((change) => [change.capability, change.grant]),
+      );
+      grants = [
+        ...grants.filter((grant) => !changed.has(grant.capability)),
+        ...command.changes.flatMap(({ capability, grant }): ApprovedGrant[] =>
+          grant === null ||
+          (grant.resources !== "tenant-scope" && grant.resources.length === 0)
+            ? []
+            : [{ capability, ...grant, capabilityApproved: true }],
+        ),
+      ];
+      break;
+    }
+    case "select-release":
+      grants = grants
+        .filter((grant) =>
+          context.declaration.capabilities.includes(grant.capability),
+        )
+        .map((grant) => ({
+          ...grant,
+          operations: grant.operations.filter((operation) =>
+            declared(grant.capability).includes(operation),
+          ),
+        }));
+      break;
+    case "delete":
+      grants = [];
+      break;
+  }
+  if (grants.length === 0) approval = null;
+  else if (command.kind === "install" || command.kind === "change-grants") {
+    approval = {
+      by: context.principal.actor,
+      at: context.now,
+      authorityVersion: version,
+    };
+  }
+  return Result.succeed({
+    authorityVersion: version,
+    declaredOperationsDigest: context.declaredOperations.digest,
+    approvedGrants: grants,
+    approval,
+  });
+}
 const anonymousMethodsSchema = z
   .array(
     z
@@ -179,12 +333,9 @@ export const installationSchema = z
     appId: ownerCodec(appIdSchema),
     release: ownerCodec(releaseSchema),
     releasePin: z.enum(["pinned", "floating"]),
-    authorityVersion: versionSchema,
+    authority: appAuthoritySchema,
     status: z.enum(["enabled", "disabled", "deleted"]),
     visibility: z.enum(["private", "public"]),
-    declaredOperationsDigest: ownerCodec(sha256DigestSchema),
-    approvedGrants: approvedGrantsSchema,
-    approval: approvalSchema.nullable(),
     approvedAnonymousMethods: anonymousMethodsSchema,
     anonymousApproval: approvalSchema.nullable(),
   })
@@ -199,7 +350,7 @@ export const installationSchema = z
       : installation.status !== "deleted" &&
           installation.approvedAnonymousMethods.length > 0 &&
           approval.by.kind === "member" &&
-          approval.authorityVersion <= installation.authorityVersion;
+          approval.authorityVersion <= installation.authority.authorityVersion;
   }, "Anonymous authority requires a retained human approval receipt");
 export type Installation = Readonly<z.output<typeof installationSchema>>;
 const releaseFields = {
@@ -212,7 +363,6 @@ export const installationCommandSchema = z.lazy(() =>
     z.strictObject({
       kind: z.literal("install"),
       ...releaseFields,
-      grants: grantRequestSchema,
     }),
     z.strictObject({ kind: z.literal("select-release"), ...releaseFields }),
     z.strictObject({
@@ -224,8 +374,8 @@ export const installationCommandSchema = z.lazy(() =>
       visibility: installationSchema.shape.visibility,
     }),
     z.strictObject({
-      kind: z.literal("set-grants"),
-      grants: grantRequestSchema,
+      kind: z.literal("change-grants"),
+      changes: grantChangesSchema,
     }),
     z.strictObject({
       kind: z.literal("approve-anonymous"),
@@ -292,15 +442,11 @@ export function applyInstallationCommand(
       return refuse("stale_authority");
   } else if (
     command.kind === "install" ||
-    context.expectedVersion !== current.authorityVersion
+    context.expectedVersion !== current.authority.authorityVersion
   ) {
     return refuse("stale_authority");
   }
-  if (
-    (command.kind === "set-grants" ||
-      (command.kind === "install" && command.grants !== "none")) &&
-    context.role !== "owner"
-  )
+  if (command.kind === "change-grants" && context.role !== "owner")
     return refuse("not_owner");
   const anonymousConsent =
     context.by.kind === "member" &&
@@ -327,18 +473,41 @@ export function applyInstallationCommand(
       release.artifact.artifactDigest ||
     (current !== null &&
       command.kind !== "select-release" &&
-      context.declaredOperations.digest !== current.declaredOperationsDigest)
+      context.declaredOperations.digest !==
+        current.authority.declaredOperationsDigest)
   )
     return refuse("stale_authority");
-  const declared = (capability: ApprovedGrant["capability"]) =>
-    context.declaration.capabilities.includes(capability)
-      ? (context.declaredOperations.capabilities.find(
-          (row) => row.capability === capability,
-        )?.operations ?? [])
-      : [];
-  const version = (current?.authorityVersion ?? 0) + 1;
-  let grants = current?.approvedGrants ?? [];
-  let approval = current?.approval ?? null;
+  const version = (current?.authority.authorityVersion ?? 0) + 1;
+  const grantCommand: GrantCommand | null =
+    command.kind === "install" || command.kind === "select-release"
+      ? { kind: command.kind }
+      : command.kind === "change-grants"
+        ? command
+        : command.kind === "set-status" && command.status === "deleted"
+          ? { kind: "delete" }
+          : null;
+  const authority =
+    grantCommand === null
+      ? current === null
+        ? Result.fail<GrantRefusal>({
+            kind: "refused",
+            code: "invalid_command",
+          })
+        : Result.succeed<AppAuthority>({
+            authorityVersion: version,
+            declaredOperationsDigest:
+              current.authority.declaredOperationsDigest,
+            approvedGrants: current.authority.approvedGrants,
+            approval: current.authority.approval,
+          })
+      : applyGrantCommand(current?.authority ?? null, grantCommand, {
+          principal: { actor: context.by, role: context.role },
+          expectedVersion: context.expectedVersion,
+          declaration: context.declaration,
+          declaredOperations: context.declaredOperations,
+          now: context.now,
+        });
+  if (Result.isFailure(authority)) return refuse(authority.failure.code);
   let anonymousMethods = current?.approvedAnonymousMethods ?? [];
   let anonymousApproval = current?.anonymousApproval ?? null;
   if (command.kind === "approve-anonymous") {
@@ -362,39 +531,6 @@ export function applyInstallationCommand(
         authorityVersion: version,
       };
   }
-  if (command.kind === "install" || command.kind === "set-grants") {
-    grants =
-      command.grants === "none"
-        ? []
-        : command.grants === "declared"
-          ? context.declaredOperations.capabilities
-              .filter((row) =>
-                context.declaration.capabilities.includes(row.capability),
-              )
-              .map((row) => ({
-                ...row,
-                capabilityApproved: true as const,
-                resources: "tenant-scope" as const,
-              }))
-          : command.grants.map((grant) => ({
-              ...grant,
-              capabilityApproved: true as const,
-            }));
-    if (
-      grants.some(
-        (grant) =>
-          !context.declaration.capabilities.includes(grant.capability) ||
-          grant.operations.some(
-            (operation) => !declared(grant.capability).includes(operation),
-          ),
-      )
-    )
-      return refuse("not_declared");
-    approval =
-      command.grants === "none"
-        ? null
-        : { by: context.by, at: context.now, authorityVersion: version };
-  }
   if (command.kind === "select-release") {
     anonymousMethods = anonymousMethods.filter((method) =>
       context.declaredOperations.anonymousMethods.some(
@@ -403,20 +539,8 @@ export function applyInstallationCommand(
       ),
     );
     if (anonymousMethods.length === 0) anonymousApproval = null;
-    grants = grants
-      .map((grant) => ({
-        ...grant,
-        operations: grant.operations.filter((operation) =>
-          declared(grant.capability).includes(operation),
-        ),
-      }))
-      .filter((grant) =>
-        context.declaration.capabilities.includes(grant.capability),
-      );
   }
   if (command.kind === "set-status" && command.status === "deleted") {
-    grants = [];
-    approval = null;
     anonymousMethods = [];
     anonymousApproval = null;
   }
@@ -430,7 +554,6 @@ export function applyInstallationCommand(
       command.kind === "install" || command.kind === "select-release"
         ? command.releasePin
         : current?.releasePin,
-    authorityVersion: version,
     status:
       command.kind === "set-status"
         ? command.status
@@ -439,13 +562,32 @@ export function applyInstallationCommand(
       command.kind === "set-visibility"
         ? command.visibility
         : (current?.visibility ?? "private"),
-    declaredOperationsDigest: context.declaredOperations.digest,
-    approvedGrants: grants,
-    approval,
+    authority: authority.success,
     approvedAnonymousMethods: anonymousMethods,
     anonymousApproval,
   });
   return next.success
     ? Result.succeed({ next: next.data, authorityChanged: true })
     : refuse("invalid_command");
+}
+
+/** Only the committed installation may activate this exact owner selection. */
+export function isCommittedInstallation(
+  current: Installation | null,
+  state: OwnerState,
+  release: Installation["release"],
+): boolean {
+  return (
+    current !== null &&
+    state.owner.kind === "installation" &&
+    current.installationId === state.owner.id &&
+    current.instanceId === state.instanceId &&
+    current.appId === state.appId &&
+    current.authority.authorityVersion === state.authorityVersion &&
+    current.status === state.status &&
+    current.release.releaseId === state.releaseId &&
+    release.releaseId === state.releaseId &&
+    release.appId === state.appId &&
+    current.release.artifact.artifactDigest === release.artifact.artifactDigest
+  );
 }

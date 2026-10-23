@@ -45,11 +45,11 @@ new OysterMcpOwner<Env>(
 
 ###### Parameters
 
-| Parameter    | Type                                                   |
-| ------------ | ------------------------------------------------------ |
-| `ctx`        | `DurableObjectState`                                   |
-| `env`        | `Env`                                                  |
-| `createHost` | (`env`, `scope`) => [`OysterHost`](host.md#oysterhost) |
+| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx`        | `DurableObjectState`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `env`        | `Env`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `createHost` | (`env`, `scope`) => \| `Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: `"pending_approval"`; `recordId`: `string`; `description`: \{ `title`: ...; `inputBytes`: ...; `inputSha256`: ...; \}; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: `Promise`\<...\>; `cancel`: `Promise`\<...\>; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ... \| ... \| ... \| ... \| ...; `errorName?`: ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `finalUrlPath`: `string`; `consoleErrors`: ...[]; `pageErrors`: ...[]; `failedRequests`: ...[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => `Promise`\<...\>; `call`: (`capabilityId`, `input`, `context`) => `Promise`\<...\>; \}\> \| `Promise`\< \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ... \| ...; `revision`: `string`; `grantedBy`: `string`; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\< \| `Readonly`\<\{ `keyId`: ...; `owner`: ...; `grantVersion`: ...; `grants`: ...; \}\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<`void`\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `buildPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: `Promise`\<...\>; `read`: `Promise`\<...\>; `binding`: `GitBinding`; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: readonly ...[]; `roles`: [`OysterRootRoles`](root-data.md#oysterrootroles); `computer?`: ... \| ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, `"read"` \| `"write"` \| `"reset"`\> & `Readonly`\<\{ `events`: `Promise`\<...\>; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\> \| `Promise`\<`Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: ...; `recordId`: ...; `description`: ...; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: ...; `cancel`: ...; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ...; `errorName?`: ...; `finalUrlPath`: ...; `consoleErrors`: ...; `pageErrors`: ...; `failedRequests`: ...; `droppedCount`: ...; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => ...; `call`: (`capabilityId`, `input`, `context`) => ...; \}\> \| `Promise`\<`Readonly`\<...\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ...; `revision`: ...; `grantedBy`: ...; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\<`Readonly`\<...\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<...\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `buildPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: ...; `read`: ...; `binding`: ...; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: ...; `roles`: ...; `computer?`: ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, ... \| ... \| ...\> & `Readonly`\<\{ `events`: ...; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\>\> |
 
 ###### Returns
 
@@ -90,34 +90,917 @@ The installation registry: one SQLite-backed Durable Object per Oyster.
 
 #### Extends
 
-- `DurableObject`\<[`OysterWorkerEnv`](#oysterworkerenv)\>
+- `DurableObject`\<`Env`\>
+
+#### Type Parameters
+
+| Type Parameter                                        | Default type                          |
+| ----------------------------------------------------- | ------------------------------------- |
+| `Env` _extends_ [`OysterWorkerEnv`](#oysterworkerenv) | [`OysterWorkerEnv`](#oysterworkerenv) |
 
 #### Constructors
 
 ##### Constructor
 
 ```ts
-new OysterRegistry(ctx, env): OysterRegistry;
+new OysterRegistry<Env>(ctx, env): OysterRegistry<Env>;
 ```
 
 ###### Parameters
 
-| Parameter | Type                                  |
-| --------- | ------------------------------------- |
-| `ctx`     | `DurableObjectState`                  |
-| `env`     | [`OysterWorkerEnv`](#oysterworkerenv) |
+| Parameter | Type                 |
+| --------- | -------------------- |
+| `ctx`     | `DurableObjectState` |
+| `env`     | `Env`                |
 
 ###### Returns
 
-[`OysterRegistry`](#oysterregistry)
+[`OysterRegistry`](#oysterregistry)\<`Env`\>
 
 ###### Overrides
 
 ```ts
-DurableObject<OysterWorkerEnv>.constructor
+DurableObject<Env>.constructor
 ```
 
 #### Methods
+
+##### approvalSubmit()
+
+```ts
+approvalSubmit(pin, call): Promise<
+  | {
+  kind: "pending_approval";
+  recordId: string;
+  description: {
+     title: string;
+     inputBytes: number;
+     inputSha256: string;
+  };
+}
+| ApprovalApplyResult>;
+```
+
+Trusted host RPC; an operation input cannot select actor, namespace or tenant.
+
+###### Parameters
+
+| Parameter             | Type                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`                 | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                                                                                                                                                                                                                                               |
+| `call`                | \{ `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `installationId`: `string`; `sessionId`: `string` \| `null`; `operation`: `string`; `access`: `"write"` \| `"external"`; `authorityFence`: `string`; `idempotencyKey`: `string`; `input`: `JSONType`; \} |
+| `call.actor`          | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}                                                                                                                                                                                                                       |
+| `call.installationId` | `string`                                                                                                                                                                                                                                                                                                                                                                    |
+| `call.sessionId`      | `string` \| `null`                                                                                                                                                                                                                                                                                                                                                          |
+| `call.operation`      | `string`                                                                                                                                                                                                                                                                                                                                                                    |
+| `call.access`         | `"write"` \| `"external"`                                                                                                                                                                                                                                                                                                                                                   |
+| `call.authorityFence` | `string`                                                                                                                                                                                                                                                                                                                                                                    |
+| `call.idempotencyKey` | `string`                                                                                                                                                                                                                                                                                                                                                                    |
+| `call.input`          | `JSONType`                                                                                                                                                                                                                                                                                                                                                                  |
+
+###### Returns
+
+`Promise`\< \| \{ `kind`: `"pending_approval"`; `recordId`: `string`;
+`description`: \{ `title`: `string`; `inputBytes`: `number`; `inputSha256`:
+`string`; \}; \} \| `ApprovalApplyResult`\>
+
+##### approvalList()
+
+```ts
+approvalList(
+   pin,
+   actor,
+   input
+): Promise<Readonly<{
+  items: readonly object[];
+  nextCursor: string | null;
+}>>;
+```
+
+Read a bounded page for the current member of the pinned native home.
+
+###### Parameters
+
+| Parameter       | Type                                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`           | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                                                               |
+| `actor`         | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}                                       |
+| `input`         | \{ `state?`: \| `"pending"` \| `"expired"` \| `"denied"` \| `"applied"` \| `"requested"` \| `"approved"` \| `"claimed"` \| `"outcome_unknown"`; `cursor?`: `string`; `limit?`: `number`; \} |
+| `input.state?`  | \| `"pending"` \| `"expired"` \| `"denied"` \| `"applied"` \| `"requested"` \| `"approved"` \| `"claimed"` \| `"outcome_unknown"`                                                           |
+| `input.cursor?` | `string`                                                                                                                                                                                    |
+| `input.limit?`  | `number`                                                                                                                                                                                    |
+
+###### Returns
+
+`Promise`\<`Readonly`\<\{ `items`: readonly `object`[]; `nextCursor`: `string`
+\| `null`; \}\>\>
+
+##### approvalGet()
+
+```ts
+approvalGet(
+   pin,
+   actor,
+   input
+): Promise<
+  | {
+  record: {
+     recordId: string;
+     requester: {
+        principalId: string;
+        agentId: string | null;
+        sessionId: string | null;
+        displayName: string;
+     };
+     module: string;
+     operation: string;
+     access: "write" | "external";
+     description: {
+        title: string;
+        inputBytes: number;
+        inputSha256: string;
+     };
+     evidence?: readonly object[];
+     authorityFence: string;
+     reversibility: "reversible" | "irreversible-external";
+     state:   | "pending"
+        | "expired"
+        | "denied"
+        | "applied"
+        | "requested"
+        | "approved"
+        | "claimed"
+        | "outcome_unknown";
+     by:   | {
+        kind: "human";
+        memberId: string;
+      }
+        | {
+        kind: "policy";
+      }
+        | null;
+     reason:   | "pending"
+        | "expired"
+        | "not-found"
+        | "not-eligible"
+        | "already-answered"
+        | "stale-revision"
+        | "declined"
+        | "fenced"
+        | "not-granted"
+        | "read-only"
+        | "in-flight"
+        | "outcome-unknown"
+        | "identity-conflict"
+        | null;
+     requestedAt: number;
+     expiresAt: number;
+     updatedAt: number;
+     revision: number;
+  };
+  canAnswer: boolean;
+  canSetAutoApprove: boolean;
+}
+| null>;
+```
+
+Read one member-scoped view; the native home resolves membership again.
+
+###### Parameters
+
+| Parameter | Type                                                                                                                                                  |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`     | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                         |
+| `actor`   | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \} |
+| `input`   | `Readonly`\<\{ `recordId`: `string`; \}\>                                                                                                             |
+
+###### Returns
+
+`Promise`\< \| \{ `record`: \{ `recordId`: `string`; `requester`: \{
+`principalId`: `string`; `agentId`: `string` \| `null`; `sessionId`: `string` \|
+`null`; `displayName`: `string`; \}; `module`: `string`; `operation`: `string`;
+`access`: `"write"` \| `"external"`; `description`: \{ `title`: `string`;
+`inputBytes`: `number`; `inputSha256`: `string`; \}; `evidence?`: readonly
+`object`[]; `authorityFence`: `string`; `reversibility`: `"reversible"` \|
+`"irreversible-external"`; `state`: \| `"pending"` \| `"expired"` \| `"denied"`
+\| `"applied"` \| `"requested"` \| `"approved"` \| `"claimed"` \|
+`"outcome_unknown"`; `by`: \| \{ `kind`: `"human"`; `memberId`: `string`; \} \|
+\{ `kind`: `"policy"`; \} \| `null`; `reason`: \| `"pending"` \| `"expired"` \|
+`"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
+\| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
+`"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"` \| `null`;
+`requestedAt`: `number`; `expiresAt`: `number`; `updatedAt`: `number`;
+`revision`: `number`; \}; `canAnswer`: `boolean`; `canSetAutoApprove`:
+`boolean`; \} \| `null`\>
+
+##### approvalAnswer()
+
+```ts
+approvalAnswer(
+   pin,
+   actor,
+   input
+): Promise<
+  | Readonly<{
+  kind: "answered";
+  view: {
+     record: {
+        recordId: string;
+        requester: {
+           principalId: string;
+           agentId: string | null;
+           sessionId: string | null;
+           displayName: string;
+        };
+        module: string;
+        operation: string;
+        access: "write" | "external";
+        description: {
+           title: string;
+           inputBytes: number;
+           inputSha256: string;
+        };
+        evidence?: readonly object[];
+        authorityFence: string;
+        reversibility: "reversible" | "irreversible-external";
+        state:   | "pending"
+           | "expired"
+           | "denied"
+           | "applied"
+           | "requested"
+           | "approved"
+           | "claimed"
+           | "outcome_unknown";
+        by:   | {
+           kind: "human";
+           memberId: string;
+         }
+           | {
+           kind: "policy";
+         }
+           | null;
+        reason:   | "pending"
+           | "expired"
+           | "not-found"
+           | "not-eligible"
+           | "already-answered"
+           | "stale-revision"
+           | "declined"
+           | "fenced"
+           | "not-granted"
+           | "read-only"
+           | "in-flight"
+           | "outcome-unknown"
+           | "identity-conflict"
+           | null;
+        requestedAt: number;
+        expiresAt: number;
+        updatedAt: number;
+        revision: number;
+     };
+     canAnswer: boolean;
+     canSetAutoApprove: boolean;
+  };
+}>
+  | Readonly<{
+  kind: "refused";
+  reason:   | "pending"
+     | "expired"
+     | "not-found"
+     | "not-eligible"
+     | "already-answered"
+     | "stale-revision"
+     | "declined"
+     | "fenced"
+     | "not-granted"
+     | "read-only"
+     | "in-flight"
+     | "outcome-unknown"
+     | "identity-conflict";
+}>>;
+```
+
+Persist an eligible answer and attempt its native decision work once.
+
+###### Parameters
+
+| Parameter                | Type                                                                                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`                    | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                         |
+| `actor`                  | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \} |
+| `input`                  | \{ `recordId`: `string`; `decision`: `"approve"` \| `"deny"`; `expectedRevision`: `number`; \}                                                        |
+| `input.recordId`         | `string`                                                                                                                                              |
+| `input.decision`         | `"approve"` \| `"deny"`                                                                                                                               |
+| `input.expectedRevision` | `number`                                                                                                                                              |
+
+###### Returns
+
+`Promise`\< \| `Readonly`\<\{ `kind`: `"answered"`; `view`: \{ `record`: \{
+`recordId`: `string`; `requester`: \{ `principalId`: `string`; `agentId`:
+`string` \| `null`; `sessionId`: `string` \| `null`; `displayName`: `string`;
+\}; `module`: `string`; `operation`: `string`; `access`: `"write"` \|
+`"external"`; `description`: \{ `title`: `string`; `inputBytes`: `number`;
+`inputSha256`: `string`; \}; `evidence?`: readonly `object`[]; `authorityFence`:
+`string`; `reversibility`: `"reversible"` \| `"irreversible-external"`; `state`:
+\| `"pending"` \| `"expired"` \| `"denied"` \| `"applied"` \| `"requested"` \|
+`"approved"` \| `"claimed"` \| `"outcome_unknown"`; `by`: \| \{ `kind`:
+`"human"`; `memberId`: `string`; \} \| \{ `kind`: `"policy"`; \} \| `null`;
+`reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
+`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
+`"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"` \| `null`; `requestedAt`: `number`; `expiresAt`: `number`;
+`updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`: `boolean`;
+`canSetAutoApprove`: `boolean`; \}; \}\> \| `Readonly`\<\{ `kind`: `"refused"`;
+`reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
+`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
+`"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"`; \}\>\>
+
+##### approvalSetAutoApprove()
+
+```ts
+approvalSetAutoApprove(
+   pin,
+   actor,
+   input
+): Promise<
+  | Readonly<{
+  kind: "refused";
+  reason:   | "pending"
+     | "expired"
+     | "not-found"
+     | "not-eligible"
+     | "already-answered"
+     | "stale-revision"
+     | "declined"
+     | "fenced"
+     | "not-granted"
+     | "read-only"
+     | "in-flight"
+     | "outcome-unknown"
+     | "identity-conflict";
+}>
+  | Readonly<{
+  kind: "updated";
+  rule: {
+     scope: {
+        agentId: string | null;
+     };
+     family: {
+        module: string | null;
+        access: "write" | "external";
+     };
+     enabled: boolean;
+  };
+}>>;
+```
+
+Policy never grants operation authority; only the live Oyster owner may change
+it.
+
+###### Parameters
+
+| Parameter             | Type                                                                                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`                 | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                                  |
+| `actor`               | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}          |
+| `input`               | \{ `scope`: \{ `agentId`: `string` \| `null`; \}; `family`: \{ `module`: `string` \| `null`; `access`: `"write"` \| `"external"`; \}; `enabled`: `boolean`; \} |
+| `input.scope`         | \{ `agentId`: `string` \| `null`; \}                                                                                                                           |
+| `input.scope.agentId` | `string` \| `null`                                                                                                                                             |
+| `input.family`        | \{ `module`: `string` \| `null`; `access`: `"write"` \| `"external"`; \}                                                                                       |
+| `input.family.module` | `string` \| `null`                                                                                                                                             |
+| `input.family.access` | `"write"` \| `"external"`                                                                                                                                      |
+| `input.enabled`       | `boolean`                                                                                                                                                      |
+
+###### Returns
+
+`Promise`\< \| `Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \|
+`"expired"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
+`"stale-revision"` \| `"declined"` \| `"fenced"` \| `"not-granted"` \|
+`"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`;
+\}\> \| `Readonly`\<\{ `kind`: `"updated"`; `rule`: \{ `scope`: \{ `agentId`:
+`string` \| `null`; \}; `family`: \{ `module`: `string` \| `null`; `access`:
+`"write"` \| `"external"`; \}; `enabled`: `boolean`; \}; \}\>\>
+
+##### installationOperation()
+
+```ts
+installationOperation(input): Promise<
+  | {
+  kind: "refused";
+  code:   | "unavailable"
+     | "stale_authority"
+     | "request_conflict"
+     | "needs_consent"
+     | "stored_operation_invalid";
+}
+  | {
+  kind: "operation";
+  operation:   | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     state: "refused";
+     status: number;
+     code: string;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     state: "unconfirmed";
+     outcome: "cancelled" | "outcome_unknown" | "interrupted";
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     state: "succeeded";
+     reference: {
+        generation: string;
+        instanceId: InstanceId;
+        authorityVersion: number;
+        status: "enabled" | "disabled" | "deleted";
+     };
+     creation: "fresh" | "replacement" | "reminted";
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other"
+              | "Error";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      }
+        | null;
+     installation:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: ReleaseId;
+           appId: AppId;
+           artifact: {
+              artifactRef: ArtifactRef;
+              artifactDigest: Sha256Digest;
+              provenance: {
+                 sourceRevision: SourceRevision;
+                 sourceTreeDigest: Sha256Digest;
+                 buildRecipeDigest: Sha256Digest;
+              };
+           };
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     state: "pending";
+   }
+     | null;
+}
+  | {
+  kind: "command";
+  command:   | {
+     admission: {
+        requestId: string;
+        installationId: string;
+        release: {
+           releaseId: ReleaseId;
+           appId: AppId;
+           artifact: {
+              artifactRef: ArtifactRef;
+              artifactDigest: Sha256Digest;
+              provenance: {
+                 sourceRevision: SourceRevision;
+                 sourceTreeDigest: Sha256Digest;
+                 buildRecipeDigest: Sha256Digest;
+              };
+           };
+        };
+        actor:   | {
+           kind: "member";
+           memberId: string;
+         }
+           | {
+           kind: "agent";
+           agentId: string;
+         }
+           | {
+           kind: "team-key";
+           keyId: string;
+         };
+        intent: "install-or-select" | "install-or-remint" | "create-only";
+        origin: "workflow" | "owner-direct";
+     };
+     scope: {
+        tenantId: string & Brand<"OysterTenantId">;
+        origin: string;
+     };
+     installationId: string;
+     instanceId: InstanceId;
+     generation: string;
+     baseline:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: ReleaseId;
+           appId: AppId;
+           artifact: {
+              artifactRef: ArtifactRef;
+              artifactDigest: Sha256Digest;
+              provenance: {
+                 sourceRevision: SourceRevision;
+                 sourceTreeDigest: Sha256Digest;
+                 buildRecipeDigest: Sha256Digest;
+              };
+           };
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+        visibility: "private" | "public";
+        approvedAnonymousMethods: readonly Readonly<{
+           name: string;
+           digest: Sha256Digest;
+        }>[];
+        anonymousApproval:   | Readonly<{
+           by: ... | ... | ...;
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+      }
+        | null;
+     acceptedAt: number;
+     creation: "fresh" | "replacement" | "reminted";
+     plan:   | {
+        installation: {
+           installationId: string;
+           instanceId: InstanceId | null;
+           appId: AppId;
+           release: {
+              releaseId: ReleaseId;
+              appId: AppId;
+              artifact: {
+                 artifactRef: ArtifactRef;
+                 artifactDigest: Sha256Digest;
+                 provenance: {
+                    sourceRevision: ...;
+                    sourceTreeDigest: ...;
+                    buildRecipeDigest: ...;
+                 };
+              };
+           };
+           releasePin: "pinned" | "floating";
+           authority: {
+              authorityVersion: number;
+              declaredOperationsDigest: Sha256Digest;
+              approvedGrants: readonly Readonly<...>[];
+              approval: Readonly<...> | null;
+           };
+           status: "enabled" | "disabled" | "deleted";
+           visibility: "private" | "public";
+           approvedAnonymousMethods: readonly Readonly<{
+              name: ...;
+              digest: ...;
+           }>[];
+           anonymousApproval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        hasBackend: boolean;
+        prepared: boolean;
+        uiCheck?:   | {
+           kind: "passed";
+         }
+           | {
+           kind: "failed";
+           code: "ui_mount_failed";
+           diagnostics?: {
+              failedPredicate: ...;
+              errorName?: ...;
+              finalUrlPath: ...;
+              consoleErrors: ...;
+              pageErrors: ...;
+              failedRequests: ...;
+              droppedCount: ...;
+           };
+         }
+           | {
+           kind: "not_checked";
+           code:   | "boot_runner_unavailable"
+              | "boot_browser_binding_missing"
+              | "boot_clone_unavailable"
+              | "boot_timeout"
+              | "boot_cleanup_failed"
+              | "ui_check_not_run_on_host";
+         }
+           | null;
+      }
+        | null;
+     operation: {
+        requestId: string;
+        requestedInstallationId: string;
+        installationId: string;
+        release: {
+           releaseId: ReleaseId;
+           appId: AppId;
+           artifact: {
+              artifactRef: ArtifactRef;
+              artifactDigest: Sha256Digest;
+              provenance: {
+                 sourceRevision: SourceRevision;
+                 sourceTreeDigest: Sha256Digest;
+                 buildRecipeDigest: Sha256Digest;
+              };
+           };
+        };
+        state: "pending";
+     };
+   }
+     | null;
+}
+  | {
+  kind: "commit";
+  commit:   | {
+     ok: true;
+   }
+     | {
+     ok: false;
+     code: "stale_authority";
+   };
+}>;
+```
+
+The installation owner's RPC: admit, read, load, plan or commit one retained
+command for the caller's tenant scope.
+
+###### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | \| \{ `action`: `"admit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `input`: \{ `requestId`: `string`; `installationId`: `string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `intent`: `"install-or-select"` \| `"install-or-remint"` \| `"create-only"`; `origin`: `"workflow"` \| `"owner-direct"`; \}; \} \| \{ `action`: `"read"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installationId`: `string`; \} \| \{ `action`: `"load"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; \} \| \{ `action`: `"plan"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installation`: \{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `hasBackend`: `boolean`; \} \| \{ `action`: `"commit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \| `"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`: \| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"` \| `"Error"`; `finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \} \| `null`; \} |
+
+###### Returns
+
+`Promise`\< \| \{ `kind`: `"refused"`; `code`: \| `"unavailable"` \|
+`"stale_authority"` \| `"request_conflict"` \| `"needs_consent"` \|
+`"stored_operation_invalid"`; \} \| \{ `kind`: `"operation"`; `operation`: \| \{
+`requestId`: `string`; `requestedInstallationId`: `string`; `installationId`:
+`string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`:
+\{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`:
+\{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"refused"`; `status`:
+`number`; `code`: `string`; \} \| \{ `requestId`: `string`;
+`requestedInstallationId`: `string`; `installationId`: `string`; `release`: \{
+`releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
+`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"unconfirmed"`;
+`outcome`: `"cancelled"` \| `"outcome_unknown"` \| `"interrupted"`; \} \| \{
+`requestId`: `string`; `requestedInstallationId`: `string`; `installationId`:
+`string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`:
+\{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`:
+\{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"succeeded"`;
+`reference`: \{ `generation`: `string`; `instanceId`:
+[`InstanceId`](index.md#instanceid); `authorityVersion`: `number`; `status`:
+`"enabled"` \| `"disabled"` \| `"deleted"`; \}; `creation`: `"fresh"` \|
+`"replacement"` \| `"reminted"`; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{
+`kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{
+`failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \|
+`"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`:
+\| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \|
+`"TimeoutError"` \| `"Other"` \| `"Error"`; `finalUrlPath`: `string`;
+`consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`:
+`object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`;
+`code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \|
+`"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \|
+`"ui_check_not_run_on_host"`; \} \| `null`; `installation`: \| \{
+`installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \|
+`null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`:
+`AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`:
+`Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`;
+`sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \};
+\}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{
+`authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`;
+`approvedGrants`: readonly `Readonly`\<\{ `capability`: ...;
+`capabilityApproved`: ...; `operations`: ...; `resources`: ...; \}\>[];
+`approval`: \| `Readonly`\<\{ `by`: ...; `at`: ...; `authorityVersion`: ...;
+\}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`;
+`visibility`: `"private"` \| `"public"`; `approvedAnonymousMethods`: readonly
+`Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[];
+`anonymousApproval`: \| `Readonly`\<\{ `by`: ... \| ... \| ...; `at`: `number`;
+`authorityVersion`: `number`; \}\> \| `null`; \} \| `null`; \} \| \{
+`requestId`: `string`; `requestedInstallationId`: `string`; `installationId`:
+`string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`:
+\{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`:
+\{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"pending"`; \} \|
+`null`; \} \| \{ `kind`: `"command"`; `command`: \| \{ `admission`: \{
+`requestId`: `string`; `installationId`: `string`; `release`: \{ `releaseId`:
+`ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`;
+`artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`:
+`SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`:
+`Sha256Digest`; \}; \}; \}; `actor`: \| \{ `kind`: `"member"`; `memberId`:
+`string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`:
+`"team-key"`; `keyId`: `string`; \}; `intent`: `"install-or-select"` \|
+`"install-or-remint"` \| `"create-only"`; `origin`: `"workflow"` \|
+`"owner-direct"`; \}; `scope`: \{ `tenantId`: `string` &
+`Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `installationId`:
+`string`; `instanceId`: [`InstanceId`](index.md#instanceid); `generation`:
+`string`; `baseline`: \| \{ `installationId`: `string`; `instanceId`:
+[`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{
+`releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
+`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \|
+`"floating"`; `authority`: \{ `authorityVersion`: `number`;
+`declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly
+`Readonly`\<\{ `capability`: ...; `capabilityApproved`: ...; `operations`: ...;
+`resources`: ...; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: ...; `at`: ...;
+`authorityVersion`: ...; \}\> \| `null`; \}; `status`: `"enabled"` \|
+`"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`;
+`approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`:
+`Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: ... \| ...
+\| ...; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \} \|
+`null`; `acceptedAt`: `number`; `creation`: `"fresh"` \| `"replacement"` \|
+`"reminted"`; `plan`: \| \{ `installation`: \{ `installationId`: `string`;
+`instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`;
+`release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{
+`artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: ...; `sourceTreeDigest`: ...; `buildRecipeDigest`: ...; \};
+\}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{
+`authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`;
+`approvedGrants`: readonly `Readonly`\<...\>[]; `approval`: `Readonly`\<...\> \|
+`null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`:
+`"private"` \| `"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{
+`name`: ...; `digest`: ...; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`:
+...; `at`: ...; `authorityVersion`: ...; \}\> \| `null`; \}; `hasBackend`:
+`boolean`; `prepared`: `boolean`; `uiCheck?`: \| \{ `kind`: `"passed"`; \} \| \{
+`kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{
+`failedPredicate`: ...; `errorName?`: ...; `finalUrlPath`: ...; `consoleErrors`:
+...; `pageErrors`: ...; `failedRequests`: ...; `droppedCount`: ...; \}; \} \| \{
+`kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \|
+`"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \|
+`"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}
+\| `null`; \} \| `null`; `operation`: \{ `requestId`: `string`;
+`requestedInstallationId`: `string`; `installationId`: `string`; `release`: \{
+`releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
+`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"pending"`; \}; \} \|
+`null`; \} \| \{ `kind`: `"commit"`; `commit`: \| \{ `ok`: `true`; \} \| \{
+`ok`: `false`; `code`: `"stale_authority"`; \}; \}\>
+
+##### alarm()
+
+```ts
+alarm(): Promise<void>;
+```
+
+One Registry wake serves both owners: installation work, then the native
+approval home. Each re-arms only an earlier wake, so neither postpones the
+other, and one owner's failure never skips the other's quantum.
+
+###### Returns
+
+`Promise`\<`void`\>
+
+###### Overrides
+
+```ts
+DurableObject.alarm;
+```
 
 ##### directory()
 
@@ -150,7 +1033,7 @@ storageRead(
    key
 ): Promise<AppStorageResult<{
   value: Json;
-  source: "team" | "member" | "none";
+  source: "member" | "team" | "none";
   team:   | {
      value: Json;
      revision: number;
@@ -177,9 +1060,9 @@ Read one key for the authenticated root owner, under fresh App admission.
 
 ###### Returns
 
-`Promise`\<`AppStorageResult`\<\{ `value`: `Json`; `source`: `"team"` \|
-`"member"` \| `"none"`; `team`: \| \{ `value`: `Json`; `revision`: `number`; \}
-\| `null`; `member`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`;
+`Promise`\<`AppStorageResult`\<\{ `value`: `Json`; `source`: `"member"` \|
+`"team"` \| `"none"`; `team`: \| \{ `value`: `Json`; `revision`: `number`; \} \|
+`null`; `member`: \| \{ `value`: `Json`; `revision`: `number`; \} \| `null`;
 `canWriteTeam`: `boolean`; \}\>\>
 
 ##### storageWrite()
@@ -202,10 +1085,10 @@ Write one declared key for the authenticated root owner.
 | ---------------- | ------------------------------------------------------------------------------------------------------- |
 | `installationId` | `string`                                                                                                |
 | `ownerId`        | `string`                                                                                                |
-| `input`          | \{ `value`: `Json`; `key`: `string`; `scope`: `"team"` \| `"member"`; `basedOn`: `number` \| `null`; \} |
+| `input`          | \{ `value`: `Json`; `key`: `string`; `scope`: `"member"` \| `"team"`; `basedOn`: `number` \| `null`; \} |
 | `input.value`    | `Json`                                                                                                  |
 | `input.key`      | `string`                                                                                                |
-| `input.scope`    | `"team"` \| `"member"`                                                                                  |
+| `input.scope`    | `"member"` \| `"team"`                                                                                  |
 | `input.basedOn`  | `number` \| `null`                                                                                      |
 
 ###### Returns
@@ -232,9 +1115,9 @@ Reset one declared layer for the authenticated root owner.
 | ---------------- | -------------------------------------------------------------------------------------- |
 | `installationId` | `string`                                                                               |
 | `ownerId`        | `string`                                                                               |
-| `input`          | \{ `key`: `string`; `scope`: `"team"` \| `"member"`; `basedOn`: `number` \| `null`; \} |
+| `input`          | \{ `key`: `string`; `scope`: `"member"` \| `"team"`; `basedOn`: `number` \| `null`; \} |
 | `input.key`      | `string`                                                                               |
-| `input.scope`    | `"team"` \| `"member"`                                                                 |
+| `input.scope`    | `"member"` \| `"team"`                                                                 |
 | `input.basedOn`  | `number` \| `null`                                                                     |
 
 ###### Returns
@@ -326,63 +1209,67 @@ list(): Readonly<{
      };
   };
   releasePin: "pinned" | "floating";
-  authorityVersion: number;
+  authority: {
+     authorityVersion: number;
+     declaredOperationsDigest: Sha256Digest;
+     approvedGrants: readonly Readonly<{
+        capability:   | "approvals"
+           | "agent.list"
+           | "agent.manage"
+           | "agent.rename"
+           | "agent.avatar"
+           | "agent.toolPolicy"
+           | "agent.read"
+           | "agent.send"
+           | "computer.list"
+           | "computer.readFile"
+           | "computer.writeFile"
+           | "computer.execute"
+           | "llm.generation"
+           | "media.generation"
+           | "games:servers"
+           | "git.repository"
+           | "apps.open"
+           | "apps.call"
+           | "app.storage"
+           | "app.events.emit"
+           | "team.workbenchHost"
+           | "marketplace.browse"
+           | "marketplace.purchase"
+           | "workflow.run"
+           | "workflow.publish"
+           | "workflow.arm"
+           | "world"
+           | "channels.read"
+           | "channels.personal.manage";
+        capabilityApproved: true;
+        operations: readonly string[];
+        resources:   | "tenant-scope"
+           | readonly Readonly<{
+           kind: ...;
+           id: ...;
+         }>[];
+     }>[];
+     approval:   | Readonly<{
+        by:   | {
+           kind: "member";
+           memberId: string;
+         }
+           | {
+           kind: "agent";
+           agentId: string;
+         }
+           | {
+           kind: "team-key";
+           keyId: string;
+         };
+        at: number;
+        authorityVersion: number;
+      }>
+        | null;
+  };
   status: "enabled" | "disabled" | "deleted";
   visibility: "private" | "public";
-  declaredOperationsDigest: Sha256Digest;
-  approvedGrants: readonly Readonly<{
-     capability:   | "agent.list"
-        | "agent.manage"
-        | "agent.rename"
-        | "agent.toolPolicy"
-        | "agent.read"
-        | "agent.send"
-        | "computer.list"
-        | "computer.readFile"
-        | "computer.writeFile"
-        | "computer.execute"
-        | "llm.generation"
-        | "media.generation"
-        | "games:servers"
-        | "git.repository"
-        | "apps.open"
-        | "apps.call"
-        | "app.storage"
-        | "app.events.emit"
-        | "team.workbenchHost"
-        | "marketplace.browse"
-        | "marketplace.purchase"
-        | "workflow.run"
-        | "workflow.publish"
-        | "workflow.arm"
-        | "world"
-        | "channels.read"
-        | "channels.personal.manage";
-     capabilityApproved: true;
-     operations: readonly string[];
-     resources:   | "tenant-scope"
-        | readonly Readonly<{
-        kind: string;
-        id: string;
-      }>[];
-  }>[];
-  approval:   | Readonly<{
-     by:   | {
-        kind: "member";
-        memberId: string;
-      }
-        | {
-        kind: "agent";
-        agentId: string;
-      }
-        | {
-        kind: "team-key";
-        keyId: string;
-      };
-     at: number;
-     authorityVersion: number;
-   }>
-     | null;
   approvedAnonymousMethods: readonly Readonly<{
      name: string;
      digest: Sha256Digest;
@@ -417,28 +1304,30 @@ Every installation record.
 `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
 `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
 `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \|
-`"floating"`; `authorityVersion`: `number`; `status`: `"enabled"` \|
-`"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`;
+`"floating"`; `authority`: \{ `authorityVersion`: `number`;
 `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly
-`Readonly`\<\{ `capability`: \| `"agent.list"` \| `"agent.manage"` \|
-`"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
-`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
-`"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \|
-`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
-`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
-`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
-`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \|
+`"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"`
+\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
 `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
 readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{
-`kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{
-`by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`:
-`"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
+`kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \|
+\{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`;
+`agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`:
+`number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`:
+`"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \|
+`"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`:
+`string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \|
+`Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{
+`kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
 `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`;
-`approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`:
-`Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{
-`kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
-`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`;
-`authorityVersion`: `number`; \}\> \| `null`; \}\>[]
+\}\>[]
 
 ##### get()
 
@@ -462,63 +1351,67 @@ get(installationId):
      };
   };
   releasePin: "pinned" | "floating";
-  authorityVersion: number;
+  authority: {
+     authorityVersion: number;
+     declaredOperationsDigest: Sha256Digest;
+     approvedGrants: readonly Readonly<{
+        capability:   | "approvals"
+           | "agent.list"
+           | "agent.manage"
+           | "agent.rename"
+           | "agent.avatar"
+           | "agent.toolPolicy"
+           | "agent.read"
+           | "agent.send"
+           | "computer.list"
+           | "computer.readFile"
+           | "computer.writeFile"
+           | "computer.execute"
+           | "llm.generation"
+           | "media.generation"
+           | "games:servers"
+           | "git.repository"
+           | "apps.open"
+           | "apps.call"
+           | "app.storage"
+           | "app.events.emit"
+           | "team.workbenchHost"
+           | "marketplace.browse"
+           | "marketplace.purchase"
+           | "workflow.run"
+           | "workflow.publish"
+           | "workflow.arm"
+           | "world"
+           | "channels.read"
+           | "channels.personal.manage";
+        capabilityApproved: true;
+        operations: readonly string[];
+        resources:   | "tenant-scope"
+           | readonly Readonly<{
+           kind: ...;
+           id: ...;
+         }>[];
+     }>[];
+     approval:   | Readonly<{
+        by:   | {
+           kind: "member";
+           memberId: string;
+         }
+           | {
+           kind: "agent";
+           agentId: string;
+         }
+           | {
+           kind: "team-key";
+           keyId: string;
+         };
+        at: number;
+        authorityVersion: number;
+      }>
+        | null;
+  };
   status: "enabled" | "disabled" | "deleted";
   visibility: "private" | "public";
-  declaredOperationsDigest: Sha256Digest;
-  approvedGrants: readonly Readonly<{
-     capability:   | "agent.list"
-        | "agent.manage"
-        | "agent.rename"
-        | "agent.toolPolicy"
-        | "agent.read"
-        | "agent.send"
-        | "computer.list"
-        | "computer.readFile"
-        | "computer.writeFile"
-        | "computer.execute"
-        | "llm.generation"
-        | "media.generation"
-        | "games:servers"
-        | "git.repository"
-        | "apps.open"
-        | "apps.call"
-        | "app.storage"
-        | "app.events.emit"
-        | "team.workbenchHost"
-        | "marketplace.browse"
-        | "marketplace.purchase"
-        | "workflow.run"
-        | "workflow.publish"
-        | "workflow.arm"
-        | "world"
-        | "channels.read"
-        | "channels.personal.manage";
-     capabilityApproved: true;
-     operations: readonly string[];
-     resources:   | "tenant-scope"
-        | readonly Readonly<{
-        kind: string;
-        id: string;
-      }>[];
-  }>[];
-  approval:   | Readonly<{
-     by:   | {
-        kind: "member";
-        memberId: string;
-      }
-        | {
-        kind: "agent";
-        agentId: string;
-      }
-        | {
-        kind: "team-key";
-        keyId: string;
-      };
-     at: number;
-     authorityVersion: number;
-   }>
-     | null;
   approvedAnonymousMethods: readonly Readonly<{
      name: string;
      digest: Sha256Digest;
@@ -560,47 +1453,42 @@ One installation record, or `null`.
 `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
 `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
 `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \|
-`"floating"`; `authorityVersion`: `number`; `status`: `"enabled"` \|
-`"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`;
+`"floating"`; `authority`: \{ `authorityVersion`: `number`;
 `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly
-`Readonly`\<\{ `capability`: \| `"agent.list"` \| `"agent.manage"` \|
-`"agent.rename"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
-`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
-`"computer.execute"` \| `"llm.generation"` \| `"media.generation"` \|
-`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
-`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
-`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
-`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \|
+`"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"`
+\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
 `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
 readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{
-`kind`: `string`; `id`: `string`; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{
-`by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`:
-`"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
-`string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`;
-`approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`:
-`Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{
-`kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
-`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`;
-`authorityVersion`: `number`; \}\> \| `null`; \}\> \| `null`
+`kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \|
+\{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`;
+`agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`:
+`number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`:
+`"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \|
+`"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`:
+`string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \|
+`Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{
+`kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
+`string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}\>
+\| `null`
 
-##### put()
+##### generation()
 
 ```ts
-put(installation, tenantId?): Promise<void>;
+generation(): string;
 ```
 
-Create or replace one installation record.
-
-###### Parameters
-
-| Parameter      | Type                                     | Default value   |
-| -------------- | ---------------------------------------- | --------------- |
-| `installation` | [`Installation`](apps.md#installation)   | `undefined`     |
-| `tenantId`     | `string` & `Brand`\<`"OysterTenantId"`\> | `defaultTenant` |
+Durable store identity, regenerated only when the store itself is replaced.
 
 ###### Returns
 
-`Promise`\<`void`\>
+`string`
 
 ##### compareAndPut()
 
@@ -608,6 +1496,7 @@ Create or replace one installation record.
 compareAndPut(
    installation,
    expectedAuthorityVersion,
+   expectedGeneration,
    tenantId?
 ): Promise<InstallationCommit>;
 ```
@@ -620,11 +1509,45 @@ Native RPC returns a closed result; callers never classify a transported Error.
 | -------------------------- | ---------------------------------------- | --------------- |
 | `installation`             | [`Installation`](apps.md#installation)   | `undefined`     |
 | `expectedAuthorityVersion` | `number`                                 | `undefined`     |
+| `expectedGeneration`       | `string`                                 | `undefined`     |
 | `tenantId`                 | `string` & `Brand`\<`"OysterTenantId"`\> | `defaultTenant` |
 
 ###### Returns
 
 `Promise`\<[`InstallationCommit`](host.md#installationcommit)\>
+
+##### bootCapability()
+
+```ts
+bootCapability(input):
+  | {
+  id: string;
+  identity: {
+     appId: string;
+     releaseId: ReleaseId;
+     surfaceId: "host-boot";
+  };
+  base: string;
+  expiresAt: number;
+  assets: object[];
+}
+  | null
+  | undefined;
+```
+
+Issue, resolve, or revoke one bounded capability without storing its token.
+
+###### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `input`   | \| `Readonly`\<\{ `kind`: `"issue"`; `grant`: \{ `lease`: \{ `id`: `string`; `identity`: \{ `appId`: `string`; `releaseId`: `ReleaseId`; `surfaceId`: `"host-boot"`; \}; `base`: `string`; `expiresAt`: `number`; `assets`: `object`[]; \}; `tokenDigest`: `string`; \}; \}\> \| `Readonly`\<\{ `kind`: `"resolve"`; `tokenDigest`: `string`; `now`: `number`; \}\> \| `Readonly`\<\{ `kind`: `"revoke"`; `id`: `string`; \}\> |
+
+###### Returns
+
+\| \{ `id`: `string`; `identity`: \{ `appId`: `string`; `releaseId`:
+`ReleaseId`; `surfaceId`: `"host-boot"`; \}; `base`: `string`; `expiresAt`:
+`number`; `assets`: `object`[]; \} \| `null` \| `undefined`
 
 ---
 
@@ -634,18 +1557,23 @@ The plain Oyster Worker's guest binding entrypoint.
 
 #### Extends
 
-- `WorkerEntrypoint`\<`Readonly`\<\{ `OYSTER_OWNER_KEY`: `string`;
+- `WorkerEntrypoint`\<`Readonly`\<\{ `BROWSER?`: `Readonly`\<\{ `fetch`:
+  [`HttpFetch`](browser.md#httpfetch); \}\>; `OYSTER_OWNER_KEY`: `string`;
   `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{
   `getByName`: `Readonly`\<\{ `readCreator`: `Promise`\<... \| ...\>; \}\>;
   \}\>; `OYSTER_ORIGIN`: `string`; `MCP`:
   `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{
   `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`:
-  `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\>; `INSTANCES`:
-  `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
+  `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
   OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
-  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<\{
-  readCreator(agentId: string): Promise\<string \| null\>; \}\>; \}\> \|
-  undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `INSTANCES`:
+  `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
+  OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
   `WorkerLoader`; \}\>, `Readonly`\<\{ `instanceId`: `string`; `binding`: \|
   `"BACKGROUND"` \| `"GIT"` \| `"EVENTS"` \| `"APPS"` \| `"WORKFLOWS"` \|
   `"APP_STORAGE"` \| `"MEDIA"` \| `"COMPUTER"` \| `"INBOX"` \| `"AGENTS"`;
@@ -845,6 +1773,87 @@ Installation changes end guest work; a Workflow cancel targets only its run.
 
 `Promise`\<`void`\>
 
+##### prepare()
+
+```ts
+prepare(
+   state,
+   release,
+   limits?,
+   tenant?
+): Promise<InstanceResult<
+  | {
+  kind: "passed";
+}
+  | {
+  kind: "failed";
+  code: "ui_mount_failed";
+  diagnostics?: {
+     failedPredicate:   | "unexpected_candidate_request"
+        | "response_status"
+        | "request_failed"
+        | "page_error"
+        | "candidate_not_mounted";
+     errorName?:   | "TypeError"
+        | "RangeError"
+        | "SyntaxError"
+        | "AbortError"
+        | "TimeoutError"
+        | "Other"
+        | "Error";
+     finalUrlPath: string;
+     consoleErrors: string[];
+     pageErrors: string[];
+     failedRequests: object[];
+     droppedCount: number;
+  };
+}
+  | {
+  kind: "not_checked";
+  code:   | "boot_runner_unavailable"
+     | "boot_browser_binding_missing"
+     | "boot_clone_unavailable"
+     | "boot_timeout"
+     | "boot_cleanup_failed"
+     | "ui_check_not_run_on_host";
+}
+| null>>;
+```
+
+Reuse lifecycle preflight without changing the active runtime or its budgets.
+
+###### Parameters
+
+| Parameter                 | Type                                                                                                                                                                                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`                   | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} |
+| `state.instanceId`        | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                                  |
+| `state.owner`             | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                                    |
+| `state.owner.kind?`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                                   |
+| `state.owner.id?`         | `string`                                                                                                                                                                                                                                                             |
+| `state.appId?`            | `AppId`                                                                                                                                                                                                                                                              |
+| `state.releaseId?`        | `ReleaseId`                                                                                                                                                                                                                                                          |
+| `state.authorityVersion?` | `number`                                                                                                                                                                                                                                                             |
+| `state.status?`           | `"enabled"` \| `"disabled"` \| `"deleted"`                                                                                                                                                                                                                           |
+| `release?`                | `Release`                                                                                                                                                                                                                                                            |
+| `limits?`                 | `Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>                                                                                                                                                                                                      |
+| `tenant?`                 | `Pick`\<`Readonly`\<\{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; `durableName`: `string`; `computerName`: `string`; `workspacePrefix`: `string`; `repositoryPrefix`: `string`; \}\>, `"origin"` \| `"tenantId"`\>                    |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\< \| \{ `kind`:
+`"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`;
+`diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \|
+`"response_status"` \| `"request_failed"` \| `"page_error"` \|
+`"candidate_not_mounted"`; `errorName?`: \| `"TypeError"` \| `"RangeError"` \|
+`"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"` \| `"Error"`;
+`finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[];
+`failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`:
+`"not_checked"`; `code`: \| `"boot_runner_unavailable"` \|
+`"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \|
+`"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}
+\| `null`\>\>
+
 ##### apply()
 
 ```ts
@@ -868,7 +1877,7 @@ apply(
 }>>;
 ```
 
-Remember `release`, then apply the owner state under the host's tenant pin.
+Activate the exact committed selection under the host's tenant pin.
 
 ###### Parameters
 
@@ -1226,18 +2235,23 @@ The non-git standalone root's MCP owner.
 
 #### Extends
 
-- [`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{ `OYSTER_OWNER_KEY`:
+- [`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{ `BROWSER?`: `Readonly`\<\{
+  `fetch`: [`HttpFetch`](browser.md#httpfetch); \}\>; `OYSTER_OWNER_KEY`:
   `string`; `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{
   `getByName`: `Readonly`\<\{ `readCreator`: `Promise`\<... \| ...\>; \}\>;
   \}\>; `OYSTER_ORIGIN`: `string`; `MCP`:
   `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{
   `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`:
-  `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\>; `INSTANCES`:
-  `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
+  `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
   OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
-  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<\{
-  readCreator(agentId: string): Promise\<string \| null\>; \}\>; \}\> \|
-  undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `INSTANCES`:
+  `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
+  OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
   `WorkerLoader`; \}\>, `this`\>
 
 #### Constructors
@@ -1287,6 +2301,269 @@ Trusted host RPC: the namespace and pin are never selected by guest headers.
 ###### Inherited from
 
 [`OysterMcpOwner`](#oystermcpowner).[`serve`](#serve)
+
+---
+
+### OysterInstallationExecutor
+
+Ordinary Worker execution; REGISTRY receives references and receipts only.
+
+#### Extends
+
+- `WorkerEntrypoint`\<`Readonly`\<\{ `BROWSER?`: `Readonly`\<\{ `fetch`:
+  [`HttpFetch`](browser.md#httpfetch); \}\>; `OYSTER_OWNER_KEY`: `string`;
+  `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{
+  `getByName`: `Readonly`\<\{ `readCreator`: `Promise`\<...\>; \}\>; \}\>;
+  `OYSTER_ORIGIN`: `string`; `MCP`:
+  `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{
+  `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`:
+  `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
+  OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `INSTANCES`:
+  `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
+  BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined;
+  OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
+  AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\>
+  \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
+  `WorkerLoader`; \}\>, `unknown`, `this`\> & `object`
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new OysterInstallationExecutor(ctx, env): OysterInstallationExecutor;
+```
+
+###### Parameters
+
+| Parameter | Type               |
+| --------- | ------------------ |
+| `ctx`     | `ExecutionContext` |
+| `env`     | `Env`              |
+
+###### Returns
+
+[`OysterInstallationExecutor`](#oysterinstallationexecutor)
+
+###### Inherited from
+
+```ts
+installationWorkerEntrypoint<OysterWorkerEnv>((env, scope) =>
+  ownerKeyRootHost(env, { scope }),
+).constructor;
+```
+
+#### Methods
+
+##### run()
+
+```ts
+run(): Promise<
+  | {
+  state: "succeeded";
+  installation: {
+     installationId: string;
+     instanceId: InstanceId | null;
+     appId: AppId;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     releasePin: "pinned" | "floating";
+     authority: {
+        authorityVersion: number;
+        declaredOperationsDigest: Sha256Digest;
+        approvedGrants: readonly Readonly<{
+           capability:   | "approvals"
+              | "agent.list"
+              | "agent.manage"
+              | "agent.rename"
+              | "agent.avatar"
+              | "agent.toolPolicy"
+              | "agent.read"
+              | "agent.send"
+              | "computer.list"
+              | "computer.readFile"
+              | "computer.writeFile"
+              | "computer.execute"
+              | "llm.generation"
+              | "media.generation"
+              | "games:servers"
+              | "git.repository"
+              | "apps.open"
+              | "apps.call"
+              | "app.storage"
+              | "app.events.emit"
+              | "team.workbenchHost"
+              | "marketplace.browse"
+              | "marketplace.purchase"
+              | "workflow.run"
+              | "workflow.publish"
+              | "workflow.arm"
+              | "world"
+              | "channels.read"
+              | "channels.personal.manage";
+           capabilityApproved: true;
+           operations: readonly string[];
+           resources: "tenant-scope" | readonly Readonly<...>[];
+        }>[];
+        approval:   | Readonly<{
+           by:   | {
+              kind: "member";
+              memberId: string;
+            }
+              | {
+              kind: "agent";
+              agentId: string;
+            }
+              | {
+              kind: "team-key";
+              keyId: string;
+            };
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+     };
+     status: "enabled" | "disabled" | "deleted";
+     visibility: "private" | "public";
+     approvedAnonymousMethods: readonly Readonly<{
+        name: string;
+        digest: Sha256Digest;
+     }>[];
+     anonymousApproval:   | Readonly<{
+        by:   | {
+           kind: "member";
+           memberId: string;
+         }
+           | {
+           kind: "agent";
+           agentId: string;
+         }
+           | {
+           kind: "team-key";
+           keyId: string;
+         };
+        at: number;
+        authorityVersion: number;
+      }>
+        | null;
+  };
+  creation: "fresh" | "replacement" | "reminted";
+  uiCheck:   | {
+     kind: "passed";
+   }
+     | {
+     kind: "failed";
+     code: "ui_mount_failed";
+     diagnostics?: {
+        failedPredicate:   | "unexpected_candidate_request"
+           | "response_status"
+           | "request_failed"
+           | "page_error"
+           | "candidate_not_mounted";
+        errorName?:   | "TypeError"
+           | "RangeError"
+           | "SyntaxError"
+           | "AbortError"
+           | "TimeoutError"
+           | "Other"
+           | "Error";
+        finalUrlPath: string;
+        consoleErrors: string[];
+        pageErrors: string[];
+        failedRequests: object[];
+        droppedCount: number;
+     };
+   }
+     | {
+     kind: "not_checked";
+     code:   | "boot_runner_unavailable"
+        | "boot_browser_binding_missing"
+        | "boot_clone_unavailable"
+        | "boot_timeout"
+        | "boot_cleanup_failed"
+        | "ui_check_not_run_on_host";
+   }
+     | null;
+}
+  | {
+  state: "refused";
+  status: number;
+  code: string;
+}
+  | {
+  state: "unconfirmed";
+  outcome: "cancelled" | "outcome_unknown" | "interrupted";
+}>;
+```
+
+Execute the retained command these props name, in its tenant scope.
+
+###### Returns
+
+`Promise`\< \| \{ `state`: `"succeeded"`; `installation`: \{ `installationId`:
+`string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`:
+`AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`:
+\{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`:
+\{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \|
+`"floating"`; `authority`: \{ `authorityVersion`: `number`;
+`declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly
+`Readonly`\<\{ `capability`: \| `"approvals"` \| `"agent.list"` \|
+`"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"`
+\| `"agent.read"` \| `"agent.send"` \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
+readonly `string`[]; `resources`: `"tenant-scope"` \| readonly
+`Readonly`\<...\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`:
+`"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
+`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`;
+`authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \|
+`"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`;
+`approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`:
+`Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{
+`kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
+`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`;
+`authorityVersion`: `number`; \}\> \| `null`; \}; `creation`: `"fresh"` \|
+`"replacement"` \| `"reminted"`; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{
+`kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{
+`failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \|
+`"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`:
+\| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \|
+`"TimeoutError"` \| `"Other"` \| `"Error"`; `finalUrlPath`: `string`;
+`consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`:
+`object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`;
+`code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \|
+`"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \|
+`"ui_check_not_run_on_host"`; \} \| `null`; \} \| \{ `state`: `"refused"`;
+`status`: `number`; `code`: `string`; \} \| \{ `state`: `"unconfirmed"`;
+`outcome`: `"cancelled"` \| `"outcome_unknown"` \| `"interrupted"`; \}\>
+
+###### Inherited from
+
+```ts
+installationWorkerEntrypoint<OysterWorkerEnv>((env, scope) =>
+  ownerKeyRootHost(env, { scope }),
+).run;
+```
 
 ## Type Aliases
 
@@ -1363,6 +2640,7 @@ input.
 
 ```ts
 type OysterWorkerEnv = Readonly<{
+  BROWSER?: BrowserBinding;
   OYSTER_OWNER_KEY: string;
   OYSTER_OWNER_NAME?: string;
   AGENT_DIRECTORY?: OysterStorageAgentDirectory;
@@ -1387,11 +2665,27 @@ type OysterBindingContext<Env> = Readonly<{
   scope: TenantScope;
   backgroundHost: Promise<
      | Readonly<{
+     approvals?: Readonly<{
+        submit: Promise<
+           | {
+           kind: ...;
+           recordId: ...;
+           description: ...;
+         }
+          | ApprovalApplyResult>;
+     }>;
+     workflows?: (principal) => Promise<
+        | {
+        status: Promise<...>;
+        cancel: Promise<...>;
+      }
+       | null>;
      auth: OysterAuth;
      backgroundOriginKey?: () => Promise<CryptoKey>;
      artifacts: ArtifactStore;
      installations: InstallationStore;
      instances: InstanceDirectory;
+     bootUi: (release) => Promise<UiBootCheckOutcome>;
      computerId?: string;
      computer?: (principal) => KnapsackComputer | null | Promise<KnapsackComputer | null>;
      appToolPolicy?: (actor) =>
@@ -1418,6 +2712,14 @@ type OysterBindingContext<Env> = Readonly<{
      }>;
      homeInstallationId?: string;
      pageScript?: string;
+     pageAssets?: () => Promise<{
+        pageScript: string;
+        publicHomeScript: string;
+        fontStyles: string;
+        loginFontStyles: string;
+        shellStyles: string;
+        grantConsentScript: string;
+     }>;
      title?: string;
    }>
     | null>;
@@ -1507,6 +2809,34 @@ admission.
 
 ## Functions
 
+### installationWorkerEntrypoint()
+
+```ts
+function installationWorkerEntrypoint<Env>(
+  hostFor,
+): (ctx, env) => WorkerEntrypoint<Env, unknown> & object;
+```
+
+A loopback export with ordinary Worker I/O, not another resource or HTTP API.
+
+#### Type Parameters
+
+| Type Parameter |
+| -------------- |
+| `Env`          |
+
+#### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hostFor` | (`env`, `scope`) => \| `Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: `"pending_approval"`; `recordId`: `string`; `description`: \{ `title`: ...; `inputBytes`: ...; `inputSha256`: ...; \}; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: `Promise`\<...\>; `cancel`: `Promise`\<...\>; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ... \| ... \| ... \| ... \| ...; `errorName?`: ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `finalUrlPath`: `string`; `consoleErrors`: ...[]; `pageErrors`: ...[]; `failedRequests`: ...[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => `Promise`\<...\>; `call`: (`capabilityId`, `input`, `context`) => `Promise`\<...\>; \}\> \| `Promise`\< \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ... \| ...; `revision`: `string`; `grantedBy`: `string`; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\< \| `Readonly`\<\{ `keyId`: ...; `owner`: ...; `grantVersion`: ...; `grants`: ...; \}\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<`void`\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `buildPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: `Promise`\<...\>; `read`: `Promise`\<...\>; `binding`: `GitBinding`; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: readonly ...[]; `roles`: [`OysterRootRoles`](root-data.md#oysterrootroles); `computer?`: ... \| ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, `"read"` \| `"write"` \| `"reset"`\> & `Readonly`\<\{ `events`: `Promise`\<...\>; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\> \| `Promise`\<`Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: ...; `recordId`: ...; `description`: ...; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: ...; `cancel`: ...; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ...; `errorName?`: ...; `finalUrlPath`: ...; `consoleErrors`: ...; `pageErrors`: ...; `failedRequests`: ...; `droppedCount`: ...; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => ...; `call`: (`capabilityId`, `input`, `context`) => ...; \}\> \| `Promise`\<`Readonly`\<...\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ...; `revision`: ...; `grantedBy`: ...; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\<`Readonly`\<...\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<...\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `buildPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: ...; `read`: ...; `binding`: ...; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: ...; `roles`: ...; `computer?`: ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, ... \| ... \| ...\> & `Readonly`\<\{ `events`: ...; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\>\> |
+
+#### Returns
+
+(`ctx`, `env`) => `WorkerEntrypoint`\<`Env`, `unknown`\> & `object`
+
+---
+
 ### createOysterMcpOwner()
 
 ```ts
@@ -1523,9 +2853,9 @@ Bind the owner to the deployment's existing host factory and options.
 
 #### Parameters
 
-| Parameter | Type                                                   |
-| --------- | ------------------------------------------------------ |
-| `host`    | (`env`, `scope`) => [`OysterHost`](host.md#oysterhost) |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`    | (`env`, `scope`) => \| `Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: `"pending_approval"`; `recordId`: `string`; `description`: \{ `title`: ...; `inputBytes`: ...; `inputSha256`: ...; \}; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: `Promise`\<...\>; `cancel`: `Promise`\<...\>; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ... \| ... \| ... \| ... \| ...; `errorName?`: ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `finalUrlPath`: `string`; `consoleErrors`: ...[]; `pageErrors`: ...[]; `failedRequests`: ...[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => `Promise`\<...\>; `call`: (`capabilityId`, `input`, `context`) => `Promise`\<...\>; \}\> \| `Promise`\< \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ... \| ...; `revision`: `string`; `grantedBy`: `string`; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\< \| `Readonly`\<\{ `keyId`: ...; `owner`: ...; `grantVersion`: ...; `grants`: ...; \}\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<`void`\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `buildPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: `Promise`\<...\>; `read`: `Promise`\<...\>; `binding`: `GitBinding`; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: readonly ...[]; `roles`: [`OysterRootRoles`](root-data.md#oysterrootroles); `computer?`: ... \| ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, `"read"` \| `"write"` \| `"reset"`\> & `Readonly`\<\{ `events`: `Promise`\<...\>; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\> \| `Promise`\<`Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: ...; `recordId`: ...; `description`: ...; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: ...; `cancel`: ...; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ...; `errorName?`: ...; `finalUrlPath`: ...; `consoleErrors`: ...; `pageErrors`: ...; `failedRequests`: ...; `droppedCount`: ...; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => ...; `call`: (`capabilityId`, `input`, `context`) => ...; \}\> \| `Promise`\<`Readonly`\<...\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ...; `revision`: ...; `grantedBy`: ...; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\<`Readonly`\<...\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<...\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `buildPass?`: `Promise`\<`Readonly`\<...\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: ...; `read`: ...; `binding`: ...; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: ...; `roles`: ...; `computer?`: ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, ... \| ... \| ...\> & `Readonly`\<\{ `events`: ...; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\>\> |
 
 #### Returns
 
@@ -1554,39 +2884,6 @@ Files in an R2 bucket under `prefix` (one workspace per prefix).
 
 ---
 
-### r2ArtifactStore()
-
-```ts
-function r2ArtifactStore(bucket): Readonly<{
-  get: (artifactRef) => Promise<Uint8Array<ArrayBufferLike> | null>;
-  put: (artifactRef, bytes) => Promise<void>;
-}> &
-  Readonly<{
-    head: (artifactRef) => Promise<Readonly<{
-      byteLength: number;
-      digest: Sha256Digest | null;
-    }> | null>;
-  }>;
-```
-
-Store Release artifacts in an R2 bucket.
-
-#### Parameters
-
-| Parameter | Type       |
-| --------- | ---------- |
-| `bucket`  | `R2Bucket` |
-
-#### Returns
-
-`Readonly`\<\{ `get`: (`artifactRef`) =>
-`Promise`\<`Uint8Array`\<`ArrayBufferLike`\> \| `null`\>; `put`: (`artifactRef`,
-`bytes`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `head`: (`artifactRef`)
-=> `Promise`\< \| `Readonly`\<\{ `byteLength`: `number`; `digest`:
-`Sha256Digest` \| `null`; \}\> \| `null`\>; \}\>
-
----
-
 ### oysterBindingEntrypoint()
 
 ```ts
@@ -1599,9 +2896,9 @@ which serves it from the same table.
 
 #### Type Parameters
 
-| Type Parameter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Env` _extends_ `Readonly`\<\{ `OYSTER_OWNER_KEY`: `string`; `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{ `getByName`: `Readonly`\<\{ `readCreator`: `Promise`\<`string` \| `null`\>; \}\>; \}\>; `OYSTER_ORIGIN`: `string`; `MCP`: `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{ `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`: `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\>; `INSTANCES`: `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{ OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined; AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<\{ readCreator(agentId: string): Promise\<string \| null\>; \}\>; \}\> \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`: `WorkerLoader`; \}\> |
+| Type Parameter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Env` _extends_ `Readonly`\<\{ `BROWSER?`: `Readonly`\<\{ `fetch`: [`HttpFetch`](browser.md#httpfetch); \}\>; `OYSTER_OWNER_KEY`: `string`; `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{ `getByName`: `Readonly`\<\{ `readCreator`: `Promise`\<`string` \| `null`\>; \}\>; \}\>; `OYSTER_ORIGIN`: `string`; `MCP`: `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{ `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`: `DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\<`Readonly`\<\{ BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined; OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined; AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\> \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `INSTANCES`: `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{ BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined; OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined; AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\> \| undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`: `WorkerLoader`; \}\> |
 
 #### Parameters
 
@@ -1615,21 +2912,48 @@ _typeof_ `WorkerEntrypoint`
 
 ---
 
+### serveOysterBootCapability()
+
+```ts
+function serveOysterBootCapability(
+  request,
+  env,
+  scope,
+): Promise<Response | null>;
+```
+
+Resolve a scoped boot URL through the registry-backed HTTPS asset route.
+
+#### Parameters
+
+| Parameter | Type                                   |
+| --------- | -------------------------------------- |
+| `request` | `Request`                              |
+| `env`     | [`OysterWorkerEnv`](#oysterworkerenv)  |
+| `scope`   | [`TenantScope`](tenant.md#tenantscope) |
+
+#### Returns
+
+`Promise`\<`Response` \| `null`\>
+
+---
+
 ### oysterWorkerHost()
 
 ```ts
 function oysterWorkerHost(env, auth, options?): OysterHost;
 ```
 
-Host adapters for a standalone Oyster Worker over its own bindings.
+Create an Oyster host backed by this Worker environment's registry, artifacts,
+Instances, and boot-check service.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env`     | [`OysterWorkerEnv`](#oysterworkerenv)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `auth`    | [`OysterAuth`](host.md#oysterauth)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `options` | `Pick`\<`Readonly`\<\{ `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => `Promise`\<...\>; `call`: (`capabilityId`, `input`, `context`) => `Promise`\<...\>; \}\> \| `Promise`\< \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ... \| ...; `revision`: `string`; `grantedBy`: `string`; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\< \| `Readonly`\<\{ `keyId`: ...; `owner`: ...; `grantVersion`: ...; `grants`: ...; \}\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<`void`\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `buildPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: `Promise`\<...\>; `read`: `Promise`\<...\>; `binding`: `GitBinding`; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: readonly ...[]; `roles`: [`OysterRootRoles`](root-data.md#oysterrootroles); `computer?`: ... \| ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, `"read"` \| `"write"` \| `"reset"`\> & `Readonly`\<\{ `events`: `Promise`\<...\>; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `title?`: `string`; \}\>, `"appToolPolicy"` \| `"guestLimits"`\> & `Readonly`\<\{ `workspace?`: `Readonly`\<\{ `computerId`: `string`; `files`: [`FileSource`](files.md#filesource); `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `Promise`\<... \| ...\> \| `null`; \}\>; `scope?`: `Readonly`\<\{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; `durableName`: `string`; `computerName`: `string`; `workspacePrefix`: `string`; `repositoryPrefix`: `string`; \}\>; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env`     | [`OysterWorkerEnv`](#oysterworkerenv)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `auth`    | [`OysterAuth`](host.md#oysterauth)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `options` | `Pick`\<`Readonly`\<\{ `approvals?`: `Readonly`\<\{ `submit`: `Promise`\< \| \{ `kind`: `"pending_approval"`; `recordId`: `string`; `description`: \{ `title`: ...; `inputBytes`: ...; `inputSha256`: ...; \}; \} \| `ApprovalApplyResult`\>; \}\>; `workflows?`: (`principal`) => `Promise`\< \| `Readonly`\<\{ `status`: `Promise`\<...\>; `cancel`: `Promise`\<...\>; \}\> \| `null`\>; `auth`: [`OysterAuth`](host.md#oysterauth); `backgroundOriginKey?`: () => `Promise`\<`CryptoKey`\>; `artifacts`: [`ArtifactStore`](host.md#artifactstore); `installations`: [`InstallationStore`](host.md#installationstore); `instances`: [`InstanceDirectory`](host.md#instancedirectory); `bootUi`: (`release`) => `Promise`\< \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: ... \| ... \| ... \| ... \| ...; `errorName?`: ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `finalUrlPath`: `string`; `consoleErrors`: ...[]; `pageErrors`: ...[]; `failedRequests`: ...[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}\>; `computerId?`: `string`; `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: (`signal`) => `Promise`\<...\>; `call`: (`capabilityId`, `input`, `context`) => `Promise`\<...\>; \}\> \| `Promise`\< \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `null`\> \| `null`; `appToolPolicy?`: (`actor`) => \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`: `string`; \} \| `Promise`\< \| \{ `level`: ... \| ...; `revision`: `string`; `grantedBy`: `string`; \} \| `null`\> \| `null`; `keys?`: `Readonly`\<\{ `live`: `Promise`\< \| `Readonly`\<\{ `keyId`: ...; `owner`: ...; `grantVersion`: ...; `grants`: ...; \}\> \| `null`\>; \}\>; `guestLimits?`: `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>; `mcp?`: `Readonly`\<\{ `handleRequest`: (`request`) => `Promise`\<`Response`\>; `close?`: () => `Promise`\<`void`\>; \}\>; `git?`: `Readonly`\<\{ `writerOf`: `Extract`\<`GitWriter`, \{ `kind`: `"actor"`; \}\>; `workflowPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `buildPass?`: `Promise`\< \| `Readonly`\<\{ `kind`: ...; `actor`: ...; `role?`: ...; `workflow?`: ...; \}\> \| `null`\>; `git`: `Promise`\<`Readonly`\<\{ `push`: `Promise`\<...\>; `read`: `Promise`\<...\>; `binding`: `GitBinding`; \}\>\>; \}\>; `ownerRoutes?`: `Hono`\<[`OysterEnv`](host.md#oysterenv), `BlankSchema`, `"/"`\>; `capabilities?`: readonly `Readonly`\<`object` & `object`\>[]; `workbench?`: `Readonly`\<\{ `directory`: `Promise`\<`Readonly`\<\{ `apps`: readonly ...[]; `roles`: [`OysterRootRoles`](root-data.md#oysterrootroles); `computer?`: ... \| ...; \}\>\>; `storage`: `Pick`\<`AppStorageWire`, `"read"` \| `"write"` \| `"reset"`\> & `Readonly`\<\{ `events`: `Promise`\<...\>; \}\>; \}\>; `homeInstallationId?`: `string`; `pageScript?`: `string`; `pageAssets?`: () => `Promise`\<\{ `pageScript`: `string`; `publicHomeScript`: `string`; `fontStyles`: `string`; `loginFontStyles`: `string`; `shellStyles`: `string`; `grantConsentScript`: `string`; \}\>; `title?`: `string`; \}\>, `"appToolPolicy"` \| `"guestLimits"`\> & `Readonly`\<\{ `workspace?`: `Readonly`\<\{ `computerId`: `string`; `files`: [`FileSource`](files.md#filesource); `computer?`: (`principal`) => \| `Readonly`\<\{ `getCapabilities`: ...; `call`: ...; \}\> \| `Promise`\<... \| ...\> \| `null`; \}\>; `scope?`: `Readonly`\<\{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; `durableName`: `string`; `computerName`: `string`; `workspacePrefix`: `string`; `repositoryPrefix`: `string`; \}\>; \}\> |
 
 #### Returns
 
@@ -1641,6 +2965,9 @@ Host adapters for a standalone Oyster Worker over its own bindings.
 
 ```ts
 function createOysterWorker(options?): ExportedHandler<Readonly<{
+  BROWSER?: Readonly<{
+     fetch: HttpFetch;
+  }>;
   OYSTER_OWNER_KEY: string;
   OYSTER_OWNER_NAME?: string;
   AGENT_DIRECTORY?: Readonly<{
@@ -1653,8 +2980,8 @@ function createOysterWorker(options?): ExportedHandler<Readonly<{
      LOADER: WorkerLoader;
   }>>>;
   RELEASES: R2Bucket;
-  REGISTRY: DurableObjectNamespace<OysterRegistry>;
-  INSTANCES: DurableObjectNamespace<OysterInstance<Readonly<{ OYSTER_OWNER_KEY: string; OYSTER_OWNER_NAME?: string | undefined; AGENT_DIRECTORY?: Readonly<{ getByName(name: string): Readonly<{ readCreator(agentId: string): Promise<string | null>; }>; }> | undefined; ... 5 more ...; LOADER: WorkerLoader; }>>>;
+  REGISTRY: DurableObjectNamespace<OysterRegistry<Readonly<{ BROWSER?: Readonly<{ fetch: HttpFetch; }> | undefined; OYSTER_OWNER_KEY: string; OYSTER_OWNER_NAME?: string | undefined; AGENT_DIRECTORY?: Readonly<{ getByName(name: string): Readonly<...>; }> | undefined; ... 5 more ...; LOADER: WorkerLoader; }>>>;
+  INSTANCES: DurableObjectNamespace<OysterInstance<Readonly<{ BROWSER?: Readonly<{ fetch: HttpFetch; }> | undefined; OYSTER_OWNER_KEY: string; OYSTER_OWNER_NAME?: string | undefined; AGENT_DIRECTORY?: Readonly<{ getByName(name: string): Readonly<...>; }> | undefined; ... 5 more ...; LOADER: WorkerLoader; }>>>;
   LOADER: WorkerLoader;
 }>>;
 ```
@@ -1670,21 +2997,31 @@ transports belong to the tenant Durable Object, independent of that cache.
 
 #### Returns
 
-`ExportedHandler`\<`Readonly`\<\{ `OYSTER_OWNER_KEY`: `string`;
+`ExportedHandler`\<`Readonly`\<\{ `BROWSER?`: `Readonly`\<\{ `fetch`:
+[`HttpFetch`](browser.md#httpfetch); \}\>; `OYSTER_OWNER_KEY`: `string`;
 `OYSTER_OWNER_NAME?`: `string`; `AGENT_DIRECTORY?`: `Readonly`\<\{ `getByName`:
 `Readonly`\<\{ `readCreator`: `Promise`\<`string` \| `null`\>; \}\>; \}\>;
 `OYSTER_ORIGIN`: `string`; `MCP`:
 `DurableObjectNamespace`\<[`OysterMcpOwner`](#oystermcpowner)\<`Readonly`\<\{
 `LOADER`: `WorkerLoader`; \}\>\>\>; `RELEASES`: `R2Bucket`; `REGISTRY`:
-`DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\>; `INSTANCES`:
+`DurableObjectNamespace`\<[`OysterRegistry`](#oysterregistry)\<`Readonly`\<\{
+BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined; OYSTER\_OWNER\_KEY:
+string; OYSTER\_OWNER\_NAME?: string \| undefined; AGENT\_DIRECTORY?:
+Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\> \| undefined; ... 5
+more ...; LOADER: WorkerLoader; \}\>\>\>; `INSTANCES`:
 `DurableObjectNamespace`\<[`OysterInstance`](#oysterinstance)\<`Readonly`\<\{
-OYSTER\_OWNER\_KEY: string; OYSTER\_OWNER\_NAME?: string \| undefined;
-AGENT\_DIRECTORY?: Readonly\<\{ getByName(name: string): Readonly\<\{
-readCreator(agentId: string): Promise\<string \| null\>; \}\>; \}\> \|
-undefined; ... 5 more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`:
-`WorkerLoader`; \}\>\>
+BROWSER?: Readonly\<\{ fetch: HttpFetch; \}\> \| undefined; OYSTER\_OWNER\_KEY:
+string; OYSTER\_OWNER\_NAME?: string \| undefined; AGENT\_DIRECTORY?:
+Readonly\<\{ getByName(name: string): Readonly\<...\>; \}\> \| undefined; ... 5
+more ...; LOADER: WorkerLoader; \}\>\>\>; `LOADER`: `WorkerLoader`; \}\>\>
 
 ## References
+
+### r2ArtifactStore
+
+Re-exports [r2ArtifactStore](cloudflare.md#r2artifactstore)
+
+---
 
 ### ownerKeyAuth
 

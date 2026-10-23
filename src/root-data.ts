@@ -9,8 +9,15 @@ import {
   addressKey,
   appDirectoryEntrySchema,
   type AppDirectoryEntry,
-} from "./shell/app-directory.js";
-import type { WorkbenchPlatformDestination } from "./shell/workbench-model.js";
+} from "@fungi.computer/nacre/app-directory";
+
+/**
+ * A destination the host offers the dashboard. This is a structural twin of
+ * Nacre's `WorkbenchPlatformDestination`: importing that type would put
+ * Nacre's DOM-typed workbench declarations on every Worker entry that reaches
+ * root data.
+ */
+type PlatformDestination = Readonly<{ id: string; label: string }>;
 
 /** Role choices belong to the root owner, independently of Release declarations. */
 export type OysterRootRoles = Readonly<
@@ -69,7 +76,7 @@ export function createOysterRootData(options: OysterRootDataOptions) {
               displayName: declaration?.displayName,
               icon: declaration?.icon ?? null,
               releaseId: installation.release.releaseId,
-              authorityVersion: installation.authorityVersion,
+              authorityVersion: installation.authority.authorityVersion,
               enforcement: null,
               handlers: [...(declaration?.handlers ?? [])],
               roles: [...(declaration?.roles ?? [])],
@@ -104,7 +111,7 @@ export function createOysterRootData(options: OysterRootDataOptions) {
       };
     },
     /** No standalone platform navigation destination is implemented yet. */
-    platformDestinations(): readonly WorkbenchPlatformDestination[] {
+    platformDestinations(): readonly PlatformDestination[] {
       return [];
     },
   };

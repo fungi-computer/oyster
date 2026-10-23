@@ -71,7 +71,13 @@ export function createStandaloneWorkflowNodeCapture(
     if (verified.declaration === null || verified.api === null) return null;
     const facts: GateFacts = {
       principal: { actor: caller.actor, role: caller.role ?? null },
-      installation,
+      installation: {
+        status: installation.status,
+        visibility: installation.visibility,
+        instanceId: installation.instanceId,
+        authority: installation.authority,
+        artifactDigest: installation.release.artifact.artifactDigest,
+      },
       declaration: verified.declaration,
       declaredOperations: await deriveDeclaredOperations(
         installation.release,
@@ -108,9 +114,10 @@ export function createStandaloneWorkflowNodeCapture(
     if (
       latest?.status !== "enabled" ||
       latest.instanceId !== installation.instanceId ||
-      latest.authorityVersion !== installation.authorityVersion ||
-      latest.declaredOperationsDigest !==
-        installation.declaredOperationsDigest ||
+      latest.authority.authorityVersion !==
+        installation.authority.authorityVersion ||
+      latest.authority.declaredOperationsDigest !==
+        installation.authority.declaredOperationsDigest ||
       latest.release.releaseId !== installation.release.releaseId ||
       latest.release.artifact.artifactDigest !==
         installation.release.artifact.artifactDigest ||

@@ -2,6 +2,7 @@
 // Guest Apps produce ordinary HTTP responses. They must never control the
 // browser's Oyster session, origin policy, or service-worker scope.
 import assert from "node:assert/strict";
+import { withBackendConstruction } from "./boot-construction.fixture.ts";
 import { test } from "node:test";
 import { createOyster } from "../dist/host.js";
 import { instanceIds } from "../dist/index.js";
@@ -134,50 +135,52 @@ function nativeFixture(t, limits, initialFailure) {
     authorityVersion: 1,
     owner: { kind: "installation", id: "guest" },
   };
-  const instance = createCloudflareAppInstance(
-    {
-      id: { name: selected.instanceId },
-      storage: {
-        sql: {
-          exec: (query, ...args) => {
-            const rows = database.prepare(query).all(...args);
-            return { toArray: () => rows };
+  const context = {
+    id: { name: selected.instanceId },
+    storage: {
+      sql: {
+        exec: (query, ...args) => {
+          const rows = database.prepare(query).all(...args);
+          return { toArray: () => rows };
+        },
+      },
+    },
+    facets: {
+      get: (_name, prepare) => {
+        prepare();
+        return {
+          http: async () => {
+            if (failure) throw failure;
+            const response = guestResponse();
+            return {
+              status: response.status,
+              statusText: response.statusText,
+              headers: [...response.headers],
+              body: response.body,
+            };
           },
-        },
+          invoke: async () => {
+            if (failure) throw failure;
+            return { kind: "ok", value: { ok: true } };
+          },
+        };
       },
-      facets: {
-        get: (_name, prepare) => {
-          prepare();
-          return {
-            http: async () => {
-              if (failure) throw failure;
-              const response = guestResponse();
-              return {
-                status: response.status,
-                statusText: response.statusText,
-                headers: [...response.headers],
-                body: response.body,
-              };
-            },
-            invoke: async () => {
-              if (failure) throw failure;
-              return { kind: "ok", value: { ok: true } };
-            },
-          };
-        },
-        abort: (name, reason) => {
-          aborts.push([name, reason]);
-        },
-        delete: () => undefined,
+      abort: (name, reason) => {
+        aborts.push([name, reason]);
       },
+      delete: () => undefined,
     },
-    {
-      get: (id, configure) => {
-        ids.push(id);
-        configurations.push(configure());
-        return { getDurableObjectClass: () => ({}) };
-      },
+  };
+  const construction = withBackendConstruction(context.facets, {
+    get: (id, configure) => {
+      ids.push(id);
+      configurations.push(configure());
+      return { getDurableObjectClass: () => ({}) };
     },
+  });
+  const instance = createCloudflareAppInstance(
+    { ...context, facets: construction.facets },
+    construction.loader,
     () =>
       Effect.succeed({
         release: installation.release,
@@ -190,6 +193,7 @@ function nativeFixture(t, limits, initialFailure) {
         },
       }),
     () => ({}),
+    () => Promise.resolve(null),
     limits,
   );
   const gate = createInvocationGate({
@@ -222,6 +226,7 @@ function nativeFixture(t, limits, initialFailure) {
     configurations,
     ids,
     aborts,
+    probes: construction.probes,
     run,
     fail: (cause) => {
       failure = cause;
@@ -241,7 +246,8 @@ test("Instance HTTP responses also isolate host headers for non-Oyster callers",
 });
 
 test("guest HTTP and method execution use explicit safe CPU and subrequest limits", async (t) => {
-  const { instance, selected, configurations, run } = nativeFixture(t);
+  const { instance, selected, configurations, ids, probes, run } =
+    nativeFixture(t);
   await Effect.runPromise(instance.apply({ ...selected, status: "enabled" }));
   await run((frame) =>
     instance.fetch(frame, new Request("https://guest.internal/")),
@@ -264,7 +270,14 @@ test("guest HTTP and method execution use explicit safe CPU and subrequest limit
       {},
     ),
   );
-  assert.equal(configurations.length, 2);
+  assert.equal(configurations.length, 3);
+  assert.equal(probes.length, 1);
+  assert.equal(probes[0].name, "candidate");
+  assert.match(probes[0].loaderId, /^boot:/);
+  assert.equal(ids[0], probes[0].loaderId);
+  assert.equal(probes[0].completed, true);
+  assert.equal(probes[0].aborted, true);
+  assert.equal(probes[0].deleted, true);
   for (const configuration of configurations) {
     assert.deepEqual(configuration.limits, { cpuMs: 1000, subRequests: 50 });
     assert.equal(configuration.globalOutbound, null);
@@ -312,10 +325,13 @@ test("createOyster carries custom budgets through its Instance directory to the 
       .status,
     202,
   );
-  assert.deepEqual(native.configurations[0].limits, {
-    cpuMs: 25,
-    subRequests: 3,
-  });
+  assert.equal(native.configurations.length, 2);
+  assert.equal(native.probes.length, 1);
+  assert.equal(native.probes[0].name, "candidate");
+  assert.match(native.probes[0].loaderId, /^boot:/);
+  assert.equal(native.ids[0], native.probes[0].loaderId);
+  for (const configuration of native.configurations)
+    assert.deepEqual(configuration.limits, { cpuMs: 25, subRequests: 3 });
 });
 
 test("different guest budgets cannot reuse the same loader cache entry", async (t) => {
@@ -329,8 +345,19 @@ test("different guest budgets cannot reuse the same loader cache entry", async (
       fixture.instance.fetch(frame, new Request("https://guest.internal/")),
     );
   }
+  for (const fixture of [a, b]) {
+    assert.equal(fixture.ids.length, 2);
+    assert.equal(fixture.probes.length, 1);
+    assert.equal(fixture.probes[0].name, "candidate");
+    assert.match(fixture.probes[0].loaderId, /^boot:/);
+    assert.equal(fixture.ids[0], fixture.probes[0].loaderId);
+  }
   assert.notEqual(a.ids[0], b.ids[0]);
-  assert.deepEqual(a.configurations[0].limits, { cpuMs: 10, subRequests: 0 });
+  assert.notEqual(a.ids[1], b.ids[1]);
+  for (const configuration of a.configurations)
+    assert.deepEqual(configuration.limits, { cpuMs: 10, subRequests: 0 });
+  for (const configuration of b.configurations)
+    assert.deepEqual(configuration.limits, { cpuMs: 20, subRequests: 1 });
 });
 
 test("invalid guest budgets fail closed before an Oyster can accept requests", () => {
@@ -448,15 +475,22 @@ test("a failed guest invocation is retired so the next frame loads a fresh isola
   fixture.fail(undefined);
   await fixture.run(read);
   await fixture.run(read);
-  assert.equal(fixture.ids.length, 3);
+  assert.equal(fixture.probes.length, 1);
+  assert.equal(fixture.probes[0].completed, true);
+  assert.equal(fixture.probes[0].aborted, true);
+  assert.equal(fixture.probes[0].deleted, true);
+  assert.equal(fixture.ids.length, 4);
+  assert.equal(fixture.probes[0].name, "candidate");
+  assert.match(fixture.probes[0].loaderId, /^boot:/);
+  assert.equal(fixture.ids[0], fixture.probes[0].loaderId);
   // The healthy-path loader id is unchanged: instance, digest and budget only.
   assert.equal(
-    fixture.ids[0],
+    fixture.ids[1],
     `${fixture.selected.instanceId}:sha256:${"a".repeat(64)}:1000:50`,
   );
-  assert.notEqual(fixture.ids[1], fixture.ids[0]);
+  assert.notEqual(fixture.ids[2], fixture.ids[1]);
   // A healthy guest keeps its isolate; only failures rotate the loader id.
-  assert.equal(fixture.ids[2], fixture.ids[1]);
+  assert.equal(fixture.ids[3], fixture.ids[2]);
   assert.equal(fixture.aborts.length, 1);
   assert.equal(logs.length, 1);
 });

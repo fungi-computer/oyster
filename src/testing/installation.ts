@@ -1,3 +1,4 @@
+import { permissionCatalog } from "../apps/catalog.js";
 import * as Result from "effect/Result";
 import type { AppDeclaration } from "@fungi.computer/puffball/app";
 import {
@@ -24,7 +25,6 @@ export async function approvedInstallation(
       kind: "install",
       release: input.release,
       releasePin: "pinned",
-      grants: "declared",
     },
     {
       by: { kind: "member", memberId: "fixture-owner" },
@@ -44,5 +44,39 @@ export async function approvedInstallation(
     },
   );
   if (Result.isFailure(result)) throw new Error(result.failure.code);
-  return { ...result.success.next, visibility: input.visibility ?? "private" };
+  const installed = result.success.next;
+  const declaredOperations = await deriveDeclaredOperations(
+    input.release,
+    input.declaration,
+    input.descriptors ?? [],
+  );
+  const changes = declaredOperations.capabilities
+    .filter(({ capability }) => permissionCatalog[capability].consent === "ask")
+    .map(
+      ({ capability, operations }) =>
+        ({
+          capability,
+          grant: { operations, resources: "tenant-scope" },
+        }) satisfies import("../apps/installation.js").GrantChange,
+    );
+  if (changes.length === 0)
+    return { ...installed, visibility: input.visibility ?? "private" };
+  const approved = applyInstallationCommand(
+    installed,
+    { kind: "change-grants", changes },
+    {
+      by: { kind: "member", memberId: "fixture-owner" },
+      role: "owner",
+      expectedVersion: installed.authority.authorityVersion,
+      declaration: input.declaration,
+      declaredOperations,
+      now: 1001,
+      identity: installed,
+    },
+  );
+  if (Result.isFailure(approved)) throw new Error(approved.failure.code);
+  return {
+    ...approved.success.next,
+    visibility: input.visibility ?? "private",
+  };
 }

@@ -12,6 +12,8 @@ import { createAppInstance, instanceIds } from "../dist/index.js";
 import { createGitDoor, createAdmittedGit } from "../dist/git.js";
 import { parseReceivePack } from "@fungi.computer/agar/git-wire";
 import { createInvocationGate } from "../dist/invocation.js";
+import { approvedInstallation } from "../dist/testing/index.js";
+import { verifyRelease } from "../dist/release.js";
 
 const memberWriter = {
   kind: "actor",
@@ -239,18 +241,22 @@ try {
       },
     },
   };
-  const installation = {
+  const verified = await verifyRelease(
+    { get: async (ref) => artifacts.get(ref) ?? null },
+    release,
+  );
+  assert.ok(verified.declaration);
+  const installation = await approvedInstallation({
     installationId: "fixture",
     instanceId: instanceIds.instance.generate(),
     release,
-    authorityVersion: 1,
-    status: "enabled",
-  };
+    declaration: verified.declaration,
+  });
   const selected = {
     instanceId: installation.instanceId,
     appId: release.appId,
     releaseId: release.releaseId,
-    authorityVersion: 1,
+    authorityVersion: installation.authority.authorityVersion,
     owner: { kind: "installation", id: "fixture" },
     status: "enabled",
   };
@@ -258,6 +264,7 @@ try {
   const runtimePushes = [];
   const runtimeQuestions = [];
   const runtime = createAppInstance({
+    boot: () => Effect.void,
     instanceId: installation.instanceId,
     read: () => Effect.succeed(stored),
     write: (value) =>
@@ -327,6 +334,7 @@ try {
       (frame) => Effect.runPromise(runtime.authorizeGitPush(frame, question)),
     );
   const standaloneHost = {
+    bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({
         kind: "admitted",
@@ -384,7 +392,10 @@ try {
   );
   await assert.rejects(
     handle.onGitPush(
-      lifecycleFacts({ ...selected, authorityVersion: 2 }, retainedFact),
+      lifecycleFacts(
+        { ...selected, authorityVersion: selected.authorityVersion + 1 },
+        retainedFact,
+      ),
       retainedFact,
     ),
   );
@@ -433,7 +444,13 @@ try {
   );
 
   for (const changed of [
-    { ...installation, authorityVersion: 2 },
+    {
+      ...installation,
+      authority: {
+        ...installation.authority,
+        authorityVersion: installation.authority.authorityVersion + 1,
+      },
+    },
     { ...installation, instanceId: instanceIds.instance.generate() },
     { ...installation, release: { ...release, releaseId: "rel_changed" } },
     { ...installation, status: "disabled" },
@@ -488,7 +505,14 @@ try {
           get: async () =>
             ++retryReads === 1
               ? installation
-              : { ...installation, authorityVersion: 2 },
+              : {
+                  ...installation,
+                  authority: {
+                    ...installation.authority,
+                    authorityVersion:
+                      installation.authority.authorityVersion + 1,
+                  },
+                },
         },
       },
       "fixture",

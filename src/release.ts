@@ -43,6 +43,18 @@ export type ArtifactHeads = Readonly<{
   head: (artifactRef: ArtifactRef) => Promise<ArtifactHead | null>;
 }>;
 
+/** A store that can stream immutable object bytes without materializing them. */
+export type ArtifactStreams = Readonly<{
+  /**
+   * Open a one-shot byte stream, or return `null` when absent. The signal owns
+   * cancellation of both source opening where supported and subsequent reads.
+   */
+  stream: (
+    artifactRef: ArtifactRef,
+    signal?: AbortSignal,
+  ) => Promise<ReadableStream<Uint8Array> | null>;
+}>;
+
 /** Why a Release could not be read; the host maps it to an HTTP refusal. */
 export class ReleaseError extends Error {
   override readonly name = "ReleaseError";
@@ -123,17 +135,16 @@ export function parseRelease(value: unknown): Release {
 }
 
 /**
- * Read a Release root and verify every artifact it names: the UI document or
- * asset build (and each asset object), and the backend descriptor.
+ * Read a Release root and verify its UI build and backend descriptor.
+ * `readAssets` verifies UI object bodies when true. When false, it reads the
+ * asset manifest needed to resolve references but does not read any UI object
+ * body, including standalone HTML.
  */
 export async function verifyRelease(
   store: ArtifactStore,
   release: Release,
   policy: AssetBuildPolicy = defaultAssetPolicy,
-  /**
-   * Read and check every UI asset now. Serving can skip this: each asset is
-   * verified against its digest when it is read.
-   */
+  /** Read and check every UI object now. Serving verifies each on demand. */
   readAssets = true,
 ): Promise<VerifiedRelease> {
   const rootBytes = await readVerified(
@@ -154,12 +165,16 @@ export async function verifyRelease(
   }
   let ui: VerifiedRelease["ui"] = null;
   if ("ui" in build) {
-    const bytes = await readVerified(
-      store,
-      build.ui.artifactRef,
-      build.ui.digest,
-    );
+    const bytes =
+      readAssets || build.ui.mediaType === assetBuildMediaType
+        ? await readVerified(store, build.ui.artifactRef, build.ui.digest)
+        : null;
     if (build.ui.mediaType === assetBuildMediaType) {
+      if (bytes === null)
+        throw new ReleaseError(
+          "invalid_release",
+          "Asset manifest is required to verify its object references",
+        );
       let assets: AssetBuild;
       try {
         assets = decodeAssetBuild(bytes, policy);

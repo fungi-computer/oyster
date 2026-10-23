@@ -2,35 +2,34 @@ import { access, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as Schema from "effect/Schema";
 
+import { appIdSchema } from "@fungi.computer/puffball/effect";
+import {
+  pinnedRecipeSchema,
+  type AppPublisherCoreConfigInput,
+} from "./effect.js";
 import type { WorkspaceBuildStep } from "./build-step.js";
+import { appRuntimeImports } from "./app-imports.js";
 
-const manifestPathSchema = Schema.String.pipe(
-  Schema.check(
-    Schema.makeFilter(
-      (path: string) =>
-        path.length > 0 &&
-        !path.startsWith("/") &&
-        !path.includes("\\") &&
-        path
-          .split("/")
-          .every((part) => part !== "" && part !== "." && part !== ".."),
-    ),
-  ),
-);
+const manifestPathSchema = pinnedRecipeSchema.fields.entry;
 
 /**
  * `package.json#fungi.build`. An App manifest (the manifest nearest the
- * entry) declares how its page builds: `react`, `shellEntry`, the workspace
+ * entry) declares its recipe beside the page policy: `react`, `shellEntry`, the workspace
  * packages whose declared stylesheets compile first (`packageStylesheets`)
  * and its own `stylesheets`, compiled in place, in order. A workspace
  * package declares its build products: extra TypeScript configs compiled
  * after its `tsconfig.build.json`, and its stylesheet input and output; or,
  * instead of TypeScript configs, the one `package.json` script that builds
  * it (`script`), which only an admitted Computer build runs. Every path is
- * relative to the manifest that declares it. Unknown build fields are
+ * relative to the manifest that declares it. Dependency-only metadata needs
+ * no App recipe; App callers require one through appBuildRecipe. Unknown fields are
  * refused, so a builder never silently ignores a policy it does not know.
  */
 export const workspaceBuildPolicySchema = Schema.Struct({
+  ...pinnedRecipeSchema.fields,
+  entry: Schema.optional(pinnedRecipeSchema.fields.entry),
+  backend: Schema.optional(pinnedRecipeSchema.fields.backend),
+  maxOutputBytes: Schema.optional(pinnedRecipeSchema.fields.maxOutputBytes),
   react: Schema.optional(Schema.Boolean),
   shellEntry: Schema.optional(manifestPathSchema),
   packageStylesheets: Schema.optional(Schema.Array(Schema.String)),
@@ -54,21 +53,59 @@ const manifestSchema = Schema.fromJsonString(
     dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     scripts: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     fungi: Schema.optional(
-      Schema.Struct({ build: Schema.optional(Schema.Unknown) }),
+      Schema.Struct({
+        appId: Schema.optional(appIdSchema),
+        build: Schema.optional(Schema.Unknown),
+      }),
     ),
   }),
 );
 
-type Manifest = Schema.Schema.Type<typeof manifestSchema>;
-
-/** A manifest's build policy; only `fungi.build` itself is held strict. */
-function policyOf(manifest: Manifest): WorkspaceBuildPolicy {
+/** Read package metadata once; only fungi.build rejects unknown fields. */
+export function readBuildManifest(packageJson: string) {
+  const manifest = Schema.decodeUnknownSync(manifestSchema)(packageJson);
   const build = manifest.fungi?.build;
-  return build === undefined
-    ? {}
-    : Schema.decodeUnknownSync(workspaceBuildPolicySchema, {
-        onExcessProperty: "error",
-      })(build);
+  return {
+    ...manifest,
+    fungi: {
+      ...manifest.fungi,
+      build:
+        build === undefined
+          ? undefined
+          : Schema.decodeUnknownSync(workspaceBuildPolicySchema, {
+              onExcessProperty: "error",
+            })(build),
+    },
+  };
+}
+
+/** Manifest metadata with the App-owned build policy decoded. */
+export type BuildManifest = ReturnType<typeof readBuildManifest>;
+
+/** Select an App recipe and root its paths in the captured source tree. */
+export function appBuildRecipe(
+  manifest: BuildManifest,
+  directory: string,
+): AppPublisherCoreConfigInput["recipe"] {
+  const recipe = Schema.decodeUnknownSync(pinnedRecipeSchema)(
+    manifest.fungi.build,
+  );
+  if (directory === "") return Schema.encodeSync(pinnedRecipeSchema)(recipe);
+  const root = Schema.decodeUnknownSync(manifestPathSchema)(directory);
+  const backend = recipe.backend;
+  return Schema.encodeSync(pinnedRecipeSchema)({
+    ...recipe,
+    entry: root + "/" + recipe.entry,
+    backend:
+      backend?.entry === undefined
+        ? backend
+        : { ...backend, entry: root + "/" + backend.entry },
+  });
+}
+
+/** The same policy drives dependency products and the App page. */
+function policyOf(manifest: BuildManifest): WorkspaceBuildPolicy {
+  return manifest.fungi.build ?? {};
 }
 
 /** One pnpm workspace project, as `pnpm ls -r --depth -1 --json` lists it. */
@@ -90,6 +127,24 @@ export const workspaceProjectsArguments = Object.freeze([
   "--json",
 ]);
 
+/** A nested package must own its build graph, never inherit its host's. */
+export class WorkspaceBuildError extends Error {
+  /** The nearest package is absent from pnpm's workspace inventory. */
+  readonly code = "non_workspace_package";
+
+  constructor(
+    /** The nearer package, relative to the captured source root. */
+    readonly directory: string,
+    /** The workspace whose dependencies would otherwise be inherited. */
+    readonly ownerDirectory: string,
+  ) {
+    super(
+      `${directory} has its own package.json but is not a workspace member; refusing to inherit ${ownerDirectory || "the repository root"}'s build dependencies`,
+    );
+    this.name = "WorkspaceBuildError";
+  }
+}
+
 /** One App page build derived from its manifests and package graph. */
 export type WorkspaceBuild = Readonly<{
   /** The pnpm workspace that owns the entry, relative to the source root. */
@@ -98,7 +153,7 @@ export type WorkspaceBuild = Readonly<{
   react: boolean;
   /** A shell module entry, relative to `directory`. */
   shellEntry?: string;
-  /** The workspace's runtime workspace dependencies, dependencies first. */
+  /** Compile dependencies of the App's runtime imports, dependencies first. */
   dependencies: readonly string[];
   steps: readonly WorkspaceBuildStep[];
 }>;
@@ -123,23 +178,27 @@ async function exists(path: string): Promise<boolean> {
 
 /**
  * Derive one App's page build from the captured source alone: the manifest
- * nearest `entry` declares the App policy, the owning pnpm workspace's
- * runtime `workspace:` dependencies give the compile order, and each
+ * nearest `entry` must be the owning pnpm workspace (or standalone repository
+ * root). It declares the App policy, its
+ * runtime imports select its compile roots; their `workspace:` dependencies
+ * give the compile order, and each
  * dependency's manifest declares its own extra build products.
  */
 export async function resolveWorkspaceBuild(options: {
   readonly root: string;
   readonly entry: string;
+  /** The selected recipe's backend, if it differs from the manifest recipe. */
+  readonly backendEntry?: string | null | undefined;
   /** `pnpm ls -r --depth -1 --json` output for the same source tree. */
   readonly projects: string;
 }): Promise<WorkspaceBuild> {
   const root = resolve(options.root);
   const entry = within(root, options.entry);
-  const manifests = new Map<string, Manifest>();
-  const manifest = async (directory: string): Promise<Manifest> => {
+  const manifests = new Map<string, BuildManifest>();
+  const manifest = async (directory: string): Promise<BuildManifest> => {
     const known = manifests.get(directory);
     if (known) return known;
-    const decoded = Schema.decodeUnknownSync(manifestSchema)(
+    const decoded = readBuildManifest(
       await readFile(join(root, directory, "package.json"), "utf8"),
     );
     manifests.set(directory, decoded);
@@ -184,12 +243,31 @@ export async function resolveWorkspaceBuild(options: {
     !(await exists(join(root, appDirectory, "package.json")))
   )
     appDirectory = parent(appDirectory);
+  if (appDirectory !== directory)
+    throw new WorkspaceBuildError(appDirectory, directory);
   const policy = policyOf(await manifest(appDirectory));
   if (policy.script !== undefined)
     throw new Error(
       `${appDirectory} is the App; its page builds with the recipe, not a script`,
     );
 
+  const runtimeImports = await appRuntimeImports({
+    root,
+    entry,
+    backendEntry:
+      options.backendEntry === undefined
+        ? policy.backend?.entry === undefined
+          ? undefined
+          : join(appDirectory, policy.backend.entry)
+        : (options.backendEntry ?? undefined),
+    shellEntry:
+      policy.shellEntry === undefined
+        ? undefined
+        : join(appDirectory, policy.shellEntry),
+  });
+  const imported = (name: string) =>
+    runtimeImports.has(name) ||
+    [...runtimeImports].some((path) => path.startsWith(`${name}/`));
   const dependencies: string[] = [];
   const visiting = new Set<string>([directory]);
   const visit = async (from: string): Promise<void> => {
@@ -197,6 +275,15 @@ export async function resolveWorkspaceBuild(options: {
       (await manifest(from)).dependencies ?? {},
     )) {
       if (!range.startsWith("workspace:")) continue;
+      // A package still builds its complete declared products. Only the App
+      // roots are narrowed: erased types and authoring-only imports do not
+      // compile the host runtime. Explicit stylesheet products remain roots.
+      if (
+        from === directory &&
+        !imported(name) &&
+        !policy.packageStylesheets?.includes(name)
+      )
+        continue;
       const dependency = projects.get(name);
       if (dependency === undefined)
         throw new Error(`${from} depends on an unlisted workspace ${name}`);

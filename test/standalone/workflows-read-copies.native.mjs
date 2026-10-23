@@ -1,89 +1,46 @@
+import {
+  nativeWorkflowHost,
+  nativeAppClient,
+  nativeFixtureWorkspace,
+  until,
+} from "./workflow-native.fixture.mjs";
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 import process from "node:process";
 import { existsSync } from "node:fs";
 import * as Schema from "effect/Schema";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { execFileSync } from "node:child_process";
+
+import { readFile } from "node:fs/promises";
+
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { parse as parseJsonc } from "jsonc-parser";
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+
 import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/workflows-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
-config.main = `${root}test/standalone/workflows-root.fixture.ts`;
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
-const provider = await workflowGitProvider();
-const port = await new Promise((resolve) => {
-  const socket = createServer().listen(0, "127.0.0.1", () => {
-    const { port: free } = socket.address();
-    socket.close(() => resolve(free));
-  });
-});
-const origin = `http://127.0.0.1:${port}`;
-const auth = { Authorization: `Bearer ${key}` };
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/workflows-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--var",
-    `OYSTER_OWNER_KEY:${key}`,
-    "--var",
-    `OYSTER_ORIGIN:${origin}`,
-    "--var",
-    `GIT_ORIGIN:${provider.origin}`,
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-let output = "";
-worker.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-worker.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
 
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
+const { work, config } = await nativeFixtureWorkspace(
+  root,
+  "workflows-native-",
+);
+
+config.main = `${root}test/standalone/workflows-root.fixture.ts`;
+
+const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
+
+const nativeHost = await nativeWorkflowHost({
+  root,
+  work,
+  config,
+  oysterOrigin: "https://oyster.test",
+});
+const { key, provider, origin, auth } = nativeHost;
+
+const { call } = nativeAppClient(origin, auth);
 async function installWorkflows() {
   const repository = fileURLToPath(new URL("../../../../", import.meta.url));
   const revision = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -104,7 +61,7 @@ async function installWorkflows() {
         cwd: repository,
         encoding: "utf8",
       }).trim(),
-      recipe: app.recipe,
+      recipe: committedAppRecipe(repository, app, revision),
       outDirectory: directory,
     });
   const release = Schema.decodeUnknownSync(
@@ -119,15 +76,7 @@ async function installWorkflows() {
   });
   assert.equal(response.status, 201, await response.text());
 }
-async function until(read, accepts, label) {
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const value = await read();
-    if (accepts(value)) return value;
-    assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
-    await delay(100);
-  }
-}
+
 try {
   await until(
     async () =>
@@ -199,12 +148,9 @@ try {
     `PASS saved Workflows ${runtime}: native Loader, durable SQLite, warm document/versions/list provider calls 0`,
   );
 } catch (cause) {
-  error(output.replaceAll(key, "[redacted]"));
+  error(nativeHost.output().replaceAll(key, "[redacted]"));
   error(provider.requests);
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }

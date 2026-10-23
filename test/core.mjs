@@ -9,7 +9,7 @@ import {
   appBackendComputerHeader,
 } from "@fungi.computer/agar/backend";
 import assert from "node:assert/strict";
-import { appCatalogEntrySchema } from "../dist/shell/app-directory.js";
+import { appCatalogEntrySchema } from "@fungi.computer/nacre/app-directory";
 
 const repositoryParam = {
   key: "repository",
@@ -54,6 +54,7 @@ const digestFor = (releaseId) => {
   return `sha256:${content.repeat(64)}`;
 };
 const ports = {
+  boot: () => Effect.void,
   instanceId,
   read: () => Effect.succeed(record),
   write: (value) =>

@@ -22,6 +22,16 @@ const config = join(oyster, "deploy/wrangler.jsonc");
 
 /** Loaded on first use, never at startup: [module path pattern, first-use owner]. */
 const deferred = [
+  [/\/dist\/page-script\.js$/, "the first host page or page-asset request"],
+  [
+    /\/roster\/conversation-agents\.js$/,
+    "the Agent owner's first runtime construction",
+  ],
+  [/^\.\.\/dist\/mcp\.js$/, "the first MCP catalog acquisition"],
+  [
+    /\/@earendil-works\/pi-ai\/dist\/providers\/openai\.js$/,
+    "a Luna model acquisition",
+  ],
   [/\/@modelcontextprotocol\/server\//, "the MCP owner's first request"],
   [/\/@modelcontextprotocol\/core\//, "the MCP owner's first request"],
   [

@@ -72,7 +72,7 @@ describe("standalone preview-only origin fence", () => {
         await standalonePreviewRequest(
           new Request(`${origins.preview}/login`),
           unconfigured,
-          "workspace",
+          (id) => Promise.resolve(id === "workspace"),
           () => {
             throw new Error(
               "Unconfigured preview must never enter the forwarder",
@@ -99,7 +99,7 @@ describe("standalone preview-only origin fence", () => {
           await standalonePreviewRequest(
             new Request(`${origins.preview}/login`),
             brokenOwner,
-            "workspace",
+            (id) => Promise.resolve(id === "workspace"),
             () => {
               throw new Error("Forbidden forwarding");
             },
@@ -123,7 +123,7 @@ describe("standalone preview-only origin fence", () => {
           await standalonePreviewRequest(
             new Request(origins.preview + path),
             env,
-            "workspace",
+            (id) => Promise.resolve(id === "workspace"),
             () => {
               throw new Error("Forbidden forwarding");
             },
@@ -139,7 +139,7 @@ describe("standalone preview-only origin fence", () => {
               { method },
             ),
             env,
-            "workspace",
+            (id) => Promise.resolve(id === "workspace"),
             () => {
               throw new Error("Forbidden forwarding");
             },
@@ -161,8 +161,9 @@ describe("standalone preview-only origin fence", () => {
         },
       ),
       env,
-      "workspace",
-      (ticket, port, request) => {
+      (id) => Promise.resolve(id === "workspace"),
+      (computerId, ticket, port, request) => {
+        expect(computerId).toBe("workspace");
         expect(ticket).toBe(signature);
         expect(port).toBe(3000);
         seen.push(request);
@@ -180,7 +181,7 @@ describe("standalone preview-only origin fence", () => {
       await standalonePreviewRequest(
         new Request(`${origins.owner}/api`),
         env,
-        "workspace",
+        (id) => Promise.resolve(id === "workspace"),
         () => {
           throw new Error("Not a preview");
         },

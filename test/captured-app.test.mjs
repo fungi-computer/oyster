@@ -30,9 +30,11 @@ test("a joined workspace backend pins browser resolution without changing the UI
     },
   };
   const ui = normalizeAppPublisherRecipe(input);
+  // The workspace metadata policy is deliberately part of the UI digest.
+  assert.equal(ui.recipe.toolchain.buildPolicy, "package-json-fungi-build-v4");
   assert.equal(
     ui.buildRecipeDigest,
-    "sha256:c048fef0b3d2a314105425bd20b7b5a71ee002e181d113737cb648c9f791ac1b",
+    "sha256:1ae028533865cd9a3e7259fc775f4f6d208719e04e74f3664953e49ce7daf773",
   );
   const joined = normalizeAppPublisherRecipe({
     ...input,

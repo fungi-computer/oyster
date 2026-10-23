@@ -1,7 +1,13 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import * as Schema from "effect/Schema";
-import { AppInstanceError, instanceIds } from "../src/index.js";
+import * as Effect from "effect/Effect";
+import {
+  AppInstanceError,
+  createAppInstance,
+  instanceIds,
+  type Instance,
+} from "../src/index.js";
 import {
   createInvocationGate,
   type InvocationFacts,
@@ -13,6 +19,102 @@ import {
   backgroundOriginKey,
   sealBackgroundOrigin,
 } from "@fungi.computer/puffball/background-replay";
+
+await test("disable fences authority before cancelling a held frame without waiting for its guest", async () => {
+  const instanceId = instanceIds.instance.generate();
+  const facts = Schema.decodeUnknownSync(invocationFactsSchema)({
+    instanceId,
+    selection: {
+      instanceId,
+      owner: { kind: "installation", id: "notes" },
+      appId: "app_notes",
+      releaseId: "rel_example",
+      authorityVersion: 1,
+    },
+    artifactDigest: `sha256:${"1".repeat(64)}`,
+    subject: {
+      kind: "call",
+      context: {
+        actor: { kind: "member", memberId: "member_one" },
+        computerId: null,
+      },
+    },
+    grants: [],
+    deadlineAt: Date.now() + 60_000,
+    ancestry: [],
+  });
+  let record: Instance = {
+    ...facts.selection,
+    desiredStatus: "enabled",
+    status: "active",
+    stateSchema: 1,
+  };
+  const entered = Promise.withResolvers<undefined>();
+  const guest = Promise.withResolvers<undefined>();
+  const aborts: unknown[] = [];
+  let nativeAborts = 0;
+  const gate = createInvocationGate({
+    abortGuest: () => {
+      nativeAborts += 1;
+      return Promise.resolve();
+    },
+    close: (frame) => {
+      aborts.push(frame.signal.reason);
+      return Promise.resolve();
+    },
+  });
+  const owner = createAppInstance({
+    instanceId,
+    read: () => Effect.succeed(record),
+    write: (next) =>
+      Effect.sync(() => {
+        record = next;
+      }),
+    resolve: () => Effect.fail(new Error("Disable must not load a backend")),
+    boot: () => Effect.fail(new Error("Disable must not boot a backend")),
+    connect: () => Effect.fail(new Error("Unused connection")),
+    purge: () => Effect.fail(new Error("Disable must retain state")),
+    abort: (reason) =>
+      Effect.tryPromise({
+        try: async () => {
+          assert.equal(record.authorityVersion, 2);
+          assert.equal(record.status, "disabled");
+          assert.ok(reason instanceof AppInstanceError);
+          assert.equal(reason.code, "disabled");
+          await gate.revoke(reason);
+        },
+        catch: (cause) => new Error("Host cancellation failed", { cause }),
+      }),
+  });
+  const result = gate
+    .run(facts, {}, async () => {
+      entered.resolve(undefined);
+      await guest.promise;
+    })
+    .then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+  await entered.promise;
+  try {
+    await Effect.runPromise(
+      owner.apply({
+        ...facts.selection,
+        status: "disabled",
+        authorityVersion: 2,
+      }),
+    );
+    const failure = await result;
+    assert.ok(failure instanceof AppInstanceError);
+    assert.equal(failure.code, "disabled");
+    assert.deepEqual(aborts, [failure]);
+    assert.equal(nativeAborts, 1);
+    assert.throws(() => gate.active(), { code: "revoked" });
+  } finally {
+    guest.resolve(undefined);
+    await result;
+  }
+});
 
 await test("replay grants and fresh admitted methods are coupled at the facts boundary", () => {
   const instanceId = instanceIds.instance.generate();

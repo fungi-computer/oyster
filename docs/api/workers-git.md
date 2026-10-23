@@ -622,7 +622,7 @@ Carrier owns retries, dead letters and retained delivery receipts.
 
 ###### Inherited from
 
-[`OysterInstance`](workers.md#oysterinstance).[`alarm`](workers.md#alarm)
+[`OysterInstance`](workers.md#oysterinstance).[`alarm`](workers.md#alarm-1)
 
 ##### revoke()
 
@@ -652,6 +652,91 @@ Installation changes end guest work; a Workflow cancel targets only its run.
 
 [`OysterInstance`](workers.md#oysterinstance).[`revoke`](workers.md#revoke)
 
+##### prepare()
+
+```ts
+prepare(
+   state,
+   release,
+   limits?,
+   tenant?
+): Promise<InstanceResult<
+  | {
+  kind: "passed";
+}
+  | {
+  kind: "failed";
+  code: "ui_mount_failed";
+  diagnostics?: {
+     failedPredicate:   | "unexpected_candidate_request"
+        | "response_status"
+        | "request_failed"
+        | "page_error"
+        | "candidate_not_mounted";
+     errorName?:   | "TypeError"
+        | "RangeError"
+        | "SyntaxError"
+        | "AbortError"
+        | "TimeoutError"
+        | "Other"
+        | "Error";
+     finalUrlPath: string;
+     consoleErrors: string[];
+     pageErrors: string[];
+     failedRequests: object[];
+     droppedCount: number;
+  };
+}
+  | {
+  kind: "not_checked";
+  code:   | "boot_runner_unavailable"
+     | "boot_browser_binding_missing"
+     | "boot_clone_unavailable"
+     | "boot_timeout"
+     | "boot_cleanup_failed"
+     | "ui_check_not_run_on_host";
+}
+| null>>;
+```
+
+Reuse lifecycle preflight without changing the active runtime or its budgets.
+
+###### Parameters
+
+| Parameter                 | Type                                                                                                                                                                                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`                   | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} |
+| `state.instanceId`        | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                                  |
+| `state.owner`             | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                                    |
+| `state.owner.kind?`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                                   |
+| `state.owner.id?`         | `string`                                                                                                                                                                                                                                                             |
+| `state.appId?`            | `AppId`                                                                                                                                                                                                                                                              |
+| `state.releaseId?`        | `ReleaseId`                                                                                                                                                                                                                                                          |
+| `state.authorityVersion?` | `number`                                                                                                                                                                                                                                                             |
+| `state.status?`           | `"enabled"` \| `"disabled"` \| `"deleted"`                                                                                                                                                                                                                           |
+| `release?`                | `Release`                                                                                                                                                                                                                                                            |
+| `limits?`                 | `Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>                                                                                                                                                                                                      |
+| `tenant?`                 | `Pick`\<`Readonly`\<\{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; `durableName`: `string`; `computerName`: `string`; `workspacePrefix`: `string`; `repositoryPrefix`: `string`; \}\>, `"origin"` \| `"tenantId"`\>                    |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\< \| \{ `kind`:
+`"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`;
+`diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \|
+`"response_status"` \| `"request_failed"` \| `"page_error"` \|
+`"candidate_not_mounted"`; `errorName?`: \| `"TypeError"` \| `"RangeError"` \|
+`"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"` \| `"Error"`;
+`finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[];
+`failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`:
+`"not_checked"`; `code`: \| `"boot_runner_unavailable"` \|
+`"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \|
+`"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \}
+\| `null`\>\>
+
+###### Inherited from
+
+[`OysterInstance`](workers.md#oysterinstance).[`prepare`](workers.md#prepare)
+
 ##### apply()
 
 ```ts
@@ -675,7 +760,7 @@ apply(
 }>>;
 ```
 
-Remember `release`, then apply the owner state under the host's tenant pin.
+Activate the exact committed selection under the host's tenant pin.
 
 ###### Parameters
 
@@ -1198,24 +1283,6 @@ Bindings the git adapters read from a standalone Oyster Worker.
 
 ---
 
-### OysterKeySummary
-
-```ts
-type OysterKeySummary = Readonly<{
-  keyId: string;
-  name: string;
-  grants: readonly Grant<OysterKeyCapability>[];
-  expiresAt: number | null;
-  createdAt: number;
-  lastUsedAt: number | null;
-  revokedAt: number | null;
-}>;
-```
-
-One listed or issued key's owner-facing summary; never its secret or owner id.
-
----
-
 ### OysterGitWorkerEnv
 
 ```ts
@@ -1235,11 +1302,17 @@ A standalone Oyster Worker that also hosts git Apps.
 
 ```ts
 type OysterGitWorkerOptions<Env> = Readonly<{
+  workflows?: (env, host) => NonNullable<OysterHost["workflows"]>;
   tenancy: (env) => OysterTenancy;
   homeInstallationId?: (env) => string;
   pageScript?: string;
   agents?: (env, scope) => OysterAgents;
-  workspace?: (env, keysLive) => OysterWorkspace;
+  workspace?: (
+    env,
+    keysLive,
+    scope,
+    request?,
+  ) => OysterWorkspace | Promise<OysterWorkspace>;
   capabilities?: (env, workspace, keysLive) => readonly OysterCapability[];
   workflowGitPass?: (
     env,
@@ -1324,7 +1397,7 @@ type OysterGitRoot<Env> = Readonly<{
     scope: TenantScope;
     auth: OysterAuth;
   }> | null>;
-  hostFor: OysterGitWorkerHost;
+  hostFor: Promise<OysterGitWorkerHost>;
 }>;
 ```
 
@@ -1594,7 +1667,12 @@ composition (`oysterGitWorkerHost`) uses this same builder.
 ### oysterGitWorkerHost()
 
 ```ts
-function oysterGitWorkerHost<Env>(env, options, selected): OysterGitWorkerHost;
+function oysterGitWorkerHost<Env>(
+  env,
+  options,
+  selected,
+  request?,
+): Promise<OysterGitWorkerHost>;
 ```
 
 One selected tenant's whole host from a root's options. Roots reach it through
@@ -1614,10 +1692,11 @@ tenant.
 | `env`      | `Env`                                                        |
 | `options`  | [`OysterGitWorkerOptions`](#oystergitworkeroptions)\<`Env`\> |
 | `selected` | [`ResolvedTenant`](tenant.md#resolvedtenant)                 |
+| `request?` | `Request`\<`unknown`, `CfProperties`\<`unknown`\>\>          |
 
 #### Returns
 
-[`OysterGitWorkerHost`](#oystergitworkerhost)
+`Promise`\<[`OysterGitWorkerHost`](#oystergitworkerhost)\>
 
 ---
 

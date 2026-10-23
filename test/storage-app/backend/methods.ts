@@ -6,7 +6,7 @@ import {
 import {
   appCatalogResponseSchema,
   type AppCatalog,
-} from "@fungi.computer/oyster/shell/app-directory";
+} from "@fungi.computer/nacre/app-directory";
 import type { AppStorageBinding } from "@fungi.computer/oyster/app-storage";
 import { defineAppGill } from "@fungi.computer/agar/gills";
 

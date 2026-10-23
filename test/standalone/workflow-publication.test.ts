@@ -9,10 +9,28 @@ import {
   graphStartRequestSchema,
   createWorkflowRunAuthority,
   createWorkflowCeilingCapture,
+  armedWorkflowTriggerSchema,
+  createTeamWorkflowTriggers,
+  createTriggerPlans,
 } from "@fungi.computer/braid/runtime";
 import * as S from "effect/Schema";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { Mycelium } from "@fungi.computer/mycelium";
+import { directSandbox } from "@fungi.computer/mycelium/testing";
+import {
+  createWorkflowPublishedDefinitionPort,
+  readPublishedWorkflow,
+  runReply,
+} from "@fungi.computer/workflows-wire";
+import { appSurfaceCache, oysterAppMethods } from "../../src/mcp.js";
+import { workflowAgentAuthority } from "../../src/workflow-agent-authority.js";
+import { createStandaloneWorkflowSchedules } from "../../src/standalone/workflow-schedules.js";
+import { standaloneTriggerErrors } from "../../src/standalone/workflow-trigger-host.js";
+import { triggerArmTargetSchema } from "../../src/standalone/workflow-binding.js";
+import type { AppToolPolicy } from "../../src/apps/index.js";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import {
   parseAppId,
@@ -22,7 +40,6 @@ import {
   parseSha256Digest,
 } from "@fungi.computer/puffball";
 import { createAppBuild } from "@fungi.computer/puffball/app";
-import { runReply } from "@fungi.computer/workflows-wire";
 import { backendMediaType } from "@fungi.computer/puffball/backend";
 import { createWorkflowLibrary } from "../../../../apps/trellis/backend/library.js";
 import { createWorkflowIndexes } from "../../../../apps/trellis/backend/indexes.js";
@@ -45,10 +62,16 @@ import {
   verifyRelease,
   type ArtifactStore,
   type InstanceResult,
+  type VerifiedRelease,
+  type OysterHost,
 } from "@fungi.computer/oyster/host";
 import type { AppMethodReply } from "@fungi.computer/agar/backend";
 import { admittedCallerFacts } from "@fungi.computer/oyster/invocation";
 import { instanceIds, type AppInstanceErrorCode } from "@fungi.computer/oyster";
+import { ownerKeyAuth } from "../../src/auth.js";
+import { createInstallationStoreGeneration } from "../../src/installation-store-generation.js";
+import { OysterApprovalHome } from "../../src/approval-home.js";
+import { defaultTenant, tenantScope } from "../../src/tenant.js";
 import { createAdmittedGit } from "@fungi.computer/oyster/git";
 import type { InvocationFacts } from "@fungi.computer/oyster/invocation";
 import type { WorkflowDefinition } from "@fungi.computer/braid";
@@ -78,8 +101,13 @@ async function fixture(
     facts: InvocationFacts,
   ) => Promise<InstanceResult<AppMethodReply>> = () =>
     Promise.resolve({ ok: true, value: { kind: "ok", value: [] } }),
+  lifecycleMember: Parameters<
+    typeof createStandaloneWorkflowHost
+  >[2]["lifecycleMember"] = () => Promise.resolve(null),
 ) {
   const database = new DatabaseSync(":memory:");
+  const storage = fromNodeSqlite(database);
+  const generation = createInstallationStoreGeneration(storage.sql);
   const git = realGit();
   const blobs = new Map<string, Uint8Array>();
   const artifactReads: string[] = [];
@@ -145,15 +173,6 @@ async function fixture(
         kind: "install",
         release,
         releasePin: "pinned",
-        grants: publishGranted
-          ? "declared"
-          : declaredOperations.capabilities
-              .filter(
-                (row) =>
-                  row.capability !== "workflow.publish" &&
-                  row.operations.length > 0,
-              )
-              .map((row) => ({ ...row, resources: "tenant-scope" as const })),
       },
       {
         by: { kind: "member", memberId: "arming-owner" },
@@ -169,7 +188,34 @@ async function fixture(
       },
     );
     if (Result.isFailure(result)) throw new Error(result.failure.code);
-    return result.success.next;
+    if (declaredOperations.capabilities.length === 0)
+      return result.success.next;
+    const approved = applyInstallationCommand(
+      result.success.next,
+      {
+        kind: "change-grants",
+        changes: declaredOperations.capabilities.map(
+          ({ capability, operations }) => ({
+            capability,
+            grant:
+              publishGranted || capability !== "workflow.publish"
+                ? { operations, resources: "tenant-scope" }
+                : null,
+          }),
+        ),
+      },
+      {
+        by: { kind: "member", memberId: "arming-owner" },
+        role: "owner",
+        expectedVersion: result.success.next.authority.authorityVersion,
+        declaration,
+        declaredOperations,
+        now: 1001,
+        identity: result.success.next,
+      },
+    );
+    if (Result.isFailure(approved)) throw new Error(approved.failure.code);
+    return approved.success.next;
   }
   const runner = buildAppDeclaration(
     defineAppBackend({
@@ -218,12 +264,12 @@ async function fixture(
   const host: StandaloneWorkflowHost = {
     artifacts,
     installations: {
+      generation: () => Promise.resolve(generation()),
       list: () => Promise.resolve(installations),
       get: (id) =>
         Promise.resolve(
           installations.find((entry) => entry.installationId === id) ?? null,
         ),
-      put: () => Promise.reject(new Error("Fixture installation is fixed")),
       compareAndPut: () =>
         Promise.reject(new Error("Fixture installation is fixed")),
     },
@@ -244,6 +290,7 @@ async function fixture(
           return call(facts);
         },
         gill: () => Promise.reject(new Error("Unexpected Gill")),
+        prepare: () => Promise.reject(new Error("Unexpected prepare")),
         apply: () => Promise.reject(new Error("Unexpected apply")),
         fetch: () => Promise.reject(new Error("Unexpected fetch")),
         onGitPush: () => Promise.reject(new Error("Unexpected lifecycle")),
@@ -254,6 +301,7 @@ async function fixture(
     },
   };
   const authorityOptions = {
+    lifecycleMember,
     admitDelivery: (_memberId: string, delivery: { agentId: string }) =>
       Promise.resolve(delivery.agentId === "agent_reports"),
     authority: () =>
@@ -311,11 +359,7 @@ async function fixture(
         denied: () => new Error("Fixture member revoked"),
       }),
   };
-  const owner = createStandaloneWorkflowHost(
-    fromNodeSqlite(database),
-    host,
-    authorityOptions,
-  );
+  const owner = createStandaloneWorkflowHost(storage, host, authorityOptions);
   const verified = await verifyRelease(
     artifacts,
     installation.release,
@@ -337,7 +381,7 @@ async function fixture(
   const entry = detail.app;
   const method = entry.methods.counts;
   if (!method) throw new Error("Missing method");
-  const indexes = createWorkflowIndexes(fromNodeSqlite(database));
+  const indexes = createWorkflowIndexes(storage);
   const library = createWorkflowLibrary({
     index: indexes,
     git: git.git,
@@ -390,19 +434,13 @@ async function fixture(
     const changed = applyInstallationCommand(
       current,
       {
-        kind: "set-grants",
-        grants: current.approvedGrants
-          .filter((grant) => grant.capability !== capability)
-          .map(({ capability, operations, resources }) => ({
-            capability,
-            operations,
-            resources,
-          })),
+        kind: "change-grants",
+        changes: [{ capability, grant: null }],
       },
       {
         by: { kind: "member", memberId: "arming-owner" },
         role: "owner",
-        expectedVersion: current.authorityVersion,
+        expectedVersion: current.authority.authorityVersion,
         declaration,
         declaredOperations: await deriveDeclaredOperations(
           current.release,
@@ -421,6 +459,7 @@ async function fixture(
   };
   return {
     owner,
+    storage,
     facts,
     method,
     definition,
@@ -444,11 +483,7 @@ async function fixture(
     revokePublication: () => revokeCapability("workflow.publish"),
     revokeRun: () => revokeCapability("workflow.run"),
     recreateOwner: (selectedHost = host) =>
-      createStandaloneWorkflowHost(
-        fromNodeSqlite(database),
-        selectedHost,
-        authorityOptions,
-      ),
+      createStandaloneWorkflowHost(storage, selectedHost, authorityOptions),
     /** Install the maintained Prints App the Storyboard template binds. */
     addPrints: async () => {
       installations.push(await install("prints", printsDeclaration));
@@ -494,6 +529,277 @@ async function fixture(
     },
   };
 }
+
+it.each([
+  "write",
+  "read",
+  "revoked",
+  "reapproved",
+  "regranted",
+  "downgraded",
+] as const)(
+  "an Agent's %s App grant controls Trellis arming and durable provenance",
+  async (approval) => {
+    const f = await fixture();
+    const unexpected = (): never => {
+      throw new Error(
+        "Arming dispatched a run or requested undeclared authority",
+      );
+    };
+    const policy: AppToolPolicy = {
+      level: approval === "read" ? "read" : "write",
+      revision: "approved-agent-policy",
+      grantedBy: "arming-owner",
+    };
+    const agentId = "agent-author";
+    let currentPolicy: AppToolPolicy | null = policy;
+    const readPolicy = () => Promise.resolve(currentPolicy);
+    const canArm = approval === "write";
+    try {
+      const git = f.host.git;
+      const instanceId = f.installation.instanceId;
+      if (git === undefined || instanceId === null)
+        throw new Error("Missing installed library");
+      const draft = await f.library.saveDraft(
+        "example",
+        {
+          definition: {
+            ...f.definition,
+            triggers: [
+              {
+                id: "nightly",
+                on: "schedule",
+                cron: { expression: "0 6 * * *", timeZone: "UTC" },
+                input: {},
+              },
+            ],
+          },
+          layout: {},
+        },
+        f.revision,
+      );
+      if (draft.kind !== "saved") throw new Error("Schedule draft not saved");
+      const publication = await f.library.publish("example", draft.revision);
+      if (publication.kind !== "published")
+        throw new Error("Schedule not published");
+      const triggers = createTeamWorkflowTriggers({
+        runs: {
+          member: (memberId) => {
+            expect(memberId).toBe("arming-owner");
+            return Promise.resolve({ membershipVersion: 1 });
+          },
+          memberComputer: (memberId, computerId) =>
+            Promise.resolve(
+              memberId === "arming-owner" &&
+                computerId === "storyboard-computer",
+            ),
+          catalog: async () => {
+            const catalog = await f.owner.catalog(f.facts, {
+              installationId: "probe",
+            });
+            if (!("app" in catalog)) throw new Error("Catalog not admitted");
+            return [catalog.app];
+          },
+          admitDelivery: unexpected,
+          triggerPlans: createTriggerPlans(f.storage.sql),
+          startCachedGraph: unexpected,
+        },
+        published: createWorkflowPublishedDefinitionPort((git) => ({
+          published: (workflowId, at) =>
+            readPublishedWorkflow(git, workflowId, at),
+        })),
+        source: async (memberId) =>
+          (await git.git(f.installation)).binding({
+            kind: "member",
+            memberId,
+          }),
+        admit: async () => (await f.owner.triggerAuthority("library")).pin,
+        readAgentAccess: () =>
+          Promise.resolve(
+            currentPolicy === null
+              ? null
+              : {
+                  kind: "policy",
+                  agentId,
+                  policyRevision: currentPolicy.revision,
+                  grantorMemberId: currentPolicy.grantedBy,
+                  level: currentPolicy.level,
+                },
+          ),
+        admitGitAccess: unexpected,
+        launch: unexpected,
+        errors: standaloneTriggerErrors,
+      });
+      const schedules = createStandaloneWorkflowSchedules<InvocationFacts>({
+        sql: f.storage.sql,
+        triggers,
+        teamId: () => "library",
+        now: () => Date.parse("2026-10-13T12:00:00Z"),
+        commit: (body) => Promise.resolve(f.storage.transactionSync(body)),
+        authorize: (memberId, installationId) => {
+          expect(memberId).toBe("arming-owner");
+          expect(installationId).toBe("library");
+          return Promise.resolve();
+        },
+        wake: () => Promise.resolve(),
+        reportFailure: unexpected,
+        admitInvocation: async (facts, operation) => ({
+          ...(await f.owner.admitInvocation(facts, operation)),
+          authority: await workflowAgentAuthority(facts, operation, readPolicy),
+        }),
+      });
+      const results: unknown[] = [];
+      let armDispatches = 0;
+      const host: OysterHost = {
+        ...f.host,
+        auth: ownerKeyAuth(
+          "workflow-fixture-owner-secret-123456789",
+          "arming-owner",
+        ),
+        bootUi: unexpected,
+        computerId: "storyboard-computer",
+        appToolPolicy: readPolicy,
+        instances: {
+          get: () => ({
+            ...f.host.instances.get(instanceId),
+            async call(
+              facts: InvocationFacts,
+              _api: NonNullable<VerifiedRelease["api"]>,
+              name: string,
+              input: unknown,
+            ) {
+              if (facts.subject.kind !== "call")
+                throw new Error("Expected admitted App method");
+              if (name === "arm") armDispatches++;
+              const value = await appBackend.call(
+                name,
+                S.decodeUnknownSync(S.Json)(input),
+                {
+                  indexes: f.indexes,
+                  env: {
+                    GIT: f.git.git,
+                    WORKFLOWS: {
+                      ...unusedGraphOperations,
+                      armSchedule: async (target) =>
+                        S.decodeUnknownSync(S.Json)(
+                          await schedules.arm(
+                            facts,
+                            triggerArmTargetSchema.parse(target),
+                          ),
+                        ),
+                    },
+                  },
+                },
+                facts.subject.context,
+              );
+              return {
+                ok: true as const,
+                value: {
+                  kind: "ok" as const,
+                  value: S.decodeUnknownSync(S.Json)(value),
+                },
+              };
+            },
+          }),
+        },
+      };
+      const approvals = new OysterApprovalHome({
+        owner: f.storage,
+        // The SQLite fixture has no native alarm owner.
+        commit: (write) => write(),
+        scope: tenantScope(defaultTenant, "https://workflow.fixture.invalid"),
+        current: () => Promise.resolve(host),
+      });
+      const source = await oysterAppMethods(
+        { ...host, approvals: { submit: (call) => approvals.submit(call) } },
+        { actor: { kind: "agent", agentId } },
+        { kind: "agent", policy },
+        appSurfaceCache(host),
+      );
+      // The acquired App source retains its original approval. Real grant
+      // changes either remove that policy or replace it with a new revision.
+      if (approval === "revoked") currentPolicy = null;
+      else if (approval !== "write" && approval !== "read")
+        currentPolicy = {
+          ...policy,
+          revision: "replacement-agent-policy",
+          grantedBy:
+            approval === "regranted" ? "another-member" : policy.grantedBy,
+          level: approval === "downgraded" ? "read" : policy.level,
+        };
+      const runtime = await Mycelium.make({
+        sources: [source],
+        sandbox: directSandbox(async (bindings) => {
+          const arm = bindings.LIBRARY?.arm;
+          if (arm === undefined) throw new Error("Missing library arm tool");
+          const target = {
+            workflowId: "example",
+            commit: publication.commit,
+            triggerId: "nightly",
+            bindings: { probe: "probe" },
+          };
+          if (!canArm)
+            await expect(arm(target)).resolves.toMatchObject({
+              kind: "refused",
+              reason:
+                approval === "revoked"
+                  ? "not-granted"
+                  : approval === "read" || approval === "downgraded"
+                    ? "read-only"
+                    : "fenced",
+            });
+          else results.push(await arm(target));
+          return null;
+        }),
+      });
+      const lease = await runtime.acquire();
+      try {
+        const call = await Effect.runPromise(
+          lease.executeTool.prepare({
+            type: "toolCall",
+            id: "agent-arm",
+            name: "execute",
+            arguments: { code: "return await env.LIBRARY.arm(target)" },
+          }),
+        );
+        await Effect.runPromise(Stream.runCollect(call.execute()));
+        expect(results).toHaveLength(canArm ? 1 : 0);
+        if (canArm) expect(results[0]).toMatchObject({ kind: "armed" });
+      } finally {
+        await lease.release();
+        await runtime.close();
+      }
+      const rows = f.storage.sql
+        .exec("SELECT record FROM hub_workflow_schedules")
+        .toArray();
+      expect(armDispatches).toBe(canArm ? 1 : 0);
+      expect(rows).toHaveLength(canArm ? 1 : 0);
+      if (!canArm) {
+        expect(schedules.nextWake()).toBeNull();
+        return;
+      }
+      // This assertion is at the durable row boundary, using its owning decoder,
+      // not an injected armer or a spy on the scheduler.
+      const stored = S.decodeUnknownSync(S.Struct({ record: S.String }))(
+        rows[0],
+      );
+      const binding = armedWorkflowTriggerSchema
+        .strip()
+        .parse(JSON.parse(stored.record));
+      expect(binding.armedBy).toBe("arming-owner");
+      expect(binding.armedVia).toEqual({
+        kind: "policy",
+        agentId: "agent-author",
+        policyRevision: "approved-agent-policy",
+        grantorMemberId: "arming-owner",
+      });
+      expect(binding.computerId).toBe("storyboard-computer");
+      expect(binding.commit).toBe(publication.commit);
+    } finally {
+      f.close();
+    }
+  },
+);
 
 it("preserves Release display names and icons through the catalog wire", async () => {
   const f = await fixture();
@@ -1035,6 +1341,60 @@ it("refuses a definition that differs from its stored publication digest", async
   }
 });
 
+it("a lifecycle-started published run dispatches with the host-owned Workflow node attestation", async () => {
+  const f = await fixture(true, true, undefined, () =>
+    Promise.resolve({
+      memberId: "arming-owner",
+      membershipVersion: 1,
+    }),
+  );
+  try {
+    const incoming: InvocationFacts = {
+      ...f.facts,
+      subject: {
+        kind: "lifecycle",
+        name: "onGitPush",
+        eventId: "main-push-43",
+      },
+    };
+    const started = await f.owner.prepare(incoming, {
+      requestId: "not-the-authority",
+      definition: f.definition,
+      bindings: { probe: "probe" },
+      input: {},
+      published: { workflowId: "example", commit: f.commit, digest: f.digest },
+    });
+    if (!("runId" in started) || started.runId === undefined)
+      throw new Error("Lifecycle run not admitted");
+    expect(
+      await f.owner.dispatch({
+        teamId: "library",
+        runId: started.runId,
+        nodeId: "done",
+        iteration: "0",
+        installationId: "probe",
+        method: "counts",
+        methodSpec: f.method,
+        input: {},
+        idempotencyKey: "main-push-43:done",
+      }),
+    ).toMatchObject({ kind: "complete", output: [] });
+    expect(incoming.subject.kind).toBe("lifecycle");
+    const delivered = f.calls[0];
+    if (delivered?.subject.kind !== "call")
+      throw new Error("No dispatched node");
+    expect(delivered.subject.context.workflow).toEqual({
+      workflowId: "example",
+      runId: started.runId,
+      nodeId: "done",
+      armedBy: { kind: "member", memberId: "arming-owner" },
+    });
+    expect(delivered.subject.context.idempotencyKey).toBe("main-push-43:done");
+  } finally {
+    f.close();
+  }
+});
+
 for (const published of [false, true]) {
   it(`${published ? "published" : "raw"} dispatch retains the arming actor and only publisher attribution attests a Workflow`, async () => {
     const f = await fixture();
@@ -1132,6 +1492,41 @@ for (const published of [false, true]) {
   });
 }
 
+it("preserves the App's domain refusal reason in the failed Workflow node", async () => {
+  const message = "No hosted build backend is attached to this Computer";
+  const f = await fixture(true, true, () =>
+    Promise.resolve({
+      ok: true,
+      value: { kind: "refused", code: "unavailable", message },
+    }),
+  );
+  try {
+    const result = await f.owner.prepare(f.facts, {
+      requestId: "honest-refusal",
+      definition: f.definition,
+      bindings: { probe: "probe" },
+      input: {},
+    });
+    if (!("runId" in result) || result.runId === undefined)
+      throw new Error("Run not created");
+    await expect(
+      f.owner.dispatch({
+        teamId: "library",
+        runId: result.runId,
+        nodeId: "done",
+        iteration: "0",
+        installationId: "probe",
+        method: "counts",
+        methodSpec: f.method,
+        input: {},
+        idempotencyKey: "opaque-key",
+      }),
+    ).rejects.toThrow("App method refused (unavailable): " + message);
+  } finally {
+    f.close();
+  }
+});
+
 it("surfaces the App backend's real failure, not revoked, when the call itself fails for a non-authority reason", async () => {
   const f = await fixture(true, true, () =>
     Promise.resolve({ ok: false, code: "failed", causeClass: "Error" }),
@@ -1211,6 +1606,7 @@ async function dispatchResultFor(code: AppInstanceErrorCode | "failed") {
 
 for (const code of [
   "revoked",
+  "disabled",
   "instance_owner_mismatch",
   "instance_authority_version_mismatch",
   "instance_release_mismatch",
@@ -1306,7 +1702,13 @@ it("refuses lifecycle, expired, stale-selection and ungranted start facts", asyn
         subject: { kind: "lifecycle", name: "onGitPush", eventId: "event" },
       },
       { ...f.facts, deadlineAt: 1 },
-      { ...f.facts, selection: { ...f.facts.selection, authorityVersion: 2 } },
+      {
+        ...f.facts,
+        selection: {
+          ...f.facts.selection,
+          authorityVersion: f.facts.selection.authorityVersion + 1,
+        },
+      },
       {
         ...f.facts,
         artifactDigest: parseSha256Digest(`sha256:${"0".repeat(64)}`),

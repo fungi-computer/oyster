@@ -13,7 +13,7 @@ class ProbeFacet extends DurableObject<ProbeEnv> {
       "CREATE TABLE IF NOT EXISTS stamps(id TEXT PRIMARY KEY,at TEXT NOT NULL,caller TEXT NOT NULL) STRICT",
     );
     ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS passes(id TEXT PRIMARY KEY,pass TEXT NOT NULL) STRICT",
+      "CREATE TABLE IF NOT EXISTS saves(id TEXT PRIMARY KEY,outside INTEGER,saved INTEGER) STRICT",
     );
   }
 }

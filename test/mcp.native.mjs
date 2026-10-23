@@ -31,9 +31,8 @@ export async function proveMcp(origin, key, readNote) {
         code: `return await env.NOTES.saveNote({ text: ${JSON.stringify(text)} })`,
       },
     });
-  // The demo client (`claude -p`) advertises a bare `elicitation: {}` and
-  // cancels every elicitation; the owner's approval of this key's App tools
-  // is its confirmation, so it is never asked.
+  // A headless client cancels every elicitation. Grants bound its authority;
+  // the durable home owns auto-approve, not a transport pre-approval list.
   const headless = await connect({ elicitation: {} });
   let asked = 0;
   headless.client.setRequestHandler("elicitation/create", () => {
@@ -59,7 +58,27 @@ export async function proveMcp(origin, key, readNote) {
       /via mcp/,
       "MCP returns the persisted App value",
     );
-    assert.equal(asked, 0, "an owner-approved key is never asked");
+    // One execute has two intended writes, not one repeated intended effect.
+    // The native App readback must observe both, even though their outer SDK
+    // tool call and host execution identity are shared.
+    const sequence = await headless.client.callTool({
+      name: "execute",
+      arguments: {
+        code: "await env.NOTES.saveNote({text: 'native ordinal first'}); const first = await env.NOTES.readNote({}); await env.NOTES.saveNote({text: 'via mcp'}); return {first, second: await env.NOTES.readNote({})};",
+      },
+    });
+    assert.notEqual(sequence.isError, true, JSON.stringify(sequence));
+    assert.match(JSON.stringify(sequence.content), /native ordinal first/);
+    assert.deepEqual(
+      await readNote(),
+      { text: "via mcp" },
+      "the second intended write in one actual native execution must dispatch",
+    );
+    assert.equal(
+      asked,
+      0,
+      "the MCP transport adds no outer write confirmation",
+    );
   } finally {
     await headless.transport.terminateSession();
     await headless.client.close();

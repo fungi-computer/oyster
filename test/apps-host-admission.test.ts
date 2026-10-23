@@ -1,7 +1,18 @@
 import { admittedBackgroundOrigins } from "../src/internal/background-origins.js";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
 import { invocationCallerContext } from "../src/invocation.js";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
+import {
+  createInstallationOperations,
+  installationOperationsPort,
+  installationOperationSchema,
+  installationCommandIds,
+} from "../src/installation-operations.js";
+import { executeInstallation } from "../src/installation-execution.js";
+import { observeInstallation } from "../src/installation-client.js";
+import { defaultTenant } from "../src/tenant.js";
 import * as hostModule from "@fungi.computer/oyster/host";
 import { deliverBackground } from "../dist/internal/delivery.js";
 import {
@@ -14,6 +25,7 @@ import type { AppMethodReply } from "@fungi.computer/agar/backend";
 import {
   createAppBuild,
   appDeclarationSchema,
+  type AppDeclaration,
   type AppUiBuild,
   type AppBackendBuild,
 } from "@fungi.computer/puffball/app";
@@ -21,30 +33,40 @@ import { parseArtifactRef } from "@fungi.computer/puffball";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import {
   createOyster,
+  installOrSelect,
   type OysterHost,
   type InstanceResult,
-} from "@fungi.computer/oyster/host";
+} from "../src/host.js";
 import type { TenantPrincipal } from "@fungi.computer/oyster/tenant";
 import { parseRelease, sha256 } from "@fungi.computer/oyster/host";
 import { fileCapabilities } from "@fungi.computer/oyster/files";
 import { installationSchema } from "../src/apps/installation.js";
+import { appPermissionsWireSchema } from "../src/apps/permissions.js";
 import type { AppToolPolicy } from "../src/apps/tools.js";
 import type { InvocationFacts } from "../src/invocation.js";
 
-/** The real HTTP host over its ordinary artifact/store ports, with no backend to execute. */
+const databases: DatabaseSync[] = [];
+afterEach(() => {
+  for (const database of databases.splice(0).reverse()) database.close();
+});
+
+/** HTTP/domain proof with the real retained owner and executor, not a native alarm proof. */
 async function fixture(
   withMethods = false,
   withSync = false,
   twoOrigins = false,
   ungrantedOrigin = false,
+  shell = false,
 ) {
   const ui = new TextEncoder().encode("<!doctype html><title>Notes</title>");
   const uiRef = parseArtifactRef("artifact:notes-ui");
   const rootRef = parseArtifactRef("artifact:notes-root");
   const baseDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
-    capabilities: ungrantedOrigin
-      ? ["computer.readFile", "computer.writeFile"]
-      : ["computer.readFile"],
+    capabilities: [
+      "computer.readFile",
+      ...(ungrantedOrigin ? ["computer.writeFile"] : []),
+      ...(shell ? ["team.workbenchHost"] : []),
+    ],
     handlers: [],
     roles: [],
     commands: [],
@@ -202,6 +224,8 @@ async function fixture(
   const refusals: InvocationFacts[] = [];
   let resolutionCalls = 0;
   const host: OysterHost = {
+    homeInstallationId: "tourtois",
+    bootUi: () => Promise.resolve({ kind: "passed" as const }),
     appToolPolicy: () => {
       toolPolicyCalls += 1;
       return toolPolicy;
@@ -252,16 +276,15 @@ async function fixture(
       },
     },
     installations: {
+      generation: () => Promise.resolve("fixture-generation"),
       list: () => Promise.resolve([...records.values()]),
       get: (id) => Promise.resolve(records.get(id) ?? null),
-      put: (record) => {
-        records.set(record.installationId, record);
-        return Promise.resolve();
-      },
-      compareAndPut: (record, expectedAuthorityVersion) => {
+      compareAndPut: (record, expectedAuthorityVersion, expectedGeneration) => {
+        if (expectedGeneration !== "fixture-generation")
+          return Promise.resolve({ ok: false, code: "stale_authority" });
         if (
-          records.get(record.installationId)?.authorityVersion !==
-          expectedAuthorityVersion
+          (records.get(record.installationId)?.authority.authorityVersion ??
+            0) !== expectedAuthorityVersion
         )
           return Promise.resolve({ ok: false, code: "stale_authority" });
         records.set(record.installationId, record);
@@ -273,6 +296,11 @@ async function fixture(
         if (!withMethods)
           throw new Error("A UI-only Release must not execute a backend");
         return {
+          prepare: () =>
+            Promise.resolve({
+              ok: true,
+              value: { kind: "passed" as const },
+            }),
           apply: (state) =>
             Promise.resolve({
               ok: true,
@@ -308,23 +336,184 @@ async function fixture(
   Object.assign(host, {
     backgroundOriginKey: () => Promise.resolve(originKey),
   });
+  const database = new DatabaseSync(":memory:");
+  databases.push(database);
+  let requestedWakes = 0;
+  const selectionAdmissions = new Map<
+    string,
+    {
+      admitted(): void;
+      acknowledged: Promise<undefined>;
+    }
+  >();
+  const runtime = await createInstallationOperations({
+    owner: fromNodeSqlite(database),
+    registryName: "registry",
+    generation: () => "fixture-generation",
+    get: (id) => records.get(id) ?? null,
+    compareAndPut: (record, expected, generation) =>
+      host.installations.compareAndPut(record, expected, generation),
+    execute: (command) => executeInstallation(host, command),
+    scheduleWake: () => {
+      requestedWakes++;
+      return Promise.resolve();
+    },
+  });
+  const operations = installationOperationsPort(
+    async (request) => {
+      const reply = await runtime.dispatch(request);
+      if (request.action === "admit") {
+        const barrier = selectionAdmissions.get(request.input.requestId);
+        if (barrier !== undefined) {
+          barrier.admitted();
+          await barrier.acknowledged;
+        }
+      }
+      return reply;
+    },
+    { tenantId: defaultTenant, origin: "https://oyster.test" },
+  );
+  Object.assign(host.installations, { operations });
   const app = createOyster(host);
-  async function install() {
+  const tickRequestedWake = async () => {
+    expect(requestedWakes).toBeGreaterThan(0);
+    requestedWakes = 0;
+    // Explicit maintained owner execution, never a status-triggered tick or
+    // a test scheduler pretending to be a durable platform alarm.
+    await runtime.tick();
+  };
+  async function completePost(installationId = "notes", candidate = release) {
+    requestedWakes = 0;
+    const requestId = installationCommandIds.request.generate();
     const response = await app.request("/api/installations", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ installationId: "notes", release }),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+      body: JSON.stringify({ installationId, release: candidate }),
     });
-    expect(response.status).toBe(201);
-    const record = records.get("notes");
-    if (record === undefined) throw new Error("Installation did not commit");
-    return record;
+    expect(response.status).toBe(202);
+    const initial = installationOperationSchema.parse(await response.json());
+    expect(initial).toMatchObject({
+      state: "pending",
+      requestId,
+      requestedInstallationId: installationId,
+    });
+    await tickRequestedWake();
+    return observeInstallation({
+      initial,
+      requestId,
+      signal: new AbortController().signal,
+      read: async () => {
+        const status = await app.request(
+          `/api/installations/${installationId}/status?requestId=${requestId}`,
+        );
+        expect(status.status).toBe(200);
+        return installationOperationSchema.parse(await status.json());
+      },
+    });
   }
-  async function upgradedRelease() {
-    const upgradedBuild = createAppBuild(uiBuild, null, {
-      ...declaration,
-      capabilities: ["computer.readFile", "computer.writeFile"],
+  async function install(installationId = "notes", candidate = release) {
+    const result = await completePost(installationId, candidate);
+    expect(result.state).toBe("succeeded");
+    if (result.state !== "succeeded" || result.installation === null)
+      throw new Error("Exact installation did not apply");
+    return result.installation;
+  }
+  /** The Workflow node's host entry, run through the same explicit owner tick. */
+  async function workflowSelect(candidate: typeof release) {
+    requestedWakes = 0;
+    const requestId = installationCommandIds.request.generate();
+    const admitted = Promise.withResolvers<undefined>();
+    const acknowledged = Promise.withResolvers<undefined>();
+    selectionAdmissions.set(requestId, {
+      admitted: () => {
+        admitted.resolve(undefined);
+      },
+      acknowledged: acknowledged.promise,
     });
+    const response = installOrSelect(
+      host,
+      "notes",
+      candidate,
+      { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+      "install-or-select",
+      "workflow",
+      requestId,
+    );
+    try {
+      await admitted.promise;
+      await tickRequestedWake();
+    } finally {
+      acknowledged.resolve(undefined);
+      selectionAdmissions.delete(requestId);
+    }
+    return response;
+  }
+  async function select(candidate: typeof release) {
+    requestedWakes = 0;
+    const requestId = installationCommandIds.request.generate();
+    const admitted = Promise.withResolvers<undefined>();
+    const acknowledged = Promise.withResolvers<undefined>();
+    selectionAdmissions.set(requestId, {
+      admitted: () => {
+        admitted.resolve(undefined);
+      },
+      acknowledged: acknowledged.promise,
+    });
+    const response = app.request("/api/installations/notes/release", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+      body: JSON.stringify(candidate),
+    });
+    try {
+      // Hold only the RPC acknowledgement so the explicit owner execution can
+      // finish before PUT's first observation. No fake completion response.
+      await admitted.promise;
+      await tickRequestedWake();
+    } finally {
+      acknowledged.resolve(undefined);
+      selectionAdmissions.delete(requestId);
+    }
+    return response;
+  }
+  async function upgradedRelease(
+    withOpenMethod = false,
+    capabilities?: AppDeclaration["capabilities"],
+  ) {
+    const upgradedDeclaration: typeof declaration = withOpenMethod
+      ? Schema.decodeUnknownSync(appDeclarationSchema)({
+          ...declaration,
+          capabilities: [...declaration.capabilities, "apps.open"],
+          api: {
+            methods: {
+              ...declaration.api?.methods,
+              open: {
+                description: "Open an App",
+                effect: "write",
+                requires: ["apps.open"],
+                input: { type: "object" },
+                output: { type: "object" },
+              },
+            },
+          },
+        })
+      : {
+          ...declaration,
+          capabilities: capabilities ?? [
+            "computer.readFile",
+            "computer.writeFile",
+          ],
+        };
+    const upgradedBuild = createAppBuild(
+      uiBuild,
+      withOpenMethod ? backendBuild : null,
+      upgradedDeclaration,
+    );
     const bytes = new TextEncoder().encode(JSON.stringify(upgradedBuild));
     const ref = parseArtifactRef("artifact:notes-upgraded-root");
     artifacts.set(ref, bytes);
@@ -365,30 +554,26 @@ async function fixture(
         artifactDigest: await sha256(bytes),
       },
     });
-    const response = await app.request("/api/installations/notes/release", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next),
-    });
+    const response = await select(next);
     expect(response.status).toBe(200);
   }
   async function approveReadOnly() {
     const current = records.get("notes");
     if (current === undefined) throw new Error("Installation missing");
-    const grants = current.approvedGrants
-      .filter((grant) => grant.capability === "computer.readFile")
-      .map(({ capability, operations, resources }) => ({
-        capability,
-        operations,
-        resources,
-      }));
+    const changes = current.authority.approvedGrants
+      .filter((grant) => grant.capability !== "computer.readFile")
+      .map(({ capability }) => ({ capability, grant: null }));
     const response = await app.request("/api/installations/notes/grants", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        authorityVersion: current.authorityVersion,
+        storeGeneration: "fixture-generation",
+        authorityVersion: current.authority.authorityVersion,
         artifactDigest: current.release.artifact.artifactDigest,
-        command: { kind: "set-grants", grants },
+        command: {
+          kind: "change-grants",
+          changes,
+        },
       }),
     });
     expect(response.status).toBe(200);
@@ -408,6 +593,9 @@ async function fixture(
     },
     records,
     install,
+    completePost,
+    select,
+    workflowSelect,
     upgradedRelease,
     release,
     calls,
@@ -424,7 +612,7 @@ it("records the owner's explicit operation approval at the installation HTTP bou
   const { install } = await fixture();
   const record = await install();
   expect(installationSchema.safeParse(record).success).toBe(true);
-  expect(record).toMatchObject({
+  expect(record.authority).toMatchObject({
     approval: {
       by: { kind: "member", memberId: "owner" },
       authorityVersion: 1,
@@ -437,6 +625,100 @@ it("records the owner's explicit operation approval at the installation HTTP bou
       },
     ],
   });
+});
+
+it("never grants shell access from the install destination, but accepts ordinary pinned owner approval", async () => {
+  const { app, release, records, install, completePost } = await fixture(
+    false,
+    false,
+    false,
+    false,
+    true,
+  );
+  for (const installationId of ["third-party", "tourtois"]) {
+    const installed = await install(installationId, release);
+    expect(
+      installed.authority.approvedGrants.map((grant) => grant.capability),
+    ).not.toContain("team.workbenchHost");
+  }
+  const path = "/api/installations/tourtois/grants";
+  const projection = Schema.decodeUnknownSync(
+    Schema.Struct({
+      artifactDigest: sha256DigestSchema,
+      permissions: Schema.Unknown,
+    }),
+  )(
+    await (
+      await app.request(path, { headers: { Accept: "application/json" } })
+    ).json(),
+  );
+  const permissions = appPermissionsWireSchema.parse(projection.permissions);
+  const approved = await app.request(path, {
+    method: "PUT",
+    body: JSON.stringify({
+      storeGeneration: "fixture-generation",
+      authorityVersion: permissions.authority.authorityVersion,
+      artifactDigest: projection.artifactDigest,
+      command: {
+        kind: "change-grants",
+        changes: permissions.declaredOperations.capabilities
+          .map(({ capability, operations }) => ({
+            capability,
+            operations,
+            resources: "tenant-scope",
+          }))
+          .map(({ capability, ...grant }) => ({ capability, grant })),
+      },
+    }),
+  });
+  expect(approved.status).toBe(200);
+  const current = installationSchema.parse(await approved.json());
+  expect(
+    current.authority.approvedGrants.map((grant) => grant.capability),
+  ).toContain("team.workbenchHost");
+  const withdrawn = await app.request(path, {
+    method: "PUT",
+    body: JSON.stringify({
+      storeGeneration: "fixture-generation",
+      authorityVersion: current.authority.authorityVersion,
+      artifactDigest: current.release.artifact.artifactDigest,
+      command: {
+        kind: "change-grants",
+        changes: [{ capability: "team.workbenchHost", grant: null }],
+      },
+    }),
+  });
+  expect(withdrawn.status).toBe(200);
+  const repeated = await completePost("tourtois", release);
+  expect(repeated).toMatchObject({
+    state: "succeeded",
+    creation: "replacement",
+  });
+  expect(
+    records
+      .get("tourtois")
+      ?.authority.approvedGrants.map((grant) => grant.capability),
+  ).toEqual(["computer.readFile"]);
+  expect(
+    (await app.request("/api/installations/tourtois", { method: "DELETE" }))
+      .status,
+  ).toBe(204);
+  // A deleted installation id is retired: it is never installed again.
+  const recreated = await completePost("tourtois", release);
+  expect(recreated).toMatchObject({ state: "succeeded", creation: "reminted" });
+  if (recreated.state !== "succeeded" || recreated.installation === null)
+    throw new Error("Exact remint did not apply");
+  const fresh = recreated.installation;
+  expect(fresh.installationId).toMatch(/^tourtois-[a-z0-9]{21}$/u);
+  expect(
+    fresh.authority.approvedGrants.map((row) => row.capability),
+  ).not.toContain("team.workbenchHost");
+  expect(records.get("tourtois")?.status).toBe("deleted");
+  expect(
+    records
+      .get("tourtois")
+      ?.authority.approvedGrants.map((grant) => grant.capability),
+  ).toEqual([]);
 });
 it("refuses the next capability request after the host narrows approval", async () => {
   const { app, records, install } = await fixture();
@@ -452,25 +734,24 @@ it("refuses the next capability request after the host narrows approval", async 
   // No provider/Instance is mocked into a completed operation.
   const narrowed = {
     ...record,
-    authorityVersion: record.authorityVersion + 1,
-    approvedGrants: [],
-    approval: null,
+    authority: {
+      ...record.authority,
+      authorityVersion: record.authority.authorityVersion + 1,
+      approvedGrants: [],
+      approval: null,
+    },
   };
   records.set("notes", narrowed);
   expect((await request()).status).toBe(403);
 });
 
 it("keeps the approval intersection on a Release upgrade and clears it on deletion", async () => {
-  const { app, records, install, upgradedRelease } = await fixture();
+  const { app, records, install, upgradedRelease, select } = await fixture();
   const initial = await install();
-  const upgraded = await app.request("/api/installations/notes/release", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(await upgradedRelease()),
-  });
+  const upgraded = await select(await upgradedRelease());
   expect(upgraded.status).toBe(200);
   const record = records.get("notes");
-  expect(record).toMatchObject({
+  expect(record?.authority).toMatchObject({
     authorityVersion: 2,
     approvedGrants: [
       {
@@ -480,7 +761,7 @@ it("keeps the approval intersection on a Release upgrade and clears it on deleti
       },
     ],
   });
-  expect(record?.approval).toEqual(initial.approval);
+  expect(record?.authority.approval).toEqual(initial.authority.approval);
   const write = await app.request("/files/content?path=/note.txt", {
     method: "PUT",
     headers: { "X-Oyster-Installation": "notes" },
@@ -492,10 +773,12 @@ it("keeps the approval intersection on a Release upgrade and clears it on deleti
   });
   expect(deleted.status).toBe(204);
   expect(records.get("notes")).toMatchObject({
-    authorityVersion: 3,
     status: "deleted",
-    approvedGrants: [],
-    approval: null,
+    authority: {
+      authorityVersion: 3,
+      approvedGrants: [],
+      approval: null,
+    },
   });
 });
 
@@ -530,9 +813,12 @@ it("refuses external and unapproved required methods before Instance dispatch", 
   expect(calls).toHaveLength(1);
   records.set("notes", {
     ...initial,
-    authorityVersion: 2,
-    approvedGrants: [],
-    approval: null,
+    authority: {
+      ...initial.authority,
+      authorityVersion: 2,
+      approvedGrants: [],
+      approval: null,
+    },
   });
   const narrowed = await call("read");
   expect(narrowed.status).toBe(403);
@@ -605,22 +891,26 @@ it("re-admits a retained member continuation through the live gate, without obse
     originMethod: "write",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
   f.records.set(installed.installationId, {
     ...installed,
-    authorityVersion: installed.authorityVersion + 1,
+    authority: {
+      ...installed.authority,
+      authorityVersion: installed.authority.authorityVersion + 1,
+    },
   });
+  const resolutionsBeforeDelivery = f.resolutionCalls();
   expect(await deliverBackground(f.host, wake)).toEqual({
     status: "accepted",
     more: false,
   });
-  expect(f.resolutionCalls()).toBe(1);
+  expect(f.resolutionCalls()).toBe(resolutionsBeforeDelivery + 1);
   expect(f.calls).toHaveLength(1);
   expect(f.calls[0]).toMatchObject({
-    selection: { authorityVersion: installed.authorityVersion + 1 },
+    selection: { authorityVersion: installed.authority.authorityVersion + 1 },
     subject: {
       kind: "call",
       context: { actor: { kind: "member", memberId: "owner" }, role: "owner" },
@@ -653,7 +943,7 @@ it("a removed member receives zero-grant syncRefused without a continuation call
     originMethod: "write",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
@@ -685,7 +975,7 @@ it("a disabled installation dead-letters its wake without executing the erased f
     originMethod: "write",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
@@ -712,7 +1002,7 @@ it("fits a valid long member lane into the maintained call idempotency key", asy
     originMethod: "write",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
@@ -727,35 +1017,55 @@ it("fits a valid long member lane into the maintained call idempotency key", asy
 });
 
 it("lets the direct owner approve new Release capabilities without reinstalling", async () => {
-  const { app, install, upgradedRelease } = await fixture();
+  const { app, install, upgradedRelease, select } = await fixture();
   await install();
-  const upgrade = await app.request("/api/installations/notes/release", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(await upgradedRelease()),
-  });
+  const upgrade = await select(await upgradedRelease());
   const current = installationSchema.parse(await upgrade.json());
-  expect(current.approvedGrants.map((grant) => grant.capability)).toEqual([
-    "computer.readFile",
-  ]);
+  expect(
+    current.authority.approvedGrants.map((grant) => grant.capability),
+  ).toEqual(["computer.readFile"]);
+  const projection = Schema.decodeUnknownSync(
+    Schema.Struct({ permissions: Schema.Unknown }),
+  )(
+    await (
+      await app.request("/api/installations/notes/grants", {
+        headers: { Accept: "application/json" },
+      })
+    ).json(),
+  );
+  const permissions = appPermissionsWireSchema.parse(projection.permissions);
   const response = await app.request("/api/installations/notes/grants", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      authorityVersion: current.authorityVersion,
+      storeGeneration: "fixture-generation",
+      authorityVersion: current.authority.authorityVersion,
       artifactDigest: current.release.artifact.artifactDigest,
-      command: { kind: "set-grants", grants: "declared" },
+      command: {
+        kind: "change-grants",
+        changes: permissions.declaredOperations.capabilities
+          .map((row) => ({
+            capability: row.capability,
+            operations: row.operations,
+            resources: "tenant-scope",
+          }))
+          .map(({ capability, ...grant }) => ({ capability, grant })),
+      },
     }),
   });
   expect(response.status).toBe(200);
   const approved = installationSchema.parse(await response.json());
   expect(approved.instanceId).toBe(current.instanceId);
-  expect(approved.authorityVersion).toBe(current.authorityVersion + 1);
-  expect(approved.approvedGrants.map((grant) => grant.capability)).toEqual([
-    "computer.readFile",
-    "computer.writeFile",
-  ]);
-  expect(approved.approval?.by).toEqual({ kind: "member", memberId: "owner" });
+  expect(approved.authority.authorityVersion).toBe(
+    current.authority.authorityVersion + 1,
+  );
+  expect(
+    approved.authority.approvedGrants.map((grant) => grant.capability),
+  ).toEqual(["computer.readFile", "computer.writeFile"]);
+  expect(approved.authority.approval?.by).toEqual({
+    kind: "member",
+    memberId: "owner",
+  });
 });
 
 it.each([
@@ -781,9 +1091,16 @@ it.each([
     const response = await app.request("/api/installations/notes/grants", {
       method: "PUT",
       body: JSON.stringify({
-        authorityVersion: initial.authorityVersion,
+        storeGeneration: "fixture-generation",
+        authorityVersion: initial.authority.authorityVersion,
         artifactDigest: initial.release.artifact.artifactDigest,
-        command: { kind: "set-grants", grants: "none" },
+        command: {
+          kind: "change-grants",
+          changes: [
+            { capability: "computer.readFile", grant: null },
+            { capability: "computer.writeFile", grant: null },
+          ],
+        },
       }),
     });
     expect(response.status).toBe(principal === null ? 401 : 403);
@@ -797,9 +1114,16 @@ it("refuses App-origin approval even with the owner's browser principal", async 
     method: "PUT",
     headers: { "X-Oyster-Installation": "notes" },
     body: JSON.stringify({
-      authorityVersion: initial.authorityVersion,
+      storeGeneration: "fixture-generation",
+      authorityVersion: initial.authority.authorityVersion,
       artifactDigest: initial.release.artifact.artifactDigest,
-      command: { kind: "set-grants", grants: "declared" },
+      command: {
+        kind: "change-grants",
+        changes: [
+          { capability: "computer.readFile", grant: null },
+          { capability: "computer.writeFile", grant: null },
+        ],
+      },
     }),
   });
   expect(response.status).toBe(403);
@@ -809,15 +1133,22 @@ it("refuses stale versions and Release digests without restoring withdrawn appro
   const { app, install, records } = await fixture();
   const initial = await install();
   for (const patch of [
-    { authorityVersion: initial.authorityVersion + 1 },
+    { authorityVersion: initial.authority.authorityVersion + 1 },
     { artifactDigest: `sha256:${"f".repeat(64)}` },
   ]) {
     const response = await app.request("/api/installations/notes/grants", {
       method: "PUT",
       body: JSON.stringify({
-        authorityVersion: initial.authorityVersion,
+        storeGeneration: "fixture-generation",
+        authorityVersion: initial.authority.authorityVersion,
         artifactDigest: initial.release.artifact.artifactDigest,
-        command: { kind: "set-grants", grants: "none" },
+        command: {
+          kind: "change-grants",
+          changes: [
+            { capability: "computer.readFile", grant: null },
+            { capability: "computer.writeFile", grant: null },
+          ],
+        },
         ...patch,
       }),
     });
@@ -829,9 +1160,16 @@ it("refuses malformed approval commands and unknown installations", async () => 
   const { app, install, records } = await fixture();
   const initial = await install();
   const valid = {
-    authorityVersion: initial.authorityVersion,
+    storeGeneration: "fixture-generation",
+    authorityVersion: initial.authority.authorityVersion,
     artifactDigest: initial.release.artifact.artifactDigest,
-    command: { kind: "set-grants", grants: "none" },
+    command: {
+      kind: "change-grants",
+      changes: [
+        { capability: "computer.readFile", grant: null },
+        { capability: "computer.writeFile", grant: null },
+      ],
+    },
   };
   for (const body of [
     "{",
@@ -865,7 +1203,8 @@ it("rejects anonymous approval through the capability-only grants route", async 
   const { app, install, records } = await fixture();
   const current = await install();
   const body = JSON.stringify({
-    authorityVersion: current.authorityVersion,
+    storeGeneration: "fixture-generation",
+    authorityVersion: current.authority.authorityVersion,
     artifactDigest: current.release.artifact.artifactDigest,
     command: { kind: "approve-anonymous", methods: [] },
   });
@@ -883,15 +1222,15 @@ it("cannot approve a capability outside the verified Release declaration", async
   const response = await app.request("/api/installations/notes/grants", {
     method: "PUT",
     body: JSON.stringify({
-      authorityVersion: initial.authorityVersion,
+      storeGeneration: "fixture-generation",
+      authorityVersion: initial.authority.authorityVersion,
       artifactDigest: initial.release.artifact.artifactDigest,
       command: {
-        kind: "set-grants",
-        grants: [
+        kind: "change-grants",
+        changes: [
           {
             capability: "computer.writeFile",
-            operations: [],
-            resources: "tenant-scope",
+            grant: { operations: [], resources: "tenant-scope" },
           },
         ],
       },
@@ -983,8 +1322,8 @@ it("labels the consent with the host's installation identity and default scope",
   const html = await page.text();
   expect(html).toContain('"installationId":"notes"');
   expect(html).toContain('"appId":"app_notes"');
-  expect(html).toContain("All of this Oyster");
-  expect(html).toContain("Lets this App");
+  expect(html).toContain('"resources":"tenant-scope"');
+  expect(html).toContain('"declaredOperations"');
 });
 
 it("seals the admitted named write origin before member dispatch", async () => {
@@ -1064,7 +1403,7 @@ it("fresh replay excludes a former write origin while retaining another origin",
     originMethod: "otherWrite",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
@@ -1120,7 +1459,10 @@ it("the exact host filter excludes an unapproved write origin on a valid nonsync
   if (authenticated.kind !== "admitted") throw new Error("Member missing");
   const caller = invocationCallerContext(authenticated.principal, null);
   const admitted = admittedBackgroundOrigins({
-    installation,
+    installation: {
+      ...installation,
+      artifactDigest: installation.release.artifact.artifactDigest,
+    },
     declaration: release.declaration,
     declaredOperations: await deriveDeclaredOperations(
       installation.release,
@@ -1158,7 +1500,7 @@ it("capability revocation refuses the whole replay while the continuation supers
     originMethod: "otherWrite",
     epoch: 1,
     observed: {
-      authorityVersion: installed.authorityVersion,
+      authorityVersion: installed.authority.authorityVersion,
       artifactDigest: installed.release.artifact.artifactDigest,
     },
   });
@@ -1175,35 +1517,32 @@ it(
   "a second POST switches an already-live installation onto a new Release " +
     "instead of refusing it (install and select share one path)",
   async () => {
-    const { app, install, records, upgradedRelease } = await fixture();
+    const { install, records, upgradedRelease, completePost } = await fixture();
     const first = await install();
     const upgraded = await upgradedRelease();
-    const response = await app.request("/api/installations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ installationId: "notes", release: upgraded }),
+    const response = await completePost("notes", upgraded);
+    expect(response).toMatchObject({
+      state: "succeeded",
+      creation: "replacement",
     });
-    expect(response.status).toBe(200);
     const next = records.get("notes");
     expect(next?.release.releaseId).toBe(upgraded.releaseId);
     expect(next?.instanceId).toBe(first.instanceId);
-    expect(next?.authorityVersion).toBe(first.authorityVersion + 1);
+    expect(next?.authority.authorityVersion).toBe(
+      first.authority.authorityVersion + 1,
+    );
   },
 );
 
 it("refuses installing or switching a Release for a different App at the same installation id", async () => {
-  const { app, install, release } = await fixture();
+  const { install, release, select } = await fixture();
   await install();
   const foreign = parseRelease({
     ...release,
     appId: "app_other",
     releaseId: "rel_other",
   });
-  const response = await app.request("/api/installations/notes/release", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(foreign),
-  });
+  const response = await select(foreign);
   expect(response.status).toBe(409);
   expect(await response.json()).toEqual({ error: "release_app_mismatch" });
 });
@@ -1221,4 +1560,129 @@ it("refuses a non-owner member's install, typed", async () => {
     error: "Only the owner manages this Oyster",
   });
   expect(records.get("notes")).toBeUndefined();
+});
+
+it("HTTP methods requiring apps.open need stored approval and refuse again after revocation", async () => {
+  const f = await fixture(true);
+  await f.install();
+  const selected = await f.select(await f.upgradedRelease(true));
+  expect(selected.status).toBe(200);
+  const call = () =>
+    f.app.request("/apps/notes/methods/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  const unapproved = await call();
+  expect(unapproved.status).toBe(403);
+  expect(await unapproved.json()).toEqual({ error: "requires_not_granted" });
+  expect(f.calls).toHaveLength(0);
+  const save = async (approve: boolean) => {
+    const current = f.records.get("notes");
+    if (current === undefined) throw new Error("Missing current installation");
+    const response = await f.app.request("/api/installations/notes/grants", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        storeGeneration: "fixture-generation",
+        authorityVersion: current.authority.authorityVersion,
+        artifactDigest: current.release.artifact.artifactDigest,
+        command: {
+          kind: "change-grants",
+          changes: [
+            {
+              capability: "apps.open",
+              grant: approve
+                ? {
+                    operations: ["route:app.methods:open"],
+                    resources: "tenant-scope",
+                  }
+                : null,
+            },
+          ],
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+  };
+  await save(true);
+  expect((await call()).status).toBe(200);
+  expect(f.calls).toHaveLength(1);
+  await save(false);
+  const revoked = await call();
+  expect(revoked.status).toBe(403);
+  expect(await revoked.json()).toEqual({ error: "requires_not_granted" });
+  expect(f.calls).toHaveLength(1);
+});
+
+it.each(["{", "not JSON", "null", "[]"])(
+  "refuses malformed permission PUT body %s without changing authority",
+  async (body) => {
+    const f = await fixture();
+    const initial = await f.install();
+    const response = await f.app.request("/api/installations/notes/grants", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid approval" });
+    expect(f.records.get("notes")).toEqual(initial);
+    expect(f.calls).toHaveLength(0);
+  },
+);
+
+it.each([
+  { name: "same approved permissions", capabilities: ["computer.readFile"] },
+  { name: "a subset of approved permissions", capabilities: [] },
+] satisfies { name: string; capabilities: AppDeclaration["capabilities"] }[])(
+  "Workflow installation selects a successful Release with $name",
+  async ({ capabilities }) => {
+    const f = await fixture();
+    const before = await f.install();
+    const candidate = await f.upgradedRelease(false, capabilities);
+    const response = await f.workflowSelect(candidate);
+    expect(response.status).toBe(200);
+    const after = f.records.get("notes");
+    expect(after?.release).toEqual(candidate);
+    expect(after?.instanceId).toBe(before.instanceId);
+    expect(
+      after?.authority.approvedGrants.every((grant) =>
+        before.authority.approvedGrants.some(
+          (approved) =>
+            approved.capability === grant.capability &&
+            grant.operations.every((operation) =>
+              approved.operations.includes(operation),
+            ),
+        ),
+      ),
+    ).toBe(true);
+  },
+);
+
+it("Workflow installation returns typed needs_consent and keeps the old Release running", async () => {
+  const f = await fixture();
+  const before = await f.install();
+  const candidate = await f.upgradedRelease();
+  const response = await f.workflowSelect(candidate);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: "needs_consent" });
+  expect(f.records.get("notes")).toEqual(before);
+});
+
+it("Workflow first install with permission requirements needs consent without creating an installation", async () => {
+  const f = await fixture();
+  const response = await f.workflowSelect(f.release);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: "needs_consent" });
+  expect(f.records.size).toBe(0);
+});
+
+it("Workflow first install without permission requirements creates the installation without grants", async () => {
+  const f = await fixture();
+  const candidate = await f.upgradedRelease(false, []);
+  const response = await f.workflowSelect(candidate);
+  expect(response.status).toBe(201);
+  expect(f.records.get("notes")?.release).toEqual(candidate);
+  expect(f.records.get("notes")?.authority.approvedGrants).toEqual([]);
 });

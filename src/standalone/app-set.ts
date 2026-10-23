@@ -4,159 +4,75 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import * as Schema from "effect/Schema";
 import { publishSource, type PackOptions } from "../pack.js";
+import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
+import { releaseSchema } from "@fungi.computer/puffball/effect";
+import {
+  grantCommandSchema,
+  installationSchema,
+  type Installation,
+} from "../apps/installation.js";
+import { appPermissionPageSchema } from "../apps/permissions.js";
+import {
+  installOnOyster,
+  InstallationObservationError,
+} from "../installation-client.js";
 
-// Existing closed source recipes, shared by the standalone install command and
-// its real-root proof. The canonical Oyster builder owns every compilation, on
-// the Oyster's own Computer.
-const assets = {
-  maxManifestBytes: 1_048_576,
-  maxObjects: 1024,
-  maxObjectBytes: 16_777_216,
-  maxTotalBytes: 67_108_864,
-};
-const facet = { kind: "durable-facet", stateSchema: 1 } as const;
-
-/** One starter App: where its source lives and how the Computer builds it. */
+/** One starter App's identity and source; its manifest owns the build recipe. */
 export type StarterApp = Readonly<{
+  /** Selecting this configured dashboard approves its declared shell authority only. */
+  dashboard?: true;
   installationId: string;
   appId: string;
   /** The App's directory in a Botanical checkout; its recipe is rooted there. */
   directory: string;
   /** Its own public source repository's name, the App at that repository's root. */
   repository: string;
-  recipe: PackOptions["recipe"];
 }>;
 
 export const standaloneAppSet: readonly StarterApp[] = [
   {
     installationId: "tourtois",
+    dashboard: true,
     directory: "apps/tourtois",
     repository: "tourtois",
     appId: "app_tourtois",
-    recipe: {
-      entry: "apps/tourtois/index.html",
-      assets,
-      assetBase: "./",
-      backend: {
-        entry: "apps/tourtois/backend/index.ts",
-        exportName: "Tourtois",
-        compatibilityDate: "2026-09-04",
-        runtime: facet,
-      },
-      maxOutputBytes: 67_108_864,
-    },
   },
   {
     installationId: "bonsai",
     directory: "apps/bonsai",
     repository: "bonsai",
     appId: "app_bonsai",
-    recipe: {
-      entry: "apps/bonsai/web/index.html",
-      assets,
-      assetBase: "./",
-      maxOutputBytes: 67_108_864,
-      backend: {
-        entry: "apps/bonsai/backend/index.ts",
-        exportName: "BonsaiApp",
-        compatibilityDate: "2026-09-04",
-        runtime: facet,
-      },
-    },
   },
   {
     installationId: "shed",
     directory: "apps/shed",
     repository: "shed",
     appId: "app_shed",
-    recipe: {
-      entry: "apps/shed/index.html",
-      assets: {
-        maxManifestBytes: 1_048_576,
-        maxObjects: 512,
-        maxObjectBytes: 4_194_304,
-        maxTotalBytes: 16_777_216,
-      },
-      assetBase: "./",
-      maxOutputBytes: 16_777_216,
-      backend: {
-        entry: "apps/shed/backend/index.ts",
-        exportName: "Shed",
-        compatibilityDate: "2026-09-25",
-        runtime: facet,
-      },
-    },
   },
   {
     installationId: "inkcap",
     directory: "apps/inkcap",
     repository: "inkcap",
     appId: "app_inkcap",
-    recipe: {
-      entry: "apps/inkcap/index.html",
-      assets,
-      assetBase: "./",
-      maxOutputBytes: 16_777_216,
-      backend: {
-        entry: "apps/inkcap/backend/index.ts",
-        exportName: "Inkcap",
-        compatibilityDate: "2026-09-25",
-        runtime: facet,
-      },
-    },
   },
   {
     installationId: "trellis",
     directory: "apps/trellis",
     repository: "trellis",
     appId: "app_trellis",
-    recipe: {
-      entry: "apps/trellis/index.html",
-      maxOutputBytes: 16_777_216,
-      backend: {
-        entry: "apps/trellis/backend/index.ts",
-        exportName: "Trellis",
-        compatibilityDate: "2026-09-04",
-        runtime: facet,
-      },
-    },
   },
   {
     installationId: "prints",
     directory: "apps/prints",
     repository: "prints",
     appId: "app_prints",
-    recipe: {
-      entry: "apps/prints/index.html",
-      assets,
-      assetBase: "./",
-      maxOutputBytes: 16_777_216,
-      backend: {
-        entry: "apps/prints/backend/index.ts",
-        exportName: "Prints",
-        compatibilityDate: "2026-09-04",
-        runtime: facet,
-      },
-    },
   },
   {
     installationId: "grove",
     directory: "apps/grove",
     repository: "grove",
     appId: "app_grove",
-    recipe: {
-      entry: "apps/grove/index.html",
-      assets,
-      assetBase: "./",
-      maxOutputBytes: 67_108_864,
-      backend: {
-        entry: "apps/grove/backend/index.ts",
-        exportName: "Grove",
-        compatibilityDate: "2026-09-04",
-        runtime: facet,
-      },
-    },
   },
 ];
 
@@ -252,28 +168,6 @@ export const defaultStarterBuildConcurrency = 2;
 /** The most builds at once on the 12 GiB Computer. */
 const maxStarterBuildConcurrency = 3;
 
-/** A recipe rooted at `from` (a checkout directory), rooted at `to` instead. */
-function relocateRecipe(
-  recipe: PackOptions["recipe"],
-  from: string,
-  to: string,
-): PackOptions["recipe"] {
-  const move = (path: string) => {
-    if (!path.startsWith(`${from}/`))
-      throw new Error(`${path} is outside its App directory ${from}`);
-    const rest = path.slice(from.length + 1);
-    return to === "" ? rest : `${to}/${rest}`;
-  };
-  const backend = recipe.backend;
-  if (backend?.entry === undefined)
-    return { ...recipe, entry: move(recipe.entry) };
-  return {
-    ...recipe,
-    entry: move(recipe.entry),
-    backend: { ...backend, entry: move(backend.entry) },
-  };
-}
-
 const run = (command: string, args: readonly string[], cwd?: string) =>
   new Promise<string>((resolveRun, reject) => {
     execFile(
@@ -316,6 +210,8 @@ export async function installStandaloneAppSet(
       }>,
     ) => Promise<Response>;
     pollMs?: number;
+    /** The idle wait between build status reads; the real timer by default. */
+    idle?: (ms: number, signal: AbortSignal) => Promise<void>;
     waitMs?: number;
   }>,
 ): Promise<readonly InstalledStarterApp[]> {
@@ -328,7 +224,10 @@ export async function installStandaloneAppSet(
     throw new Error(
       `Starter builds run 1 to ${String(maxStarterBuildConcurrency)} at a time`,
     );
-  const authorization = { Authorization: `Bearer ${options.key}` };
+  const authorization = {
+    Authorization: `Bearer ${options.key}`,
+    Accept: "application/json",
+  };
   const owner = async (
     method: string,
     path: string,
@@ -346,6 +245,81 @@ export async function installStandaloneAppSet(
     if (signal !== undefined) init.signal = signal;
     return fetch(new URL(path, options.url), init);
   };
+  const approveChosenDashboard = async (
+    installed: Installation,
+    generation: string,
+  ) => {
+    const name = installed.installationId;
+    const path = `/api/installations/${encodeURIComponent(name)}/grants`;
+    const projectionResponse = await owner("GET", path);
+    if (!projectionResponse.ok)
+      throw new Error(
+        `${name} approval read failed (${String(projectionResponse.status)})`,
+      );
+    const projection = appPermissionPageSchema.parse(
+      await projectionResponse.json(),
+    );
+    const { permissions } = projection;
+    const digest = installed.release.artifact.artifactDigest;
+    if (
+      projection.storeGeneration !== generation ||
+      projection.installationId !== name ||
+      projection.artifactDigest !== digest ||
+      permissions.declaredOperations.artifactDigest !== digest ||
+      permissions.authority.authorityVersion !==
+        installed.authority.authorityVersion ||
+      permissions.authority.declaredOperationsDigest !==
+        installed.authority.declaredOperationsDigest ||
+      permissions.declaredOperations.digest !==
+        installed.authority.declaredOperationsDigest
+    )
+      throw new Error(`${name} approval snapshot changed`);
+    const shell = permissions.declaredOperations.capabilities.find(
+      (row) => row.capability === "team.workbenchHost",
+    );
+    if (shell === undefined) return;
+    const command = grantCommandSchema.parse({
+      kind: "change-grants",
+      changes: [
+        {
+          capability: shell.capability,
+          grant: { operations: shell.operations, resources: "tenant-scope" },
+        },
+      ],
+    });
+    const saved = await owner(
+      "PUT",
+      path,
+      Schema.decodeUnknownSync(Schema.Json)({
+        storeGeneration: projection.storeGeneration,
+        authorityVersion: installed.authority.authorityVersion,
+        artifactDigest: digest,
+        command,
+      }),
+    );
+    if (!saved.ok)
+      throw new Error(`${name} approval failed (${String(saved.status)})`);
+    const receipt = installationSchema.parse(await saved.json());
+    if (
+      receipt.installationId !== name ||
+      receipt.instanceId !== installed.instanceId ||
+      receipt.release.artifact.artifactDigest !== digest ||
+      receipt.authority.authorityVersion !==
+        installed.authority.authorityVersion + 1 ||
+      !receipt.authority.approvedGrants.some(
+        (grant) =>
+          grant.capability === "team.workbenchHost" &&
+          grant.resources === "tenant-scope" &&
+          shell.operations.every((operation) =>
+            grant.operations.includes(operation),
+          ),
+      )
+    )
+      throw new Error(`${name} approval incomplete`);
+  };
+  const idle =
+    options.idle ??
+    ((ms: number, signal: AbortSignal) => sleep(ms, undefined, { signal }));
   /** Start one build and wait for its terminal outcome within the build
    * budget; the budget cancels every request and body read it covers. */
   const buildOnComputer = async (
@@ -368,7 +342,6 @@ export async function installStandaloneAppSet(
       jobId = build.jobId;
       options.report(`Building ${name} on the Computer (${build.jobId})`);
       while (build.status === "running") {
-        await sleep(options.pollMs ?? 5_000, undefined, { signal: budget });
         const read = await owner(
           "GET",
           `/api/builds/${encodeURIComponent(build.jobId)}`,
@@ -378,6 +351,9 @@ export async function installStandaloneAppSet(
         if (!read.ok)
           throw new Error(`${name} build is missing (${String(read.status)})`);
         build = Schema.decodeUnknownSync(buildSchema)(await read.json());
+        // Read first: a build already finished costs no idle wait.
+        if (build.status === "running")
+          await idle(options.pollMs ?? 5_000, budget);
       }
       return build;
     } catch (cause) {
@@ -414,13 +390,23 @@ export async function installStandaloneAppSet(
    * own repository; `release` removes a clone once its template is seeded. */
   const locate = async (app: StarterApp) => {
     const source = options.source;
-    if (source.kind === "checkout")
+    if (source.kind === "checkout") {
+      const sourceRevision = parseSourceRevision(source.revision);
+      const metadata = await run(
+        "git",
+        [
+          "show",
+          sourceRevision.slice(4) + ":" + app.directory + "/package.json",
+        ],
+        source.directory,
+      );
       return {
         repositoryPath: source.directory,
-        sourceRevision: parseSourceRevision(source.revision),
-        recipe: app.recipe,
+        sourceRevision,
+        recipe: appBuildRecipe(readBuildManifest(metadata), app.directory),
         release: () => Promise.resolve(),
       };
+    }
     const clone = await mkdtemp(join(source.scratch, `${app.repository}-`));
     try {
       await run("git", [
@@ -436,7 +422,12 @@ export async function installStandaloneAppSet(
       return {
         repositoryPath: clone,
         sourceRevision: parseSourceRevision(`git:${head}`),
-        recipe: relocateRecipe(app.recipe, app.directory, ""),
+        recipe: appBuildRecipe(
+          readBuildManifest(
+            await run("git", ["show", head + ":package.json"], clone),
+          ),
+          "",
+        ),
         release: () => rm(clone, { recursive: true, force: true }),
       };
     } catch (cause) {
@@ -445,8 +436,13 @@ export async function installStandaloneAppSet(
     }
   };
 
-  // Seed every template first: a git push each, quick beside a build.
-  const seeded: {
+  // Seed templates one at a time in set order (a git push each, quick beside
+  // a build); a build slot takes each App the moment its own source is
+  // seeded, so Tourtois builds while the rest publish. Builds start in set
+  // order. The first failure, in a seed or a build, starts no further seed or
+  // build; builds already running finish and install, every seed and clone
+  // cleanup settles, and only then does the install reject with that failure.
+  type Seeded = {
     app: StarterApp;
     kind: "recorded" | "existing";
     seedRevision: string;
@@ -454,8 +450,22 @@ export async function installStandaloneAppSet(
     fetch: number;
     publish: number;
     ready: number;
-  }[] = [];
-  for (const app of standaloneAppSet) {
+  };
+  const installed = new Map<string, InstalledStarterApp>();
+  /** Set by the first failure, so no further seed or build starts. */
+  const stop = { requested: false };
+  /** Every failure, in the order it happened; the first is the one thrown. */
+  const failures: unknown[] = [];
+  const seededQueue: Seeded[] = [];
+  const waiting: ((next: Seeded | undefined) => void)[] = [];
+  const seeding = { finished: false };
+  const takeSeeded = () =>
+    new Promise<Seeded | undefined>((resolveTake) => {
+      const next = seededQueue.shift();
+      if (next !== undefined || seeding.finished) resolveTake(next);
+      else waiting.push(resolveTake);
+    });
+  const seedApp = async (app: StarterApp): Promise<Seeded> => {
     const name = app.installationId;
     const fetchStarted = performance.now();
     const located = await locate(app);
@@ -471,7 +481,7 @@ export async function installStandaloneAppSet(
       );
       options.report(`${name} source ${kind} at ${receipt.seedRevision}`);
       const ready = performance.now();
-      seeded.push({
+      return {
         app,
         kind,
         seedRevision: receipt.seedRevision,
@@ -479,24 +489,35 @@ export async function installStandaloneAppSet(
         fetch: publishStarted - fetchStarted,
         publish: ready - publishStarted,
         ready,
-      });
+      };
     } finally {
       await located.release();
     }
-  }
-
-  // Then build `concurrency` at a time, in set order, installing each as its
-  // build succeeds. The first failure rejects the install and starts no
-  // further build; builds already running finish and install.
-  const installed = new Map<string, InstalledStarterApp>();
-  const pending = [...seeded];
-  /** Set by the first failure, so no further build starts. */
-  const stop = { requested: false };
+  };
+  const seedAll = async () => {
+    try {
+      for (const app of standaloneAppSet) {
+        if (stop.requested) break;
+        const seeded = await seedApp(app);
+        const waiter = waiting.shift();
+        if (waiter === undefined) seededQueue.push(seeded);
+        else waiter(seeded);
+      }
+    } catch (cause) {
+      stop.requested = true;
+      failures.push(cause);
+      throw cause;
+    } finally {
+      seeding.finished = true;
+      for (const waiter of waiting.splice(0)) waiter(undefined);
+    }
+  };
+  // `concurrency` builds at once, each installing as its build succeeds.
   const slot = async () => {
     for (
-      let next = stop.requested ? undefined : pending.shift();
-      next !== undefined;
-      next = stop.requested ? undefined : pending.shift()
+      let next = await takeSeeded();
+      next !== undefined && !stop.requested;
+      next = await takeSeeded()
     ) {
       const name = next.app.installationId;
       try {
@@ -510,29 +531,75 @@ export async function installStandaloneAppSet(
           throw new Error(
             `${name} build ${build.status}: ${build.detail ?? "no Release"}`,
           );
-        const installStarted = performance.now();
-        const installation = await owner("POST", "/api/installations", {
-          release: build.release,
-          installationId: name,
+        const release = Schema.decodeUnknownSync(releaseSchema)(build.release, {
+          onExcessProperty: "error",
         });
-        if (!installation.ok)
+        if (release.appId !== next.app.appId)
+          throw new Error(`${name} build belongs to another App`);
+        const installStarted = performance.now();
+        let installation: Parameters<typeof installOnOyster>[0] = {
+          url: options.url,
+          key: options.key,
+          release,
+          installationId: name,
+          signal: AbortSignal.timeout(options.waitMs ?? appBuildWaitMs),
+          idle,
+        };
+        if (options.pollMs !== undefined)
+          installation = { ...installation, pollMs: options.pollMs };
+        const operation = await installOnOyster(installation);
+        if (operation.state === "unconfirmed")
+          throw new InstallationObservationError(operation.requestId);
+        if (operation.state === "refused")
+          throw new Error(`${name} installation refused (${operation.code})`);
+        const record = operation.installation;
+        if (record === null)
           throw new Error(
-            `${name} installation failed (${String(installation.status)})`,
+            `${name} completed installation version is unavailable`,
           );
+        if (
+          record.appId !== release.appId ||
+          record.release.releaseId !== release.releaseId ||
+          record.release.artifact.artifactDigest !==
+            release.artifact.artifactDigest
+        )
+          throw new Error(`${name} installation does not match its build`);
+        // Only the owner can attest exclusive fresh creation. A replacement or
+        // tombstone remint never replays a default grant.
+        if (operation.creation === "fresh") {
+          if (record.status !== "enabled")
+            throw new Error(`${name} fresh installation is not enabled`);
+          if (next.app.dashboard === true)
+            await approveChosenDashboard(
+              record,
+              operation.reference.generation,
+            );
+        }
         options.report(
-          `${installation.status === 201 ? "Installed" : "Replaced"} ${name} from its build ${build.jobId}`,
+          `${operation.creation === "replacement" ? "Replaced" : "Installed"} ${name} from its build ${build.jobId}`,
         );
+        // Report-only UI check: never blocks, but the owner sees it here.
+        const uiCheck = operation.uiCheck;
+        if (uiCheck?.kind === "failed")
+          options.report(
+            `Warning: ${name} is installed, but its UI check failed (${uiCheck.code}${uiCheck.diagnostics === undefined ? "" : `: ${uiCheck.diagnostics.failedPredicate}`}).`,
+          );
+        else if (uiCheck?.kind === "not_checked")
+          options.report(
+            `Warning: ${name} is installed, but its UI was not checked (${uiCheck.code}).`,
+          );
         const phases =
           build.detail === null
             ? undefined
             : Schema.decodeUnknownOption(computerPhasesSchema)(build.detail);
         installed.set(name, {
-          installationId: name,
+          installationId: record.installationId,
           published: next.kind,
           seedRevision: next.seedRevision,
           sourceRevision: next.sourceRevision,
           jobId: build.jobId,
-          installed: installation.status === 201 ? "installed" : "replaced",
+          installed:
+            operation.creation === "replacement" ? "replaced" : "installed",
           release: build.release,
           timings: {
             fetch: next.fetch,
@@ -548,11 +615,18 @@ export async function installStandaloneAppSet(
         });
       } catch (cause) {
         stop.requested = true;
+        failures.push(cause);
         throw cause;
       }
     }
   };
-  await Promise.all(Array.from({ length: concurrency }, slot));
+  // Wait for every seed and build to settle before reporting: nothing of this
+  // call may still run, or install, after it rejects.
+  await Promise.allSettled([
+    seedAll(),
+    ...Array.from({ length: concurrency }, slot),
+  ]);
+  if (failures.length > 0) throw failures[0];
   return standaloneAppSet.flatMap((app) => {
     const result = installed.get(app.installationId);
     return result === undefined ? [] : [result];

@@ -57,15 +57,25 @@ const stored = {
     },
   },
   releasePin: "pinned",
-  authorityVersion: 1,
   status: "enabled",
   visibility: "private",
-  declaredOperationsDigest: `sha256:${"e".repeat(64)}`,
-  approvedGrants: [],
-  approval: null,
   approvedAnonymousMethods: [],
   anonymousApproval: null,
+  authority: {
+    authorityVersion: 1,
+    declaredOperationsDigest: `sha256:${"e".repeat(64)}`,
+    approvedGrants: [],
+    approval: null,
+  },
 };
+
+it("stores one embedded authority and refuses the superseded inline grant fields", () => {
+  expect(installationSchema.parse(stored).authority).toEqual(stored.authority);
+  const { authority, ...identity } = stored;
+  expect(
+    installationSchema.safeParse({ ...identity, ...authority }).success,
+  ).toBe(false);
+});
 
 it("pins the Release and operation snapshot with explicit host state", () => {
   expect(installationSchema.parse(stored)).toEqual(stored);
@@ -90,10 +100,13 @@ it("rejects ambiguous duplicate grants instead of combining operation/resource s
   expect(
     installationSchema.safeParse({
       ...stored,
-      approvedGrants: [
-        read,
-        { ...read, resources: [{ kind: "computer", id: "b" }] },
-      ],
+      authority: {
+        ...stored.authority,
+        approvedGrants: [
+          read,
+          { ...read, resources: [{ kind: "computer", id: "b" }] },
+        ],
+      },
     }).success,
   ).toBe(false);
 });
@@ -130,7 +143,7 @@ it("freezes the typed not-declared and external-approval refusal boundaries", ()
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type {
   ResourceRef,
-  GrantRequest,
+  GrantChange,
   Approval,
   Installation,
   InstallationReader,
@@ -148,9 +161,7 @@ import type { AppToolEntry } from "../src/apps/tools.js";
 it("keeps host identity, read-only storage and pre-read tool facts in the frozen interface", () => {
   expectTypeOf<keyof ResourceRef>().toEqualTypeOf<"kind" | "id">();
   expectTypeOf<Approval["by"]>().toEqualTypeOf<HostActor>();
-  expectTypeOf<Extract<GrantRequest, string>>().toEqualTypeOf<
-    "none" | "declared"
-  >();
+  expectTypeOf<Extract<GrantChange, string>>().toEqualTypeOf<never>();
   expectTypeOf<keyof InstallationReader>().toEqualTypeOf<"list" | "get">();
   expectTypeOf<InstallationReader["get"]>().returns.toEqualTypeOf<
     Promise<Installation | null>
@@ -165,13 +176,12 @@ it("keeps host identity, read-only storage and pre-read tool facts in the frozen
     kind: "install",
     release: stored.release,
     releasePin: "pinned",
-    grants: "declared",
   });
-  expect(command.kind === "install" && command.grants).toBe("declared");
+  expect(command.kind).toBe("install");
   expect(
     declaredOperationsSchema.safeParse({
       artifactDigest: stored.release.artifact.artifactDigest,
-      digest: stored.declaredOperationsDigest,
+      digest: stored.authority.declaredOperationsDigest,
       anonymousMethods: [],
       capabilities: [
         {
@@ -188,18 +198,24 @@ it("keeps identities explicit and grant commands distinct from state commands", 
     Pick<Installation, "installationId" | "instanceId">
   >();
   expectTypeOf<
-    Extract<InstallationCommand, { kind: "set-grants" }>
-  >().toEqualTypeOf<{ kind: "set-grants"; grants: GrantRequest }>();
+    Extract<InstallationCommand, { kind: "change-grants" }>
+  >().toEqualTypeOf<{
+    kind: "change-grants";
+    changes: readonly GrantChange[];
+  }>();
   expectTypeOf<keyof InstallationUpdate>().toEqualTypeOf<
     "next" | "authorityChanged"
   >();
   expect(
     installationSchema.safeParse({
       ...stored,
-      approval: {
-        by: { kind: "member", memberId: "" },
-        at: 1000,
-        authorityVersion: 1,
+      authority: {
+        ...stored.authority,
+        approval: {
+          by: { kind: "member", memberId: "" },
+          at: 1000,
+          authorityVersion: 1,
+        },
       },
     }).success,
   ).toBe(false);

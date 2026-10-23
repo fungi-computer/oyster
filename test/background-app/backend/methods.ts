@@ -7,7 +7,7 @@ import {
   type BackgroundBinding,
 } from "@fungi.computer/puffball/background-replay";
 import { z } from "zod";
-import type { AppCatalog } from "@fungi.computer/oyster/shell/app-directory";
+import type { AppCatalog } from "@fungi.computer/nacre/app-directory";
 
 /** Native host-port fixture; durable rows expose the actual alarm's admission result. */
 export type BackgroundContext = {

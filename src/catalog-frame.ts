@@ -3,7 +3,7 @@ import { appIdSchema } from "@fungi.computer/puffball/effect";
 import {
   appCatalogResponseSchema,
   type AppCatalog,
-} from "./shell/app-directory.js";
+} from "@fungi.computer/nacre/app-directory";
 import type { OysterRootDirectory } from "./root-data.js";
 import type { FrameBindingMethods } from "./cloudflare.js";
 import type { OysterBindingResult } from "./workers.js";

@@ -7,6 +7,7 @@
 // it through `root.hostFor`, so they share one auth, one workspace and one
 // capability set.
 import type { TenantScope } from "@fungi.computer/oyster/tenant";
+import { installationWorkerEntrypoint } from "@fungi.computer/oyster/workers";
 import {
   createOysterGitMcpOwner,
   createOysterGitWorker,
@@ -16,7 +17,7 @@ import {
   type OysterGitWorkerEnv,
 } from "@fungi.computer/oyster/workers-git";
 
-export { OysterRegistry } from "@fungi.computer/oyster/workers";
+import { OysterRegistry as Registry } from "@fungi.computer/oyster/workers";
 // The one binding entrypoint, whose table also hands Apps `env.GIT` and `env.EVENTS`.
 export {
   OysterBinding,
@@ -26,6 +27,16 @@ export {
 
 // The owner key, or a named key minted at POST /api/keys, signs `git` in.
 const root = oysterGitRoot<OysterGitWorkerEnv>({ tenancy: ownerOrKeyTenancy });
+
+export class OysterRegistry extends Registry<OysterGitWorkerEnv> {
+  protected override hostFor(scope: TenantScope) {
+    return root.hostFor(this.env, scope);
+  }
+}
+
+export class OysterInstallationExecutor extends installationWorkerEntrypoint<OysterGitWorkerEnv>(
+  (env, scope) => root.hostFor(env, scope),
+) {}
 
 export class OysterMcp extends createOysterGitMcpOwner(root) {}
 

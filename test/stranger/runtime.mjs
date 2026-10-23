@@ -96,6 +96,7 @@ const instance = createAppInstance({
       stored = value;
     }),
   resolve: () => Effect.fail(new Error("No Releases in this consumer")),
+  boot: () => Effect.void,
   abort: () => Effect.void,
   purge: () => Effect.void,
   connect: () => Effect.fail(new Error("No backend in this consumer")),
@@ -109,6 +110,8 @@ const selection = {
 };
 const state = { ...selection, status: "disabled" };
 
+await Effect.runPromise(instance.prepare(state));
+assert.equal(stored, null);
 const receipt = await Effect.runPromise(instance.apply(state));
 assert.equal(receipt.status, "disabled");
 assert.deepEqual(await Effect.runPromise(instance.apply(state)), receipt);
@@ -187,74 +190,6 @@ for (let attempt = 0; attempt < 2; attempt++) {
 const pageModule = await import("@fungi.computer/oyster/page");
 assert.ok(pageModule.mountOysterPage);
 await import("@fungi.computer/oyster/root-data");
-const shell = await import("@fungi.computer/oyster/shell");
-const commandHost = await import("@fungi.computer/oyster/shell/command-host");
-const keys = await import("@fungi.computer/oyster/shell/keys");
-const commands = await import("@fungi.computer/oyster/shell/commands");
-const windows = await import("@fungi.computer/oyster/shell/window-manager");
-const workbench = await import("@fungi.computer/oyster/shell/workbench");
-await import("@fungi.computer/oyster/shell/app-directory");
-assert.equal(shell.createWindowManager, windows.createWindowManager);
-assert.equal(
-  shell.createAppSurfaceCommandHost,
-  commandHost.createAppSurfaceCommandHost,
-);
-assert.equal(shell.shellCommands, commands.shellCommands);
-assert.deepEqual(keys.parseChord("mod+k", false), {
-  key: "k",
-  alt: false,
-  ctrl: true,
-  meta: false,
-  shift: false,
-});
-const shellCommandsHost = commandHost.createAppSurfaceCommandHost();
-const declaredMount = shellCommandsHost.mount("packed-app", []);
-await assert.rejects(
-  declaredMount.handlers.registerCommands({
-    commands: [{ id: "undeclared", title: "Undeclared", category: "App" }],
-    invoke: async () => undefined,
-  }),
-  (error) => error.code === "COMMAND_NOT_DECLARED",
-);
-declaredMount.dispose();
-shellCommandsHost.dispose();
-let shellDisposals = 0;
-const shellWindows = windows.createWindowManager({
-  createContainer: () => ({}),
-  mount: () => ({
-    setVisibility: () => undefined,
-    reconfigure: () => undefined,
-    dispose: () => {
-      shellDisposals += 1;
-    },
-  }),
-});
-await shellWindows.open({ windowId: "packed-window" });
-assert.equal(shellWindows.read().windows[0].status, "ready");
-await shellWindows.dispose();
-assert.equal(shellDisposals, 1);
-assert.equal(shellWindows.read().windows.length, 0);
-
-assert.equal(workbench.WorkbenchHost.name, "WorkbenchHost");
-
-for (const name of [
-  "appDirectoryResponseSchema",
-  "appComputerPermissionSchema",
-  "appAgentPermissionSchema",
-  "appMarketplacePermissionsSchema",
-]) {
-  assert.equal(name in shell, false, `Private Team contract leaked: ${name}`);
-}
-assert.equal(
-  "computerPermission" in shell.appDirectoryEntrySchema.shape,
-  false,
-);
-assert.equal(
-  "marketplacePermissions" in shell.appDirectoryEntrySchema.shape,
-  false,
-);
-assert.equal("agentPermission" in shell.appDirectoryEntrySchema.shape, false);
-assert.equal("grants" in shell.appDirectoryEntrySchema.shape, false);
 
 // The packed storage owner runs without a Hub or Worker global. Lifecycle
 // writes share the team layer and invalidate a live member subscription.
@@ -418,6 +353,7 @@ assert.equal(
 
 for (const status of [404, 429]) {
   const app = createOyster({
+    bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({ kind: "refused", status, retryAfter: 9 }),
     },
@@ -599,3 +535,21 @@ assert.throws(() =>
     null,
   );
 }
+
+import { decodeMachineAgentHome } from "@fungi.computer/oyster/machine-link";
+assert.deepEqual(decodeMachineAgentHome({ kind: "hosted" }), {
+  kind: "hosted",
+});
+assert.deepEqual(
+  decodeMachineAgentHome({ kind: "machine", deviceId: "device-one" }),
+  { kind: "machine", deviceId: "device-one" },
+);
+assert.throws(
+  () =>
+    decodeMachineAgentHome({
+      kind: "machine",
+      deviceId: "device-one",
+      memberId: "member-one",
+    }),
+  Schema.isSchemaError,
+);

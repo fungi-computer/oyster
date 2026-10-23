@@ -13,7 +13,8 @@
 ### OysterKeyCapability
 
 ```ts
-type OysterKeyCapability = "apps.read" | "apps.use" | "computer.use";
+type OysterKeyCapability =
+  "apps.read" | "apps.use" | "computer.use" | "machine.enroll";
 ```
 
 Every capability an Oyster key may carry.
@@ -87,6 +88,8 @@ const oysterKeyVocabulary: GrantVocabulary<OysterKeyCapability>;
 `apps.use` also reaches `apps.read` (one level, per `defineGrants`'s own
 `implies`): a key that may change an App's data may also read it. `computer.use`
 has no narrower capability under it; the Computer is on or off, host-wide.
+`machine.enroll` admits enrollment only; it implies no App or Computer access.
+The enrollment owner, not this vocabulary, owns one-use consumption.
 
 ---
 
@@ -163,6 +166,26 @@ function keyAllowsComputerUse(key): boolean;
 ```
 
 Whether a live key's own grants turn its Computer access on. Off by default.
+
+#### Parameters
+
+| Parameter | Type                              |
+| --------- | --------------------------------- |
+| `key`     | [`LiveOysterKey`](#liveoysterkey) |
+
+#### Returns
+
+`boolean`
+
+---
+
+### keyAllowsMachineEnroll()
+
+```ts
+function keyAllowsMachineEnroll(key): boolean;
+```
+
+Whether a live key's grants permit a one-use device enrollment.
 
 #### Parameters
 

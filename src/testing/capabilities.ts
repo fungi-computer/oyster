@@ -125,12 +125,20 @@ export async function capabilityFixture(
     descriptors: capabilities,
   });
   if (options.admitted === false)
-    installation = { ...installation, approvedGrants: [], approval: null };
+    installation = {
+      ...installation,
+      authority: {
+        ...installation.authority,
+        approvedGrants: [],
+        approval: null,
+      },
+    };
   // An anonymous reader reaches only a public App, as the host's visitor.
   if (options.visitor) installation = { ...installation, visibility: "public" };
   const readOnly = () =>
     Promise.reject(new Error("Fixture installations are read-only"));
   const base: OysterHost = {
+    bootUi: () => Promise.resolve({ kind: "passed" as const }),
     auth: {
       resolve: () =>
         Promise.reject(new Error("Capability fixture resolves no actor")),
@@ -154,12 +162,12 @@ export async function capabilityFixture(
       put: () => Promise.reject(new Error("Fixture artifacts are read-only")),
     },
     installations: {
+      generation: () => Promise.resolve("fixture-generation"),
       list: () => Promise.resolve([installation]),
       get: (id) =>
         Promise.resolve(
           id === installation.installationId ? installation : null,
         ),
-      put: readOnly,
       compareAndPut: readOnly,
     },
     instances: {
@@ -186,7 +194,10 @@ export async function capabilityFixture(
       installation = {
         ...installation,
         release: await release("rel_undeclared", []),
-        authorityVersion: installation.authorityVersion + 1,
+        authority: {
+          ...installation.authority,
+          authorityVersion: installation.authority.authorityVersion + 1,
+        },
       };
     },
   };

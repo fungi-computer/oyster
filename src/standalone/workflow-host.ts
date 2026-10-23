@@ -46,6 +46,7 @@ import type { AppMethodCallContext } from "@fungi.computer/puffball/app-method-r
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   createGraphWorkflowRuns,
+  createTriggerRunReservations,
   compileForMember,
   graphStartRequestSchema,
   preparationFromRun,
@@ -208,6 +209,11 @@ export function createStandaloneWorkflowHost(
   host: StandaloneWorkflowHost,
   options: Readonly<{
     authority(libraryInstallationId: string): WorkflowRunAuthority;
+    /** The standalone root's live canonical owner, never an App-supplied actor. */
+    lifecycleMember(): Promise<Readonly<{
+      memberId: string;
+      membershipVersion: number;
+    }> | null>;
     /** Whether this member may have run endings reported to the Agent Session. */
     admitDelivery(
       memberId: string,
@@ -215,7 +221,19 @@ export function createStandaloneWorkflowHost(
     ): Promise<boolean>;
   }>,
 ) {
-  const store = createGraphWorkflowRuns(owner);
+  const graph = createGraphWorkflowRuns(owner);
+  const reservations = createTriggerRunReservations(owner);
+  const store = {
+    ...graph,
+    markTerminal(...args: Parameters<typeof graph.markTerminal>): void {
+      // The standalone run owner ends graph/review state and the SAME Braid
+      // reservation atomically, without creating a Hub Computer-cleanup queue.
+      owner.transactionSync(() => {
+        graph.markTerminal(...args);
+        reservations.terminalTriggerRun(args[0]);
+      });
+    },
+  };
   // Only the host's attested invocation context is associated here. Lifecycle,
   // events, reviews and replay are owned by the shared runtime store.
   owner.sql.exec(`CREATE TABLE IF NOT EXISTS standalone_workflow_callers (
@@ -316,7 +334,11 @@ export function createStandaloneWorkflowHost(
     );
     return (
       grantsFor(
-        selected.installation,
+        {
+          status: selected.installation.status,
+          authority: selected.installation.authority,
+          artifactDigest: selected.installation.release.artifact.artifactDigest,
+        },
         declaration,
         snapshot,
         "workflow.publish",
@@ -333,7 +355,11 @@ export function createStandaloneWorkflowHost(
     );
     if (
       grantsFor(
-        selected.installation,
+        {
+          status: selected.installation.status,
+          authority: selected.installation.authority,
+          artifactDigest: selected.installation.release.artifact.artifactDigest,
+        },
         declaration,
         snapshot,
         "workflow.run",
@@ -365,14 +391,10 @@ export function createStandaloneWorkflowHost(
     checkLibraryOperation(selected, operation);
     return selected;
   };
-  const admitInvocation = async (raw: InvocationFacts, operation: string) => {
-    const facts = S.decodeUnknownSync(invocationFactsSchema)(raw, {
-      onExcessProperty: "error",
-    });
-    if (
-      facts.subject.kind !== "call" ||
-      facts.selection.owner.kind !== "installation"
-    )
+  // All frame kinds re-open the same live installation pin and grants.
+  // A lifecycle admission does not turn the frame into a member call.
+  const admitFrame = async (facts: InvocationFacts, operation: string) => {
+    if (facts.selection.owner.kind !== "installation")
       throw new AppInstanceError("revoked");
     if (facts.deadlineAt <= Date.now()) throw new AppInstanceError("expired");
     if (
@@ -400,12 +422,56 @@ export function createStandaloneWorkflowHost(
     return {
       ...selected,
       libraryId,
-      context: facts.subject.context,
       installationAuthority: {
         selection: current.selection,
         artifactDigest: current.artifactDigest,
       },
     };
+  };
+  const admitInvocation = async (raw: InvocationFacts, operation: string) => {
+    const facts = S.decodeUnknownSync(invocationFactsSchema)(raw, {
+      onExcessProperty: "error",
+    });
+    if (facts.subject.kind !== "call") throw new AppInstanceError("revoked");
+    return {
+      ...(await admitFrame(facts, operation)),
+      context: facts.subject.context,
+    };
+  };
+  const admitLifecycle = async (
+    raw: InvocationFacts,
+    operation: "catalog" | "runGraph",
+  ) => {
+    const facts = S.decodeUnknownSync(invocationFactsSchema)(raw, {
+      onExcessProperty: "error",
+    });
+    if (
+      facts.subject.kind !== "lifecycle" ||
+      facts.subject.name !== "onGitPush"
+    )
+      throw new AppInstanceError("revoked");
+    return admitFrame(facts, operation);
+  };
+  const admitStart = async (raw: InvocationFacts) => {
+    const facts = S.decodeUnknownSync(invocationFactsSchema)(raw, {
+      onExcessProperty: "error",
+    });
+    if (facts.subject.kind === "call")
+      return admitInvocation(facts, "runGraph");
+    const selected = await admitLifecycle(facts, "runGraph");
+    const member = await options.lifecycleMember();
+    if (member === null) throw new AppInstanceError("revoked");
+    const current = await options
+      .authority(selected.libraryId)
+      .member(member.memberId);
+    if (current.membershipVersion !== member.membershipVersion)
+      throw new AppInstanceError("revoked");
+    const context: AppMethodCallContext = {
+      actor: { kind: "member", memberId: member.memberId },
+      role: "owner",
+      computerId: host.computerId ?? null,
+    };
+    return { ...selected, context };
   };
   /** A trigger's live library pin; any missing grant is a typed revocation. */
   const triggerAuthority = async (installationId: string) => {
@@ -593,7 +659,8 @@ export function createStandaloneWorkflowHost(
             const after = await host.installations.get(current.installationId);
             if (
               after?.status !== "enabled" ||
-              after.authorityVersion !== current.authorityVersion ||
+              after.authority.authorityVersion !==
+                current.authority.authorityVersion ||
               releaseKey(after) !== releaseKey(current)
             )
               throw new AppInstanceError("revoked");
@@ -628,7 +695,10 @@ export function createStandaloneWorkflowHost(
     facts: InvocationFacts,
     input?: Readonly<{ installationId?: string | undefined }>,
   ) => {
-    const library = await admitInvocation(facts, "catalog");
+    const library =
+      facts.subject.kind === "call"
+        ? await admitInvocation(facts, "catalog")
+        : await admitLifecycle(facts, "catalog");
     if (input?.installationId === undefined) return catalogForLibrary(library);
     const { apps } = await catalogForLibrary(library, {
       installationIds: [input.installationId],
@@ -679,12 +749,15 @@ export function createStandaloneWorkflowHost(
     // Host readers use this only after admitting the live member and library.
     catalogForLibrary,
     async prepare(facts: InvocationFacts, raw: GraphStartRequest) {
-      const selected = await admitInvocation(facts, "runGraph");
+      const selected = await admitStart(facts);
       const { libraryId, context } = selected;
       const request = S.decodeUnknownSync(graphStartRequestSchema)(raw, {
         onExcessProperty: "error",
       });
       const publication = request.published;
+      // Only immutable, published runs receive Workflow node attestations.
+      if (facts.subject.kind === "lifecycle" && publication === undefined)
+        return { error: "not_granted" as const };
       if (publication !== undefined) {
         if (!(await publisherGranted(selected)))
           return { error: "not_granted" as const };
@@ -750,9 +823,13 @@ export function createStandaloneWorkflowHost(
       const admitted = admitRunInput(compiled.plan.definition, request.input);
       if (admitted.kind === "invalid")
         return { error: "invalid_input" as const };
+      // The host's accepted event owns lifecycle replay, not a guest request id.
+      const requestId =
+        facts.subject.kind === "lifecycle" && facts.subject.name === "onGitPush"
+          ? ["onGitPush", facts.subject.eventId]
+          : request.requestId;
       const runId =
-        "run_" +
-        (await contentDigest([libraryId, request.requestId])).slice(7, 47);
+        "run_" + (await contentDigest([libraryId, requestId])).slice(7, 47);
       // An Agent runs with the access of the person who approved its App
       // tools.
       const subject = facts.subject.kind === "call" ? facts.subject : null;
@@ -815,7 +892,7 @@ export function createStandaloneWorkflowHost(
               }
             : {
                 initiatedBy: { kind: "member", memberId: actorId },
-                source: "manual",
+                source: facts.subject.kind === "lifecycle" ? "event" : "manual",
                 libraryInstallationId: libraryId,
                 computerId: context.computerId,
                 plan: compiled.plan,
@@ -832,7 +909,7 @@ export function createStandaloneWorkflowHost(
       const started = {
         teamId: libraryId,
         runId,
-        requestId: await contentDigest([libraryId, request.requestId]),
+        requestId: await contentDigest([libraryId, requestId]),
         actorId,
         computerId: context.computerId,
         plan: compiled.plan,
@@ -843,7 +920,12 @@ export function createStandaloneWorkflowHost(
       };
       const record =
         delivery === undefined ? started : { ...started, delivery };
-      const current = await admitInvocation(facts, "runGraph");
+      const current = await admitStart(facts);
+      if (
+        canonicalJson(S.decodeUnknownSync(S.Json)(current.context)) !==
+        canonicalJson(S.decodeUnknownSync(S.Json)(context))
+      )
+        return { error: "not_granted" as const };
       if (publication !== undefined && !(await publisherGranted(current)))
         return { error: "not_granted" as const };
       const callContext: AppMethodCallContext = {
@@ -1026,6 +1108,7 @@ export function createStandaloneWorkflowHost(
           // retryable fault; same for an instance the owner state marks
           // inactive.
           case "revoked":
+          case "disabled":
           case "instance_owner_mismatch":
           case "instance_authority_version_mismatch":
           case "instance_release_mismatch":
@@ -1043,6 +1126,14 @@ export function createStandaloneWorkflowHost(
                 : `App execution failed (${result.causeClass})`,
             );
           case "expired":
+          case "backend_load_failed":
+          case "backend_construction_failed":
+          case "ui_mount_failed":
+          case "boot_runner_unavailable":
+          case "boot_browser_binding_missing":
+          case "boot_clone_unavailable":
+          case "boot_timeout":
+          case "boot_cleanup_failed":
           case "binding_unavailable":
           case "reentrant":
           case "conflicting_owner_state":
@@ -1060,9 +1151,11 @@ export function createStandaloneWorkflowHost(
         }
       }
       // The engine's closed refusal vocabulary names host decisions; an App's
-      // own domain refusal fails the node with its code.
+      // own domain refusal fails the node with its code and caller-facing reason.
       if (result.value.kind === "refused")
-        throw new Error(`App method refused (${result.value.code})`);
+        throw new Error(
+          `App method refused (${result.value.code}): ${result.value.message}`,
+        );
       const value = result.value.value;
       const pending =
         pinned.pending === true ? pendingSchema.safeParse(value) : null;

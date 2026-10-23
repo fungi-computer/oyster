@@ -76,7 +76,13 @@ export async function hostGateFacts(
     installation.installationId,
   );
   return {
-    installation,
+    installation: {
+      status: installation.status,
+      visibility: installation.visibility,
+      instanceId: installation.instanceId,
+      authority: installation.authority,
+      artifactDigest: installation.release.artifact.artifactDigest,
+    },
     declaration,
     declaredOperations: await deriveDeclaredOperations(
       installation.release,

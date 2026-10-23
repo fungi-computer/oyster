@@ -27,6 +27,12 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { guestLimits, type GuestLimits } from "./guest-policy.js";
 export type { GuestLimits } from "./guest-policy.js";
+import { headContentObject } from "./build/content-objects.js";
+import type {
+  ArtifactHeads,
+  ArtifactStore,
+  ArtifactStreams,
+} from "./release.js";
 import {
   appBackendBindingKinds,
   type AppBackendBindingName,
@@ -41,6 +47,13 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
+import type { Release } from "@fungi.computer/puffball";
+import {
+  BACKEND_CONSTRUCTION_FACET,
+  checkBackendConstruction,
+} from "./boot-construction.js";
+import { BootGateError, type UiBootCheckOutcome } from "./boot-gate.js";
+export { checkBackendConstruction } from "./boot-construction.js";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   createAppInstance,
@@ -49,10 +62,86 @@ import {
   instanceSchema,
   appInstanceErrorCodeSchema,
   type AppInstance,
+  type Backend,
+  type Instance,
   type InstancePorts,
 } from "./index.js";
 
 const bindingWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
+
+/** Store Release artifacts without loading the Worker ownership barrel. */
+export function r2ArtifactStore(
+  bucket: R2Bucket,
+): ArtifactStore & ArtifactHeads & ArtifactStreams {
+  const abortError = (signal: AbortSignal): Error => {
+    const reason: unknown = signal.reason;
+    return reason instanceof Error
+      ? reason
+      : new Error("Artifact stream aborted", { cause: reason });
+  };
+  const cancelAfterOpen = (
+    opening: Promise<R2ObjectBody | null>,
+    reason: Error,
+  ): void => {
+    void opening
+      .then(
+        async (object) => {
+          if (object !== null) await object.body.cancel(reason);
+        },
+        () => undefined,
+      )
+      .catch((cause: unknown) => {
+        const failureKind =
+          cause instanceof Error ? cause.name : "non-error rejection";
+        console.error("R2 artifact body cancellation failed", failureKind);
+      });
+  };
+  return {
+    head: (artifactRef) => headContentObject(bucket, artifactRef),
+    async stream(artifactRef, signal) {
+      const opening = bucket.get(artifactRef);
+      if (signal === undefined) {
+        const object = await opening;
+        return object?.body ?? null;
+      }
+      if (signal.aborted) {
+        const failure = abortError(signal);
+        cancelAfterOpen(opening, failure);
+        throw failure;
+      }
+      let abort: (() => void) | undefined;
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        abort = () => {
+          reject(abortError(signal));
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      try {
+        const object = await Promise.race([opening, cancelled]);
+        return object?.body ?? null;
+      } catch (cause) {
+        cancelAfterOpen(
+          opening,
+          cause instanceof Error
+            ? cause
+            : new Error("Artifact stream failed", { cause }),
+        );
+        throw cause;
+      } finally {
+        if (abort !== undefined) signal.removeEventListener("abort", abort);
+      }
+    },
+    async get(artifactRef) {
+      const object = await bucket.get(artifactRef);
+      return object === null
+        ? null
+        : new Uint8Array(await object.arrayBuffer());
+    },
+    async put(artifactRef, bytes) {
+      await bucket.put(artifactRef, bytes);
+    },
+  };
+}
 
 /** Encode supervisor refusals before native RPC can discard Error properties. */
 export async function captureFrameBindingReply<Value>(
@@ -289,6 +378,8 @@ export type AppInstanceContext<FacetClass> = Readonly<{
     abort: (name: string, reason: Error) => void;
     /** Delete the named facet and its storage. */
     delete: (name: string) => void;
+    /** Native same-supervisor copy; absence refuses initialized-state probes. */
+    clone?: (source: string, destination: string) => void;
   }>;
 }>;
 
@@ -340,14 +431,18 @@ export function createCloudflareInvocationGate<Host, FacetClass>(
  * @param loader - The Worker Loader binding; without it backend execution is unavailable.
  * @param resolve - Resolves a Release ID to its verified durable backend.
  * @param guestEnv - Mints loopbacks bound to the captured invocation frame.
+ * @param bootUi - Host-owned UI check, or `null` when this executor deliberately skips it (for example, after the signed host already checked).
  * @param limits - Guest CPU and subrequest budgets; omitted fields use safe defaults.
+ * @param onAbort - Close the host's existing invocation frame after its state is fenced.
  */
 export function createCloudflareAppInstance<FacetClass, Host>(
   ctx: AppInstanceContext<FacetClass>,
   loader: AppInstanceLoader<FacetClass> | undefined,
   resolve: InstancePorts<Host>["resolve"],
   guestEnv: (frame: InvocationFrame<Host>) => object,
+  bootUi: (release: Release) => Promise<UiBootCheckOutcome | null>,
   limits?: Partial<GuestLimits>,
+  onAbort?: (reason: AppInstanceError) => Promise<void>,
 ): AppInstance<Host> {
   const budget = guestLimits(limits);
   const sql = ctx.storage.sql;
@@ -431,13 +526,51 @@ export function createCloudflareAppInstance<FacetClass, Host>(
         );
       }),
     resolve,
-    abort: () =>
-      attempt(() => {
-        ctx.facets.abort("app", new Error("Instance authority changed"));
+    boot: (
+      artifact: Backend,
+      priorStateSchema: Instance["stateSchema"],
+      uiCheck: "run" | "reuse",
+    ) =>
+      Effect.tryPromise({
+        try: async () => {
+          await checkBackendConstruction(
+            ctx,
+            loader,
+            artifact,
+            budget,
+            priorStateSchema,
+          );
+          // Apply reuses prepare's recorded UI result: no second browser.
+          return uiCheck === "run" ? await bootUi(artifact.release) : null;
+        },
+        catch: (cause) =>
+          cause instanceof BootGateError
+            ? new AppInstanceError(cause.code, { cause })
+            : cause instanceof Error
+              ? cause
+              : new Error("Host boot gate failed"),
+      }),
+    abort: (reason) =>
+      Effect.tryPromise({
+        try: async () => {
+          try {
+            await onAbort?.(reason);
+          } finally {
+            ctx.facets.abort("app", reason);
+          }
+        },
+        catch: (cause) =>
+          cause instanceof Error
+            ? cause
+            : new Error("Instance abort failed", { cause }),
       }),
     purge: () =>
       attempt(() => {
-        ctx.facets.delete("app");
+        try {
+          ctx.facets.delete(BACKEND_CONSTRUCTION_FACET);
+        } finally {
+          ctx.facets.delete("app");
+        }
       }),
     connect: (artifact, frame) =>
       attempt(() => {

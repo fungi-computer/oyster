@@ -1,3 +1,9 @@
+import { grantDeclaredAppCapabilities } from "./owner-grants.fixture.mjs";
+import {
+  nativeLabAppHost,
+  nativeAppClient,
+} from "./workflow-native.fixture.mjs";
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // An App builds on Oyster's own Computer, end to end on a real on-box VM:
 // the production root (wrangler dev, landed-push-root.fixture.ts) with
 // Bonsai installed, a real lab vmd Computer, and Bonsai's own first-party
@@ -8,42 +14,26 @@
 // back; the host stores and verifies the Release, and the owner switches
 // the Bonsai installation to it.
 //
-// Then Build on merge: the owner arms the stock Workflows template on a
-// forked App's source repository (a new App with its own installation), and
-// each merged Change builds that exact commit and installs it, once with
-// Review before install (the run waits for the owner's approval) and once
-// without (a passing build installs automatically).
+// Then an accepted main merge on the registered fork starts Bonsai's retained
+// build/verify/install Workflow without trigger arming or a review step.
 //
-// Requires OYSTER_PROOF_ENV_FILE (mode 0600) naming an already-running lab
-// vmd and the worker slot port it calls back to. Claim that slot first.
-import process from "node:process";
+// This lab qualification requires an explicitly supplied, already-authorized
+// OYSTER_PROOF_ENV_FILE. No VM/lab slot is available in this writing lane.
+// Installed-Release acceptance uses the separately authorized throwaway hosted
+// preview runner at the exact bundle SHA; this script does not create a slot.
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  writeFile,
-  rm,
-} from "node:fs/promises";
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { build } from "esbuild";
-import * as z from "zod";
-import { parse as parseJsonc } from "jsonc-parser";
-import { createAppBuild } from "@fungi.computer/puffball/app";
-import { backendMediaType } from "@fungi.computer/puffball/backend";
-import { sha256 } from "@fungi.computer/oyster/host";
+
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
 import { appBackend } from "../../../../apps/bonsai/backend/methods.ts";
 import packageMetadata from "../../../../apps/bonsai/package.json" with { type: "json" };
-import { workflowGitProvider } from "./workflow-git.fixture.mjs";
-import { labComputer } from "./lab-computer.fixture.mjs";
+
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import * as Effect from "effect/Effect";
 import { parseSourceRevision } from "@fungi.computer/puffball";
 import {
@@ -51,205 +41,34 @@ import {
   createLocalCommitSourceCapture,
 } from "@fungi.computer/oyster/build";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
-import { appBackend as workflowsBackend } from "../../../../apps/trellis/backend/methods.ts";
-import workflowsMetadata from "../../../../apps/trellis/package.json" with { type: "json" };
-
-const { port, vars: computerVars } = await labComputer();
 
 const appDeclaration = buildAppDeclaration(
   appBackend,
   packageMetadata.fungi.app,
 );
-const workflowsDeclaration = buildAppDeclaration(
-  workflowsBackend,
-  workflowsMetadata.fungi.app,
-);
 const root = fileURLToPath(new URL("../../", import.meta.url));
-await mkdir(`${root}.botanical`, { recursive: true });
-const work = await mkdtemp(`${root}.botanical/app-build-native-`);
-const config = parseJsonc(
-  await readFile(`${root}deploy/wrangler.celld.jsonc`, "utf8"),
-);
-config.main = `${root}test/standalone/landed-push-root.fixture.ts`;
-config.vars = {
-  ...config.vars,
-  WORKFLOW_CODE_LOCAL_DEV: process.env.CELLD_PLATFORM_CELLD ? "false" : "true",
-};
-await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
-const key = randomBytes(24).toString("hex");
-const provider = await workflowGitProvider();
-const origin = `http://127.0.0.1:${String(port)}`;
-const tenantHost = "oyster.test";
-const auth = { Authorization: `Bearer ${key}` };
-const vars = {
-  ...computerVars,
-  OYSTER_OWNER_KEY: key,
-  OYSTER_ORIGIN: `https://${tenantHost}`,
-  GIT_ORIGIN: provider.origin,
-};
-const redact = (text) =>
-  Object.values(vars).reduce(
-    (message, value) => message.replaceAll(value, "[REDACTED]"),
-    String(text),
-  );
-const worker = spawn(
-  `${root}node_modules/.bin/wrangler`,
-  [
-    "dev",
-    `${root}test/standalone/landed-push-root.fixture.ts`,
-    "--config",
-    `${work}/wrangler.json`,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--persist-to",
-    `${work}/state`,
-    "--local-upstream",
-    tenantHost,
-    "--upstream-protocol",
-    "https",
-    ...Object.entries(vars).flatMap(([name, value]) => [
-      "--var",
-      `${name}:${value}`,
-    ]),
-  ],
-  { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: process.env },
-);
-let output = "";
-// Redacted worker log, kept after the run for diagnosis.
-const workerLog = `${root}.botanical/app-build-native.log`;
-await writeFile(workerLog, "");
-const capture = (chunk) => {
-  output += chunk;
-  void appendFile(workerLog, redact(chunk));
-};
-worker.stdout.on("data", capture);
-worker.stderr.on("data", capture);
-const stopped = new Promise((resolve) => worker.once("exit", resolve));
 
-async function call(installation, method, input) {
-  const response = await globalThis.fetch(
-    `${origin}/apps/${installation}/methods/${method}`,
-    {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
-  );
-  const text = await response.text();
-  assert.equal(response.status, 200, `${installation}.${method}: ${text}`);
-  return JSON.parse(text);
-}
-async function persist(value) {
-  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(value));
-  const digest = await sha256(bytes);
-  const artifactRef = `artifact:sha256-${digest.slice(7)}`;
-  const response = await globalThis.fetch(
-    `${origin}/api/artifacts/${artifactRef}?digest=${digest}`,
-    {
-      method: "PUT",
-      headers: auth,
-      body: bytes,
-      signal: globalThis.AbortSignal.timeout(120_000),
-    },
-  );
-  assert.equal(response.status, 204, await response.text());
-  return { artifactRef, digest, byteLength: bytes.length, version: digest };
-}
-/** Install a digest-verified test Release of one App's real backend source. */
-async function installApp(installationId, entry, exportName, declaration) {
-  const bundled = await build({
-    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-    bundle: true,
-    write: false,
-    minify: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    external: ["cloudflare:*"],
-    target: "es2022",
-  });
-  const backend = {
-    ...(await persist({
-      runtime: { kind: "durable-facet", stateSchema: 1 },
-      compatibilityDate: "2026-09-04",
-      exportName,
-      code: bundled.outputFiles[0].text,
-    })),
-    mediaType: backendMediaType,
-  };
-  log("step: backend persisted");
-  const artifact = await persist(createAppBuild(null, backend, declaration));
-  log("step: build persisted; installing");
-  const response = await globalThis.fetch(`${origin}/api/installations`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      installationId,
-      release: {
-        appId: `app_${installationId}`,
-        releaseId: `rel_${installationId}`,
-        artifact: {
-          artifactRef: artifact.artifactRef,
-          artifactDigest: artifact.digest,
-          provenance: {
-            sourceRevision: `git:${"a".repeat(40)}`,
-            sourceTreeDigest: artifact.digest,
-            buildRecipeDigest: artifact.digest,
-          },
-        },
-      },
-    }),
-    signal: globalThis.AbortSignal.timeout(120_000),
-  });
-  assert.equal(response.status, 201, await response.text());
-}
-// Always async: the in-process Git provider answers on this event loop.
-async function hostGit(...args) {
-  const child = spawn("git", args, {
-    cwd: work,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const status = await new Promise((resolve) => child.once("exit", resolve));
-  assert.equal(status, 0, redact(stderr));
-  return stdout.trim();
-}
+// Redacted worker log, kept after the run for diagnosis.
+
+const nativeHost = await nativeLabAppHost(root, "app-build-native");
+const { work, key, origin, auth, redact, git: hostGit } = nativeHost;
+
+const { call, installFirstParty } = nativeAppClient(origin, auth, {
+  key,
+  requestMilliseconds: 120_000,
+  installationMilliseconds: 120_000,
+});
 
 const timings = {};
 try {
-  const deadline = Date.now() + 90_000;
-  while (
-    !(await globalThis
-      .fetch(`${origin}/login`, {
-        signal: globalThis.AbortSignal.timeout(2_000),
-      })
-      .then(
-        (response) => response.ok,
-        () => false,
-      ))
-  ) {
-    assert.equal(worker.exitCode, null, "Standalone Oyster exited");
-    assert.ok(Date.now() < deadline, "Standalone Oyster did not start");
-    await delay(200);
-  }
+  await nativeHost.ready();
   log("step: Oyster ready; installing Bonsai");
-  await installApp(
-    "bonsai",
-    "../../../../apps/bonsai/backend/index.ts",
-    "BonsaiApp",
-    appDeclaration,
-  );
+  await installFirstParty("bonsai", appDeclaration);
+  await grantDeclaredAppCapabilities({
+    origin,
+    installationId: "bonsai",
+    headers: auth,
+  });
 
   const bonsai = standaloneAppSet.find(
     (app) => app.installationId === "bonsai",
@@ -271,7 +90,7 @@ try {
         ).capture();
         return yield* createFirstPartyAppSourceDistribution({
           appId: bonsai.appId,
-          entry: bonsai.recipe.entry,
+          entry: committedAppRecipe(repository, bonsai, revision).entry,
           source,
         });
       }),
@@ -320,12 +139,13 @@ try {
     const text = await response.text();
     return { status: response.status, body: text ? JSON.parse(text) : null };
   };
-  const registered = await owner("PUT", "/api/apps/app_bonsai/build-source", {
-    installationId: "bonsai",
-    repository: "bonsai-source",
-    recipe: bonsai.recipe,
+  const registered = await call("bonsai", "apps.register", {
+    repo: "bonsai-source",
   });
-  assert.equal(registered.status, 204, JSON.stringify(registered.body));
+  assert.deepEqual(registered, {
+    appId: bonsai.appId,
+    sourceRevision: "git:" + head,
+  });
   const started = Date.now();
   const build = await owner("POST", "/api/builds", {
     appId: "app_bonsai",
@@ -335,7 +155,7 @@ try {
   log(`step: build ${build.body.jobId} started for ${build.body.releaseId}`);
   let view = build.body;
   while (view.status === "running") {
-    assert.equal(worker.exitCode, null, "Standalone Oyster exited");
+    assert.equal(nativeHost.exitCode, null, "Standalone Oyster exited");
     assert.ok(Date.now() - started < 960_000, "Build did not finish");
     await delay(5_000);
     view = (await owner("GET", `/api/builds/${build.body.jobId}`)).body;
@@ -358,28 +178,48 @@ try {
   );
   assert.equal(current.release.releaseId, view.release.releaseId);
   assert.match(
-    output,
+    nativeHost.output(),
     /"lane":"internal-git"/u,
     "The build clone and report used the build lanes",
   );
   assert.match(
-    output,
+    nativeHost.output(),
     /"lane":"public"/u,
     "Packages came over the public lane",
   );
 
-  // Build on merge (C1): the stock Workflows template, armed by the owner on
-  // a forked App's source repository, builds each merged commit and installs
-  // it on that App's own installation, once through the review step and once
-  // automatically.
-  await installApp(
-    "trellis",
-    "../../../../apps/trellis/backend/index.ts",
-    "Trellis",
-    workflowsDeclaration,
-  );
+  // No arming/configuration step: registration plus an accepted main update
+  // starts the retained Workflow under the host's lifecycle authority.
   const fork = { appId: "app_mybonsai", installationId: "my-bonsai" };
   await call("bonsai", "repos.create", { name: "my-bonsai" });
+  // This copy is a distinct App: commit its identity, not a registration override.
+  // Preserve every other npm and fungi field in the projected manifest.
+  const forkPackagePath = join(work, "checkout", "package.json");
+  const forkPackage = JSON.parse(await readFile(forkPackagePath, "utf8"));
+  await writeFile(
+    forkPackagePath,
+    JSON.stringify(
+      {
+        ...forkPackage,
+        fungi: { ...forkPackage.fungi, appId: fork.appId },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  await hostGit("-C", "checkout", "add", "package.json");
+  await hostGit(
+    "-C",
+    "checkout",
+    "-c",
+    "user.name=Owner",
+    "-c",
+    "user.email=owner@test.invalid",
+    "commit",
+    "-qm",
+    "Give the copied App its own identity",
+  );
+  const forkHead = await hostGit("-C", "checkout", "rev-parse", "HEAD");
   await hostGit(
     "-C",
     "checkout",
@@ -392,37 +232,17 @@ try {
     `${origin}/git/bonsai/my-bonsai.git`,
     "main",
   );
-  const forkSource = await owner(
-    "PUT",
-    `/api/apps/${fork.appId}/build-source`,
-    {
-      installationId: "bonsai",
-      repository: "my-bonsai",
-      recipe: bonsai.recipe,
-    },
-  );
-  assert.equal(forkSource.status, 204, JSON.stringify(forkSource.body));
-  const template = z
-    .object({ definition: z.json(), layout: z.json() })
-    .parse(
-      JSON.parse(
-        await readFile(
-          new URL(
-            "../../../../apps/trellis/templates/bonsai-build-on-merge.json",
-            import.meta.url,
-          ),
-          "utf8",
-        ),
-      ),
-    );
-  const catalog = (await call("trellis", "catalog", {})).apps.find(
-    (item) => item.installationId === "bonsai",
-  );
-  assert.ok(catalog?.events?.["change.merged"], JSON.stringify(catalog));
+  const forkSource = await call("bonsai", "apps.register", {
+    repo: "my-bonsai",
+  });
+  assert.deepEqual(forkSource, {
+    appId: fork.appId,
+    sourceRevision: "git:" + forkHead,
+  });
   const until = async (read, accepts, label, timeoutMs) => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      assert.equal(worker.exitCode, null, "Standalone Oyster exited");
+      assert.equal(nativeHost.exitCode, null, "Standalone Oyster exited");
       const value = await read();
       if (accepts(value)) return value;
       assert.ok(Date.now() < deadline, `${label}: ${JSON.stringify(value)}`);
@@ -446,56 +266,13 @@ try {
     }
     return call("bonsai", "repos.get", { repo });
   };
-  let edits = 0;
-  for (const reviewBeforeInstall of [true, false]) {
-    const workflowId = reviewBeforeInstall
-      ? "build-on-merge-review"
-      : "build-on-merge-auto";
-    // The owner's arm-time choices: this App, its repository, its
-    // installation and the Review before install setting.
-    const definition = globalThis.structuredClone(template.definition);
-    for (const node of definition.nodes)
-      if (node.kind === "app")
-        node.methodDigest = catalog.methods[node.method].digest;
-    const [trigger] = definition.triggers;
-    trigger.eventDigest = catalog.events["change.merged"].digest;
-    trigger.when.tests[0].right = { literal: "my-bonsai" };
-    trigger.input.appId = { literal: fork.appId };
-    trigger.input.installationId = { literal: fork.installationId };
-    trigger.input.reviewBeforeInstall = { literal: reviewBeforeInstall };
-    const draft = await call("trellis", "saveDraft", {
-      workflowId,
-      expectedRevision: 0,
-      draft: { definition, layout: template.layout },
-    });
-    assert.equal(draft.kind, "saved", JSON.stringify(draft));
-    let published = await call("trellis", "publishWorkflow", {
-      workflowId,
-      expectedRevision: draft.revision,
-    });
-    if (published.kind === "publishing")
-      published = await until(
-        () =>
-          call("trellis", "publicationStatus", {
-            workflowId,
-            publicationId: published.publicationId,
-          }),
-        (status) => status.kind !== "publishing",
-        `${workflowId} publication`,
-        60_000,
-      );
-    assert.equal(published.kind, "published", JSON.stringify(published));
-    const armed = await call("trellis", "armEventTrigger", {
-      workflowId,
-      commit: published.commit,
-      triggerId: trigger.id,
-      bindings: { bonsai: "bonsai" },
-    });
-    assert.equal(armed.kind, "armed", JSON.stringify(armed));
-
+  const beforeMerge = await call("bonsai", "apps.buildWorkflowRuns", {});
+  assert.ok("runs" in beforeMerge, JSON.stringify(beforeMerge));
+  const previousRuns = new Set(beforeMerge.runs.map((run) => run.runId));
+  {
+    const workflowId = "bonsai-build-on-merge";
     // An edit lands on the fork's main through a merged Change.
-    edits += 1;
-    const branch = `edit-${String(edits)}`;
+    const branch = "edit-main";
     await hostGit("-C", "checkout", "checkout", "-qB", branch, "main");
     await writeFile(`${work}/checkout/BUILD-ON-MERGE.txt`, `edit ${branch}\n`);
     await hostGit("-C", "checkout", "add", "BUILD-ON-MERGE.txt");
@@ -561,48 +338,37 @@ try {
     await hostGit("-C", "checkout", "merge", "-q", "--ff-only", proposed);
     log(`step: ${branch} merged at ${mergedCommit}; awaiting ${workflowId}`);
 
-    const [run] = await until(
-      () => call("trellis", "listRuns", { workflowId }),
-      (rows) => rows.some((row) => row.source === "event"),
-      `the merge starts ${workflowId}`,
+    const listed = await until(
+      () => call("bonsai", "apps.buildWorkflowRuns", {}),
+      (reply) =>
+        "runs" in reply &&
+        reply.runs.some(
+          (run) => run.source === "event" && !previousRuns.has(run.runId),
+        ),
+      "the accepted merge starts the retained build Workflow",
       60_000,
     );
-    const status = () => call("trellis", "runStatus", { runId: run.runId });
+    const run = listed.runs.find(
+      (row) => row.source === "event" && !previousRuns.has(row.runId),
+    );
+    assert.ok(run, JSON.stringify(listed));
     const buildStarted = Date.now();
-    if (reviewBeforeInstall) {
-      await until(
-        status,
-        (value) => {
-          assert.notEqual(value.outcome, "terminal", JSON.stringify(value));
-          return value.reviews.some((row) => row.status === "pending");
-        },
-        `${workflowId} waits for review after a passing build`,
-        960_000,
-      );
-      const before = (await owner("GET", "/api/installations")).body;
-      assert.ok(
-        !before.some((row) => row.installationId === fork.installationId),
-        "Nothing installs before the owner approves",
-      );
-      assert.deepEqual(
-        await call("trellis", "answerReview", {
-          runId: run.runId,
-          nodeId: "review",
-          iteration: "0",
-          answer: { approved: true },
-        }),
-        { result: "accepted" },
-      );
-    }
     const finished = await until(
-      status,
-      (value) => value.outcome !== "active",
-      `${workflowId} finishes`,
+      () => call("bonsai", "apps.buildWorkflowRun", { runId: run.runId }),
+      (value) => "outcome" in value && value.outcome !== "active",
+      "build, verify and install finish",
       960_000,
     );
     timings[workflowId] = Date.now() - buildStarted;
     assert.equal(finished.outcome, "terminal", JSON.stringify(finished));
     assert.equal(finished.error, null, JSON.stringify(finished));
+    for (const nodeId of ["build", "verify", "install"])
+      assert.ok(
+        finished.events.some(
+          (event) => event.nodeId === nodeId && event.state === "complete",
+        ),
+        JSON.stringify(finished),
+      );
     const installations = (await owner("GET", "/api/installations")).body;
     const installed = installations.find(
       (row) => row.installationId === fork.installationId,
@@ -614,21 +380,11 @@ try {
       installed.release.artifact.provenance.sourceRevision,
       `git:${mergedCommit}`,
     );
-    assert.equal(
-      finished.reviews.length,
-      reviewBeforeInstall ? 1 : 0,
-      JSON.stringify(finished.reviews),
-    );
-    // The run holds no key: it ran as the owner who armed it.
+    assert.deepEqual(finished.reviews, []);
+    // The host-owned run carries no owner credential.
     const record = JSON.stringify([run, finished]);
     assert.ok(!record.includes(key), "The run record carries no owner key");
     assert.doesNotMatch(record, /obp\.|uploadGrant|Authorization/u);
-    assert.deepEqual(
-      await call("trellis", "disarmEventTrigger", {
-        eventTriggerId: armed.eventTriggerId,
-      }),
-      { kind: "disarmed" },
-    );
     log(
       `step: ${workflowId} installed ${installed.release.releaseId} in ${String(timings[workflowId])}ms`,
     );
@@ -637,11 +393,8 @@ try {
     `PASS app build native proof ${JSON.stringify(timings)} ${view.release.releaseId}`,
   );
 } catch (cause) {
-  error(redact(output));
+  error(redact(nativeHost.output()));
   throw cause;
 } finally {
-  worker.kill("SIGTERM");
-  await stopped;
-  await provider.close();
-  await rm(work, { recursive: true, force: true });
+  await nativeHost.close();
 }
