@@ -960,7 +960,12 @@ test("a Worker resolves one workspace per request for its base host and capabili
     OYSTER_OWNER_KEY: "fixture-owner-key-not-a-real-secret",
     OYSTER_ORIGIN: "https://oyster.test",
     RELEASES: { get: () => assert.fail("workspace files must not read R2") },
-    REGISTRY: { getByName: () => ({ get: async () => null }) },
+    REGISTRY: {
+      getByName: () => ({
+        get: async () => null,
+        storeFromOlderOyster: async () => false,
+      }),
+    },
   };
   const auth = {
     authenticate: async () => ({

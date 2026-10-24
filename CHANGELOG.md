@@ -1,5 +1,25 @@
 # @fungi.computer/oyster
 
+## 0.3.1
+
+### Patch Changes
+
+- Changes since 0.3.0:
+
+  - test(oyster): registry fakes answer storeFromOlderOyster like the real
+    registry
+  - fix(oyster): keep the Worker refusal out of the CLI's module graph
+  - fix(oyster): keep older-store helpers private and their types public
+  - fix(oyster): decode the older-store refusal without swallowing body errors
+  - fix(oyster): cache clean registry answers, tighten older-store wording,
+    reset steps and tests
+  - fix(oyster): refuse a store created by Oyster 0.2 or earlier
+  - fix(computer): read ignore rules without loading the ai-dependent tools
+    entry
+
+- Updated dependencies
+  - @fungi.computer/computer@0.2.1
+
 ## 0.3.0
 
 ### Minor Changes

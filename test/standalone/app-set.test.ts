@@ -57,6 +57,10 @@ import {
 } from "../../src/installation-client.js";
 import type { UiBootCheckOutcome } from "../../src/boot-gate.js";
 import { instanceIds } from "../../src/instance-id.js";
+import {
+  olderOysterStoreCode,
+  olderOysterStoreMessage,
+} from "../../src/older-oyster-store.js";
 
 let isolatedHome: string;
 beforeAll(() => {
@@ -1187,6 +1191,32 @@ it.each([
     ).toHaveLength(1);
   },
 );
+
+it("shows the older-store refusal instead of a bare publish failure", async () => {
+  oyster(() => "succeeded");
+  const failure = await installStandaloneAppSet({
+    source: checkout,
+    url: "https://oyster.test",
+    key: "key",
+    report: () => undefined,
+    publish: () =>
+      Promise.resolve(
+        Response.json(
+          { error: olderOysterStoreCode, message: olderOysterStoreMessage },
+          { status: 409 },
+        ),
+      ),
+    concurrency: 1,
+    pollMs: 1,
+  }).then(
+    () => null,
+    (cause: unknown) => cause,
+  );
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure instanceof Error ? failure.message : "").toBe(
+    olderOysterStoreMessage,
+  );
+});
 
 it("gives up on a build that does not finish within its wait", async () => {
   oyster(() => "succeeded");

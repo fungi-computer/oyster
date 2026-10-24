@@ -37,6 +37,8 @@ import {
 import { checkBootPage } from "./browser/boot.js";
 import { bindingSessions, type BrowserBinding } from "./browser/sessions.js";
 import { registryInstallations } from "./internal/registry-installations.js";
+import { installationsFromOlderOyster } from "./older-oyster-store.js";
+import { refuseOlderOysterStore } from "./older-oyster-store-refusal.js";
 import {
   createInstallationOperations,
   type InstallationOperationRequest,
@@ -240,6 +242,8 @@ export class OysterRegistry<
   Env extends OysterWorkerEnv = OysterWorkerEnv,
 > extends DurableObject<Env> {
   readonly #generation: () => string;
+  /** Decided once, before this version writes anything, and never revised. */
+  readonly #installationsFromOlderOyster: boolean;
   #approval: OysterApprovalHome | undefined;
   readonly #installationOperations: ReturnType<
     typeof createInstallationOperations
@@ -369,6 +373,9 @@ export class OysterRegistry<
   >;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.#installationsFromOlderOyster = installationsFromOlderOyster(
+      ctx.storage.sql,
+    );
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS oyster_approval_home (id INTEGER PRIMARY KEY CHECK (id = 1), tenant_id TEXT NOT NULL, origin TEXT NOT NULL) STRICT",
     );
@@ -678,6 +685,10 @@ export class OysterRegistry<
             : new AppStorageError("unavailable", { cause }),
       }),
     );
+  }
+  /** Whether this registry's data was written by Oyster 0.2 or earlier; hosts refuse it. */
+  storeFromOlderOyster(): boolean {
+    return this.#installationsFromOlderOyster;
   }
   /** Every installation record. */
   list(): Installation[] {
@@ -1998,6 +2009,8 @@ export function createOysterWorker(
   return {
     async fetch(request, env) {
       const scope = tenantScope(defaultTenant, env.OYSTER_ORIGIN);
+      const refused = await refuseOlderOysterStore(request, env, scope);
+      if (refused !== null) return refused;
       const boot = await serveOysterBootCapability(request, env, scope);
       if (boot !== null) return boot;
       let app = apps.get(env);

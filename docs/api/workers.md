@@ -1188,6 +1188,19 @@ Open the existing App-storage invalidation stream under fresh owner admission.
 
 `Promise`\<`Response`\>
 
+##### storeFromOlderOyster()
+
+```ts
+storeFromOlderOyster(): boolean;
+```
+
+Whether this registry's data was written by Oyster 0.2 or earlier; hosts refuse
+it.
+
+###### Returns
+
+`boolean`
+
 ##### list()
 
 ```ts

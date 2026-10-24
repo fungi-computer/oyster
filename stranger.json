@@ -211,6 +211,8 @@
     "package/dist/mcp.js",
     "package/dist/media.d.ts",
     "package/dist/media.js",
+    "package/dist/older-oyster-store.d.ts",
+    "package/dist/older-oyster-store.js",
     "package/dist/pack.d.ts",
     "package/dist/pack.js",
     "package/dist/page-assets.d.ts",
@@ -521,6 +523,10 @@
         ]
       }
     }
+  },
+  "workerBundle": {
+    "entry": "examples/standalone/worker.ts",
+    "config": "examples/standalone/wrangler.jsonc"
   },
   "consumerDevDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

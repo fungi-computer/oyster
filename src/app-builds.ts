@@ -69,6 +69,10 @@ import {
   templateRepositoryForApp,
 } from "./source/template-repository.js";
 import type { PublisherTemplateSeedReceipts } from "./source/seed-receipt.js";
+import {
+  buildJobsFromOlderOyster,
+  OlderOysterStoreError,
+} from "./older-oyster-store.js";
 
 /** A Computer's whole-build budget: a cold build on a 6 GiB Computer measured 185-270 s. */
 export const oysterAppBuildTimeoutMs = 900_000;
@@ -281,9 +285,10 @@ function sameDigest(left: string, right: string): boolean {
   return difference === 0;
 }
 
-/** Create the current build tables and index atomically; never convert old stores. */
+/** Create the current build tables and index atomically; an older store is refused, never converted. */
 export function migrateOysterAppBuilds(owner: WatchdogSqliteOwner): void {
   const { sql } = owner;
+  if (buildJobsFromOlderOyster(sql)) throw new OlderOysterStoreError();
   owner.transactionSync(() => {
     sql.exec(
       "CREATE TABLE IF NOT EXISTS oyster_build_sources (app_id TEXT PRIMARY KEY, source TEXT NOT NULL) STRICT",

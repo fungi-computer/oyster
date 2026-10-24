@@ -35,6 +35,7 @@ import {
   type OysterAppBuilds,
   type OysterBuildView,
 } from "../app-builds.js";
+import { buildJobsFromOlderOyster } from "../older-oyster-store.js";
 import type { TeamAppCandidateManifest } from "../build-contract.js";
 import { readBuildManifest, appBuildRecipe } from "../build/workspace-build.js";
 import type { BuildGitEvent } from "../build-egress.js";
@@ -148,6 +149,14 @@ export abstract class StandaloneRegistry
       retryAfterSeconds: 30,
     });
     this.#computers.ensure();
+  }
+
+  /** Whether installations or build jobs were written by Oyster 0.2 or earlier. */
+  override storeFromOlderOyster(): boolean {
+    return (
+      super.storeFromOlderOyster() ||
+      buildJobsFromOlderOyster(this.ctx.storage.sql)
+    );
   }
 
   /** Re-admit the live owner before inventory access or a hosted start. */

@@ -767,6 +767,8 @@ test("the production worker resolves tenancy before authentication and uses the 
           seen.push(name);
           return [];
         },
+
+        storeFromOlderOyster: async () => false,
       }),
     },
   };
@@ -971,6 +973,7 @@ test("window selection and cached HTTP hosts share authentication only within on
   const reads = [];
   const selections = [];
   const registry = {
+    storeFromOlderOyster: async () => false,
     list: async () => [],
     selectedComputer: async () => {
       throw new Error(
@@ -1076,7 +1079,12 @@ test("each request admits its tenant once; a removed tenant refuses the next req
     OYSTER_ORIGIN: "https://default.oyster.test",
     OYSTER_OWNER_KEY: "default-host-owner-fixture-123456789",
     RELEASES: {},
-    REGISTRY: { getByName: () => ({ list: async () => [] }) },
+    REGISTRY: {
+      getByName: () => ({
+        list: async () => [],
+        storeFromOlderOyster: async () => false,
+      }),
+    },
   };
   const request = () =>
     new globalThis.Request("https://aa.oyster.test/api/installations", {
@@ -1133,7 +1141,12 @@ test("cached tenant host resolution refuses changed domain ownership and suspend
     OYSTER_ORIGIN: "https://default.oyster.test",
     OYSTER_OWNER_KEY: "default-host-owner-fixture-123456789",
     RELEASES: {},
-    REGISTRY: { getByName: () => ({ list: async () => [] }) },
+    REGISTRY: {
+      getByName: () => ({
+        list: async () => [],
+        storeFromOlderOyster: async () => false,
+      }),
+    },
   };
   const response = await createOysterGitWorker(root).fetch(
     new globalThis.Request("https://aa.oyster.test/api/installations"),
@@ -1163,7 +1176,12 @@ test("the keys.live port rechecks the live, current owner on every read: a forme
     OYSTER_ORIGIN: scope.origin,
     OYSTER_OWNER_KEY: "default-host-owner-fixture-123456789",
     RELEASES: {},
-    REGISTRY: { getByName: () => ({ list: async () => [] }) },
+    REGISTRY: {
+      getByName: () => ({
+        list: async () => [],
+        storeFromOlderOyster: async () => false,
+      }),
+    },
     INSTANCES: { getByName: () => ({}) },
     MCP: {},
     KEYS: keys,
@@ -1218,7 +1236,12 @@ test("the keys.live port rechecks the live owner's role, not merely that the mem
     OYSTER_ORIGIN: scope.origin,
     OYSTER_OWNER_KEY: "default-host-owner-fixture-123456789",
     RELEASES: {},
-    REGISTRY: { getByName: () => ({ list: async () => [] }) },
+    REGISTRY: {
+      getByName: () => ({
+        list: async () => [],
+        storeFromOlderOyster: async () => false,
+      }),
+    },
     INSTANCES: { getByName: () => ({}) },
     MCP: {},
     KEYS: keys,

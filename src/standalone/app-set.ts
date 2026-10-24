@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { olderOysterStoreCode } from "../older-oyster-store.js";
 import { publishSource, type PackOptions } from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
@@ -76,6 +78,11 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
 ];
 
+/** The host's refusal of a store written by Oyster 0.2 or earlier. */
+const olderOysterStoreRefusal = Schema.Struct({
+  error: Schema.Literal(olderOysterStoreCode),
+  message: Schema.String,
+});
 const publishedSchema = Schema.Struct({
   kind: Schema.Literals(["recorded", "existing"]),
   receipt: Schema.Struct({
@@ -472,10 +479,15 @@ export async function installStandaloneAppSet(
     const publishStarted = performance.now();
     try {
       const published = await publish(app, located);
-      if (!published.ok)
+      if (!published.ok) {
+        const refusal = Schema.decodeUnknownOption(
+          Schema.fromJsonString(olderOysterStoreRefusal),
+        )(await published.text());
+        if (Option.isSome(refusal)) throw new Error(refusal.value.message);
         throw new Error(
           `${name} source publish failed (${String(published.status)})`,
         );
+      }
       const { kind, receipt } = Schema.decodeUnknownSync(publishedSchema)(
         await published.json(),
       );

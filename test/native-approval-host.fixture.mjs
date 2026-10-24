@@ -73,6 +73,8 @@ export function installationStore(reader) {
       (await reader.list()).find((row) => row.installationId === id) ?? null,
     ...reader,
     generation: () => Promise.resolve(registry.generation()),
+    storeFromOlderOyster: () =>
+      Promise.resolve(registry.storeFromOlderOyster()),
     compareAndPut: () =>
       Promise.reject(new Error("Catalog fixture installation is fixed")),
   };

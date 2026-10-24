@@ -116,6 +116,7 @@ import {
   serveOysterBootCapability,
 } from "./workers.js";
 import { registryInstallations } from "./internal/registry-installations.js";
+import { refuseOlderOysterStore } from "./older-oyster-store-refusal.js";
 
 const infoSchema = Schema.Struct({
   name: Schema.String,
@@ -1398,6 +1399,8 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
       const resolved = await root.admit(env, request);
       if (resolved === null) return new Response("Not found", { status: 404 });
       const { scope } = resolved;
+      const refused = await refuseOlderOysterStore(request, env, scope);
+      if (refused !== null) return refused;
       const boot = await serveOysterBootCapability(request, env, scope);
       if (boot !== null) return boot;
       let host: OysterGitWorkerHost;

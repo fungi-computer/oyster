@@ -172,6 +172,26 @@ repositories and namespace. Use the configured resource names and confirm each
 is gone through Cloudflare's dashboard or API. Capture teardown errors and the
 Wrangler version rather than silently adding unrelated token permissions.
 
+### Upgrading from Oyster 0.2 or earlier
+
+Oyster 0.3 does not read data created by Oyster 0.1 or 0.2, and it does not
+convert it. An Oyster deployed on 0.2 and redeployed on 0.3 answers every
+request with `409` and `{"error": "store_from_older_oyster", ...}` (a short
+explanation page in a browser), and `oyster install-apps` prints the same
+message. Old data is left untouched, so redeploying 0.2.x brings the Oyster back
+exactly as it was.
+
+To move to 0.3, start from a fresh store. The smallest way is to deploy under
+new names, leaving the old Oyster in place until you no longer need it. In
+`wrangler.jsonc`, rename `name`, both `bucket_name` values,
+`artifacts.namespace` and every `workflows[].name`; create the new release
+bucket; then run the quick start again. To reuse the names instead, tear the old
+Oyster down as in the teardown steps above (delete the Worker, which deletes its
+Durable Object data; empty and delete the release bucket; delete the Computer's
+container application, the Workflow, and the Artifacts repositories and
+namespace), then deploy 0.3 and reinstall the Apps. Data in the old Oyster, such
+as Apps' stored data, is not carried over.
+
 ### Set the Oyster owner key
 
 Choose an owner key (separate from the Cloudflare API token) and store it as a
