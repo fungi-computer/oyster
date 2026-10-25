@@ -124,7 +124,8 @@ npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
 ```
 
 Set `OYSTER_ORIGIN` in `wrangler.jsonc` instead if you deploy again later; every
-deploy replaces the Worker's variables.
+deploy replaces the Worker's variables. If you rename the Worker's `name` in
+`wrangler.jsonc`, update `OYSTER_ORIGIN` to that Worker's URL at the same time.
 
 ### API-token permissions and teardown
 

@@ -325,7 +325,7 @@ test("actual Chromium mounts an ordinary Vite module, CSS and font through the c
   for (const request of route.requests) {
     assert.ok(request.url.startsWith(`/_boot/${identity.releaseId}/`));
     // Every request under the release path carried the capability header.
-    const [token] = [request.headers["x-oyster-boot-capability"]].flat();
+    const [token] = [request.headers["x-oyster-boot-token"]].flat();
     assert.ok(token, `${request.url} carried no capability`);
     assert.ok(!request.url.includes(token));
   }

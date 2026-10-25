@@ -17,7 +17,7 @@ import {
 import type { BootPageResult, BootPageTarget } from "./browser/boot.js";
 import { defaultAssetPolicy } from "./release.js";
 
-export const BOOT_CAPABILITY_HEADER = "x-oyster-boot-capability";
+export const BOOT_CAPABILITY_HEADER = "x-oyster-boot-token";
 
 const bootCapabilityAssetSchema = z.strictObject({
   path: z.string().min(1).max(4096),

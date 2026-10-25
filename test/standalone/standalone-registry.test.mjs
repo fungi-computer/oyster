@@ -1199,7 +1199,7 @@ test("build route preserves a template seed refusal instead of reporting missing
   }
 });
 
-test("a Workflow build starts its exact head once and failed builds never select a Release", async () => {
+test("a Workflow build starts its exact head once and failed builds never select a Release", async (t) => {
   const { appGitPushFactSchema } = await import("@fungi.computer/agar/git");
   const tenantsDatabase = new DatabaseSync(":memory:");
   const registryDatabase = new DatabaseSync(":memory:");
@@ -1317,6 +1317,65 @@ test("a Workflow build starts its exact head once and failed builds never select
     assert.equal(settled.status, "failed");
     assert.equal(settled.installation.kind, "failed");
     assert.equal(await registry.get("my-app"), null);
+    await t.test(
+      "APPS job status hides another installation's job like an unknown job",
+      async () => {
+        const instanceId = instanceIds.instance.generate();
+        const owner = await shared.owner();
+        const scope = tenantScope(defaultTenant, env.OYSTER_ORIGIN);
+        const gate = createInvocationGate({
+          abortGuest: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        });
+        const status = (installationId, jobId) => {
+          const facts = Schema.decodeUnknownSync(invocationFactsSchema)({
+            instanceId,
+            selection: {
+              instanceId,
+              owner: { kind: "installation", id: installationId },
+              appId: "app_bonsai",
+              releaseId: "rel_example",
+              authorityVersion: 1,
+            },
+            artifactDigest: "sha256:" + "1".repeat(64),
+            subject: {
+              kind: "call",
+              context: { actor: owner.actor, role: "owner", computerId: null },
+              method: { name: "apps.buildStatus", effect: "read" },
+            },
+            grants: [{ binding: "APPS", operations: ["buildStatus"] }],
+            deadlineAt: Date.now() + 60_000,
+            ancestry: [],
+          });
+          return gate.run(facts, {}, (frame) =>
+            dispatchAppsBuildsBinding(
+              { ...env, REGISTRY: { getByName: () => registry } },
+              scope,
+              frame,
+              { instanceId, frameId: frame.frameId, binding: "APPS" },
+              "buildStatus",
+              appsFrameMethods.APPS.buildStatus.decodeArgs([{ jobId }]),
+              async () => {
+                throw new Error("Job status must not open a host");
+              },
+            ),
+          );
+        };
+        assert.deepEqual(await status("bonsai", started.build.jobId), {
+          status: 200,
+          body: settled,
+        });
+        const unknown = await status("other-installation", "unknown-job");
+        assert.deepEqual(unknown, {
+          status: 404,
+          body: { error: "Not found" },
+        });
+        assert.deepEqual(
+          await status("other-installation", started.build.jobId),
+          unknown,
+        );
+      },
+    );
     const reopened = new RootRegistry(registryState, env);
     const replay = await reopened.startBuild({
       appId: "app_auto",

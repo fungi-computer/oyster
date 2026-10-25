@@ -1,5 +1,37 @@
 # @fungi.computer/oyster
 
+## 0.3.2
+
+### Patch Changes
+
+- Changes since 0.3.1:
+
+  - fix(oyster): require confirmation for MCP Workspace calls
+  - fix(oyster): fence preview origins before routes
+  - fix(oyster): surface typed seed refusals on all routes
+  - fix(oyster): create seed refusal responses per request
+  - fix(oyster): refuse standalone origin mismatches before seeding
+  - fix(oyster): use tail-redacted boot token header
+  - fix(oyster): scope APPS build status jobs to caller installation
+  - fix(oyster): redact boot capability header from mount diagnostics
+  - fix(oyster): include refusal worker files in stranger inventory
+  - fix(mule): own provider data types at the Pi boundary
+  - fix(oyster): keep MCP SDK declarations out of Worker graph
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.2.2
+  - @fungi.computer/knapsack@0.2.1
+  - @fungi.computer/shiitake-extensions@0.1.1
+  - @fungi.computer/shiitake@0.3.1
+  - @fungi.computer/computer-contract@0.0.2
+  - @fungi.computer/mycelium@0.2.1
+  - @fungi.computer/zookeeper@0.0.2
+  - @fungi.computer/braid@0.2.1
+  - @fungi.computer/workflows-wire@0.2.1
+
 ## 0.3.1
 
 ### Patch Changes

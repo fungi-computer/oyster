@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",

@@ -1,10 +1,11 @@
+import { fauxModel } from "@fungi.computer/mule/testing";
+import type { StandaloneModelSource } from "../../src/standalone/agents.js";
 import {
   standaloneTenancy,
   type StandaloneTenancyEnv,
 } from "../../src/standalone/tenancy.js";
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { standaloneAgents } from "../../src/standalone/agents.js";
@@ -21,8 +22,8 @@ export * from "../../src/standalone/worker.js";
 // Only the model is deterministic. The inherited agent options, installed
 // App tools, Shiitake runtime and Worker Loader sandbox run unchanged.
 export class SandboxAgent extends NativeAgent {
-  protected override modelSource() {
-    const faux = fauxProvider();
+  protected override modelSource(): StandaloneModelSource {
+    const faux = fauxModel([]);
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("execute", {
@@ -36,8 +37,9 @@ export class SandboxAgent extends NativeAgent {
       acquire: () =>
         Promise.resolve({
           retryable: () => false,
-          model: faux.getModel(),
-          stream: faux.provider.streamSimple.bind(faux.provider),
+          model: faux.model,
+          stream: (model, context, options) =>
+            faux.stream(model, context, options),
           release: () => Promise.resolve(),
         }),
     };
@@ -80,8 +82,8 @@ export class SandboxAgent extends NativeAgent {
 // The same deterministic-model seam, with the production tool lease, App
 // admission and native Computer unchanged. Only this first prompt uses Shed.
 export class StandaloneAgent extends NativeAgent {
-  protected override modelSource() {
-    const faux = fauxProvider();
+  protected override modelSource(): StandaloneModelSource {
+    const faux = fauxModel([]);
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("execute", {
@@ -99,8 +101,9 @@ return await env.SHED.runCommand({
       acquire: () =>
         Promise.resolve({
           retryable: () => false,
-          model: faux.getModel(),
-          stream: faux.provider.streamSimple.bind(faux.provider),
+          model: faux.model,
+          stream: (model, context, options) =>
+            faux.stream(model, context, options),
           release: () => Promise.resolve(),
         }),
     };

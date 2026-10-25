@@ -97,7 +97,7 @@ describe("reportBootPage", () => {
     expect(target).toMatchObject({
       origin: "https://apps.example.test",
       releaseId: "rel_report01",
-      capability: { header: "x-oyster-boot-capability" },
+      capability: { header: "x-oyster-boot-token" },
       deadlineAt: 11_000,
     });
     expect(target?.capability.token).toMatch(/^[A-Za-z0-9_-]{43}$/u);

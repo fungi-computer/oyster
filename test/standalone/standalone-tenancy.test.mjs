@@ -18,8 +18,10 @@ const hooks = registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { StandaloneTenants, standaloneTenancy } =
+const { StandaloneTenants, standaloneTenancy, standaloneTenancyForRequest } =
   await import("../../src/standalone/tenancy.ts");
+const { createOysterGitWorker } = await import("../../src/workers-git.ts");
+const standaloneWorker = await import("../../src/standalone/worker.ts");
 const { AgentDirectory } = await import("../../src/standalone/agents.ts");
 const { admittedRegistry, durableObjectRegistry } =
   await import("@fungi.computer/oyster/tenancy/cloudflare");
@@ -73,10 +75,256 @@ function fixture() {
   };
 }
 
+function tenantStub(owner, onSeed) {
+  return {
+    seed: (seed) => {
+      onSeed?.();
+      return owner.seed(seed);
+    },
+    get: owner.get.bind(owner),
+    byHandle: owner.byHandle.bind(owner),
+    byDomain: owner.byDomain.bind(owner),
+    status: owner.status.bind(owner),
+    memberById: owner.memberById.bind(owner),
+    membershipOf: owner.membershipOf.bind(owner),
+    admission: owner.admission.bind(owner),
+  };
+}
+
 const input = {
   origin: "https://bonsai.test",
   owner: { provider: "standalone-owner", subject: "configured-owner" },
 };
+
+test("a mismatched first request cannot seed, and the corrected origin can admit", async () => {
+  const probe = fixture();
+  let seedCalls = 0;
+  const env = {
+    OYSTER_ORIGIN: "https://oyster.shiit.app",
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-origin-owner-key-24-characters",
+    TENANTS: {
+      getByName: () =>
+        tenantStub(probe.owner, () => {
+          seedCalls += 1;
+        }),
+    },
+    KEYS: { getByName: () => assert.fail("No credential lookup expected") },
+  };
+  const requestOrigin = "https://renamed-preview.levi-fe0.workers.dev";
+  const request = new globalThis.Request(`${requestOrigin}/`);
+  try {
+    const worker = createOysterGitWorker({
+      admit: async (_workerEnv, incoming) => {
+        await standaloneTenancyForRequest(env, incoming);
+        return null;
+      },
+      hostFor: () => assert.fail("A refused request must not select a host"),
+    });
+    const refused = await worker.fetch(request, env, {});
+    assert.equal(refused.status, 404);
+    assert.deepEqual(await refused.json(), {
+      kind: "refused",
+      code: "origin_mismatch",
+      configuredOrigin: env.OYSTER_ORIGIN,
+      requestOrigin,
+      message: `Request origin ${requestOrigin} does not match configured OYSTER_ORIGIN ${env.OYSTER_ORIGIN}. Set OYSTER_ORIGIN to this Worker's URL.`,
+    });
+    assert.equal(seedCalls, 0);
+
+    const corrected = {
+      ...env,
+      OYSTER_ORIGIN: requestOrigin,
+    };
+    const tenancy = await standaloneTenancyForRequest(corrected, request);
+    assert.equal(seedCalls, 1);
+    assert.ok(await tenancy.oyster.resolve(request));
+  } finally {
+    probe.close();
+  }
+});
+
+test("a changed seed returns a typed refusal with the existing-data recovery", async () => {
+  const probe = fixture();
+  await probe.owner.seed(input);
+  try {
+    const configured = {
+      ...input,
+      origin: "https://renamed-preview.test",
+    };
+    const result = await probe.owner.seed(configured);
+    assert.deepEqual(result, {
+      kind: "refused",
+      code: "seed_configuration_changed",
+      seededOrigin: input.origin,
+      configuredOrigin: configured.origin,
+      recovery: "fresh_worker_name_or_reset_worker_data",
+    });
+
+    const changedEnv = {
+      OYSTER_ORIGIN: configured.origin,
+      OYSTER_OWNER_NAME: input.owner.subject,
+      OYSTER_OWNER_KEY: "standalone-changed-owner-key-24-characters",
+      TENANTS: { getByName: () => probe.owner },
+      KEYS: { getByName: () => assert.fail("No credential lookup expected") },
+    };
+    const refused = await standaloneWorker.default.fetch(
+      new globalThis.Request(`${configured.origin}/`),
+      changedEnv,
+      {},
+    );
+    assert.equal(refused.status, 409);
+    assert.deepEqual(await refused.json(), {
+      kind: "refused",
+      code: "seed_configuration_changed",
+      seededOrigin: input.origin,
+      configuredOrigin: configured.origin,
+      recovery: "fresh_worker_name_or_reset_worker_data",
+      message: `Standalone seed/origin mismatch: existing data was seeded for ${input.origin}, but OYSTER_ORIGIN is ${configured.origin}. Deploy under a fresh Worker name or reset this Worker's data.`,
+    });
+  } finally {
+    probe.close();
+  }
+});
+
+test("concurrent seed refusals give each real Worker request a readable response", async () => {
+  const probe = fixture();
+  await probe.owner.seed(input);
+  const origin = "https://renamed-preview.test";
+  const env = {
+    OYSTER_ORIGIN: origin,
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-concurrent-owner-key-24-characters",
+    TENANTS: { getByName: () => probe.owner },
+    KEYS: { getByName: () => assert.fail("No credential lookup expected") },
+  };
+  try {
+    const responses = await Promise.all(
+      ["/", "/mcp"].map((path) =>
+        standaloneWorker.default.fetch(
+          new globalThis.Request(`${origin}${path}`),
+          env,
+          {},
+        ),
+      ),
+    );
+    assert.deepEqual(
+      responses.map((response) => response.status),
+      [409, 409],
+    );
+    const [firstBody, secondBody] = await Promise.all(
+      responses.map((response) => response.text()),
+    );
+    assert.equal(firstBody, secondBody);
+    assert.deepEqual(JSON.parse(firstBody), {
+      kind: "refused",
+      code: "seed_configuration_changed",
+      seededOrigin: input.origin,
+      configuredOrigin: origin,
+      recovery: "fresh_worker_name_or_reset_worker_data",
+      message: `Standalone seed/origin mismatch: existing data was seeded for ${input.origin}, but OYSTER_ORIGIN is ${origin}. Deploy under a fresh Worker name or reset this Worker's data.`,
+    });
+  } finally {
+    probe.close();
+  }
+});
+
+test("mesh connect preserves the typed seed refusal as readable recovery JSON", async () => {
+  const probe = fixture();
+  await probe.owner.seed(input);
+  const origin = "https://renamed-preview.test";
+  const env = {
+    OYSTER_ORIGIN: origin,
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-mesh-owner-key-24-characters",
+    TENANTS: { getByName: () => probe.owner },
+  };
+  try {
+    const response = await standaloneWorker.default.fetch(
+      new globalThis.Request(
+        `${origin}/api/teams/agents/local/mesh/example/connect`,
+      ),
+      env,
+      {},
+    );
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      kind: "refused",
+      code: "seed_configuration_changed",
+      seededOrigin: input.origin,
+      configuredOrigin: origin,
+      recovery: "fresh_worker_name_or_reset_worker_data",
+      message: `Standalone seed/origin mismatch: existing data was seeded for ${input.origin}, but OYSTER_ORIGIN is ${origin}. Deploy under a fresh Worker name or reset this Worker's data.`,
+    });
+  } finally {
+    probe.close();
+  }
+});
+
+test("preview-only requests reach the fence before invalid owner scope construction", async () => {
+  const previewOrigin = "https://oyster-preview.test";
+  const response = await standaloneWorker.default.fetch(
+    new globalThis.Request(`${previewOrigin}/login`),
+    {
+      OYSTER_ORIGIN: "not an origin",
+      OYSTER_PREVIEW_ORIGIN: previewOrigin,
+    },
+    {},
+  );
+  assert.equal(response.status, 404);
+});
+
+test("preview-only requests fence webhook paths before tenancy seeding", async () => {
+  const probe = fixture();
+  await probe.owner.seed(input);
+  let seedCalls = 0;
+  const origin = "https://oyster-preview.test";
+  const env = {
+    OYSTER_ORIGIN: origin,
+    OYSTER_PREVIEW_ORIGIN: origin,
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-webhook-owner-key-24-characters",
+    TENANTS: {
+      getByName: () =>
+        tenantStub(probe.owner, () => {
+          seedCalls += 1;
+        }),
+    },
+  };
+  try {
+    const response = await standaloneWorker.default.fetch(
+      new globalThis.Request(
+        `${origin}/api/installations/example/workflows/webhooks/binding`,
+      ),
+      env,
+      {},
+    );
+    assert.equal(response.status, 404);
+    assert.equal(seedCalls, 0);
+  } finally {
+    probe.close();
+  }
+});
+
+test("a configured custom domain and local-dev origin both admit their own requests", async () => {
+  for (const origin of ["https://oyster.shiit.app", "https://localhost:8797"]) {
+    const probe = fixture();
+    const env = {
+      OYSTER_ORIGIN: origin,
+      OYSTER_OWNER_NAME: input.owner.subject,
+      OYSTER_OWNER_KEY: "standalone-legit-origin-owner-key",
+      TENANTS: { getByName: () => probe.owner },
+      KEYS: { getByName: () => assert.fail("No credential lookup expected") },
+    };
+    try {
+      const request = new globalThis.Request(`${origin}/`);
+      const tenancy = await standaloneTenancyForRequest(env, request);
+      assert.ok(await tenancy.oyster.resolve(request));
+    } finally {
+      probe.close();
+    }
+  }
+});
 
 test("a transient seed RPC failure can retry the same environment against the real registry", async () => {
   const probe = fixture();
@@ -230,20 +478,32 @@ test("concurrent and cold seed reuse preserves the registry-owned membership rev
     const cold = probe.reopen();
     assert.deepEqual(await cold.seed(input), first);
     assert.deepEqual(await cold.membershipOf(first.id, input.owner), original);
-    await assert.rejects(
-      cold.seed({
+    assert.deepEqual(
+      await cold.seed({
         ...input,
         owner: { ...input.owner, subject: "different-owner" },
       }),
-      /configuration/u,
+      {
+        kind: "refused",
+        code: "seed_configuration_changed",
+        seededOrigin: input.origin,
+        configuredOrigin: input.origin,
+        recovery: "fresh_worker_name_or_reset_worker_data",
+      },
     );
-    await assert.rejects(
-      cold.seed({ ...input, origin: "https://different.test" }),
-      /configuration/u,
+    assert.deepEqual(
+      await cold.seed({ ...input, origin: "https://different.test" }),
+      {
+        kind: "refused",
+        code: "seed_configuration_changed",
+        seededOrigin: input.origin,
+        configuredOrigin: "https://different.test",
+        recovery: "fresh_worker_name_or_reset_worker_data",
+      },
     );
     assert.deepEqual(await cold.membershipOf(first.id, input.owner), original);
   } finally {
-    probe.close([/configuration/u, /configuration/u]);
+    probe.close();
   }
 });
 

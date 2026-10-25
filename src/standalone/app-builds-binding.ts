@@ -265,7 +265,10 @@ export async function dispatchAppsBuildsBinding(
             frame.facts.selection.owner.id,
             input.repo,
           )
-        : await registry.readBuild(input.jobId);
+        : await registry.readInstallationBuild(
+            frame.facts.selection.owner.id,
+            input.jobId,
+          );
     frame.signal.throwIfAborted();
     const missingJob = build === null && "jobId" in input;
     return Schema.decodeUnknownSync(Schema.Json)({

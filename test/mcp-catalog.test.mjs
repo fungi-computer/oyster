@@ -264,11 +264,12 @@ async function run(
   principal,
   program,
   policy,
-  { session, instances = host.instances, source } = {},
+  { session, instances = host.instances, source, confirm } = {},
 ) {
   const results = [];
   const runtime = await Mycelium.make({
     session,
+    access: { confirm },
     sources: [
       source ??
         (await oysterAppMethods(
@@ -890,7 +891,7 @@ test("the MCP catalog adds the host's Computer for a caller with Computer access
   );
   await Promise.all([apps.release(), plain.release()]);
 
-  const { results, catalog } = await run(
+  const { results: refusedWithoutPerson, catalog } = await run(
     owner,
     // The direct sandbox receives flat module bindings; codemode nests them.
     (bindings) => bindings.workspace.exec({ command: "ls" }),
@@ -898,6 +899,31 @@ test("the MCP catalog adds the host's Computer for a caller with Computer access
     { source: withComputer.sources[1] },
   );
   assert.ok(catalog.describe({ path: "computers.workspace.exec" }));
+  assert.deepEqual(refusedWithoutPerson, [
+    {
+      refused: true,
+      module: "computer:workspace-one",
+      operation: "exec",
+      reason: "confirmation-unavailable",
+      message:
+        "computer:workspace-one.exec needs a person's approval, and no one can be asked here.",
+    },
+  ]);
+  assert.deepEqual(computerCalls, []);
+  const approved = [];
+  const { results } = await run(
+    owner,
+    (bindings) => bindings.workspace.exec({ command: "ls" }),
+    null,
+    {
+      source: withComputer.sources[1],
+      confirm: (request) => {
+        approved.push(request.operation);
+        return Promise.resolve(true);
+      },
+    },
+  );
+  assert.deepEqual(approved, ["exec"]);
   assert.deepEqual(results, [{ stdout: "ran" }]);
   assert.deepEqual(computerCalls, [
     { principal: owner, capabilityId: "exec", input: { command: "ls" } },

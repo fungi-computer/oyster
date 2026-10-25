@@ -67,6 +67,20 @@ readonly code: string;
 
 ## Type Aliases
 
+### OysterMcpCatalogSnapshot
+
+```ts
+type OysterMcpCatalogSnapshot = Readonly<{
+  instructions: string;
+  sources: readonly CapabilitySource[];
+  grants: Grants;
+}>;
+```
+
+Captured capabilities and grants offered to one admitted MCP caller.
+
+---
+
 ### OysterCallerAccess
 
 ```ts

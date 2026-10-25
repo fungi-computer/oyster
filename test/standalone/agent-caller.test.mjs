@@ -2500,13 +2500,12 @@ test("Luna streams through the existing Veil gateway owner without exposing its 
     signal: new globalThis.AbortController().signal,
   });
   try {
-    const result = await lease
-      .stream(
-        lease.model,
-        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
-        {},
-      )
-      .result();
+    const response = await lease.stream(
+      lease.model,
+      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
+      {},
+    );
+    const result = await response.result();
     assert.equal(sent.length, 1);
     assert.equal(
       sent[0].url,
@@ -2570,7 +2569,7 @@ for (const binding of [false, true]) {
         signal: controller.signal,
       });
       try {
-        const response = lease.stream(
+        const response = await lease.stream(
           lease.model,
           { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
           { maxRetries: 0, signal: controller.signal },

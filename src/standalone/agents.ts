@@ -1,10 +1,11 @@
+import { normalizeModel, streamModel } from "@fungi.computer/mule/effect";
 import { observeProviderStatus } from "@fungi.computer/mule/effect";
 import type {
   Api,
   AssistantMessage,
   Model,
   SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+} from "@fungi.computer/mule/effect";
 import {
   standaloneTenancy,
   type StandaloneTenancy,
@@ -44,6 +45,16 @@ import {
   type MachineLinkIdentity,
 } from "../machine-link/index.js";
 import { memberInboxItemSchema } from "@fungi.computer/puffball/inbox";
+/** Workers AI binding surface used by the standalone provider adapter. */
+export type AiBinding = {
+  aiGatewayLogId: string | null;
+  /** AI binding transport supplied by the Worker runtime. */
+  fetch?: (
+    input: Request | string | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
+};
+
 /**
  * Agents on a standalone Oyster Worker. Each agent is Shiitake's public
  * Cloudflare host (`ShiitakeDO`), one Durable Object per agent; a directory
@@ -65,7 +76,6 @@ import {
 import {
   CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
   createAiBindingFetch,
-  type AiBinding,
 } from "@earendil-works/pi-ai/api/cloudflare-ai-binding";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import * as Schema from "effect/Schema";
@@ -141,19 +151,19 @@ function observedModels(
   defaults: SimpleStreamOptions,
 ): StandaloneModelSource {
   return {
-    acquire: async ({ signal }) => {
-      const streamSimple = await loadStreamSimple();
+    acquire: ({ signal }) => {
+      const streamSimple = streamModel;
       const retryableMessages = new WeakSet<AssistantMessage>();
-      return {
+      return Promise.resolve({
         model,
         retryable: (message) =>
           !signal.aborted &&
           message.stopReason === "error" &&
           retryableMessages.has(message),
-        stream: (selected, context, options) => {
+        stream: async (selected, context, options) => {
           const upstream = { ...options, ...defaults };
           const observed = observeProviderStatus(upstream);
-          const response = streamSimple(selected, context, {
+          const response = await streamSimple(selected, context, {
             ...upstream,
             fetch: observed.fetch,
             onProviderStreamEvent: observed.onProviderStreamEvent,
@@ -172,7 +182,7 @@ function observedModels(
           return response;
         },
         release: () => Promise.resolve(),
-      };
+      });
     },
   };
 }
@@ -196,7 +206,7 @@ function workersAiModels(
     baseUrl: `https://workers-binding.ai/ai-gateway/gateways/${options.gateway ?? "default"}/workers-ai/v1`,
   };
   const fetch = createAiBindingFetch(ai);
-  return observedModels(model, {
+  return observedModels(normalizeModel(model), {
     fetch,
     apiKey: CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
     headers: {
@@ -207,13 +217,6 @@ function workersAiModels(
     },
   });
 }
-
-/**
- * Pi's dispatching `streamSimple` evaluates every provider's model catalog when
- * it loads; only a run needs it, so acquisition loads it instead of startup.
- */
-const loadStreamSimple = async () =>
-  (await import("@earendil-works/pi-ai/compat")).streamSimple;
 
 /** Where Workers AI requests go: which model, through which gateway. */
 type WorkersAiOptions = Readonly<{ model?: string; gateway?: string }>;
@@ -572,7 +575,7 @@ export abstract class StandaloneAgentBase<
           if (listed === undefined)
             throw new Error("The OpenAI catalog has no Luna model");
           const model = { ...listed, id: "openai/gpt-6-luna", baseUrl };
-          return observedModels(model, {
+          return observedModels(normalizeModel(model), {
             apiKey: "oyster-provider-egress",
             fetch: providerFetch(egress, "ai-gateway"),
           }).acquire(input);

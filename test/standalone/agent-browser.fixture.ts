@@ -1,6 +1,7 @@
+import { fauxModel } from "@fungi.computer/mule/testing";
+import type { StandaloneModelSource } from "../../src/standalone/agents.js";
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/host";
@@ -34,8 +35,8 @@ const BROWSED_PAGE = "https://example.com/";
 // Only the model is deterministic. The standalone Agent's tool sources, the
 // Worker Loader sandbox and the real BROWSER binding run unchanged.
 export class BrowserAgent extends StandaloneAgent {
-  protected override modelSource() {
-    const faux = fauxProvider();
+  protected override modelSource(): StandaloneModelSource {
+    const faux = fauxModel([]);
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("execute", {
@@ -64,8 +65,9 @@ export class BrowserAgent extends StandaloneAgent {
       acquire: () =>
         Promise.resolve({
           retryable: () => false,
-          model: faux.getModel(),
-          stream: faux.provider.streamSimple.bind(faux.provider),
+          model: faux.model,
+          stream: (model, context, options) =>
+            faux.stream(model, context, options),
           release: () => Promise.resolve(),
         }),
     };

@@ -1396,7 +1396,13 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
         hosts = new Map();
         environments.set(env, hosts);
       }
-      const resolved = await root.admit(env, request);
+      let resolved: ResolvedTenant | null;
+      try {
+        resolved = await root.admit(env, request);
+      } catch (error) {
+        if (error instanceof HTTPException) return error.getResponse();
+        throw error;
+      }
       if (resolved === null) return new Response("Not found", { status: 404 });
       const { scope } = resolved;
       const refused = await refuseOlderOysterStore(request, env, scope);

@@ -103,6 +103,10 @@ export type StandaloneRegistryRpc = {
     installationId: string,
     repository: string,
   ): ReturnType<StandaloneRegistry["readRepositoryBuild"]>;
+  readInstallationBuild(
+    installationId: string,
+    jobId: string,
+  ): ReturnType<StandaloneRegistry["readInstallationBuild"]>;
   installWorkflowBuild(
     jobId: string,
     target: string,
@@ -554,6 +558,19 @@ export abstract class StandaloneRegistry
 
   async readBuild(jobId: string): Promise<OysterBuildView | null> {
     return (await this.#appBuilds()).read(jobId);
+  }
+
+  /** A job ID alone never grants another installation access to its status. */
+  async readInstallationBuild(
+    installationId: string,
+    jobId: string,
+  ): Promise<OysterBuildView | null> {
+    const builds = await this.#appBuilds();
+    const build = builds.read(jobId);
+    return build !== null &&
+      sourceOwnedBy(builds.readSource(build.appId), installationId)
+      ? build
+      : null;
   }
 
   /** Repository status belongs to the same captured Git owner as registration. */

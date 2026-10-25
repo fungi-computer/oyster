@@ -4,6 +4,8 @@ import { installationStore } from "./native-approval-host.fixture.mjs";
 /* global Request, URL */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import {
   Client,
   SdkHttpError,
@@ -146,3 +148,42 @@ for (const crossing of [false, true]) {
     },
   );
 }
+
+test("the Worker stranger declaration graph keeps MCP client/server SDKs private", () => {
+  // This measures declaration reachability; the strict stranger compiler owns
+  // diagnostics, including independent Worker blockers in other dependencies.
+  const fixture = fileURLToPath(
+    new URL("./stranger/consumer-worker.mts", import.meta.url),
+  );
+  const program = ts.createProgram([fixture], {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    target: ts.ScriptTarget.ES2024,
+    types: [],
+    strict: true,
+    skipLibCheck: false,
+    noEmit: true,
+  });
+  assert.ok(
+    program.getSourceFile(fixture),
+    "the real Worker consumer is loaded",
+  );
+  for (const entry of ["host", "mcp"]) {
+    const declaration = fileURLToPath(
+      new URL(`../dist/${entry}.d.ts`, import.meta.url),
+    );
+    assert.ok(
+      program.getSourceFile(declaration),
+      `${entry} declarations resolve`,
+    );
+  }
+  const exposed = program
+    .getSourceFiles()
+    .filter(({ fileName }) =>
+      /\/@modelcontextprotocol\/(?:client|server)\//u.test(fileName),
+    );
+  assert.deepEqual(
+    exposed.map(({ fileName }) => fileName),
+    [],
+  );
+});

@@ -35,16 +35,22 @@ import * as Schema from "effect/Schema";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
 import type { OysterHost, OysterPrincipal, OysterJson } from "./host.js";
 import { keyAppAccess } from "./keys.js";
-import type {
-  McpPrincipal,
-  McpCatalogSnapshot,
-} from "@fungi.computer/mycelium/mcp";
+import type { TenantPrincipal } from "./tenant.js";
+
 import {
   defaultAssetPolicy,
   sha256,
   verifyRelease,
   type VerifiedRelease,
 } from "./release.js";
+
+/** Captured capabilities and grants offered to one admitted MCP caller. */
+export type OysterMcpCatalogSnapshot = Readonly<{
+  instructions: string;
+  sources: readonly CapabilitySource[];
+  /** An omitted module has no grant. */
+  grants: Grants;
+}>;
 
 /** Mints the requestId a tool family tool sends on the caller's behalf to its
  * declared `call` method: each MCP call is its own independent run, never a
@@ -620,6 +626,7 @@ export async function oysterComputerTools(
       id,
       name: "workspace",
       namespace: ["computers"],
+      confirmCalls: true,
       computer,
     }),
     grants: { [id]: "write" },
@@ -653,7 +660,7 @@ export function oysterMcpCatalogLoad(
     | "keys"
     | "workflows"
   >,
-): (principal: McpPrincipal) => Promise<McpCatalogSnapshot> {
+): (principal: TenantPrincipal) => Promise<OysterMcpCatalogSnapshot> {
   const surfaces = appSurfaceCache(host);
   return async (principal) => {
     const { actor } = principal;

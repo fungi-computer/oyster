@@ -60,7 +60,11 @@ import {
   type FileSource,
 } from "@fungi.computer/oyster/files";
 import * as Schema from "effect/Schema";
-import { oysterAppMethods } from "@fungi.computer/oyster/mcp";
+import {
+  oysterAppMethods,
+  oysterMcpCatalogLoad,
+  type OysterMcpCatalogSnapshot,
+} from "@fungi.computer/oyster/mcp";
 import type { CapabilitySource, Grants } from "@fungi.computer/mycelium";
 import {
   AppInstanceError,
@@ -480,3 +484,9 @@ export type WAppSourcesSurface = typeof WAppSources;
 
 import type * as WMedia from "@fungi.computer/oyster/media";
 export type WMediaSurface = typeof WMedia;
+
+// The catalog contract keeps the server SDK declarations private.
+export const catalogProvider: (
+  host: Parameters<typeof oysterMcpCatalogLoad>[0],
+) => (principal: TenantPrincipal) => Promise<OysterMcpCatalogSnapshot> =
+  oysterMcpCatalogLoad;

@@ -34,7 +34,11 @@ import {
   StandaloneWorkflowRunsBase,
   type StandaloneWorkflowEnv,
 } from "./workflows.js";
-import { standaloneTenancy, type StandaloneTenancyEnv } from "./tenancy.js";
+import {
+  standaloneTenancyForRequest,
+  StandaloneSeedConfigurationChanged,
+  type StandaloneTenancyEnv,
+} from "./tenancy.js";
 export { StandaloneTenants } from "./tenancy.js";
 import { standalonePreviewRequest } from "./preview.js";
 import {
@@ -47,7 +51,8 @@ import {
   standaloneWorkflowWebhookRoutes,
   standaloneWorkflowWebhookControls,
 } from "./workflow-webhooks.js";
-import { Hono } from "hono";
+import { Hono, type ErrorHandler } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { standaloneBuildRoutes } from "./builds.js";
 import {
   standaloneComputerFleetRoutes,
@@ -126,7 +131,9 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
   const root: OysterGitRoot<StandaloneEnv> = oysterGitRoot<StandaloneEnv>({
     tenancy: (env) => ({
       resolve: async (request) =>
-        (await standaloneTenancy(env)).oyster.resolve(request),
+        (await standaloneTenancyForRequest(env, request)).oyster.resolve(
+          request,
+        ),
     }),
 
     homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
@@ -265,16 +272,24 @@ export class OysterComputerEgress extends WorkerEntrypoint<
   }
 }
 
+const standaloneWorkerErrorHandler: ErrorHandler = (error, context) => {
+  if (error instanceof StandaloneSeedConfigurationChanged) {
+    const { refusal } = error;
+    return context.json(
+      {
+        ...refusal,
+        message: `Standalone seed/origin mismatch: existing data was seeded for ${refusal.seededOrigin}, but OYSTER_ORIGIN is ${refusal.configuredOrigin}. Deploy under a fresh Worker name or reset this Worker's data.`,
+      },
+      409,
+    );
+  }
+  if (error instanceof HTTPException) return error.getResponse();
+  console.error(error);
+  return context.text("Internal Server Error", 500);
+};
+
 export default {
   async fetch(request, env, context) {
-    const path = new URL(request.url).pathname;
-    if (
-      path === "/local/mesh/join" ||
-      new URLPattern({
-        pathname: "/api/teams/:teamId/local/mesh/:deviceId/connect",
-      }).test(request.url)
-    )
-      return standaloneMachineLinkRoutes(env).fetch(request);
     const preview = await standalonePreviewRequest(
       request,
       env,
@@ -293,6 +308,17 @@ export default {
     if (fetchOyster === undefined)
       throw new Error("Oyster fetch handler is missing");
     return new Hono()
+      .onError(standaloneWorkerErrorHandler)
+      .all("/local/mesh/join", () =>
+        standaloneMachineLinkRoutes(env)
+          .onError(standaloneWorkerErrorHandler)
+          .fetch(request, env, context),
+      )
+      .all("/api/teams/:teamId/local/mesh/:deviceId/connect", () =>
+        standaloneMachineLinkRoutes(env)
+          .onError(standaloneWorkerErrorHandler)
+          .fetch(request, env, context),
+      )
       .route(
         "/",
         standaloneWorkflowWebhookRoutes(env, async (incoming) => {
@@ -303,6 +329,6 @@ export default {
         }),
       )
       .all("*", () => fetchOyster(request, env, context))
-      .fetch(request);
+      .fetch(request, env, context);
   },
 } satisfies ExportedHandler<StandaloneEnv>;

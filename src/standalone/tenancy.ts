@@ -14,6 +14,7 @@ import { ownerKey } from "../tenancy/owner-key.js";
 import { hosts } from "../tenancy/resolve.js";
 import { ownerOrKeyAuth } from "../auth.js";
 import type { OysterGitWorkerEnv } from "../workers-git.js";
+import { HTTPException } from "hono/http-exception";
 import {
   defaultTenant,
   tenantScope,
@@ -38,6 +39,24 @@ export type StandaloneSeed = Readonly<{
   owner: Identity;
 }>;
 
+export type StandaloneSeedRefusal = Readonly<{
+  kind: "refused";
+  code: "seed_configuration_changed";
+  seededOrigin: string;
+  configuredOrigin: string;
+  recovery: "fresh_worker_name_or_reset_worker_data";
+}>;
+
+export class StandaloneSeedConfigurationChanged extends Error {
+  readonly refusal: StandaloneSeedRefusal;
+
+  constructor(refusal: StandaloneSeedRefusal) {
+    super("Standalone seed configuration changed");
+    this.name = "StandaloneSeedConfigurationChanged";
+    this.refusal = refusal;
+  }
+}
+
 /** A fresh registry namespace with one host-provisioned standalone tenant. */
 export class StandaloneTenants extends TenancyRegistryDO {
   readonly #state: DurableObjectState;
@@ -48,7 +67,7 @@ export class StandaloneTenants extends TenancyRegistryDO {
   }
 
   /** Reuse only the exact configured tenant and its current canonical owner. */
-  seed(input: StandaloneSeed): Promise<Tenant> {
+  seed(input: StandaloneSeed): Promise<Tenant | StandaloneSeedRefusal> {
     return this.#state.blockConcurrencyWhile(async () => {
       input = Schema.decodeUnknownSync(seedSchema)(input);
       const scope = tenantScope(defaultTenant, input.origin);
@@ -60,8 +79,15 @@ export class StandaloneTenants extends TenancyRegistryDO {
           marker.origin !== scope.origin ||
           marker.owner.provider !== input.owner.provider ||
           marker.owner.subject !== input.owner.subject
-        )
-          throw new Error("Standalone seed configuration changed");
+        ) {
+          return {
+            kind: "refused",
+            code: "seed_configuration_changed",
+            seededOrigin: marker.origin,
+            configuredOrigin: scope.origin,
+            recovery: "fresh_worker_name_or_reset_worker_data",
+          };
+        }
       }
       let tenant = await this.get(defaultTenant);
       if (tenant === null) {
@@ -131,6 +157,29 @@ export type StandaloneTenancy = Readonly<{
   owner(): Promise<StandaloneOwner | null>;
 }>;
 
+/** A request may seed the standalone tenant only at its configured origin. */
+export async function standaloneTenancyForRequest(
+  env: StandaloneTenancyEnv,
+  request: Request,
+): Promise<StandaloneTenancy> {
+  const configuredOrigin = tenantScope(defaultTenant, env.OYSTER_ORIGIN).origin;
+  const requestOrigin = new URL(request.url).origin;
+  if (requestOrigin !== configuredOrigin)
+    throw new HTTPException(404, {
+      res: Response.json(
+        {
+          kind: "refused",
+          code: "origin_mismatch",
+          configuredOrigin,
+          requestOrigin,
+          message: `Request origin ${requestOrigin} does not match configured OYSTER_ORIGIN ${configuredOrigin}. Set OYSTER_ORIGIN to this Worker's URL.`,
+        },
+        { status: 404 },
+      ),
+    });
+  return standaloneTenancy(env);
+}
+
 const environments = new WeakMap<
   StandaloneTenancyEnv,
   Promise<StandaloneTenancy>
@@ -167,10 +216,11 @@ async function composeTenancy(
     provider: "standalone-owner",
     subject: env.OYSTER_OWNER_NAME ?? "owner",
   };
-  await env.TENANTS.getByName("registry").seed({
+  const seeded = await env.TENANTS.getByName("registry").seed({
     origin: scope.origin,
     owner: identity,
   });
+  if ("kind" in seeded) throw new StandaloneSeedConfigurationChanged(seeded);
   const registry = durableObjectRegistry(env.TENANTS, { readonly: true });
   /** The canonical owner, only while the one admitted record still proves it. */
   const ownerOf = ({

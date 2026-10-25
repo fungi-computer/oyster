@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  BOOT_CAPABILITY_HEADER,
   issueBootCapability,
   type BootCapabilityGrant,
   type BootCapabilityStore,
@@ -45,6 +46,10 @@ function recordingStore() {
 
 const bucket = (size: number | null) => ({
   head: () => Promise.resolve(size === null ? null : { size }),
+});
+
+it("uses the boot header name redacted by the Worker tail runtime", () => {
+  expect(BOOT_CAPABILITY_HEADER).toBe("x-oyster-boot-token");
 });
 
 describe("issueBootCapability", () => {

@@ -12,7 +12,7 @@ const ORIGIN = "https://preview.example.test";
 const RELEASE = "rel_boot01";
 const PARENT = `${ORIGIN}/_boot/${RELEASE}/index.html`;
 const CANDIDATE = `${ORIGIN}/_boot/${RELEASE}/candidate/index.html`;
-const HEADER = "x-oyster-boot-capability";
+const HEADER = "x-oyster-boot-token";
 const TOKEN = "capability-token-not-for-pages";
 
 const frameSchema = z.object({

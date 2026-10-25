@@ -213,6 +213,8 @@
     "package/dist/media.js",
     "package/dist/older-oyster-store.d.ts",
     "package/dist/older-oyster-store.js",
+    "package/dist/older-oyster-store-refusal.d.ts",
+    "package/dist/older-oyster-store-refusal.js",
     "package/dist/pack.d.ts",
     "package/dist/pack.js",
     "package/dist/page-assets.d.ts",
