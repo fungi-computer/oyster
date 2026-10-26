@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Data from "effect/Data";
 import * as Option from "effect/Option";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
+import { candidateFailureDiagnostic } from "./build/candidate-diagnostic.js";
 import {
   parseArtifactRef,
   parseReleaseId,
@@ -139,7 +140,7 @@ export type OysterBuildView = Readonly<{
   appId: string;
   releaseId: string;
   sourceRevision: string;
-  status: "running" | "succeeded" | "failed" | "revoked";
+  status: "running" | "succeeded" | "failed" | "interrupted" | "revoked";
   detail: string | null;
   release: Release | null;
   installation: OysterBuildInstallation | null;
@@ -244,7 +245,13 @@ const jobRow = Schema.Struct({
   credential_id: Schema.String,
   upload_grant_digest: Schema.String,
   request_id: Schema.NullOr(Schema.String),
-  status: Schema.Literals(["running", "succeeded", "failed", "revoked"]),
+  status: Schema.Literals([
+    "running",
+    "succeeded",
+    "failed",
+    "interrupted",
+    "revoked",
+  ]),
   artifact_digest: Schema.NullOr(Schema.String),
   artifact_bytes: Schema.NullOr(Schema.Number),
   detail: Schema.NullOr(Schema.String),
@@ -330,14 +337,14 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
   // A job outlives the owner instance that started it: the Computer keeps
   // building and its own reports (objects, candidate, status) settle the
   // job, so an owner restart must not fail it. A job that reaches its expiry
-  // without a result can never settle, so it fails then instead of reading
+  // without a result can never settle, so it is interrupted instead of reading
   // as running for as long as anyone asks.
   const failedInstallation = `CASE WHEN installation IS NULL THEN NULL ELSE
     json_object('kind', 'failed', 'installationId', json_extract(installation, '$.installationId'),
       'detail', COALESCE(?, 'Build did not succeed')) END`;
   const expire = () =>
     owner.sql.exec(
-      `UPDATE oyster_build_jobs SET installation=${failedInstallation}, status='failed', detail=? WHERE status='running' AND expires_at<=?`,
+      `UPDATE oyster_build_jobs SET installation=${failedInstallation}, status='interrupted', detail=? WHERE status='running' AND expires_at<=?`,
       "Build expired without a result",
       "Build expired without a result",
       now(),
@@ -390,7 +397,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
   });
   const settle = (
     jobId: string,
-    status: "succeeded" | "failed" | "revoked",
+    status: "succeeded" | "failed" | "interrupted" | "revoked",
     detail: string | null,
   ) => {
     owner.sql.exec(
@@ -453,6 +460,9 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         return Promise.resolve();
       },
       execute: async (input) => {
+        // The Computer's connection may close without a terminal execution
+        // reply. A missing output is not an exit; a rejected RPC carrying an
+        // Error (including an admission refusal) remains a definite failure.
         const result = await options.computer.port.runBuild({
           jobId: input.jobId,
           command: input.command,
@@ -484,14 +494,10 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         timeoutMs: oysterAppBuildTimeoutMs,
       });
     } catch (cause) {
-      // Without a terminal result the build may still be running on the
-      // Computer; its own reports settle the job, or its expiry fails it.
+      // An unknown output can belong to a live builder. Its reports can
+      // still succeed; the existing build expiry interrupts it if abandoned.
       if (!(cause instanceof BuildOutcomeUnknown))
-        settle(
-          jobId,
-          "failed",
-          cause instanceof Error ? cause.message : "Build failed",
-        );
+        settle(jobId, "failed", candidateFailureDiagnostic(cause));
     }
     return view(required(jobId));
   };

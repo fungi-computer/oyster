@@ -96,7 +96,10 @@ function timingTable(results: readonly InstalledStarterApp[]) {
   return [header, ...rows].map((row) => row.join("\t")).join("\n");
 }
 
-async function installApps(args: readonly string[]) {
+export async function installApps(
+  args: readonly string[],
+  install: typeof installStandaloneAppSet = installStandaloneAppSet,
+) {
   const { values } = parseArgs({
     args: [...args],
     options: {
@@ -141,7 +144,7 @@ async function installApps(args: readonly string[]) {
       source = { kind: "checkout", directory, revision: `git:${revision}` };
     }
     const started = performance.now();
-    const results = await installStandaloneAppSet({
+    const { installed, failed } = await install({
       source,
       url,
       key,
@@ -151,9 +154,14 @@ async function installApps(args: readonly string[]) {
       },
     });
     const elapsed = performance.now() - started;
-    process.stdout.write(`\n${timingTable(results)}\n`);
+    process.stdout.write(`\n${timingTable(installed)}\n`);
+    process.stdout.write("\nApp\tResult\n");
+    for (const app of installed)
+      process.stdout.write(`${app.installationId}\tinstalled\n`);
+    for (const app of failed)
+      process.stdout.write(`${app.installationId}\tfailed: ${app.reason}\n`);
     process.stdout.write(
-      `\nInstalled ${String(results.length)} Apps in ${seconds(elapsed)}. Open ${url}/ to use Tourtois and the installed Apps.\n`,
+      `\nInstalled ${String(installed.length)} Apps; failed ${String(failed.length)} in ${seconds(elapsed)}.${installed.length > 0 ? ` Open ${url}/ to use the installed Apps.` : ""}\n`,
     );
     if (values.timings !== undefined)
       await writeFile(
@@ -162,33 +170,39 @@ async function installApps(args: readonly string[]) {
           {
             concurrency,
             elapsedMs: elapsed,
-            apps: results.map(({ installationId, jobId, timings }) => ({
+            apps: installed.map(({ installationId, jobId, timings }) => ({
               installationId,
               jobId,
               timings,
             })),
+            failed,
           },
           null,
           2,
         ) + "\n",
       );
+    if (failed.length > 0) process.exitCode = 1;
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 }
 
-const [command, ...rest] = process.argv.slice(2);
-if (command === "--help" || command === "-h") {
-  process.stdout.write(usage + "\n" + installReleaseUsage + "\n");
-} else if (command !== "install-apps" && command !== "install") {
-  process.stderr.write(`${usage}\n`);
-  process.exitCode = 2;
-} else
-  await (
-    command === "install" ? installReleaseCommand(rest) : installApps(rest)
-  ).catch((cause: unknown) => {
-    process.stderr.write(
-      `${cause instanceof Error ? cause.message : String(cause)}\n`,
-    );
-    process.exitCode = 1;
-  });
+export async function runInstallAppsCli(
+  args: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  const [command, ...rest] = args;
+  if (command === "--help" || command === "-h") {
+    process.stdout.write(usage + "\n" + installReleaseUsage + "\n");
+  } else if (command !== "install-apps" && command !== "install") {
+    process.stderr.write(`${usage}\n`);
+    process.exitCode = 2;
+  } else
+    await (
+      command === "install" ? installReleaseCommand(rest) : installApps(rest)
+    ).catch((cause: unknown) => {
+      process.stderr.write(
+        `${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      process.exitCode = 1;
+    });
+}

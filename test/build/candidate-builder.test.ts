@@ -324,7 +324,7 @@ async function runCli(request: (revision: string) => BuilderRequest) {
     const candidate = join(root, "candidate");
     // No report URL: a build that gets past its request still exits 1, but
     // only after writing its candidate.
-    const exitCode = await exec(
+    const outcome = await exec(
       process.execPath,
       [
         new URL("../../dist/build/candidate-cli.mjs", import.meta.url).pathname,
@@ -334,16 +334,19 @@ async function runCli(request: (revision: string) => BuilderRequest) {
       ],
       { env: { PATH: process.env.PATH } },
     ).then(
-      () => 0,
-      (error: unknown) =>
-        Schema.decodeUnknownSync(Schema.Struct({ code: Schema.Number }))(error)
-          .code,
+      () => ({ exitCode: 0, stderr: "" }),
+      (error: unknown) => {
+        const failed = Schema.decodeUnknownSync(
+          Schema.Struct({ code: Schema.Number, stderr: Schema.String }),
+        )(error);
+        return { exitCode: failed.code, stderr: failed.stderr };
+      },
     );
     const built = await readFile(teamCandidateLayout(candidate).manifest).then(
       () => true,
       () => false,
     );
-    return { exitCode, built };
+    return { ...outcome, built };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -379,13 +382,16 @@ it("refuses a request whose build policy is not this builder's", async () => {
       ...request(revision),
       buildPolicy: workspaceBuildPolicy,
     })),
-  ).toEqual({ exitCode: 1, built: true });
+  ).toMatchObject({ exitCode: 1, built: true });
   // Missing or superseded policy metadata builds nothing.
-  expect(await runCli(request)).toEqual({ exitCode: 1, built: false });
+  const refused = await runCli(request);
+  expect(refused).toMatchObject({ exitCode: 1, built: false });
+  expect(refused.stderr).toContain("Team App source/build failed");
+  expect(refused.stderr).toContain("buildPolicy");
   expect(
     await runCli((revision) => ({
       ...request(revision),
       buildPolicy: "package-json-fungi-build-v2",
     })),
-  ).toEqual({ exitCode: 1, built: false });
+  ).toMatchObject({ exitCode: 1, built: false });
 }, 60_000);

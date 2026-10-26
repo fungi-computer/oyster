@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { readFile } from "node:fs/promises";
+import { candidateFailureDiagnostic } from "./candidate-diagnostic.js";
 import {
   candidateManifestObjects,
   teamAppCandidateManifestSchema,
@@ -17,12 +18,15 @@ const uploadConcurrency = 4;
 /** Attempts per object when its connection drops before a response. */
 const uploadAttempts = 3;
 
-/** Report a failed build to the host's build output: its kind, never its text. */
+/** Report bounded diagnostics to the host's build output. */
 function reportFailure(cause: unknown) {
+  const diagnostic = candidateFailureDiagnostic(cause);
+  process.stderr.write(`Team App source/build failed: ${diagnostic}\n`);
   process.stderr.write(
     `${JSON.stringify({
       source: "oyster-candidate-builder",
       failureKind: cause instanceof Error ? "Error" : "NonErrorThrown",
+      diagnostic,
     })}\n`,
   );
 }
@@ -135,7 +139,5 @@ try {
   );
 } catch (cause) {
   reportFailure(cause);
-  // Customer source and provider messages can contain secrets; only expose the stage.
-  process.stderr.write("Team App source/build failed\n");
   process.exitCode = 1;
 }

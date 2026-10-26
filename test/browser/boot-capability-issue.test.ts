@@ -59,7 +59,7 @@ describe("issueBootCapability", () => {
       ui,
       bucket: bucket(42),
       capabilities,
-      expiresAt: 9_000,
+      now: () => 1_000,
     });
     expect(issued.token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(grants).toHaveLength(1);
@@ -72,14 +72,14 @@ describe("issueBootCapability", () => {
       id: issued.leaseId,
       identity: ui.identity,
       base: "./",
-      expiresAt: 9_000,
+      expiresAt: 13_000,
       assets: [{ path: "/index.html", byteLength: 42 }],
     });
   });
 
   it("mints a different token every time", async () => {
     const { capabilities } = recordingStore();
-    const input = { ui, bucket: bucket(1), capabilities, expiresAt: 9_000 };
+    const input = { ui, bucket: bucket(1), capabilities, now: () => 1_000 };
     const first = await issueBootCapability(input);
     const second = await issueBootCapability(input);
     expect(first.token).not.toBe(second.token);
@@ -93,7 +93,7 @@ describe("issueBootCapability", () => {
         ui,
         bucket: bucket(null),
         capabilities,
-        expiresAt: 9_000,
+        now: () => 1_000,
       }),
     ).rejects.toMatchObject({ code: "ui_mount_failed" });
     expect(grants).toEqual([]);
@@ -106,7 +106,7 @@ describe("issueBootCapability", () => {
         ui,
         bucket: bucket(Number.MAX_SAFE_INTEGER),
         capabilities,
-        expiresAt: 9_000,
+        now: () => 1_000,
       }),
     ).rejects.toBeInstanceOf(BootGateError);
     expect(grants).toEqual([]);

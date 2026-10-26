@@ -151,3 +151,49 @@ test("registry bounds active capability leases and rejects oversized asset autho
   );
   database.close();
 });
+
+test("registry admits two seconds of issuer-ahead skew, not more, and never replays an expired lease", () => {
+  const { database, registry } = fixture();
+  const originalNow = Date.now;
+  const verifierNow = originalNow();
+  Date.now = () => verifierNow;
+  try {
+    const within = grant(
+      "skew-within",
+      "skew-token",
+      verifierNow + 12_000 + 2_000,
+    );
+    registry.bootCapability({ kind: "issue", grant: within });
+    assert.deepEqual(
+      registry.bootCapability({
+        kind: "resolve",
+        tokenDigest: within.tokenDigest,
+        now: verifierNow,
+      }),
+      within.lease,
+    );
+    assert.throws(
+      () =>
+        registry.bootCapability({
+          kind: "issue",
+          grant: grant(
+            "skew-beyond",
+            "other-token",
+            verifierNow + 12_000 + 2_001,
+          ),
+        }),
+      /outside its deadline/,
+    );
+    assert.equal(
+      registry.bootCapability({
+        kind: "resolve",
+        tokenDigest: within.tokenDigest,
+        now: within.lease.expiresAt,
+      }),
+      null,
+    );
+  } finally {
+    Date.now = originalNow;
+    database.close();
+  }
+});

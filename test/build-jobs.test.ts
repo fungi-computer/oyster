@@ -156,6 +156,26 @@ it("revokes execution even when the Computer command fails", async () => {
   expect(f.order).toEqual(["prepare", "allowed", "revoked"]);
 });
 
+it("records the builder's bounded failure detail instead of its exit kind alone", async () => {
+  const f = fixture();
+  f.computer.execute.mockResolvedValue({
+    output: {
+      exitCode: 1,
+      stderr:
+        "Team App source/build failed: compile failed; Caused by: install failed bearer secret-123456789012345678901234\n",
+    },
+  });
+  const result = await f.publisher.run({
+    jobId: "job-1",
+    command: "build",
+    timeoutMs: 4_000,
+  });
+  expect(result.status).toBe("failed");
+  expect(result.detail).toContain("compile failed; Caused by: install failed");
+  expect(result.detail).not.toContain("secret-123456789012345678901234");
+  expect(result.detail?.length).toBeLessThanOrEqual(200);
+});
+
 it("does not overwrite a job already settled by the Computer's own report", async () => {
   const f = fixture();
   f.computer.deliverTeamGitEvents.mockImplementation(() => {

@@ -1,13 +1,13 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "oyster": "./dist/standalone/install-apps-cli.js"
+    "oyster": "./dist/standalone/install-apps-bin.js"
   },
   "files": [
     "dist",
@@ -304,7 +304,7 @@
     "test:mcp": "BONSAI_PROOF=mcp node --import tsx test/standalone/seed-demo.browser.mjs",
     "test:seed-demo": "node --import tsx test/standalone/seed-demo.browser.mjs",
     "test:edit-in-inkcap": "node --import tsx test/standalone/edit-in-inkcap-live.browser.mjs",
-    "install:apps": "node --import tsx src/standalone/install-apps-cli.ts install-apps --from ../..",
+    "install:apps": "node --import tsx src/standalone/install-apps-bin.ts install-apps --from ../..",
     "check:deploy": "wrangler deploy --dry-run --config deploy/wrangler.jsonc --containers-rollout=none --outdir=.botanical/worker",
     "test:boot-ui": "node --import tsx --test test/boot-ui-references.test.mjs test/boot-capability-registry.test.mjs test/boot-capability-route.test.mjs",
     "test:boot-browser": "node --test test/boot-page.browser.mjs && pnpm run test:browser-onbox",

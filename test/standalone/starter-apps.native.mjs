@@ -180,7 +180,7 @@ try {
   /** Install the whole set from one commit of one repository and check it. */
   async function installFrom(directory, commit, expected) {
     const started = Date.now();
-    const results = await installStandaloneAppSet({
+    const { installed: results, failed } = await installStandaloneAppSet({
       source: { kind: "checkout", directory, revision: `git:${commit}` },
       url,
       key,
@@ -189,6 +189,7 @@ try {
     log(
       `step: ${expected.installed} all seven in ${String(Date.now() - started)}ms`,
     );
+    assert.deepEqual(failed, []);
     assert.deepEqual(
       results.map((result) => result.installationId),
       expectedStarterIds,

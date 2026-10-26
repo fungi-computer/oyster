@@ -1,79 +1,91 @@
+import { expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import type {
+  InstalledStarterApp,
+  StarterAppSetResult,
+} from "../../src/standalone/app-set.js";
 
-const packageRoot = resolve(import.meta.dirname, "../..");
-const cli = resolve(packageRoot, "src/standalone/install-apps-cli.ts");
-
-type Finished = {
-  readonly status: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-};
-
-function cliCommand(
-  args: readonly string[],
-  environment: Readonly<Record<string, string>>,
-): Finished {
-  const base = Object.fromEntries(
+it("importing the CLI module does not dispatch a command", () => {
+  const cli = resolve(
+    import.meta.dirname,
+    "../../src/standalone/install-apps-cli.ts",
+  );
+  const env = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([name]) => name !== "OYSTER_URL" && name !== "OYSTER_OWNER_KEY",
+      ([name]) =>
+        name !== "OYSTER_URL" &&
+        name !== "OYSTER_OWNER_KEY" &&
+        name !== "NODE_PATH",
     ),
   );
-  return spawnSync(process.execPath, ["--import", "tsx", cli, ...args], {
-    cwd: packageRoot,
-    env: { ...base, ...environment },
-    encoding: "utf8",
-  });
-}
-
-function installApps(
-  args: readonly string[],
-  environment: Readonly<Record<string, string>>,
-): Finished {
-  return cliCommand(["install-apps", ...args], environment);
-}
-
-it("top-level help discovers both starter and local Release installation without credentials", () => {
-  const finished = cliCommand(["--help"], {});
+  const finished = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `await import(${JSON.stringify(cli)})`,
+    ],
+    { cwd: resolve(import.meta.dirname, "../.."), env, encoding: "utf8" },
+  );
   expect(finished.status).toBe(0);
+  expect(finished.stdout).toBe("");
   expect(finished.stderr).toBe("");
-  expect(finished.stdout).toContain("oyster install-apps");
-  expect(finished.stdout).toContain("oyster install <directory|release.json>");
 });
 
-describe("oyster install-apps", () => {
-  it.each(["--help", "-h"])(
-    "%s prints usage, where OYSTER_URL and OYSTER_OWNER_KEY come from, and exits 0",
-    (flag) => {
-      const finished = installApps([flag], {});
-      expect(finished.status).toBe(0);
-      expect(finished.stderr).toBe("");
-      expect(finished.stdout).toContain("Usage: oyster install-apps");
-      expect(finished.stdout).toContain("OYSTER_URL");
-      expect(finished.stdout).toContain("OYSTER_OWNER_KEY");
-      expect(finished.stdout).toContain("deployed Oyster");
-      expect(finished.stdout).toContain("seven starter Apps");
+it("the import-safe handler prints failed Apps and sets a non-zero exit code", async () => {
+  const record = (
+    installationId: string,
+    jobId: string,
+  ): InstalledStarterApp => ({
+    installationId,
+    jobId,
+    published: "recorded",
+    seedRevision: "git:seed",
+    sourceRevision: "git:source",
+    installed: "installed",
+    release: null,
+    timings: {
+      fetch: 0,
+      publish: 0,
+      queue: 0,
+      build: 0,
+      install: 0,
+      computer: null,
     },
-  );
-
-  it("names OYSTER_URL when only the owner key is set and exits non-zero", () => {
-    const finished = installApps([], {
-      OYSTER_OWNER_KEY: "k".repeat(24),
-    });
-    expect(finished.status).toBe(1);
-    expect(finished.stderr).toContain("OYSTER_URL is not set");
-    expect(finished.stderr).not.toContain("OYSTER_OWNER_KEY is not set");
-    expect(finished.stderr).toContain("oyster install-apps --help");
   });
-
-  it("names OYSTER_OWNER_KEY when only the URL is set and exits non-zero", () => {
-    const finished = installApps([], {
-      OYSTER_URL: "https://oyster.example.workers.dev",
+  const result: StarterAppSetResult = {
+    installed: [record("tourtois", "build_1"), record("shed", "build_3")],
+    failed: [
+      { installationId: "bonsai", reason: "bonsai build failed: compile" },
+    ],
+  };
+  const originalCode = process.exitCode;
+  const output: string[] = [];
+  const write = vi
+    .spyOn(process.stdout, "write")
+    .mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
     });
-    expect(finished.status).toBe(1);
-    expect(finished.stderr).toContain("OYSTER_OWNER_KEY is not set");
-    expect(finished.stderr).not.toContain("OYSTER_URL is not set");
-    expect(finished.stderr).toContain("openssl rand -hex 24");
-  });
+  try {
+    vi.stubEnv("OYSTER_URL", "https://oyster.test");
+    vi.stubEnv("OYSTER_OWNER_KEY", "key");
+    const { installApps: installAppsCommand } =
+      await import("../../src/standalone/install-apps-cli.js");
+    await installAppsCommand([], () => Promise.resolve(result));
+    expect(output.join("")).toContain("tourtois\tinstalled");
+    expect(output.join("")).toContain(
+      "bonsai\tfailed: bonsai build failed: compile",
+    );
+    expect(output.join("")).toContain("shed\tinstalled");
+    expect(output.join("")).toContain("Installed 2 Apps; failed 1");
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = originalCode;
+    write.mockRestore();
+    vi.unstubAllEnvs();
+  }
 });

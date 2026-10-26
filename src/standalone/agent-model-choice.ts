@@ -66,7 +66,10 @@ export async function selectAgentModel(
 
 /** The Agent DO is the only durable owner. Absence is a new-format default, not an old-env reader. */
 export function agentModelChoice(
-  storage: Pick<DurableObjectStorage, "get" | "put">,
+  storage: Readonly<{
+    get<T = unknown>(key: string): Promise<T | undefined>;
+    put(key: string, value: AgentModelChoice): Promise<void>;
+  }>,
   admit: (choice: AgentModelChoice) => void,
 ) {
   return {

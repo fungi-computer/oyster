@@ -918,7 +918,7 @@ try {
       [
         "--import",
         "tsx",
-        `${root}src/standalone/install-apps-cli.ts`,
+        `${root}src/standalone/install-apps-bin.ts`,
         "install-apps",
         "--from",
         repository,

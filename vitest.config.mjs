@@ -26,6 +26,7 @@ export default defineConfig({
       "test/artifact-writer.test.ts",
       "test/workspace-build-script.test.ts",
       "test/build/candidate-builder.test.ts",
+      "test/build/candidate-diagnostic.test.ts",
     ],
   },
 });

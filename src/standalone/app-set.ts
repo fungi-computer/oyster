@@ -93,7 +93,13 @@ const publishedSchema = Schema.Struct({
 });
 const buildSchema = Schema.Struct({
   jobId: Schema.String,
-  status: Schema.Literals(["running", "succeeded", "failed", "revoked"]),
+  status: Schema.Literals([
+    "running",
+    "succeeded",
+    "failed",
+    "interrupted",
+    "revoked",
+  ]),
   detail: Schema.NullOr(Schema.String),
   /** Installed exactly as the host encoded it. */
   release: Schema.NullOr(Schema.Json),
@@ -163,6 +169,11 @@ export type InstalledStarterApp = Readonly<{
   timings: StarterAppTimings;
 }>;
 
+export type StarterAppSetResult = Readonly<{
+  installed: readonly InstalledStarterApp[];
+  failed: readonly Readonly<{ installationId: string; reason: string }>[];
+}>;
+
 /** How long one App's build may run before the installer gives up: the
  * host's whole-build budget plus queueing on the one Computer. */
 const appBuildWaitMs = 20 * 60_000;
@@ -221,7 +232,7 @@ export async function installStandaloneAppSet(
     idle?: (ms: number, signal: AbortSignal) => Promise<void>;
     waitMs?: number;
   }>,
-): Promise<readonly InstalledStarterApp[]> {
+): Promise<StarterAppSetResult> {
   const concurrency = options.concurrency ?? defaultStarterBuildConcurrency;
   if (
     !Number.isInteger(concurrency) ||
@@ -446,9 +457,7 @@ export async function installStandaloneAppSet(
   // Seed templates one at a time in set order (a git push each, quick beside
   // a build); a build slot takes each App the moment its own source is
   // seeded, so Tourtois builds while the rest publish. Builds start in set
-  // order. The first failure, in a seed or a build, starts no further seed or
-  // build; builds already running finish and install, every seed and clone
-  // cleanup settles, and only then does the install reject with that failure.
+  // order. A failed seed or build does not prevent other Apps from installing.
   type Seeded = {
     app: StarterApp;
     kind: "recorded" | "existing";
@@ -459,10 +468,21 @@ export async function installStandaloneAppSet(
     ready: number;
   };
   const installed = new Map<string, InstalledStarterApp>();
-  /** Set by the first failure, so no further seed or build starts. */
-  const stop = { requested: false };
-  /** Every failure, in the order it happened; the first is the one thrown. */
-  const failures: unknown[] = [];
+  const failures = new Map<string, string>();
+  const fail = (app: StarterApp, cause: unknown) => {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    failures.set(app.installationId, reason);
+    options.report(`Failed ${app.installationId}: ${reason}`);
+  };
+  const reportFailure = ({
+    app,
+    cause,
+  }: {
+    app: StarterApp;
+    cause: unknown;
+  }) => {
+    fail(app, cause);
+  };
   const seededQueue: Seeded[] = [];
   const waiting: ((next: Seeded | undefined) => void)[] = [];
   const seeding = { finished: false };
@@ -509,16 +529,15 @@ export async function installStandaloneAppSet(
   const seedAll = async () => {
     try {
       for (const app of standaloneAppSet) {
-        if (stop.requested) break;
-        const seeded = await seedApp(app);
-        const waiter = waiting.shift();
-        if (waiter === undefined) seededQueue.push(seeded);
-        else waiter(seeded);
+        try {
+          const seeded = await seedApp(app);
+          const waiter = waiting.shift();
+          if (waiter === undefined) seededQueue.push(seeded);
+          else waiter(seeded);
+        } catch (cause) {
+          reportFailure({ app, cause });
+        }
       }
-    } catch (cause) {
-      stop.requested = true;
-      failures.push(cause);
-      throw cause;
     } finally {
       seeding.finished = true;
       for (const waiter of waiting.splice(0)) waiter(undefined);
@@ -528,7 +547,7 @@ export async function installStandaloneAppSet(
   const slot = async () => {
     for (
       let next = await takeSeeded();
-      next !== undefined && !stop.requested;
+      next !== undefined;
       next = await takeSeeded()
     ) {
       const name = next.app.installationId;
@@ -626,21 +645,27 @@ export async function installStandaloneAppSet(
           },
         });
       } catch (cause) {
-        stop.requested = true;
-        failures.push(cause);
-        throw cause;
+        reportFailure({ app: next.app, cause });
       }
     }
   };
-  // Wait for every seed and build to settle before reporting: nothing of this
-  // call may still run, or install, after it rejects.
-  await Promise.allSettled([
+  // Wait for every seed and build to settle before returning the full outcome.
+  const settled = await Promise.allSettled([
     seedAll(),
     ...Array.from({ length: concurrency }, slot),
   ]);
-  if (failures.length > 0) throw failures[0];
-  return standaloneAppSet.flatMap((app) => {
-    const result = installed.get(app.installationId);
-    return result === undefined ? [] : [result];
-  });
+  for (const outcome of settled)
+    if (outcome.status === "rejected") throw outcome.reason;
+  return {
+    installed: standaloneAppSet.flatMap((app) => {
+      const result = installed.get(app.installationId);
+      return result === undefined ? [] : [result];
+    }),
+    failed: standaloneAppSet.flatMap((app) => {
+      const reason = failures.get(app.installationId);
+      return reason === undefined
+        ? []
+        : [{ installationId: app.installationId, reason }];
+    }),
+  };
 }

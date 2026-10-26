@@ -639,7 +639,7 @@ it("fails a build whose Computer exits without a Release", async () => {
 
 /** Two build owners over one durable store, as a Durable Object restart
  * leaves them: the first started the job, the second serves the reports. */
-function restartedOwners(clock: { now: number }) {
+function restartedOwners(clock: { now: number }, missingOutput = false) {
   const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
   const store = memoryStore();
   const commands: string[] = [];
@@ -656,7 +656,9 @@ function restartedOwners(clock: { now: number }) {
           buildBackend: () => Promise.resolve({ kind: "hosted" }),
           runBuild: ({ command }) => {
             commands.push(command);
-            return new Promise(() => undefined);
+            return missingOutput
+              ? Promise.resolve({ output: null })
+              : new Promise<never>(() => undefined);
           },
         },
       },
@@ -725,10 +727,72 @@ it("completes a build from the Computer's reports after its owner restarted mid-
   expect(done?.release).not.toBeNull();
 });
 
+it("fails a definite RPC refusal with its bounded reason and permits retry", async () => {
+  // Unlike a missing terminal output, a rejected refusal is a real error.
+  const store = memoryStore();
+  let command = "";
+  const builds = createOysterAppBuilds({
+    owner: fromNodeSqlite(new DatabaseSync(":memory:")),
+    tenantId: "tenant-1",
+    computer: {
+      name: "workspace",
+      objectId: computerObjectId,
+      port: {
+        buildBackend: () => Promise.resolve({ kind: "hosted" }),
+        runBuild: (input) => {
+          command = input.command;
+          return Promise.reject(
+            new Error("App denied: token=secret-raw", {
+              cause: new Error("authority revoked"),
+            }),
+          );
+        },
+      },
+    },
+    artifacts: store,
+    templates: { read: () => Promise.resolve(null) },
+  });
+  builds.registerSource({
+    appId: parseAppId(appId),
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-fixture",
+    },
+    recipe: normalized.recipe,
+    buildRecipeDigest: normalized.buildRecipeDigest,
+  });
+  const { build, run } = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  expect((await run()).status).toBe("failed");
+  expect(builds.read(build.jobId)?.status).toBe("failed");
+  expect(builds.read(build.jobId)?.detail).toContain(
+    "Caused by: authority revoked",
+  );
+  expect(builds.read(build.jobId)?.detail).not.toContain("secret-raw");
+  expect(builds.admitBuild(build.jobId, computerObjectId)).toBeNull();
+  expect(
+    await builds.admitObjectUpload(
+      build.jobId,
+      computerObjectId,
+      grantOf(command),
+    ),
+  ).toBeNull();
+  const retry = await builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner-1",
+  });
+  expect(retry.build.status).toBe("running");
+  expect(retry.build.jobId).not.toBe(build.jobId);
+});
+
 it("keeps a build running when the Computer loses its result, and completes it from the reports", async () => {
   // Live: Prints's build kept running after the Computer's connection to its
-  // container dropped; reading that unknown outcome as "exited with null"
-  // failed the job and refused the build's own object uploads.
+  // container dropped. Its object uploads must remain authorized.
   const store = memoryStore();
   let command = "";
   const builds = createOysterAppBuilds({
@@ -794,57 +858,60 @@ it("keeps a build running when the Computer loses its result, and completes it f
   expect(builds.read(build.jobId)?.status).toBe("succeeded");
 });
 
-it("fails a build that reaches its expiry without a result, and refuses its late reports", async () => {
-  const clock = { now: Date.now() };
-  const { create, commands } = restartedOwners(clock);
-  const before = create();
-  before.registerSource({
-    appId: parseAppId(appId),
-    location: {
-      kind: "installation",
-      installationId: "bonsai",
-      repository: "my-fixture",
-    },
-    recipe: normalized.recipe,
-    buildRecipeDigest: normalized.buildRecipeDigest,
+for (const missingOutput of [false, true]) {
+  it(`interrupts a build that reaches its expiry ${missingOutput ? "after a dropped socket" : "without a result"}, and refuses its late reports`, async () => {
+    const clock = { now: Date.now() };
+    const { create, commands } = restartedOwners(clock, missingOutput);
+    const before = create();
+    before.registerSource({
+      appId: parseAppId(appId),
+      location: {
+        kind: "installation",
+        installationId: "bonsai",
+        repository: "my-fixture",
+      },
+      recipe: normalized.recipe,
+      buildRecipeDigest: normalized.buildRecipeDigest,
+    });
+    const { build, run } = await before.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner-1",
+    });
+    if (missingOutput) expect((await run()).status).toBe("running");
+    else void run();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const credentialId =
+      before.admitBuild(build.jobId, computerObjectId)?.credentialId ?? "";
+    const after = create();
+    expect(after.read(build.jobId)?.status).toBe("running");
+    // Past the build timeout and the job's grace, no result can arrive.
+    clock.now += oysterAppBuildTimeoutMs + 5 * 60_000;
+    expect(after.read(build.jobId)).toMatchObject({
+      status: "interrupted",
+      detail: "Build expired without a result",
+      release: null,
+    });
+    expect(after.admitBuild(build.jobId, computerObjectId)).toBeNull();
+    expect(
+      (
+        await after.submitCandidate(
+          build.jobId,
+          received(built, normalized),
+          grantOf(commands[0] ?? ""),
+          credentialId,
+        )
+      ).status,
+    ).toBe(403);
+    // A fresh build of the same commit can start.
+    const retried = await after.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner-1",
+    });
+    expect(retried.build.status).toBe("running");
   });
-  const { build, run } = await before.start({
-    appId,
-    sourceRevision,
-    requestedBy: "owner-1",
-  });
-  void run();
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  const credentialId =
-    before.admitBuild(build.jobId, computerObjectId)?.credentialId ?? "";
-  const after = create();
-  expect(after.read(build.jobId)?.status).toBe("running");
-  // Past the build timeout and the job's grace, no result can arrive.
-  clock.now += oysterAppBuildTimeoutMs + 5 * 60_000;
-  expect(after.read(build.jobId)).toMatchObject({
-    status: "failed",
-    detail: "Build expired without a result",
-    release: null,
-  });
-  expect(after.admitBuild(build.jobId, computerObjectId)).toBeNull();
-  expect(
-    (
-      await after.submitCandidate(
-        build.jobId,
-        received(built, normalized),
-        grantOf(commands[0] ?? ""),
-        credentialId,
-      )
-    ).status,
-  ).toBe(403);
-  // A fresh build of the same commit can start.
-  const retried = await after.start({
-    appId,
-    sourceRevision,
-    requestedBy: "owner-1",
-  });
-  expect(retried.build.status).toBe("running");
-});
+}
 
 it("refuses a build for an App without a registered source or with a mismatched recipe digest", async () => {
   const { builds } = fixture(() => Promise.resolve(0));

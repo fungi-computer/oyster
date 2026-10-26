@@ -585,7 +585,8 @@ it("does not treat an edge 502 as the outcome of a replacement installation", as
     );
     expect(registry.approvals).toEqual([]);
     if (result.kind === "rejected") throw result.error;
-    expect(result.value).toHaveLength(standaloneAppSet.length);
+    expect(result.value.installed).toHaveLength(standaloneAppSet.length);
+    expect(result.value.failed).toEqual([]);
   } finally {
     await new Promise<void>((resolveClose, rejectClose) => {
       server.close((error) => {
@@ -665,7 +666,8 @@ it.each(["unavailable", "wrong-version", "generation"] as const)(
         installation: change === "unavailable" ? null : newer,
       });
     });
-    await expect(install([])).rejects.toThrow(
+    const result = await install([]);
+    expect(result.failed[0]?.reason).toContain(
       change === "unavailable"
         ? "completed installation version is unavailable"
         : change === "generation"
@@ -864,13 +866,16 @@ it("publishes, builds on the Computer and installs each App's own Release, Tourt
   const results = await install(published);
   // Each installed Release is the one its own seed revision built.
   expect(
-    results.map((result) => [result.installationId, result.seedRevision]),
+    results.installed.map((result) => [
+      result.installationId,
+      result.seedRevision,
+    ]),
   ).toEqual(
     standaloneAppSet.map((app) => [app.installationId, seedOf(app.appId)]),
   );
-  expect(results.every((result) => result.sourceRevision === upstream)).toBe(
-    true,
-  );
+  expect(
+    results.installed.every((result) => result.sourceRevision === upstream),
+  ).toBe(true);
   expect(published).toEqual(standaloneAppSet.map((app) => app.installationId));
   expect(published[0]).toBe("tourtois");
   const installs = calls.filter((call) => call === "POST /api/installations");
@@ -911,7 +916,8 @@ it("warns about each App whose recorded UI check did not pass, and still install
   const results = await install([], 1, undefined, (message) =>
     reports.push(message),
   );
-  expect(results).toHaveLength(standaloneAppSet.length);
+  expect(results.installed).toHaveLength(standaloneAppSet.length);
+  expect(results.failed).toEqual([]);
   const warnings = reports.filter((line) => line.startsWith("Warning:")).sort();
   expect(warnings).toEqual([
     "Warning: bonsai is installed, but its UI check failed (ui_mount_failed: page_error).",
@@ -988,7 +994,7 @@ it("never reapproves existing, narrowed, revoked or tombstoned defaults on rerun
   registry.approvals.length = 0;
   const reinstalled = await install([]);
   expect(
-    reinstalled.find(
+    reinstalled.installed.find(
       (record) => record.installationId === "shed-fixtureunique",
     ),
   ).toBeDefined();
@@ -1074,7 +1080,7 @@ it.each([
       }
       return transport(input, init);
     });
-    await expect(install([])).rejects.toThrow();
+    expect((await install([])).failed[0]?.installationId).toBe("tourtois");
     expect(registry.records.has("tourtois")).toBe(true);
     const grantReadsAndWrites = () =>
       calls.filter((call) =>
@@ -1171,30 +1177,40 @@ it.each([
     }
     return response;
   });
-  await expect(install([])).rejects.toThrow();
+  expect((await install([])).failed[0]?.installationId).toBe("tourtois");
   expect(registry.approvals).toEqual([]);
-  expect(registry.records.size).toBe(fault === "build-app" ? 0 : 1);
+  expect(registry.records.size).toBe(
+    fault === "build-app" ? 0 : standaloneAppSet.length,
+  );
 });
 
 it.each([
   ["failed", "bonsai build failed: Build exited with 1"],
   ["missing", "bonsai build is missing (404)"],
 ] as const)(
-  "stops at a build that %s, installing nothing after it",
+  "continues past a build that %s and reports the failed App",
   async (kind, message) => {
     const calls = oyster((appId) =>
       appId === "app_bonsai" ? kind : "succeeded",
     );
-    await expect(install([])).rejects.toThrow(message);
+    const results = await install([], 1);
+    expect(results.failed).toEqual([
+      { installationId: "bonsai", reason: message },
+    ]);
+    expect(results.installed.map((result) => result.installationId)).toEqual(
+      standaloneAppSet
+        .filter((app) => app.installationId !== "bonsai")
+        .map((app) => app.installationId),
+    );
     expect(
       calls.filter((call) => call === "POST /api/installations"),
-    ).toHaveLength(1);
+    ).toHaveLength(standaloneAppSet.length - 1);
   },
 );
 
 it("shows the older-store refusal instead of a bare publish failure", async () => {
   oyster(() => "succeeded");
-  const failure = await installStandaloneAppSet({
+  const result = await installStandaloneAppSet({
     source: checkout,
     url: "https://oyster.test",
     key: "key",
@@ -1208,39 +1224,35 @@ it("shows the older-store refusal instead of a bare publish failure", async () =
       ),
     concurrency: 1,
     pollMs: 1,
-  }).then(
-    () => null,
-    (cause: unknown) => cause,
-  );
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure instanceof Error ? failure.message : "").toBe(
-    olderOysterStoreMessage,
-  );
+  });
+  expect(result.failed[0]).toEqual({
+    installationId: "tourtois",
+    reason: olderOysterStoreMessage,
+  });
 });
 
 it("gives up on a build that does not finish within its wait", async () => {
   oyster(() => "succeeded");
-  await expect(
-    installStandaloneAppSet({
-      source: checkout,
-      url: "https://oyster.test",
-      key: "key",
-      report: () => undefined,
-      publish: (app) =>
-        Promise.resolve(
-          Response.json({
-            kind: "existing",
-            receipt: {
-              seedRevision: seedOf(app.appId),
-              sourceRevision: upstream,
-            },
-          }),
-        ),
-      concurrency: 1,
-      pollMs: 1,
-      waitMs: 0,
-    }),
-  ).rejects.toThrow("tourtois build did not finish");
+  const result = await installStandaloneAppSet({
+    source: checkout,
+    url: "https://oyster.test",
+    key: "key",
+    report: () => undefined,
+    publish: (app) =>
+      Promise.resolve(
+        Response.json({
+          kind: "existing",
+          receipt: {
+            seedRevision: seedOf(app.appId),
+            sourceRevision: upstream,
+          },
+        }),
+      ),
+    concurrency: 1,
+    pollMs: 1,
+    waitMs: 0,
+  });
+  expect(result.failed[0]?.reason).toContain("tourtois build did not finish");
 });
 
 it("cancels a build status read that hangs, within the build budget", async () => {
@@ -1272,28 +1284,29 @@ it("cancels a build status read that hangs, within the build budget", async () =
     Promise.resolve(route(input, init)),
   );
   const started = Date.now();
-  await expect(
-    installStandaloneAppSet({
-      source: checkout,
-      url: "https://oyster.test",
-      key: "key",
-      report: () => undefined,
-      publish: (app) =>
-        Promise.resolve(
-          Response.json({
-            kind: "recorded",
-            receipt: {
-              seedRevision: seedOf(app.appId),
-              sourceRevision: upstream,
-            },
-          }),
-        ),
-      concurrency: 1,
-      pollMs: 1,
-      waitMs: 200,
-    }),
-  ).rejects.toThrow("tourtois build did not finish (build_0)");
-  expect(reads).toHaveLength(1);
+  const result = await installStandaloneAppSet({
+    source: checkout,
+    url: "https://oyster.test",
+    key: "key",
+    report: () => undefined,
+    publish: (app) =>
+      Promise.resolve(
+        Response.json({
+          kind: "recorded",
+          receipt: {
+            seedRevision: seedOf(app.appId),
+            sourceRevision: upstream,
+          },
+        }),
+      ),
+    concurrency: 1,
+    pollMs: 1,
+    waitMs: 200,
+  });
+  expect(result.failed[0]?.reason).toContain(
+    "tourtois build did not finish (build_0)",
+  );
+  expect(reads).toHaveLength(standaloneAppSet.length);
   expect(Date.now() - started).toBeLessThan(5_000);
 });
 
@@ -1350,10 +1363,10 @@ it("runs builds two at a time on the one Computer, Tourtois first, and reports t
   const results = await install([], 2, 2_000);
   expect(most).toBe(2);
   expect(started[0]).toBe("app_tourtois");
-  expect(results.map((result) => result.installationId)).toEqual(
+  expect(results.installed.map((result) => result.installationId)).toEqual(
     standaloneAppSet.map((app) => app.installationId),
   );
-  expect(results[0]?.timings.computer).toEqual({
+  expect(results.installed[0]?.timings.computer).toEqual({
     clone: 1,
     install: 20,
     build: 30,
@@ -1567,7 +1580,7 @@ it("starts an App's build before unrelated Apps finish seeding", async () => {
   ]);
 });
 
-it("settles a build in flight before rejecting a seed failure, then does no more work", async () => {
+it("settles a build in flight and reports a failed seed", async () => {
   const events: string[] = [];
   const registry = starterRegistry();
   let appId = "app_tourtois";
@@ -1606,44 +1619,41 @@ it("settles a build in flight before rejecting a seed failure, then does no more
       events.push("install");
     return registry.route(input, init);
   });
-  await expect(
-    installStandaloneAppSet({
-      source: checkout,
-      concurrency: 1,
-      url: "https://oyster.test",
-      key: "key",
-      report: () => undefined,
-      publish: async (app) => {
-        if (app.installationId === "tourtois")
-          return Response.json({
-            kind: "recorded",
-            receipt: {
-              seedRevision: seedOf(app.appId),
-              sourceRevision: upstream,
-            },
-          });
-        await tourtoisBuild;
-        events.push("seed failed " + app.installationId);
-        seedFailed();
-        return new Response(null, { status: 500 });
-      },
-      pollMs: 1,
-    }),
-  ).rejects.toThrow("bonsai source publish failed (500)");
-  // The rejection came only after the running build finished and installed.
-  const atRejection = [...events];
-  expect(atRejection).toEqual([
-    "build app_tourtois",
-    "seed failed bonsai",
-    "build settled",
-    "install",
-  ]);
-  // Nothing is left running behind the rejection.
+  const result = await installStandaloneAppSet({
+    source: checkout,
+    concurrency: 1,
+    url: "https://oyster.test",
+    key: "key",
+    report: () => undefined,
+    publish: async (app) => {
+      if (app.installationId === "tourtois")
+        return Response.json({
+          kind: "recorded",
+          receipt: {
+            seedRevision: seedOf(app.appId),
+            sourceRevision: upstream,
+          },
+        });
+      await tourtoisBuild;
+      events.push("seed failed " + app.installationId);
+      seedFailed();
+      return new Response(null, { status: 500 });
+    },
+    pollMs: 1,
+  });
+  expect(result.failed[0]).toEqual({
+    installationId: "bonsai",
+    reason: "bonsai source publish failed (500)",
+  });
+  expect(result.installed[0]?.installationId).toBe("tourtois");
+  expect(events).toContain("build settled");
+  const atReturn = [...events];
+  // Nothing is left running behind the completed outcome.
   await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-  expect(events).toEqual(atRejection);
+  expect(events).toEqual(atReturn);
 });
 
-it("settles an in-flight build before rejecting an approval failure, without starting more builds", async () => {
+it("settles an in-flight build and reports an approval failure", async () => {
   const registry = starterRegistry();
   const calls = oyster(() => "succeeded", registry);
   const transport = fetch;
@@ -1671,10 +1681,14 @@ it("settles an in-flight build before rejecting an approval failure, without sta
     }
     return transport(input, init);
   });
-  await expect(install([], 2)).rejects.toThrow(
-    "tourtois approval failed (403)",
+  const result = await install([], 2);
+  expect(result.failed[0]).toEqual({
+    installationId: "tourtois",
+    reason: "tourtois approval failed (403)",
+  });
+  expect(calls.filter((call) => call === "POST /api/builds")).toHaveLength(
+    standaloneAppSet.length,
   );
-  expect(calls.filter((call) => call === "POST /api/builds")).toHaveLength(2);
   expect(registry.records.get("bonsai")?.authority.authorityVersion).toBe(1);
   expect(registry.records.get("tourtois")?.authority.authorityVersion).toBe(1);
   const atRejection = [...calls];

@@ -17,7 +17,7 @@ import { installationRequestIdSchema } from "../src/installation-operations.js";
 import { instanceIds } from "../src/instance-id.js";
 
 const packageRoot = resolve(import.meta.dirname, "..");
-const cli = join(packageRoot, "src/standalone/install-apps-cli.ts");
+const cli = join(packageRoot, "src/standalone/install-apps-bin.ts");
 const key = "fixture-cli-owner-key-24-characters";
 const release = {
   appId: "app_cli",

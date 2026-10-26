@@ -110,9 +110,9 @@ export async function issueBootCapability(
     ui: BootUi;
     bucket: BootCapabilityBucket;
     capabilities: BootCapabilityStore;
-    expiresAt: number;
+    now: () => number;
   }>,
-): Promise<Readonly<{ token: string; leaseId: string }>> {
+): Promise<Readonly<{ token: string; leaseId: string; deadlineAt: number }>> {
   const byteLengths: number[] = [];
   let totalBytes = 0;
   for (const asset of input.ui.assets) {
@@ -124,11 +124,14 @@ export async function issueBootCapability(
       throw new BootGateError("ui_mount_failed");
     byteLengths.push(head.size);
   }
+  // Metadata may take longer than the page budget; start the lease only once
+  // every asset has been verified, immediately before issuing it.
+  const deadlineAt = input.now() + BOOT_DEADLINE_MS;
   const lease: BootCapabilityLease = {
     id: bootCapabilityIds.lease.generate(),
     identity: input.ui.identity,
     base: input.ui.base,
-    expiresAt: input.expiresAt,
+    expiresAt: deadlineAt + BOOT_TRANSPORT_GRACE_MS,
     assets: capabilityAssets(input.ui.assets, byteLengths),
   };
   validateCapabilityAssetSet(lease);
@@ -140,7 +143,7 @@ export async function issueBootCapability(
     .replace(/=+$/u, "");
   const tokenDigest = createHash("sha256").update(token, "utf8").digest("hex");
   await input.capabilities.issue({ lease, tokenDigest });
-  return { token, leaseId: lease.id };
+  return { token, leaseId: lease.id, deadlineAt };
 }
 
 /** What one boot page report needs from its host. */
@@ -170,14 +173,17 @@ export async function reportBootPage(
   if (ui === null) return { kind: "passed" };
   if (input.check === null || input.origin === null)
     return { kind: "not_checked", code: "boot_browser_binding_missing" };
-  const deadlineAt = input.now() + BOOT_DEADLINE_MS;
-  let issued: Readonly<{ token: string; leaseId: string }>;
+  let issued: Readonly<{
+    token: string;
+    leaseId: string;
+    deadlineAt: number;
+  }>;
   try {
     issued = await issueBootCapability({
       ui,
       bucket: input.bucket,
       capabilities: input.capabilities,
-      expiresAt: deadlineAt + BOOT_TRANSPORT_GRACE_MS,
+      now: input.now,
     });
   } catch (cause) {
     if (cause instanceof BootGateError && cause.code === "ui_mount_failed")
@@ -190,7 +196,7 @@ export async function reportBootPage(
       origin: input.origin,
       releaseId: ui.identity.releaseId,
       capability: { header: BOOT_CAPABILITY_HEADER, token: issued.token },
-      deadlineAt,
+      deadlineAt: issued.deadlineAt,
     });
   } finally {
     await input.capabilities.revoke(issued.leaseId);

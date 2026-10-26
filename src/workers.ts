@@ -220,6 +220,9 @@ export type OysterWorkerEnv = Readonly<{
   LOADER: WorkerLoader;
 }>;
 
+/** Issuer-ahead clock allowance at issue only; resolution never adds skew. */
+const BOOT_ISSUER_SKEW_MS = 2_000;
+
 const recordRow = Schema.Struct({
   installation_id: Schema.String,
   record: Schema.String,
@@ -819,9 +822,15 @@ export class OysterRegistry<
       );
       validateCapabilityAssetSet(lease);
       const now = Date.now();
+      // The issuer can be at most 2 s ahead of this registry. Apply that
+      // allowance only on issue: resolution still uses the stored absolute
+      // expiry, and revocation still removes the token after the page check.
+      // A lease can therefore live at most 14 s on this clock, not be renewed
+      // or replayed once expired.
       if (
         lease.expiresAt <= now ||
-        lease.expiresAt > now + BOOT_DEADLINE_MS + BOOT_TRANSPORT_GRACE_MS
+        lease.expiresAt >
+          now + BOOT_DEADLINE_MS + BOOT_TRANSPORT_GRACE_MS + BOOT_ISSUER_SKEW_MS
       )
         throw new Error("Boot capability lease is outside its deadline");
       this.ctx.storage.sql.exec(

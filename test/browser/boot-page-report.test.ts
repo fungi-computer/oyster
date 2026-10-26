@@ -104,6 +104,28 @@ describe("reportBootPage", () => {
     expect(revoked).toEqual([grant?.lease.id]);
   });
 
+  it("starts the ten-second deadline after slow asset metadata loads", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const { all, grants, check } = input({
+        now: Date.now,
+        bucket: {
+          head: async () => {
+            await vi.advanceTimersByTimeAsync(11_000);
+            return { size: 12 };
+          },
+        },
+      });
+      await expect(reportBootPage(all)).resolves.toEqual({ kind: "passed" });
+      expect(check).toHaveBeenCalledOnce();
+      expect(check.mock.calls[0]?.[0].deadlineAt).toBe(1_021_000);
+      expect(grants[0]?.lease.expiresAt).toBe(1_023_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails a page that did not mount, with sanitized diagnostics", async () => {
     const { all, revoked } = input({
       check: () =>

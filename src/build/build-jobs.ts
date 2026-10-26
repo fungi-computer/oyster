@@ -3,6 +3,7 @@ import { base64url } from "jose";
 import type { Sha256Digest } from "@fungi.computer/puffball";
 import type { PinnedRecipe } from "./effect.js";
 import { workspaceBuildPolicy } from "./build-policy.js";
+import { boundedDiagnostic } from "@fungi.computer/bird-dog/effect";
 
 /** The secret-free Team job; no provider token enters publication. */
 const jobSchema = Schema.Struct({
@@ -14,7 +15,13 @@ const jobSchema = Schema.Struct({
   expiresAt: Schema.Number,
   remote: Schema.NonEmptyString,
   reportUrl: Schema.NonEmptyString,
-  status: Schema.Literals(["running", "succeeded", "failed", "revoked"]),
+  status: Schema.Literals([
+    "running",
+    "succeeded",
+    "failed",
+    "interrupted",
+    "revoked",
+  ]),
   artifact: Schema.NullOr(
     Schema.Struct({ digest: Schema.NonEmptyString, bytes: Schema.Number }),
   ),
@@ -173,10 +180,8 @@ export function createTeamBuildPublisher(
               : "failed",
             exitCode === 0
               ? "Build exited without reporting status"
-              : "Build exited with " +
-                  String(exitCode) +
-                  ": " +
-                  (result.output?.stderr ?? "").slice(-1_000),
+              : (boundedDiagnostic(result.output?.stderr ?? "") ??
+                  `Build exited with ${String(exitCode)}`),
           ),
         );
         await build.deliverProjection();

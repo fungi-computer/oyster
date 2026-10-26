@@ -1,5 +1,22 @@
 # @fungi.computer/oyster
 
+## 0.4.1
+
+### Patch Changes
+
+- Changes since 0.4.0:
+
+  - fix(oyster): inventory candidate diagnostic artifacts
+  - fix(oyster): type agent model choice storage writes
+  - fix(oyster): keep model choice storage type portable
+  - fix(oyster): inventory shipped agent and computer files
+  - fix(oyster): route install callers through bin
+  - fix(oyster): dispatch CLI from the declared bin
+  - fix(oyster): ship starter dependencies and continue failed installs
+  - fix(oyster): preserve live builds after unknown Computer output
+  - fix(oyster): bound builder failures and interrupt lost builds
+  - fix(oyster): start App boot lease after asset metadata
+
 ## 0.4.0
 
 ### Minor Changes
