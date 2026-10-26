@@ -20,8 +20,10 @@ export type UrlCheckOptions = Readonly<{
  * `169.254.169.254`, a private range like `10/8`, the box's own address, and
  * a rebinding hostname (one whose DNS answer is private) are all refused
  * here, before Cloudflare ever sees the URL. The name is resolved once; the
- * caller never connects to it directly — Cloudflare does, so this is a policy
- * gate, not a proxy.
+ * caller does not connect directly: Browser Run does in production, Chromium
+ * does on staging. This check is not network confinement: a page can redirect,
+ * load subresources or resolve the host differently after this check. Staging
+ * must isolate Chromium's network egress before enabling Agent leases.
  */
 export async function assertCloudBrowserUrlAllowed(
   raw: string,

@@ -104,7 +104,6 @@ async function runProof() {
           OYSTER_OWNER_KEY: ownerKey,
           OYSTER_OWNER_NAME: "owner",
           OYSTER_HOME_INSTALLATION: "tourtois",
-          OYSTER_AGENT_MODEL: "@fungi/luna",
           OYSTER_COMPUTER_ID: "agent-workspace",
           AI_GATEWAY_ACCOUNT_ID: process.env.AI_GATEWAY_ACCOUNT_ID,
           AI_GATEWAY_ID: process.env.AI_GATEWAY_ID,

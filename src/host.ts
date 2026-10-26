@@ -5,6 +5,7 @@ import type {
 } from "@fungi.computer/approvals";
 import { hostGateFacts, releaseCache } from "./internal/host-gate.js";
 import type { WorkflowControl } from "./workflows.js";
+import type { ComputerControlPort } from "./computer-control-port.js";
 import {
   InstallationOperationError,
   installationCommandIds,
@@ -377,6 +378,8 @@ export type OysterHost = Readonly<{
    * @inlineType WorkflowControl
    */
   workflows?: (principal: OysterPrincipal) => Promise<WorkflowControl | null>;
+  /** Owner-admitted durable Computer inventory, absent on hosts without a fleet. */
+  computerControl?: (principal: OysterPrincipal) => ComputerControlPort | null;
   auth: OysterAuth;
   /** Host-held sealing key for member writes; never exposed to the guest.
    * Absence refuses eligible named member writes, even when the App has no sync continuation.

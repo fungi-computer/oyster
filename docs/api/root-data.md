@@ -74,7 +74,7 @@ type OysterRootDataOptions = Parameters<typeof createAppStorage>[0] &
             digest: Sha256Digest;
           }> | null;
         }>,
-        "declaration" | "ui"
+        "ui" | "declaration"
       >
     >;
   }>;

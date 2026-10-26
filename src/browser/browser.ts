@@ -95,7 +95,7 @@ export type BrowserLimits = Readonly<{
   maxConcurrentPerTeam: number;
   /** A lease older than this is reaped even if active. */
   maxLifetimeMs: number;
-  /** A lease idle this long is reaped; also the provider keep-alive. */
+  /** Reaped on the next operation; Browser Run also uses it as keep-alive. */
   idleTimeoutMs: number;
   /** Per-navigation load deadline. */
   navigationTimeoutMs?: number;
@@ -204,7 +204,8 @@ export function createBrowser(
       const attempts = (pending?.attempts ?? 0) + 1;
       if (attempts > maxTeardownAttempts) {
         teardowns.delete(sessionId);
-        // The provider keep-alive (the idle timeout) is the last backstop.
+        // Browser Run has an idle backstop. Chromium does not: a context
+        // abandoned here persists until Chromium restarts.
         host.report({
           kind: "teardown_abandoned",
           teamId,

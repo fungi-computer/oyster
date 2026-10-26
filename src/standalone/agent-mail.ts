@@ -33,9 +33,7 @@ export function agentMail(
     await tick();
   };
   const mail = new AgentMail({ ...options, post: runtime, drain });
-  const host: Required<
-    Pick<CloudflareShiitakeOptions, "mailRoom" | "hostJobs" | "hostWork">
-  > = {
+  const host = {
     mailRoom: mail.mailRoom(),
     hostJobs: {
       lane: "post",
@@ -64,7 +62,9 @@ export function agentMail(
         run: drain,
       },
     ],
-  };
+  } satisfies Required<
+    Pick<CloudflareShiitakeOptions, "mailRoom" | "hostJobs" | "hostWork">
+  >;
   return {
     host,
     deliver: (value: Parameters<AgentMail["send"]>[0]) => mail.send(value),

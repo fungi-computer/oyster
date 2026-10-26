@@ -1237,6 +1237,11 @@ export abstract class OysterGitInstance<
  * `oysterGitRoot(options).hostFor`.
  */
 export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
+  /** Host-owned fleet control, admitted on every invocation by its durable owner. */
+  computerControl?: (
+    env: Env,
+    scope: TenantScope,
+  ) => NonNullable<OysterHost["computerControl"]>;
   /** Workflow controls supplied by the host's existing run owner. */
   workflows?: (
     env: Env,
@@ -1711,6 +1716,8 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
     host = { ...host, pageScript: options.pageScript };
   if (options.workflows !== undefined)
     host = { ...host, workflows: options.workflows(env, host) };
+  if (options.computerControl !== undefined)
+    host = { ...host, computerControl: options.computerControl(env, scope) };
   if (options.homeInstallationId !== undefined)
     host = { ...host, homeInstallationId: options.homeInstallationId(env) };
   return host;

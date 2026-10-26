@@ -1,7 +1,8 @@
 /**
  * `@fungi.computer/oyster/browser`: the one agent browser for the Hub and a
  * standalone Oyster. A host builds the port from a provider (`browserRunSessions`
- * or `bindingSessions`, plus Browser Run Quick Reads when it has them), its
+ * or `bindingSessions` or `onboxBrowserSessions` on staging, plus Browser Run
+ * Quick Reads when it has them), its
  * required metering owner and an event sink; `createBrowser` owns lease
  * ownership, egress policy and billing order; `browserCapabilitySource` is
  * the agent's `cloudBrowser` tool. Raw CDP stays internal to this directory.
@@ -71,6 +72,7 @@ export {
 export {
   bindingSessions,
   browserRunSessions,
+  onboxBrowserSessions,
   type BrowserBinding,
   type BrowserSessions,
   type CdpConnect,

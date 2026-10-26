@@ -756,7 +756,7 @@ apply(
   authorityVersion: number;
   stateSchema: number | null;
   desiredStatus: "enabled" | "disabled" | "deleted";
-  status: "disabled" | "deleted" | "active" | "deleting";
+  status: "active" | "disabled" | "deleted" | "deleting";
 }>>;
 ```
 
@@ -786,7 +786,7 @@ Activate the exact committed selection under the host's tenant pin.
 `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`;
 `authorityVersion`: `number`; `stateSchema`: `number` \| `null`;
 `desiredStatus`: `"enabled"` \| `"disabled"` \| `"deleted"`; `status`:
-`"disabled"` \| `"deleted"` \| `"active"` \| `"deleting"`; \}\>\>
+`"active"` \| `"disabled"` \| `"deleted"` \| `"deleting"`; \}\>\>
 
 ###### Inherited from
 
@@ -1302,6 +1302,7 @@ A standalone Oyster Worker that also hosts git Apps.
 
 ```ts
 type OysterGitWorkerOptions<Env> = Readonly<{
+  computerControl?: (env, scope) => NonNullable<OysterHost["computerControl"]>;
   workflows?: (env, host) => NonNullable<OysterHost["workflows"]>;
   tenancy: (env) => OysterTenancy;
   homeInstallationId?: (env) => string;

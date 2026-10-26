@@ -103,6 +103,8 @@ function readCdpMessage(event: Event): ReadFrame {
 }
 
 export type CdpClient = Readonly<{
+  /** A Chromium context-scoped host supplies this; Browser Run leaves it absent. */
+  browserContextId?: string;
   /** One command/response round trip, optionally flattened into `sessionId`. */
   call: (
     method: string,

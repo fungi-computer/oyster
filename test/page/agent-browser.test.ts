@@ -288,4 +288,12 @@ it.each([
       reason: "browser_not_connected",
     });
   },
+  // Measured 2026-10-25: the first case (it pays the file's cold jsdom frame,
+  // Knapsack UI and Agar session setup) takes about 0.2 s idle and at most
+  // 0.8 s with four times more busy processes than cores plus the whole Oyster
+  // vitest suite; 48 runs eight-wide under that load peaked at 0.6 s. Batch
+  // 2137 still timed it out at the 5 s default while its sibling cases ran at
+  // normal loaded speed, so the gate can stall it far beyond what load here
+  // reproduces. 15 s keeps a real hang failing well inside the file's budget.
+  15_000,
 );

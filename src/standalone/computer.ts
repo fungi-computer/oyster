@@ -41,7 +41,12 @@ import {
   ComputerOperationConflictError,
   type AttachedBackend,
   type ComputerEnv,
+  type ComputerFilesRpc,
 } from "@fungi.computer/computer";
+import {
+  patchInputSchema,
+  patchOutputSchema,
+} from "@fungi.computer/knapsack/files-patch";
 import {
   ComputerFileConflict,
   computerExecutionRequestSchema,
@@ -301,8 +306,25 @@ export type ComputerFetch = {
   fetch(request: Request): Promise<Response>;
 };
 
+/** The additional native doors an attached Agent may use on this Computer. */
+export type StandaloneAgentComputerRpc = ComputerFilesRpc &
+  Readonly<{
+    tool(
+      authority: ComputerGrant,
+      capabilityId: string,
+      input: ComputerValue,
+    ): Promise<StandaloneComputerResult>;
+    filePatch(
+      authority: ComputerGrant,
+      input: z.output<typeof patchInputSchema>,
+    ): Promise<z.output<typeof patchOutputSchema>>;
+  }>;
+
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
-export class ComputerDO extends NativeComputerDO implements ComputerFetch {
+export class ComputerDO
+  extends NativeComputerDO
+  implements ComputerFetch, StandaloneAgentComputerRpc
+{
   #backends: readonly AttachedBackend[] | undefined;
   #preview: ReturnType<typeof createStandalonePreview> | undefined;
   #lifecycle: FleetLifecycle | undefined;
@@ -367,6 +389,12 @@ export class ComputerDO extends NativeComputerDO implements ComputerFetch {
       this.#accept(authority, "start");
       await run();
     });
+  }
+
+  /** Observe an admitted fleet Computer without starting its backend. */
+  readHostedComputerState(authority: ComputerGrant) {
+    this.#accept(authority, "start");
+    return this.#fleetLifecycle().readComputerState();
   }
 
   #previewGrant(ownerId: string): ComputerGrant {
@@ -775,6 +803,16 @@ export class ComputerDO extends NativeComputerDO implements ComputerFetch {
         this.#accept(authority, "files.writeBytes");
       },
     );
+  }
+
+  /** Patch is handled by the Computer's pinned native engine, not by the Agent. */
+  async filePatch(
+    authority: ComputerGrant,
+    input: z.output<typeof patchInputSchema>,
+  ): Promise<z.output<typeof patchOutputSchema>> {
+    return this.applyPatchAfterAcceptance(input, () => {
+      this.#accept(authority, "files.edit");
+    });
   }
 
   async fileReplace(

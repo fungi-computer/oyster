@@ -11,6 +11,8 @@ import {
   type OysterGitRoot,
 } from "../workers-git.js";
 import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
+import { oysterPrincipalIsOwner } from "../host.js";
+import { standaloneComputerControl } from "./computer-control.js";
 import { onBoxVmIngress } from "@fungi.computer/computer";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { installationWorkerEntrypoint } from "../installation-execution.js";
@@ -58,6 +60,8 @@ import {
   standaloneComputerFleetRoutes,
   standaloneComputerSelection,
 } from "./computer-fleet.js";
+import { standaloneAgentComputerRoutes } from "./agent-computers.js";
+import { agentDirectoryForScope } from "./agent-directory.js";
 import {
   serveOysterComputerEgress,
   type OysterComputerEgressProps,
@@ -139,6 +143,13 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
     homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
     agents: standaloneAgents,
     workflows: standaloneWorkflowControl,
+    computerControl: (env, scope) => (principal) =>
+      oysterPrincipalIsOwner(principal)
+        ? standaloneComputerControl(
+            tenantRegistry(env, scope),
+            principal.actor.memberId,
+          )
+        : null,
     workspace: async (env, keysLive, scope, request) =>
       standaloneWorkspace(
         env,
@@ -190,6 +201,29 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
         .route(
           "/",
           standaloneComputerFleetRoutes(() => tenantRegistry(env, scope)),
+        )
+        .route(
+          "/",
+          standaloneAgentComputerRoutes({
+            attach: (principal, command) =>
+              agentDirectoryForScope(env, scope).attachComputer(
+                command,
+                principal,
+                scope.tenantId,
+              ),
+            detach: (principal, command) =>
+              agentDirectoryForScope(env, scope).detachComputer(
+                command,
+                principal,
+                scope.tenantId,
+              ),
+            read: (principal, agentId) =>
+              agentDirectoryForScope(env, scope).readAgentComputers(
+                agentId,
+                principal,
+                scope.tenantId,
+              ),
+          }),
         )
         .route(
           "/",

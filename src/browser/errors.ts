@@ -2,7 +2,7 @@ import * as Data from "effect/Data";
 
 /**
  * The cloud-browser backend's closed, typed failure channel. Every backend
- * (today only Cloudflare Browser Run) throws exclusively from this union;
+ * (Cloudflare Browser Run or on-box Chromium) throws from this union;
  * `agent-cloud-browser-source.ts` is the one place that maps it onto
  * Mycelium's `CapabilityFailed`, so the model only ever sees a bounded,
  * owner-admitted message (never a raw provider error body or stack).
@@ -21,7 +21,7 @@ export class CloudBrowserUrlDenied extends Data.TaggedError(
   readonly message: string;
 }> {}
 
-/** The provider (Cloudflare Browser Run) answered with a failure. */
+/** The configured provider answered with a failure or is unreachable. */
 export class CloudBrowserUpstreamError extends Data.TaggedError(
   "CloudBrowserUpstreamError",
 )<{

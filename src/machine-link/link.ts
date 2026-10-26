@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import * as Schema from "effect/Schema";
 import { BirdDogMailSchema } from "@fungi.computer/bird-dog/effect";
+import type { SeamReplayStore } from "@fungi.computer/seam";
 import {
   agentMailAddressSchema,
   machineAgentOperationSchema,
@@ -27,7 +28,6 @@ import {
 import { MachineLinkHost } from "./host.js";
 
 const pinKey = "machine-link:identity";
-const maximumMailBytes = 256 * 1024;
 
 /** The Durable Object state a machine link needs from its host class. */
 export type MachineLinkState = Pick<
@@ -35,7 +35,8 @@ export type MachineLinkState = Pick<
   "getWebSockets" | "acceptWebSocket" | "setWebSocketAutoResponse" | "waitUntil"
 > &
   Readonly<{
-    storage: WatchdogSqliteOwner & Pick<DurableObjectStorage, "get" | "put">;
+    storage: WatchdogSqliteOwner &
+      Pick<DurableObjectStorage, "get" | "put" | "setAlarm">;
   }>;
 
 /** The host's own storage erasure, so readback matches its other owners. */
@@ -63,6 +64,15 @@ export function createMachineLink<Readback>(
 ) {
   const { authority } = options;
   let host: MachineLinkHost | undefined;
+  let replayStore: Promise<SeamReplayStore> | undefined;
+
+  const openReplayStore = (): Promise<SeamReplayStore> => {
+    replayStore ??= import("@fungi.computer/computer").then(
+      ({ createLocalBackendReplayStore }) =>
+        createLocalBackendReplayStore(state.storage),
+    );
+    return replayStore;
+  };
 
   const match = (identity: MachineLinkIdentity) => {
     if (!options.addressed(identity))
@@ -168,9 +178,7 @@ export function createMachineLink<Readback>(
     if (
       envelope.key !== body.key ||
       address.scopeId !== target.teamId ||
-      address.agentId !== body.to.agentId ||
-      new TextEncoder().encode(JSON.stringify(body)).byteLength >
-        maximumMailBytes
+      address.agentId !== body.to.agentId
     )
       return "refused";
     return await authority.deliverHome(identity, caller, target, envelope);
@@ -185,8 +193,10 @@ export function createMachineLink<Readback>(
           throw new MachineLinkRefused("actor_not_allowed");
         return await current(identity);
       },
+      replay: openReplayStore,
       directory: () => authority.directory(identity),
       receive: (_device, envelope) => receive(identity, envelope),
+      scheduleWake: (at) => state.storage.setAlarm(at),
       report: options.report,
     }));
   };
@@ -234,9 +244,7 @@ export function createMachineLink<Readback>(
         address.scopeId !== facts.teamId ||
         address.agentId !== facts.targetAgentId ||
         body.to.agentId !== facts.targetAgentId ||
-        body.from.agentId !== facts.callerAgentId ||
-        new TextEncoder().encode(JSON.stringify(body)).byteLength >
-          maximumMailBytes
+        body.from.agentId !== facts.callerAgentId
       )
         return "refused";
       return await hostFor(device).deliver(device.deviceId, envelope);
@@ -308,6 +316,18 @@ export function createMachineLink<Readback>(
     },
 
     readErasure: () => options.erasure.read(),
+
+    /** Carrier terminal rows, including expired custody, remain observable for S9. */
+    async deadLetters(input: MachineLinkIdentity, afterKey?: string) {
+      const device = await current(input);
+      return await hostFor(device).deadLetters(afterKey);
+    },
+
+    /** Reconcile durable Carrier custody after a DO alarm or physical restart. */
+    async alarm() {
+      const identity = await savedIdentity();
+      if (identity !== null) await hostFor(identity).alarm();
+    },
 
     async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
       const identity = await savedIdentity();

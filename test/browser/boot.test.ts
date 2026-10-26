@@ -24,6 +24,8 @@ const frameSchema = z.object({
 type Sent = z.output<typeof frameSchema>;
 
 type Scenario = Readonly<{
+  /** Chromium context only; Browser Run supplies no context id. */
+  contextId?: string;
   /** What the isolated-world mount probe answers. */
   mounted?: boolean;
   /** Events the page emits while it loads. */
@@ -42,6 +44,13 @@ type Scenario = Readonly<{
   /** Requests the child frame issues once it runs. */
   onChildRun?: (emit: (method: string, params: Json) => void) => void;
 }>;
+
+type PageTargetInfo = {
+  targetId: string;
+  type: "page";
+  url: string;
+  browserContextId?: string;
+};
 
 /** A faithful CDP peer: answers the commands the boot check sends, by method. */
 function bootPeer(scenario: Scenario = {}) {
@@ -67,22 +76,42 @@ function bootPeer(scenario: Scenario = {}) {
   const answer = (frame: Sent): Json => {
     switch (frame.method) {
       case "Target.getTargets":
-        return { targetInfos: [{ targetId: "page-1", type: "page" }] };
-      case "Target.attachToTarget":
+        return {
+          targetInfos:
+            scenario.contextId === undefined
+              ? [{ targetId: "page-1", type: "page" }]
+              : [
+                  {
+                    targetId: "foreign",
+                    type: "page",
+                    browserContextId: "other",
+                  },
+                  {
+                    targetId: "page-1",
+                    type: "page",
+                    browserContextId: scenario.contextId,
+                  },
+                ],
+        };
+      case "Target.attachToTarget": {
         // The browser reports its own explicit attach at browser level.
+        const targetInfo: PageTargetInfo = {
+          targetId: "page-1",
+          type: "page",
+          url: "about:blank",
+        };
+        if (scenario.contextId !== undefined)
+          targetInfo.browserContextId = scenario.contextId;
         emit({
           method: "Target.attachedToTarget",
           params: {
             sessionId: "page-session",
-            targetInfo: {
-              targetId: "page-1",
-              type: "page",
-              url: "about:blank",
-            },
+            targetInfo,
             waitingForDebugger: false,
           },
         });
         return { sessionId: "page-session" };
+      }
       case "Target.setDiscoverTargets":
         // Discovery first reports the targets that already exist.
         emit({
@@ -176,7 +205,10 @@ function bootPeer(scenario: Scenario = {}) {
     },
     connect: async () => {
       if (scenario.stallConnect === true) await connected;
-      return createCdpClient(socket);
+      const client = createCdpClient(socket);
+      return scenario.contextId === undefined
+        ? client
+        : { ...client, browserContextId: scenario.contextId };
     },
     release: (sessionId) => {
       released.push(sessionId);
@@ -221,6 +253,28 @@ function target(overrides: Partial<BootPageTarget> = {}): BootPageTarget {
 }
 
 describe("the boot check opens only its own pinned candidate page", () => {
+  it("ignores a foreign Chromium context's page when judging its own boot", async () => {
+    const peer = bootPeer({
+      contextId: "staging-boot",
+      onLoad: (emit) => {
+        emit("Target.targetCreated", {
+          targetInfo: {
+            targetId: "foreign-pop",
+            type: "page",
+            browserContextId: "other",
+          },
+        });
+      },
+    });
+    await expect(checkBootPage(peer.sessions, target())).resolves.toEqual({
+      kind: "mounted",
+    });
+    expect(peer.calls("Target.attachToTarget")[0]?.params).toEqual({
+      targetId: "page-1",
+      flatten: true,
+    });
+  });
+
   it("builds the capability URL itself and pins the provider guardrail to that host", async () => {
     const peer = bootPeer();
     await expect(checkBootPage(peer.sessions, target())).resolves.toEqual({

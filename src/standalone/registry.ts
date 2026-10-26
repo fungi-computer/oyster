@@ -246,6 +246,16 @@ export abstract class StandaloneRegistry
         await this.#fleetStorage.put("selected-computer", input.computerId);
         return computer;
       }
+      case "state":
+        if (this.#computers.read(input.computerId) === null) return null;
+        return this.#env.COMPUTER.getByName(
+          input.computerId,
+        ).readHostedComputerState({
+          computerId: input.computerId,
+          actions: new Set(["start"]),
+          expiresAt: Date.now() + 60_000,
+          provenance: { actor: memberId },
+        });
       case "start":
         if (this.#computers.read(input.computerId) === null) return null;
         return this.#env.COMPUTER.getByName(

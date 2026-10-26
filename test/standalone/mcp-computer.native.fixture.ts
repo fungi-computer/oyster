@@ -57,6 +57,9 @@ function countingTenancy(env: ProofEnv): OysterTenancy {
 
 const notInProof = () =>
   Promise.reject(new Error("This proof only reads one Agent's policy"));
+const notInProofSync = (): never => {
+  throw new Error("This proof only reads one Agent's policy");
+};
 
 /** One fixed Agent for the owner's direct policy read; named keys hold their own issued grants. */
 const proofAgents = (): OysterAgents => ({
@@ -75,6 +78,9 @@ const proofAgents = (): OysterAgents => ({
   create: notInProof,
   rename: notInProof,
   setAvatar: notInProof,
+  readModelChoice: notInProof,
+  decodeModelChoice: notInProofSync,
+  setModelChoice: notInProof,
   approveAppToolPolicy: notInProof,
   mcpServers: notInProof,
   addMcpServer: notInProof,

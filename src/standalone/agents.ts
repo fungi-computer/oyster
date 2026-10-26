@@ -63,6 +63,29 @@ export type AiBinding = {
  * Worker's AI binding, with no API token.
  */
 import { agentDirectoryForScope } from "./agent-directory.js";
+import {
+  createAgentComputers,
+  type ComputerAttachmentInput,
+} from "../agent-computers.js";
+import {
+  createAgentComputerSource,
+  readAgentComputerConnections,
+  type AgentComputerSnapshot,
+  type AgentComputerConnection,
+} from "../agent-computer-source.js";
+import {
+  standaloneAgentComputerPorts,
+  type StandaloneAgentComputerReply,
+} from "./agent-computers.js";
+import {
+  FleetGrantRefused,
+  type ComputerGrant,
+} from "@fungi.computer/computer/fleet";
+import {
+  homeExtension,
+  homeGrant,
+} from "@fungi.computer/shiitake-extensions/home/host";
+import { homeContract } from "@fungi.computer/shiitake-extensions/home";
 import { DurableObject } from "cloudflare:workers";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
@@ -73,6 +96,15 @@ import {
   configuredProviderEgress,
   providerFetch,
 } from "@fungi.computer/veil/gatekeeper";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
+import {
+  agentModelChoice,
+  agentModelChoiceSchema,
+  AgentModelRefused,
+  selectAgentModel,
+  type AgentModelChoice,
+  type AgentModelRefusal,
+} from "./agent-model-choice.js";
 import {
   CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
   createAiBindingFetch,
@@ -142,9 +174,6 @@ import type {
 /** The model door an agent runs on; Shiitake's own contract. */
 export type StandaloneModelSource = CloudflareShiitakeOptions["model"];
 
-/** Default Workers AI chat model: one that reliably calls tools. */
-const defaultAgentModel = "@cf/moonshotai/kimi-k2.6";
-
 /** Own transport evidence and exact-message decisions for one model lease. */
 function observedModels(
   model: Model<Api>,
@@ -152,34 +181,116 @@ function observedModels(
 ): StandaloneModelSource {
   return {
     acquire: ({ signal }) => {
-      const streamSimple = streamModel;
       const retryableMessages = new WeakSet<AssistantMessage>();
+      const safeFailures = new WeakMap<AssistantMessage, string>();
+      const failure = (message: AssistantMessage, code: string) => {
+        // Pi can include raw response bodies in errorMessage. No provider
+        // prose enters a Session, retry journal, model context or diagnostics.
+        const safe = `Model request failed (${code}). Retry the request.`;
+        const terminal: AssistantMessage = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: message.usage,
+          stopReason: message.stopReason,
+          errorMessage: safe,
+          timestamp: message.timestamp,
+        };
+        safeFailures.set(terminal, safe);
+        if (code === "provider_unavailable") retryableMessages.add(terminal);
+        return terminal;
+      };
       return Promise.resolve({
         model,
         retryable: (message) =>
           !signal.aborted &&
           message.stopReason === "error" &&
           retryableMessages.has(message),
-        stream: async (selected, context, options) => {
+        failureReason: (message) => safeFailures.get(message),
+        stream: (selected, context, options) => {
           const upstream = { ...options, ...defaults };
           const observed = observeProviderStatus(upstream);
-          const response = await streamSimple(selected, context, {
-            ...upstream,
-            fetch: observed.fetch,
-            onProviderStreamEvent: observed.onProviderStreamEvent,
-          });
-          // Observe Pi's ordinary settled-result interface without replacing
-          // its stream, iterator, result or transport.
-          void response.result().then((message) => {
-            if (
-              message.stopReason === "error" &&
-              !signal.aborted &&
-              !upstream.signal?.aborted &&
-              observed.rejection()?.code === "provider_unavailable"
-            )
-              retryableMessages.add(message);
-          });
-          return response;
+          const events = createAssistantMessageEventStream();
+          void (async () => {
+            try {
+              const response = await streamModel(selected, context, {
+                ...upstream,
+                fetch: observed.fetch,
+                onProviderStreamEvent: observed.onProviderStreamEvent,
+              });
+              for await (const event of response) {
+                if (event.type === "error") {
+                  const terminal = failure(
+                    event.error,
+                    observed.rejection()?.code ?? "provider_rejected",
+                  );
+                  events.push({ ...event, error: terminal });
+                  events.end(terminal);
+                  return;
+                }
+                if (
+                  event.type === "done" &&
+                  (event.message.stopReason === "error" ||
+                    event.message.stopReason === "aborted")
+                ) {
+                  const terminal = failure(
+                    event.message,
+                    observed.rejection()?.code ?? "provider_rejected",
+                  );
+                  events.push({ ...event, message: terminal });
+                  events.end(terminal);
+                  return;
+                }
+                events.push(event);
+              }
+              const result = await response.result();
+              events.end(
+                result.stopReason === "error" || result.stopReason === "aborted"
+                  ? failure(
+                      result,
+                      observed.rejection()?.code ?? "provider_rejected",
+                    )
+                  : result,
+              );
+            } catch {
+              // A transport exception can contain headers or provider text.
+              const terminal = failure(
+                {
+                  role: "assistant",
+                  content: [],
+                  api: model.api,
+                  provider: model.provider,
+                  model: model.id,
+                  usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 0,
+                    cost: {
+                      input: 0,
+                      output: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      total: 0,
+                    },
+                  },
+                  stopReason: signal.aborted ? "aborted" : "error",
+                  timestamp: Date.now(),
+                },
+                "provider_unavailable",
+              );
+              events.push({
+                type: "error",
+                reason: signal.aborted ? "aborted" : "error",
+                error: terminal,
+              });
+              events.end(terminal);
+            }
+          })();
+          return events;
         },
         release: () => Promise.resolve(),
       });
@@ -193,9 +304,9 @@ function observedModels(
  */
 function workersAiModels(
   ai: AiBinding,
-  options: WorkersAiOptions = {},
+  options: WorkersAiOptions,
 ): StandaloneModelSource {
-  const id = options.model ?? defaultAgentModel;
+  const id = options.model;
   const listed = cloudflareWorkersAIProvider()
     .getModels()
     .find((model) => model.id === id);
@@ -206,7 +317,7 @@ function workersAiModels(
     baseUrl: `https://workers-binding.ai/ai-gateway/gateways/${options.gateway ?? "default"}/workers-ai/v1`,
   };
   const fetch = createAiBindingFetch(ai);
-  return observedModels(normalizeModel(model), {
+  const streamOptions: SimpleStreamOptions = {
     fetch,
     apiKey: CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
     headers: {
@@ -215,11 +326,18 @@ function workersAiModels(
       // taken as a provider key that overrides the gateway's own.
       Authorization: null,
     },
-  });
+  };
+  if (options.reasoning !== undefined)
+    streamOptions.reasoning = options.reasoning;
+  return observedModels(normalizeModel(model), streamOptions);
 }
 
 /** Where Workers AI requests go: which model, through which gateway. */
-type WorkersAiOptions = Readonly<{ model?: string; gateway?: string }>;
+type WorkersAiOptions = Readonly<{
+  model: string;
+  gateway?: string;
+  reasoning?: SimpleStreamOptions["reasoning"];
+}>;
 
 /** One directory entry: an agent's id, display name and own avatar. */
 export type AgentEntry = Readonly<{
@@ -239,8 +357,6 @@ export type StandaloneAgentsEnv = Readonly<{
   AI_GATEWAY_ID?: string;
   /** Workers AI, the default model door. */
   AI?: AiBinding;
-  /** The model: `@fungi/luna` via AI Gateway, or a Workers AI id (default {@link defaultAgentModel}). */
-  OYSTER_AGENT_MODEL?: string;
   /** The AI Gateway the binding routes through (default `default`). */
   OYSTER_AI_GATEWAY?: string;
   /** Maintained current-member authority; absent means no nondefault-tenant policy admission. */
@@ -302,6 +418,7 @@ const toMcpServer = (stored: StoredMcpServer): AgentMcpServer => ({
 });
 
 const instructions = [
+  "Attached Computers are independent env.computers.<name> modules, including their Files and execute operations; no App is needed. Discover their exact operations before calling.",
   "You are an agent on a personal Oyster: a small, self-hosted home for Apps.",
   "Your tool is execute: it runs JavaScript in an isolated sandbox. Each installed App is an env.<APP> module; dotted method names are nested properties, e.g. `return await env.BONSAI.repos.list({})`.",
   "Remote MCP servers the owner connected are env.mcp.<server> modules; call a tool as `return await env.mcp.<server>.<tool>({...})`.",
@@ -354,6 +471,111 @@ export abstract class StandaloneAgentBase<
       },
     });
   }
+  private computerSnapshot: AgentComputerSnapshot | null = null;
+  private computerSnapshotLoad: Promise<AgentComputerSnapshot | null> | null =
+    null;
+  private computerSnapshotGeneration: number | null | undefined;
+  private computerSnapshotRevision = 0;
+  private readonly computerInvalidations = new Set<() => void>();
+
+  /** Host invalidation drops captured discovery, not just its displayed names. */
+  invalidateComputerConnections(): void {
+    this.computerSnapshot = null;
+    this.computerSnapshotLoad = null;
+    this.computerSnapshotGeneration = undefined;
+    this.computerSnapshotRevision += 1;
+    for (const invalidate of this.computerInvalidations) invalidate();
+  }
+
+  private computerConnections() {
+    return {
+      read: () => this.computerSnapshot,
+      connect: (connection: AgentComputerConnection) =>
+        standaloneAgentComputerPorts(
+          {
+            computer: (computerId) => this.env.COMPUTER.getByName(computerId),
+            admit: async (captured) => {
+              const pin = await this.policyDirectory();
+              if (pin?.directoryName !== captured.scopeId)
+                throw new FleetGrantRefused();
+              return this.env.AGENT_DIRECTORY.getByName(
+                pin.directoryName,
+              ).admitAgentComputer(
+                {
+                  scopeId: captured.scopeId,
+                  agentId: captured.agentId,
+                  attachment: captured.attachment,
+                },
+                pin.tenantId,
+              );
+            },
+          },
+          connection,
+        ),
+    };
+  }
+
+  /** Revalidate the owner's generation before reusing a Home or tool snapshot. */
+  private async preparedComputerSnapshot(): Promise<AgentComputerSnapshot | null> {
+    for (;;) {
+      const revision = this.computerSnapshotRevision;
+      const generation = await this.readComputerGeneration();
+      if (revision !== this.computerSnapshotRevision) continue;
+      const cachedGeneration = this.computerSnapshotGeneration;
+      if (
+        generation !== null &&
+        cachedGeneration !== null &&
+        cachedGeneration !== undefined &&
+        generation < cachedGeneration
+      )
+        continue;
+      if (generation !== this.computerSnapshotGeneration) {
+        this.computerSnapshot = null;
+        this.computerSnapshotLoad = null;
+        this.computerSnapshotGeneration = generation;
+      }
+      const load = (this.computerSnapshotLoad ??= this.readComputerSnapshot());
+      try {
+        const snapshot = await load;
+        if (
+          revision !== this.computerSnapshotRevision ||
+          generation !== this.computerSnapshotGeneration
+        )
+          continue;
+        if (snapshot !== null && snapshot.projection.revision !== generation) {
+          this.computerSnapshotGeneration = undefined;
+          this.computerSnapshotLoad = null;
+          continue;
+        }
+        this.computerSnapshot = snapshot;
+        return snapshot;
+      } catch (error) {
+        if (this.computerSnapshotLoad === load)
+          this.computerSnapshotLoad = null;
+        throw error;
+      }
+    }
+  }
+
+  private async readComputerGeneration(): Promise<number | null> {
+    const pin = await this.policyDirectory();
+    const agentId = this.ctx.id.name;
+    return pin === null || agentId === undefined
+      ? null
+      : this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).agentComputerRevision(agentId, pin.tenantId);
+  }
+
+  private async readComputerSnapshot(): Promise<AgentComputerSnapshot | null> {
+    const pin = await this.policyDirectory();
+    const agentId = this.ctx.id.name;
+    return pin === null || agentId === undefined
+      ? null
+      : this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).agentComputerSnapshot(agentId, pin.tenantId);
+  }
 
   private async ui(): Promise<UiConnection> {
     const { Knapsack } = await import("@fungi.computer/knapsack");
@@ -366,9 +588,20 @@ export abstract class StandaloneAgentBase<
   protected override hostFetch(
     request: Request,
   ): Promise<Response> | undefined {
-    return new URL(request.url).pathname.startsWith("/browser/")
-      ? this.ui().then((connection) => connection.fetch(request))
-      : undefined;
+    const pathname = new URL(request.url).pathname;
+    if (pathname.startsWith("/browser/"))
+      return this.ui().then((connection) => connection.fetch(request));
+    // The Home command reads attachments inside a synchronous state transaction.
+    // Prepare its directory snapshot before Shiitake enters that transaction.
+    if (
+      request.method === "POST" &&
+      pathname.startsWith("/sessions/") &&
+      pathname.endsWith(`/extensions/${homeContract.id}/commands/home`)
+    )
+      return this.preparedComputerSnapshot().then(() =>
+        this.runtimeOwner().fetch(request),
+      );
+    return undefined;
   }
 
   protected override async closeShiitake(): Promise<void> {
@@ -451,6 +684,8 @@ export abstract class StandaloneAgentBase<
 
   private delegationOwner: AgentDelegation | undefined;
   private delegation(): AgentDelegation {
+    const outbox = this.mail();
+    const mailRoom = outbox.host.mailRoom;
     return (this.delegationOwner ??= new AgentDelegation({
       storage: this.ctx.storage,
       expiresAt: () => Date.now() + 60_000,
@@ -464,8 +699,16 @@ export abstract class StandaloneAgentBase<
       directory: () => this.controlDirectory(),
       deliver: (mail) => this.mail().deliver(mail),
       prepare: () => Promise.resolve(),
-      accept: async (mail, reply) =>
-        (await this.shiitake()).acceptMail(mail, mail.meta, reply),
+      stageAcceptedNotice: (mail, scopeId) => {
+        mailRoom.stageAcceptedNotice(mail, scopeId);
+      },
+      accept: async (mail, reply, stageAcceptedNotice) =>
+        (await this.shiitake()).acceptMail(
+          mail,
+          mail.meta,
+          reply,
+          stageAcceptedNotice,
+        ),
     }));
   }
 
@@ -507,6 +750,9 @@ export abstract class StandaloneAgentBase<
         const pin = await this.policyDirectory();
         if (pin === null || mail.reply === undefined)
           throw new Error("Delegated reply identity is unavailable");
+        if (mail.reply.outcome === "undeliverable") return undefined;
+        if (mail.from.sessionId === undefined)
+          throw new Error("Delegated reply Session is unavailable");
         return (await this.machineClient()).settlement(
           mail.from.agentId,
           mail.from.sessionId,
@@ -556,41 +802,92 @@ export abstract class StandaloneAgentBase<
       : null;
   }
 
-  /** Choose this agent's model door; override to plug in another. */
+  private choice() {
+    return agentModelChoice(this.ctx.storage, (choice) => {
+      if (
+        choice.keySource === "ai-gateway" &&
+        configuredProviderEgress(this.env).baseUrl("ai-gateway") === null
+      )
+        throw new AgentModelRefused("key_not_connected");
+      if (choice.keySource === "workers-ai" && this.env.AI === undefined)
+        throw new AgentModelRefused("key_not_connected");
+    });
+  }
+
+  /** Secret-free default of this Agent; stored separately from Session history. */
+  async readModelChoice(): Promise<AgentModelChoice> {
+    return this.choice().read();
+  }
+
+  async setModelChoice(
+    input: AgentModelChoice,
+  ): Promise<AgentModelChoice | Readonly<{ error: AgentModelRefusal }>> {
+    try {
+      return await this.choice().set(input);
+    } catch (error) {
+      // DO RPC does not preserve Error prototypes. Transport a domain
+      // refusal as data, not an exception the root must recognize by name.
+      if (error instanceof AgentModelRefused) return { error: error.reason };
+      throw error;
+    }
+  }
+
+  /** Capture one model and credential source when the Agent's run acquires it. */
   protected modelSource(): StandaloneModelSource {
-    if (this.env.OYSTER_AGENT_MODEL === "@fungi/luna") {
+    return {
+      acquire: async (input) => {
+        input.signal.throwIfAborted();
+        const choice = await this.readModelChoice();
+        const preference = input.preference;
+        if (
+          preference !== null &&
+          (preference.providerId !== choice.model.providerId ||
+            preference.modelId !== choice.model.modelId)
+        )
+          throw new AgentModelRefused("key_source_mismatch");
+        const selected = {
+          ...choice,
+          model: {
+            ...choice.model,
+            reasoning: preference?.reasoning ?? choice.model.reasoning,
+          },
+        };
+        const source = await this.sourceFor(selected);
+        return source.acquire(input);
+      },
+    };
+  }
+
+  private async sourceFor(
+    choice: AgentModelChoice,
+  ): Promise<StandaloneModelSource> {
+    const modelChoice = await selectAgentModel(choice);
+    if (choice.keySource === "ai-gateway") {
       const egress = configuredProviderEgress(this.env);
       const baseUrl = egress.baseUrl("ai-gateway");
-      if (baseUrl === null)
-        throw new Error(
-          "Configure the Luna AI Gateway Worker secret and gateway",
-        );
+      if (baseUrl === null) throw new AgentModelRefused("key_not_connected");
       return {
         acquire: async (input) => {
-          const { openaiProvider } =
-            await import("@earendil-works/pi-ai/providers/openai");
-          const listed = openaiProvider()
-            .getModels()
-            .find((item) => item.id === "gpt-6-luna");
-          if (listed === undefined)
-            throw new Error("The OpenAI catalog has no Luna model");
-          const model = { ...listed, id: "openai/gpt-6-luna", baseUrl };
-          return observedModels(normalizeModel(model), {
+          const model = { ...modelChoice, id: "openai/gpt-6-luna", baseUrl };
+          const streamOptions: SimpleStreamOptions = {
             apiKey: "oyster-provider-egress",
             fetch: providerFetch(egress, "ai-gateway"),
-          }).acquire(input);
+          };
+          if (choice.model.reasoning !== undefined)
+            streamOptions.reasoning = choice.model.reasoning;
+          return observedModels(normalizeModel(model), streamOptions).acquire(
+            input,
+          );
         },
       };
     }
     if (this.env.AI === undefined)
-      throw new Error("Configure the AI binding to run agents");
-    const options: {
-      -readonly [K in keyof WorkersAiOptions]: WorkersAiOptions[K];
-    } = {};
-    if (this.env.OYSTER_AGENT_MODEL !== undefined)
-      options.model = this.env.OYSTER_AGENT_MODEL;
+      throw new AgentModelRefused("key_not_connected");
+    let options: WorkersAiOptions = { model: modelChoice.id };
     if (this.env.OYSTER_AI_GATEWAY !== undefined)
-      options.gateway = this.env.OYSTER_AI_GATEWAY;
+      options = { ...options, gateway: this.env.OYSTER_AI_GATEWAY };
+    if (choice.model.reasoning !== undefined)
+      options = { ...options, reasoning: choice.model.reasoning };
     return workersAiModels(this.env.AI, options);
   }
 
@@ -611,6 +908,7 @@ export abstract class StandaloneAgentBase<
       return;
     }
     await this.ctx.storage.put("app-policy-directory", directory);
+    this.invalidateComputerConnections();
   }
 
   /** Host-only policy pin read, used before an owner can approve tools. */
@@ -674,6 +972,16 @@ export abstract class StandaloneAgentBase<
       import("@fungi.computer/knapsack"),
     ]);
     const conversationAgents = await this.conversationAgents();
+    const computerSource = createAgentComputerSource({
+      ...this.computerConnections(),
+      subscribe: (invalidate) => {
+        this.computerInvalidations.add(invalidate);
+        return () => this.computerInvalidations.delete(invalidate);
+      },
+    });
+    const extensions = oysterAgentExtensions(
+      conversationAgents.source(this.controlDirectory()),
+    );
     const keeping = agentStoreKeeping(this.ctx.storage, (request) =>
       this.readColdSessions(request),
     );
@@ -686,7 +994,7 @@ export abstract class StandaloneAgentBase<
       ...this.mail().host,
       instructions: {
         load: () =>
-          Promise.resolve({ revision: "oyster-4", text: instructions }),
+          Promise.resolve({ revision: "oyster-5", text: instructions }),
       },
       tools: {
         sources: [
@@ -713,6 +1021,13 @@ export abstract class StandaloneAgentBase<
                 this.#appSurfaces,
               );
               return source.acquire(context);
+            },
+          },
+          {
+            id: computerSource.id,
+            acquire: async (context) => {
+              await this.preparedComputerSnapshot();
+              return computerSource.acquire(context);
             },
           },
           Knapsack.mcpServers({
@@ -749,9 +1064,27 @@ export abstract class StandaloneAgentBase<
         ],
         sandbox: createCodemodeSandbox(this.env.LOADER, "oyster-workerd"),
       },
-      extensions: oysterAgentExtensions(
-        conversationAgents.source(this.controlDirectory()),
-      ),
+      extensions: {
+        roster: [
+          ...extensions.roster,
+          homeExtension({
+            computers: {
+              prepare: async () => {
+                await this.preparedComputerSnapshot();
+              },
+              read: () =>
+                readAgentComputerConnections(this.computerConnections()).map(
+                  ({ name, attachmentId, files }) => ({
+                    name,
+                    attachmentId,
+                    port: files.port,
+                  }),
+                ),
+            },
+          }),
+        ],
+        grants: [...extensions.grants, homeGrant],
+      },
       ...keeping,
       hostWork: [...this.mail().host.hostWork, ...keeping.hostWork],
     };
@@ -829,6 +1162,8 @@ const counterRow = Schema.Struct({ value: Schema.Number });
 
 /** Names this Oyster's agents and remembers which Sessions the member opened. */
 export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
+  private readonly computers: ReturnType<typeof createAgentComputers>;
+  private readonly computerNames = new Map<string, string>();
   private readonly directory: ReturnType<typeof createAgentDirectory>;
   private readonly avatars: AgentAvatarStore;
   private composedTenancy: Promise<StandaloneTenancy> | undefined;
@@ -1005,6 +1340,28 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     super(ctx, env);
     this.directory = createAgentDirectory(ctx.storage.sql);
     this.avatars = createAgentAvatarStore(ctx.storage.sql);
+    this.computers = createAgentComputers({
+      sql: ctx.storage.sql,
+      transactionSync: (body) => ctx.storage.transactionSync(body),
+      readComputerName: (computerId) => {
+        const name = this.computerNames.get(computerId);
+        if (name === undefined) throw new FleetGrantRefused();
+        return name;
+      },
+      revoke: (_requestId, attachment) => {
+        ctx.waitUntil(
+          env.AGENTS.getByName(
+            attachment.agentId,
+          ).invalidateComputerConnections(),
+        );
+      },
+      enqueueProjection: (agentId) => {
+        this.bump();
+        ctx.waitUntil(
+          env.AGENTS.getByName(agentId).invalidateComputerConnections(),
+        );
+      },
+    });
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS visits (agent_id TEXT NOT NULL, session_id TEXT NOT NULL, visited_at INTEGER NOT NULL, PRIMARY KEY (agent_id, session_id)) STRICT",
     );
@@ -1014,6 +1371,246 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS app_tool_policies (agent_id TEXT PRIMARY KEY, policy TEXT NOT NULL) STRICT",
     );
+  }
+
+  private async computerOwner(
+    agentId: string,
+    tenantId: TenantId,
+    principal?: OysterPrincipal,
+  ) {
+    const scope = tenantScope(tenantId, this.env.OYSTER_ORIGIN);
+    if (this.ctx.id.name !== scope.durableName("agents")) return null;
+    if (!this.has(agentId)) return null;
+    const creator = this.readCreator(agentId);
+    if (creator === null) return null;
+    const member = await this.currentMember(tenantId, creator);
+    if (member === null || !oysterPrincipalIsOwner(member)) return null;
+    if (
+      principal !== undefined &&
+      (!oysterPrincipalIsOwner(principal) ||
+        oysterPrincipalId(principal) !== creator)
+    )
+      return null;
+    return member;
+  }
+
+  private async loadComputerNames(
+    agentId: string,
+    tenantId: TenantId,
+    memberId: string,
+    extra?: string,
+  ): Promise<boolean> {
+    const scope = tenantScope(tenantId, this.env.OYSTER_ORIGIN);
+    const bindings: StandaloneComputerEnv = this.env;
+    const registry = bindings.REGISTRY.getByName(scope.durableName("registry"));
+    const ids = new Set(this.computers.attachedComputers(agentId));
+    if (extra !== undefined) ids.add(extra);
+    for (const computerId of ids) {
+      const admitted = await registry.computerFleet(memberId, {
+        operation: "resolve",
+        computerId,
+      });
+      if (
+        admitted === null ||
+        !("computerId" in admitted) ||
+        admitted.computerId !== computerId
+      )
+        return false;
+      const computer =
+        computerId === this.env.OYSTER_COMPUTER_ID
+          ? { name: computerId }
+          : await registry.computerFleet(memberId, {
+              operation: "read",
+              computerId,
+            });
+      if (computer === null || !("name" in computer)) return false;
+      this.computerNames.set(computerId, computer.name);
+    }
+    return true;
+  }
+
+  /** Check the existing transactional revision without resolving fleet names. */
+  async agentComputerRevision(
+    agentId: string,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<number | null> {
+    return (await this.computerOwner(agentId, tenantId)) === null
+      ? null
+      : this.computers.revision(agentId);
+  }
+
+  /** Read the shared owner only after current membership and real fleet lookup. */
+  async agentComputerSnapshot(
+    agentId: string,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<AgentComputerSnapshot | null> {
+    if (this.computers.attachedComputers(agentId).length === 0) return null;
+    const owner = await this.computerOwner(agentId, tenantId);
+    if (
+      owner === null ||
+      !(await this.loadComputerNames(
+        agentId,
+        tenantId,
+        oysterPrincipalId(owner),
+      ))
+    )
+      return null;
+    return {
+      scopeId: tenantScope(tenantId, this.env.OYSTER_ORIGIN).durableName(
+        "agents",
+      ),
+      agentId,
+      projection: this.computers.read(agentId),
+    };
+  }
+
+  private async computerCommand(
+    operation: "attach" | "detach" | "read",
+    agentId: string,
+    principal: OysterPrincipal,
+    tenantId: TenantId,
+    command?: ComputerAttachmentInput,
+  ): Promise<StandaloneAgentComputerReply> {
+    const owner = await this.computerOwner(agentId, tenantId, principal);
+    if (owner === null) return { kind: "refused", error: "not_granted" };
+    if (
+      !(await this.loadComputerNames(
+        agentId,
+        tenantId,
+        oysterPrincipalId(owner),
+        operation === "attach" ? command?.computerId : undefined,
+      ))
+    )
+      return { kind: "refused", error: "not_found" };
+    try {
+      const projection =
+        operation === "read"
+          ? this.computers.read(agentId)
+          : operation === "attach" && command !== undefined
+            ? this.computers.attachComputer(command)
+            : operation === "detach" && command !== undefined
+              ? this.computers.detachComputer(command)
+              : null;
+      if (projection === null) throw new Error("Missing attachment command");
+      return { kind: "ok", projection };
+    } catch (error) {
+      const refusal = z
+        .object({
+          code: z.enum([
+            "request_conflict",
+            "attachment_identity_conflict",
+            "not_attached",
+          ]),
+        })
+        .safeParse(error);
+      if (!refusal.success) throw error;
+      return {
+        kind: "refused",
+        error:
+          refusal.data.code === "not_attached"
+            ? "not_found"
+            : refusal.data.code,
+      };
+    }
+  }
+
+  /** Owner attachment commands retain the shared owner's receipts and versions. */
+  attachComputer(
+    command: ComputerAttachmentInput,
+    principal: OysterPrincipal,
+    tenantId: TenantId = defaultTenant,
+  ) {
+    return this.computerCommand(
+      "attach",
+      command.agentId,
+      principal,
+      tenantId,
+      command,
+    );
+  }
+
+  /** Detach advances the owner version and invalidates the Agent's held discovery. */
+  detachComputer(
+    command: ComputerAttachmentInput,
+    principal: OysterPrincipal,
+    tenantId: TenantId = defaultTenant,
+  ) {
+    return this.computerCommand(
+      "detach",
+      command.agentId,
+      principal,
+      tenantId,
+      command,
+    );
+  }
+
+  /** The owner HTTP read uses the same projection as direct discovery. */
+  readAgentComputers(
+    agentId: string,
+    principal: OysterPrincipal,
+    tenantId: TenantId = defaultTenant,
+  ) {
+    return this.computerCommand("read", agentId, principal, tenantId);
+  }
+
+  /** Every captured native call rechecks the exact live attachment and credential owner. */
+  async admitAgentComputer(
+    captured: Pick<
+      AgentComputerConnection,
+      "scopeId" | "agentId" | "attachment"
+    >,
+    tenantId: TenantId,
+  ): Promise<Omit<ComputerGrant, "egress">> {
+    const owner = await this.computerOwner(captured.agentId, tenantId);
+    const scope = tenantScope(tenantId, this.env.OYSTER_ORIGIN);
+    const held = captured.attachment;
+    if (
+      owner === null ||
+      captured.scopeId !== scope.durableName("agents") ||
+      !this.computers
+        .attachments()
+        .some(
+          (current) =>
+            current.agentId === captured.agentId &&
+            current.attachmentId === held.attachmentId &&
+            current.computerId === held.computerId &&
+            current.version === held.version,
+        )
+    )
+      throw new FleetGrantRefused();
+    const bindings: StandaloneComputerEnv = this.env;
+    const computer = await bindings.REGISTRY.getByName(
+      scope.durableName("registry"),
+    ).computerFleet(oysterPrincipalId(owner), {
+      operation: "resolve",
+      computerId: held.computerId,
+    });
+    if (
+      computer === null ||
+      !("computerId" in computer) ||
+      computer.computerId !== held.computerId
+    )
+      throw new FleetGrantRefused();
+    return {
+      computerId: held.computerId,
+      actions: new Set([
+        "files.read",
+        "files.readBytes",
+        "files.list",
+        "files.glob",
+        "files.grep",
+        "files.edit",
+        "files.write",
+        "mkdir",
+        "bash",
+        "exec",
+        "processStart",
+        "processList",
+        "processKill",
+      ]),
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: oysterPrincipalId(owner), via: captured.agentId },
+    };
   }
 
   list(): readonly AgentEntry[] {
@@ -1403,6 +2000,28 @@ export function standaloneAgents(
     setAvatar: async (agentId, avatar, principal) => {
       const result = await directory().setAvatar(agentId, avatar, principal);
       return "error" in result ? result : toAgent(result);
+    },
+    readModelChoice: async (agentId) =>
+      (await directory().has(agentId))
+        ? env.AGENTS.getByName(agentId).readModelChoice()
+        : null,
+    decodeModelChoice: (json) => {
+      const parsed = Schema.decodeUnknownOption(
+        Schema.fromJsonString(agentModelChoiceSchema),
+        { onExcessProperty: "error" },
+      )(json);
+      return parsed._tag === "None" ? null : parsed.value;
+    },
+    setModelChoice: async (agentId, choice, principal) => {
+      if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+      if (!(await directory().has(agentId))) return { error: "not_found" };
+      const pinned = await env.AGENTS.getByName(agentId).policyDirectory();
+      if (
+        pinned?.directoryName !== directoryName ||
+        pinned.tenantId !== (scope?.tenantId ?? defaultTenant)
+      )
+        return { error: "not_found" };
+      return env.AGENTS.getByName(agentId).setModelChoice(choice);
     },
     policyStatus: async (agentId) => directory().policyStatus(agentId),
     appToolPolicy: (actor) =>

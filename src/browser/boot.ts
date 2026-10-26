@@ -15,8 +15,8 @@ import type { BrowserSessions } from "./sessions.js";
  * (`BrowserSessions`), never a meter, so a boot check is never billed to a
  * Team, and the agent tool never receives it. It accepts no URL: it builds
  * `<origin>/_boot/<releaseId>/index.html` itself from the host's configured
- * origin. Its dedicated provider session is pinned to that host by the
- * provider guardrail (a host-level backstop). The browser's request gate
+ * origin. Browser Run also pins that host through a provider guardrail;
+ * Chromium contexts have no provider host allowlist. The browser's request gate
  * fails every request whose exact origin (scheme, host, port) differs, on
  * the page and on every frame it admits, before that frame runs. The
  * capability token is added by that gate, and only to exact-origin
@@ -174,7 +174,11 @@ const responseSchema = z.object({
 });
 const loadingFailedSchema = z.object({ requestId: z.string() });
 const createdSchema = z.object({
-  targetInfo: z.object({ targetId: z.string(), type: z.string() }),
+  targetInfo: z.object({
+    targetId: z.string(),
+    type: z.string(),
+    browserContextId: z.string().optional(),
+  }),
 });
 const attachedSchema = z.object({
   sessionId: z.string(),
@@ -482,6 +486,11 @@ function observe(
       // outside every gate.
       const created = createdSchema.safeParse(params);
       if (!created.success || created.data.targetInfo.type !== "page") return;
+      if (
+        client.browserContextId !== undefined &&
+        created.data.targetInfo.browserContextId !== client.browserContextId
+      )
+        return;
       const { targetId } = created.data.targetInfo;
       if (!pages.sealed) pages.known.add(targetId);
       else if (!pages.known.has(targetId)) recorder.unexpected();

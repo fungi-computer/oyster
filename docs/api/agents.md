@@ -203,6 +203,47 @@ type OysterAgents = Readonly<{
         error: "not_found" | "not_granted";
       }>
   >;
+  readModelChoice: Promise<{
+    keySource: "workers-ai" | "ai-gateway" | "byok";
+    model: {
+      providerId: Schema.String;
+      modelId: Schema.String;
+      reasoning?: Schema.optional<
+        Schema.Literals<
+          readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
+        >
+      >;
+    };
+  } | null>;
+  decodeModelChoice: {
+    keySource: "workers-ai" | "ai-gateway" | "byok";
+    model: {
+      providerId: Schema.String;
+      modelId: Schema.String;
+      reasoning?: Schema.optional<
+        Schema.Literals<
+          readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
+        >
+      >;
+    };
+  } | null;
+  setModelChoice: Promise<
+    | {
+        keySource: "workers-ai" | "ai-gateway" | "byok";
+        model: {
+          providerId: Schema.String;
+          modelId: Schema.String;
+          reasoning?: Schema.optional<
+            Schema.Literals<
+              readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
+            >
+          >;
+        };
+      }
+    | Readonly<{
+        error: "not_found" | "not_granted" | AgentModelRefusal;
+      }>
+  >;
   policyStatus: Promise<Readonly<{
     status: "pending" | "approved";
     revision: string;
@@ -261,6 +302,31 @@ type OysterAgents = Readonly<{
 ```
 
 Where an Oyster's agents live and run.
+
+---
+
+### AgentModelChoice
+
+```ts
+type AgentModelChoice = typeof agentModelChoiceSchema.Type;
+```
+
+The Agent's model preference and source reference, never credential material.
+
+---
+
+### AgentModelRefusal
+
+```ts
+type AgentModelRefusal =
+  | "invalid_model_choice"
+  | "unsupported_key_source"
+  | "key_source_mismatch"
+  | "model_unavailable"
+  | "key_not_connected";
+```
+
+Stable reason for rejecting a model or credential source before a run.
 
 ## Variables
 

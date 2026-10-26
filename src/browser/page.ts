@@ -15,7 +15,11 @@ import type { CdpClient, Json } from "./cdp-client.js";
  * on 2026-10-03; see `test/browser/cdp-client.test.ts`.
  */
 
-const targetSchema = z.object({ targetId: z.string(), type: z.string() });
+const targetSchema = z.object({
+  targetId: z.string(),
+  type: z.string(),
+  browserContextId: z.string().optional(),
+});
 const getTargetsResultSchema = z.object({ targetInfos: z.array(targetSchema) });
 const attachResultSchema = z.object({ sessionId: z.string() });
 const navigateResultSchema = z.object({
@@ -49,11 +53,22 @@ export async function attachPage(client: CdpClient): Promise<Page> {
     await client.call("Target.getTargets", {}),
   );
   const targetId =
-    targets.targetInfos.find((target) => target.type === "page")?.targetId ??
+    targets.targetInfos.find(
+      (target) =>
+        target.type === "page" &&
+        (client.browserContextId === undefined ||
+          target.browserContextId === client.browserContextId),
+    )?.targetId ??
     z
       .object({ targetId: z.string() })
-      .parse(await client.call("Target.createTarget", { url: "about:blank" }))
-      .targetId;
+      .parse(
+        await client.call(
+          "Target.createTarget",
+          client.browserContextId === undefined
+            ? { url: "about:blank" }
+            : { url: "about:blank", browserContextId: client.browserContextId },
+        ),
+      ).targetId;
   const { sessionId: cdpSessionId } = attachResultSchema.parse(
     await client.call("Target.attachToTarget", { targetId, flatten: true }),
   );

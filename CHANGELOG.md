@@ -1,5 +1,64 @@
 # @fungi.computer/oyster
 
+## 0.4.0
+
+### Minor Changes
+
+- Changes since 0.3.2:
+
+  - fix(oyster): report unreadable Chromium discovery explicitly
+  - feat(oyster): isolate staging browser leases in Chromium contexts
+  - fix(oyster): compose model choice in standalone agent owner
+  - fix(oyster): preserve standalone mail room contract
+  - feat(oyster): persist standalone agent model source choices
+  - fix(mesh): replay durable mail receipt after reconstruction
+  - fix(computer): restore isolated replay-store subpath
+  - fix(mesh): close relay custody review gaps
+  - feat(oyster): retain offline machine-link posts
+  - fix(mesh): stage standalone acceptance notices
+  - feat(mesh): wip sessionless acceptance checkpoint
+  - fix(oyster): reconcile Computer snapshot with attachment revision
+  - fix(oyster): prepare Home Computers on first use
+  - feat(local): back off mesh redials and refuse incompatible protocol
+  - feat(mesh): distinguish held delegation mail
+  - fix(oyster): defer Computer snapshot to capability acquisition
+  - fix(oyster): keep Worker fleet declarations out of Node host types
+  - fix(oyster): export admission projection fields
+  - fix(oyster): require confirmation for MCP Workspace calls
+  - fix(oyster): admit configured Agent Computers through registry resolve
+  - feat(oyster): share Computer MCP fleet controls with Hub
+  - feat(oyster): attach Agents to named Computers
+  - feat(mesh): report terminal undeliverable mail replies
+  - fix(mesh): keep mail size enforcement in BirdDog schema
+  - feat(bird-dog): bound mail content by UTF-8 bytes
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/bird-dog@0.2.0
+  - @fungi.computer/caps@0.3.0
+  - @fungi.computer/carrier@0.2.0
+  - @fungi.computer/computer@0.3.0
+  - @fungi.computer/knapsack@0.3.0
+  - @fungi.computer/seam@0.2.0
+  - @fungi.computer/shiitake-extensions@0.2.0
+  - @fungi.computer/shiitake@0.4.0
+  - @fungi.computer/agar@0.3.1
+  - @fungi.computer/computer-contract@0.0.3
+  - @fungi.computer/mycelium@0.2.2
+  - @fungi.computer/zookeeper@0.0.3
+  - @fungi.computer/braid@0.2.2
+  - @fungi.computer/darkroom@0.2.1
+  - @fungi.computer/nacre@0.0.2
+  - @fungi.computer/workflows-wire@0.2.2
+
 ## 0.3.2
 
 ### Patch Changes

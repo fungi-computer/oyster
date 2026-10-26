@@ -53,7 +53,6 @@ try {
         OYSTER_OWNER_KEY: key,
         OYSTER_ORIGIN: "https://oyster.test",
         OYSTER_COMPUTER_ID: "agent-workspace",
-        OYSTER_AGENT_MODEL: "@fungi/luna",
         AI_GATEWAY_AUTH_TOKEN: "fixture-not-a-provider-credential",
         AI_GATEWAY_ACCOUNT_ID: "fixture-account",
         AI_GATEWAY_ID: "fixture-gateway",

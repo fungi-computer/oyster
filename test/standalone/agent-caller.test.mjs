@@ -4,7 +4,13 @@ import { registerHooks } from "node:module";
 import { URL } from "node:url";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  setImmediate as nextTurn,
+  setTimeout as delay,
+} from "node:timers/promises";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { PostRowSchema } from "@fungi.computer/carrier/post";
 import { createAgentDirectory } from "@fungi.computer/shiitake/fleet";
@@ -75,7 +81,15 @@ const hooks = registerHooks({
   },
 });
 const { ownerOrKeyAuth } = await import("@fungi.computer/oyster/auth");
-const { StandaloneAgent } = await import("../../src/standalone/worker.ts");
+const {
+  StandaloneAgent,
+  default: standaloneWorker,
+  OysterRegistry,
+  StandaloneTenants,
+} = await import("../../src/standalone/worker.ts");
+const { standaloneTenancy } = await import("../../src/standalone/tenancy.ts");
+const { projectionSchema: agentComputerProjectionSchema } =
+  await import("../../src/agent-computers.ts");
 const { AgentDelegation } = await import("@fungi.computer/shiitake/delegation");
 const {
   AgentDirectory,
@@ -84,7 +98,722 @@ const {
   dispatchAgentBinding,
 } = await import("../../src/standalone/agents.ts");
 const { OysterBinding } = await import("../../src/standalone/instance.ts");
+const { standaloneAgentComputerPorts } =
+  await import("../../src/standalone/agent-computers.ts");
 hooks.deregister();
+
+test("an Agent patch stays on its captured Computer B, leaving A untouched", async () => {
+  const files = new Map([
+    ["A", "original A"],
+    ["B", "original B"],
+  ]);
+  const called = [];
+  const connection = {
+    scopeId: "agents",
+    agentId: "morel",
+    attachment: { computerId: "B", attachmentId: "att-b", version: 1 },
+    admission: () => null,
+  };
+  const port = standaloneAgentComputerPorts(
+    {
+      admit: async ({ attachment }) => ({
+        computerId: attachment.computerId,
+        actions: new Set(["files.edit"]),
+        expiresAt: Date.now() + 60_000,
+        provenance: { actor: "owner", via: "morel" },
+      }),
+      computer: (computerId) => ({
+        filePatch: async (_grant, { patch }) => {
+          called.push(computerId);
+          assert.equal(
+            patch,
+            `*** Begin Patch
+*** Update File: B
+@@
+-original B
++changed B
+*** End Patch`,
+          );
+          files.set(computerId, "changed B");
+          return {
+            status: "completed",
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            truncated: false,
+          };
+        },
+      }),
+    },
+    connection,
+  );
+  const patch = `*** Begin Patch
+*** Update File: B
+@@
+-original B
++changed B
+*** End Patch`;
+  const result = await port.files.patch(
+    { patch },
+    {
+      signal: new AbortController().signal,
+      executionId: "agent-patch-B",
+      deadlineAt: null,
+    },
+  );
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(called, ["B"]);
+  assert.deepEqual(
+    [...files],
+    [
+      ["A", "original A"],
+      ["B", "changed B"],
+    ],
+  );
+});
+
+test("standalone owner attaches fleet and configured Computers without an App, refusing foreign and unknown IDs", async (t) => {
+  const databases = [];
+  const background = [];
+  const lostInvalidation = new Error("invalidation RPC failed once");
+  let droppedInvalidations = 0;
+  let rejectNextInvalidation = false;
+  const state = (name) => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const values = new Map();
+    return {
+      id: { name },
+      waitUntil: (work) =>
+        background.push(
+          work.catch((error) => {
+            if (error !== lostInvalidation) throw error;
+            droppedInvalidations += 1;
+          }),
+        ),
+      storage: {
+        ...cloudflareStorageFixture(fromNodeSqlite(database)),
+        get: async (key) => values.get(key),
+        put: async (key, value) => {
+          values.set(key, value);
+        },
+      },
+      blockConcurrencyWhile: (work) => work(),
+    };
+  };
+  t.after(async () => {
+    try {
+      await Promise.all(background);
+    } finally {
+      for (const database of databases) database.close();
+    }
+  });
+  const tenants = new StandaloneTenants(state());
+  const initialized = [];
+  const invalidations = [];
+  const agentHosts = new Map();
+  const agentStates = new Map();
+  let directory;
+  let registry;
+  let ownerMemberId;
+  const ownerKey = "owned-agent-computer-control-fixture";
+  class ModelAgent extends StandaloneAgent {
+    async invalidateComputerConnections() {
+      super.invalidateComputerConnections();
+      if (rejectNextInvalidation) {
+        rejectNextInvalidation = false;
+        throw lostInvalidation;
+      }
+      invalidations.push(this.ctx.id.name);
+    }
+  }
+  const env = {
+    OYSTER_ORIGIN: "https://oyster.test",
+    OYSTER_OWNER_KEY: ownerKey,
+    OYSTER_OWNER_NAME: "owner",
+    OYSTER_COMPUTER_ID: "workspace",
+    AI: {
+      fetch: async () => assert.fail("Selection must not call the supplier"),
+    },
+    AI_GATEWAY_AUTH_TOKEN: "fixture-gateway-secret",
+    AI_GATEWAY_ACCOUNT_ID: "fixture-account",
+    AI_GATEWAY_ID: "fixture-gateway",
+    TENANTS: { getByName: () => tenants },
+    AGENT_DIRECTORY: { getByName: () => directory },
+    AGENTS: {
+      getByName: (agentId) => {
+        if (!agentStates.has(agentId)) agentStates.set(agentId, state(agentId));
+        if (!agentHosts.has(agentId))
+          agentHosts.set(
+            agentId,
+            new ModelAgent(agentStates.get(agentId), env),
+          );
+        return agentHosts.get(agentId);
+      },
+    },
+    REGISTRY: { getByName: () => registry },
+    COMPUTER: {
+      getByName: (computerId) => ({
+        initializeFleetBackings: async (backings) => {
+          initialized.push({ computerId, backings });
+        },
+      }),
+    },
+    KEYS: {
+      getByName: () => ({
+        live: async () => null,
+        verify: async (secret) =>
+          secret === "nonowner-named-key"
+            ? {
+                kind: "ok",
+                value: {
+                  keyId: "nonowner",
+                  owner: ownerMemberId,
+                  name: "reader",
+                  scope: {
+                    grants: [
+                      { capability: "apps.read", targets: { kind: "all" } },
+                    ],
+                  },
+                  grantVersion: 1,
+                  expiresAt: null,
+                },
+              }
+            : { kind: "error", error: { code: "denied" } },
+      }),
+    },
+  };
+  directory = new AgentDirectory(
+    state(tenantScope(defaultTenant, env.OYSTER_ORIGIN).durableName("agents")),
+    env,
+  );
+  registry = new OysterRegistry(state(), env);
+  const owner = await (await standaloneTenancy(env)).owner();
+  assert.ok(owner);
+  ownerMemberId = owner.actor.memberId;
+  const agent = directory.create(
+    "Morel",
+    "create-direct-computer-agent",
+    owner,
+    "owner-direct",
+  );
+  await env.AGENTS.getByName(agent.agentId).usePolicyDirectory({
+    directoryName: tenantScope(defaultTenant, env.OYSTER_ORIGIN).durableName(
+      "agents",
+    ),
+    tenantId: defaultTenant,
+  });
+  const computer = await registry.computerFleet(owner.actor.memberId, {
+    operation: "create",
+    request: { requestId: "create-direct-computer", name: "Amber" },
+  });
+  assert.ok(computer && !("error" in computer));
+  assert.equal(initialized.length, 1);
+  const incoming = (path, input, authorization = ownerKey) => {
+    const options = {
+      method: input === undefined ? "GET" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    };
+    if (authorization !== null)
+      options.headers.Authorization = `Bearer ${authorization}`;
+    if (input !== undefined) options.body = JSON.stringify(input);
+    return standaloneWorker.fetch(
+      new globalThis.Request(`https://oyster.test${path}`, options),
+      env,
+      { waitUntil: (work) => background.push(work) },
+    );
+  };
+  const policy = await incoming(`/api/agent-policies/${agent.agentId}`);
+  assert.equal(
+    policy.status,
+    200,
+    "the real owner route sees the stored Agent",
+  );
+  await t.test(
+    "owner model controls persist independent Agent choices and refuse unsupported custody",
+    async () => {
+      const sibling = directory.create(
+        "Model sibling",
+        "create-model-sibling",
+        owner,
+        "owner-direct",
+      );
+      await env.AGENTS.getByName(sibling.agentId).usePolicyDirectory({
+        directoryName: tenantScope(
+          defaultTenant,
+          env.OYSTER_ORIGIN,
+        ).durableName("agents"),
+        tenantId: defaultTenant,
+      });
+      const modelRequest = (id, method, choice, authorization = ownerKey) => {
+        let options = {
+          method,
+          headers: {
+            Authorization: `Bearer ${authorization}`,
+            "Content-Type": "application/json",
+          },
+        };
+        if (choice !== undefined)
+          options = { ...options, body: JSON.stringify(choice) };
+        return standaloneWorker.fetch(
+          new Request(`https://oyster.test/api/agent-models/${id}`, options),
+          env,
+          { waitUntil: (work) => background.push(work) },
+        );
+      };
+      const workerChoice = {
+        keySource: "workers-ai",
+        model: {
+          providerId: "cloudflare-workers-ai",
+          modelId: "@cf/moonshotai/kimi-k2.6",
+        },
+      };
+      const gatewayChoice = {
+        keySource: "ai-gateway",
+        model: { providerId: "openai", modelId: "openai/gpt-6-luna" },
+      };
+      const first = await modelRequest(agent.agentId, "PUT", workerChoice);
+      assert.equal(first.status, 200, await first.text());
+      const second = await modelRequest(sibling.agentId, "PUT", gatewayChoice);
+      assert.equal(second.status, 200, await second.text());
+      agentHosts.delete(agent.agentId);
+      agentHosts.delete(sibling.agentId);
+      const read = async (id) => {
+        const response = await modelRequest(id, "GET");
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+      assert.deepEqual(await read(agent.agentId), workerChoice);
+      assert.deepEqual(await read(sibling.agentId), gatewayChoice);
+      const edited = {
+        ...workerChoice,
+        model: {
+          ...workerChoice.model,
+          modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        },
+      };
+      const edit = await modelRequest(agent.agentId, "PUT", edited);
+      assert.equal(edit.status, 200, await edit.text());
+      assert.deepEqual(await read(sibling.agentId), gatewayChoice);
+      assert.deepEqual(await read(agent.agentId), edited);
+      const mismatched = await modelRequest(sibling.agentId, "PUT", {
+        keySource: "workers-ai",
+        model: gatewayChoice.model,
+      });
+      assert.equal(mismatched.status, 409);
+      assert.deepEqual(await mismatched.json(), {
+        error: "key_source_mismatch",
+      });
+      const unsupported = await modelRequest(sibling.agentId, "PUT", {
+        keySource: "byok",
+        model: gatewayChoice.model,
+      });
+      assert.equal(unsupported.status, 409);
+      assert.deepEqual(await unsupported.json(), {
+        error: "unsupported_key_source",
+      });
+      const malformed = await modelRequest(sibling.agentId, "PUT", {
+        keySource: "ai-gateway",
+        model: { providerId: "openai", modelId: 42 },
+      });
+      assert.equal(malformed.status, 400);
+      assert.deepEqual(await malformed.json(), {
+        error: "Invalid model choice",
+      });
+      assert.deepEqual(await read(sibling.agentId), gatewayChoice);
+      const outsider = await modelRequest(
+        agent.agentId,
+        "PUT",
+        workerChoice,
+        "nonowner-named-key",
+      );
+      assert.equal(outsider.status, 403);
+      const unknown = await modelRequest("agent_unknown", "PUT", workerChoice);
+      assert.equal(unknown.status, 404);
+      const gateway = env.AGENTS.getByName(sibling.agentId);
+      const lease = await gateway.modelSource().acquire({
+        sessionId: "route-gateway",
+        preference: null,
+        signal: new AbortController().signal,
+      });
+      assert.equal(lease.model.provider, "openai");
+      await lease.release();
+      env.AI_GATEWAY_AUTH_TOKEN = undefined;
+      await assert.rejects(
+        () =>
+          gateway.modelSource().acquire({
+            sessionId: "route-revoked",
+            preference: null,
+            signal: new AbortController().signal,
+          }),
+        (error) => error.reason === "key_not_connected",
+      );
+      env.AI_GATEWAY_AUTH_TOKEN = "fixture-gateway-secret";
+      assert.deepEqual(await read(sibling.agentId), gatewayChoice);
+    },
+  );
+  invalidations.length = 0;
+  const inventory = await incoming("/api/computers");
+  assert.equal(inventory.status, 200);
+  assert.ok(
+    (await inventory.json()).computers.some(
+      ({ computerId }) => computerId === computer.computerId,
+    ),
+    "the real durable fleet, not a fabricated inventory, owns the target",
+  );
+  const attached = await incoming(
+    `/api/agents/${agent.agentId}/computers/attach`,
+    {
+      agentId: agent.agentId,
+      computerId: computer.computerId,
+      attachmentId: "attachment-amber",
+      requestId: "attach-amber",
+    },
+  );
+  assert.equal(
+    attached.status,
+    200,
+    "the owner can attach a real Computer directly to an ordinary Agent",
+  );
+  const projection = agentComputerProjectionSchema.parse(await attached.json());
+  assert.deepEqual(invalidations, [agent.agentId]);
+  assert.deepEqual(
+    projection.attachments.map(
+      ({ agentId, attachmentId, computerId, version }) => ({
+        agentId,
+        attachmentId,
+        computerId,
+        version,
+      }),
+    ),
+    [
+      {
+        agentId: agent.agentId,
+        attachmentId: "attachment-amber",
+        computerId: computer.computerId,
+        version: 1,
+      },
+    ],
+  );
+  const read = await incoming(`/api/agents/${agent.agentId}/computers/read`, {
+    agentId: agent.agentId,
+  });
+  assert.equal(read.status, 200);
+  assert.deepEqual(
+    agentComputerProjectionSchema.parse(await read.json()),
+    projection,
+    "the attachment owner reads back the admitted projection",
+  );
+
+  const configured = await incoming(
+    `/api/agents/${agent.agentId}/computers/attach`,
+    {
+      agentId: agent.agentId,
+      computerId: env.OYSTER_COMPUTER_ID,
+      attachmentId: "attachment-configured",
+      requestId: "attach-configured",
+    },
+  );
+  assert.equal(
+    configured.status,
+    200,
+    "the owner may attach the configured Computer even without a fleet receipt",
+  );
+  const configuredProjection = agentComputerProjectionSchema.parse(
+    await configured.json(),
+  );
+  assert.deepEqual(
+    configuredProjection.attachments.map(({ computerId }) => computerId),
+    [computer.computerId, env.OYSTER_COMPUTER_ID],
+  );
+  const snapshot = await directory.agentComputerSnapshot(agent.agentId);
+  assert.ok(snapshot);
+  const configuredAttachment = snapshot.projection.attachments.find(
+    ({ computerId }) => computerId === env.OYSTER_COMPUTER_ID,
+  );
+  assert.ok(configuredAttachment);
+  const grant = await directory.admitAgentComputer(
+    {
+      scopeId: snapshot.scopeId,
+      agentId: agent.agentId,
+      attachment: configuredAttachment,
+    },
+    defaultTenant,
+  );
+  assert.equal(grant.computerId, env.OYSTER_COMPUTER_ID);
+
+  await t.test(
+    "cold Home choice and first run capture attached Files before Computer acquisition",
+    async () => {
+      const readSnapshot = directory.agentComputerSnapshot.bind(directory);
+      let snapshotReads = 0;
+      directory.agentComputerSnapshot = async (...args) => {
+        snapshotReads += 1;
+        return readSnapshot(...args);
+      };
+      const modelTools = [];
+      class HomeAgent extends StandaloneAgent {
+        modelSource() {
+          return fauxModelSource([
+            async (context) => {
+              modelTools.push(
+                context.messages[0].toolsAdded?.map(({ name }) => name) ?? [],
+              );
+              return fauxAssistantMessage("done");
+            },
+          ]);
+        }
+        options() {
+          return this.shiitakeOptions();
+        }
+        client() {
+          return this.shiitake();
+        }
+      }
+      const homeAgent = new HomeAgent(state(agent.agentId), {
+        ...env,
+        LOADER: {},
+      });
+      await homeAgent.usePolicyDirectory({
+        directoryName: snapshot.scopeId,
+        tenantId: defaultTenant,
+      });
+      await homeAgent.options();
+      assert.equal(snapshotReads, 0, "options alone do not read attachments");
+      const client = await homeAgent.client();
+      const sessionId = await client.createSession("cold-home");
+      assert.equal(snapshotReads, 0, "addressing a Session acquires nothing");
+      const response = await homeAgent.fetch(
+        new Request(
+          `https://agent.test/sessions/${sessionId}/extensions/botanical-home/commands/home`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: "Amber" }),
+          },
+        ),
+      );
+      assert.equal(response.status, 200);
+      const choice = await response.json();
+      assert.equal(choice.notice.message, "Home: Amber");
+      assert.equal(snapshotReads, 1, "the cold command prepares the snapshot");
+      await client.session(sessionId).send("Read Home", {
+        requestId: "first-home-run",
+        delivery: "followUp",
+      });
+      for (
+        let attempt = 0;
+        attempt < 40 && modelTools.length === 0;
+        attempt++
+      ) {
+        await client.alarm();
+        await delay(10);
+      }
+      assert.ok(
+        modelTools[0]?.includes("read"),
+        "the first run captures Home Files, not an empty pre-acquisition table",
+      );
+      assert.equal(
+        snapshotReads,
+        1,
+        "capability acquisition shares the snapshot",
+      );
+      await client.close();
+
+      const coldRunAgent = new HomeAgent(state(agent.agentId), {
+        ...env,
+        LOADER: {},
+      });
+      await coldRunAgent.usePolicyDirectory({
+        directoryName: snapshot.scopeId,
+        tenantId: defaultTenant,
+      });
+      const coldClient = await coldRunAgent.client();
+      const coldSessionId = await coldClient.createSession("cold-files");
+      await coldClient.extensions.call("botanical-home", "seed", {
+        attachmentId: "attachment-amber",
+      });
+      assert.equal(
+        snapshotReads,
+        1,
+        "seeding a choice does not acquire Computers",
+      );
+      await coldClient.session(coldSessionId).send("Read Home", {
+        requestId: "first-cold-files-run",
+        delivery: "followUp",
+      });
+      for (
+        let attempt = 0;
+        attempt < 40 && modelTools.length === 1;
+        attempt++
+      ) {
+        await coldClient.alarm();
+        await delay(10);
+      }
+      assert.ok(
+        modelTools[1]?.includes("read"),
+        "the first cold run captures its Home Files before Computer acquisition",
+      );
+      assert.equal(
+        snapshotReads,
+        2,
+        "Files and capability share one cold read",
+      );
+      await coldClient.close();
+    },
+  );
+
+  const foreignRegistry = new OysterRegistry(state(), env);
+  const foreignComputer = await foreignRegistry.computerFleet(
+    owner.actor.memberId,
+    {
+      operation: "create",
+      request: { requestId: "create-foreign-computer", name: "Foreign" },
+    },
+  );
+  assert.ok(foreignComputer && !("error" in foreignComputer));
+  for (const [computerId, suffix] of [
+    [foreignComputer.computerId, "foreign"],
+    ["unknown-computer", "unknown"],
+  ]) {
+    const refused = await incoming(
+      `/api/agents/${agent.agentId}/computers/attach`,
+      {
+        agentId: agent.agentId,
+        computerId,
+        attachmentId: `attachment-${suffix}`,
+        requestId: `attach-${suffix}`,
+      },
+    );
+    assert.equal(refused.status, 404);
+    assert.deepEqual(await refused.json(), { error: "not_found" });
+  }
+  const anonymous = await incoming(
+    `/api/agents/${agent.agentId}/computers/attach`,
+    {
+      agentId: agent.agentId,
+      computerId: env.OYSTER_COMPUTER_ID,
+      attachmentId: "attachment-anonymous",
+      requestId: "attach-anonymous",
+    },
+    null,
+  );
+  assert.equal(anonymous.status, 401);
+  const namedKey = await incoming(
+    `/api/agents/${agent.agentId}/computers/attach`,
+    {
+      agentId: agent.agentId,
+      computerId: env.OYSTER_COMPUTER_ID,
+      attachmentId: "attachment-key",
+      requestId: "attach-key",
+    },
+    "nonowner-named-key",
+  );
+  assert.equal(namedKey.status, 403, "a live named key is not the owner");
+  const afterRefusals = await directory.readAgentComputers(
+    agent.agentId,
+    owner,
+  );
+  assert.equal(afterRefusals.kind, "ok");
+  assert.deepEqual(
+    afterRefusals.projection.attachments.map(({ computerId }) => computerId),
+    configuredProjection.attachments.map(({ computerId }) => computerId),
+  );
+  await t.test(
+    "a lost attachment invalidation cannot hide Gold from the next acquisition or Home choice",
+    async () => {
+      class HomeAgent extends StandaloneAgent {
+        modelSource() {
+          return fauxModelSource([fauxAssistantMessage("done")]);
+        }
+        options() {
+          return this.shiitakeOptions();
+        }
+      }
+      const homeAgent = new HomeAgent(state(agent.agentId), {
+        ...env,
+        LOADER: {},
+      });
+      await homeAgent.usePolicyDirectory({
+        directoryName: snapshot.scopeId,
+        tenantId: defaultTenant,
+      });
+      const options = await homeAgent.options();
+      const source = options.tools.sources.find(
+        ({ id }) => id === "agent-computers",
+      );
+      assert.ok(source);
+      const acquire = () =>
+        source.acquire({
+          signal: new AbortController().signal,
+          invalidate: () => assert.fail("owner invalidation was lost"),
+        });
+      const before = await acquire();
+      const beforeModuleCount = before.snapshot.modules.length;
+      const beforeVersion = before.snapshot.version;
+      await before.release();
+
+      // Keep a separate Home command cache cold to the later acquisition:
+      // either entry point must reconcile even if the notification is lost.
+      const homeOnlyAgent = new HomeAgent(state(agent.agentId), {
+        ...env,
+        LOADER: {},
+      });
+      await homeOnlyAgent.usePolicyDirectory({
+        directoryName: snapshot.scopeId,
+        tenantId: defaultTenant,
+      });
+      const client = await homeOnlyAgent.shiitake();
+      const sessionId = await client.createSession("gold-home");
+      const chooseHome = (name) =>
+        homeOnlyAgent.fetch(
+          new Request(
+            `https://agent.test/sessions/${sessionId}/extensions/botanical-home/commands/home`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name }),
+            },
+          ),
+        );
+      assert.equal((await chooseHome("Amber")).status, 200);
+
+      const gold = await registry.computerFleet(owner.actor.memberId, {
+        operation: "create",
+        request: { requestId: "create-gold", name: "Gold" },
+      });
+      assert.ok(gold && !("error" in gold));
+      rejectNextInvalidation = true;
+      const attachedGold = await incoming(
+        `/api/agents/${agent.agentId}/computers/attach`,
+        {
+          agentId: agent.agentId,
+          computerId: gold.computerId,
+          attachmentId: "attachment-gold",
+          requestId: "attach-gold",
+        },
+      );
+      assert.equal(attachedGold.status, 200);
+      await Promise.all(background);
+      assert.equal(droppedInvalidations, 1);
+
+      const after = await acquire();
+      assert.equal(
+        after.snapshot.modules.length,
+        beforeModuleCount + 1,
+        "the next acquisition includes Gold without an invalidation RPC",
+      );
+      assert.notEqual(after.snapshot.version, beforeVersion);
+      await after.release();
+      const response = await chooseHome("Gold");
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).notice.message, "Home: Gold");
+      await client.close();
+    },
+  );
+});
 
 for (const home of [
   { kind: "machine", deviceId: "device", memberId: "owner" },
@@ -380,6 +1109,7 @@ for (const delivery of ["steer", "followUp"]) {
               delivery: "followUp",
             }),
         prepare: () => Promise.resolve(),
+        stageAcceptedNotice: () => undefined,
         accept: async () => {
           throw new Error("No replies in this fixture");
         },
@@ -458,7 +1188,7 @@ for (const delivery of ["steer", "followUp"]) {
         } else if (state === "settled") await target.settle("child-main");
         const expected =
           state === "pending"
-            ? sent
+            ? { status: "accepted", commandId: sent.commandId }
             : { status: "too_late", commandId: sent.commandId };
         assert.deepEqual(
           await reopened.recall(request, "parent-main", signal),
@@ -601,12 +1331,212 @@ function delegationCallerFixture(t) {
         };
       },
       prepare: async () => undefined,
+      stageAcceptedNotice: () => undefined,
       accept: async () => {
         throw new Error("This sender test must not admit incoming mail");
       },
     });
   return { open, delivered };
 }
+
+function standaloneDeliveryFixture(databasePath, values, background) {
+  const database = new DatabaseSync(databasePath);
+  const owner = fromNodeSqlite(database);
+  const storage = {
+    ...cloudflareStorageFixture(owner),
+    get: async (key) => values.get(key),
+    put: async (key, value) => values.set(key, value),
+  };
+  const agents = [
+    { agentId: "sender", name: "Sender", createdBy: null },
+    { agentId: "recipient", name: "Recipient", createdBy: null },
+  ];
+  const directory = {
+    list: async () => agents,
+    agentComputerRevision: async () => null,
+    agentComputerSnapshot: async () => null,
+    open: async () => {
+      throw new Error("Sessionless admission must not open another Agent");
+    },
+  };
+  const env = {
+    OYSTER_ORIGIN: "https://oyster.test",
+    AGENT_DIRECTORY: { getByName: () => directory },
+    AGENTS: {
+      getByName: () => ({
+        deliver: async () => "refused",
+      }),
+    },
+    LOADER: {},
+  };
+  const context = {
+    id: { name: "recipient" },
+    storage,
+    waitUntil: (work) => {
+      background.push(Promise.resolve(work));
+    },
+    blockConcurrencyWhile: (work) => work(),
+  };
+  class SessionlessAgent extends StandaloneAgent {
+    modelSource() {
+      return fauxModelSource([fauxAssistantMessage("Done")]);
+    }
+    async shiitakeOptions() {
+      return {
+        ...(await super.shiitakeOptions()),
+        tools: { sources: [], sandbox: directSandbox },
+      };
+    }
+    client() {
+      return this.shiitake();
+    }
+    hostOptions() {
+      return this.shiitakeOptions();
+    }
+  }
+  const agent = new SessionlessAgent(context, env);
+  return { agent, database, storage };
+}
+
+const sessionlessEnvelope = (key) => {
+  const from = {
+    kind: "agent",
+    agentId: "sender",
+    sessionId: "sender-session",
+  };
+  return {
+    key,
+    kind: "agentMail",
+    address: { scopeId: "team", agentId: "recipient" },
+    event: {
+      key,
+      from,
+      replyTo: [from],
+      to: { kind: "agent", agentId: "recipient" },
+      content: "Accept this sessionless work",
+      createdAt: Date.now(),
+    },
+  };
+};
+
+test("standalone accepts sessionless Agent mail and stages its accepted notice in Carrier Post", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "oyster-sessionless-accept-"));
+  const databasePath = join(directory, "agent.sqlite");
+  const values = new Map();
+  const background = [];
+  const fixture = standaloneDeliveryFixture(databasePath, values, background);
+  let client;
+  try {
+    await fixture.agent.usePolicyDirectory({
+      directoryName: "team",
+      tenantId: defaultTenant,
+    });
+    client = await fixture.agent.client();
+    const key = "standalone-sessionless-accepted";
+    const delivery = await fixture.agent.deliver(sessionlessEnvelope(key));
+    assert.equal(delivery.status, "accepted");
+    assert.ok(delivery.receipt.sessionId);
+    const sessions = (await client.listSessions()).sessions;
+    assert.deepEqual(
+      sessions.map(({ sessionId }) => sessionId),
+      [delivery.receipt.sessionId],
+    );
+    const admissions = fixture.storage.sql
+      .exec(
+        "SELECT session_id FROM session_command_admissions WHERE request_id = ?",
+        key,
+      )
+      .toArray();
+    assert.deepEqual(admissions, [{ session_id: delivery.receipt.sessionId }]);
+    const notice = Schema.decodeUnknownSync(PostRowSchema)(
+      fixture.storage.sql
+        .exec(
+          "SELECT value FROM carrier_post_rows WHERE key = ?",
+          `post:${key}:accepted`,
+        )
+        .one().value,
+    );
+    assert.equal(notice.state, "pending");
+    assert.equal(notice.envelope.key, `${key}:accepted`);
+    assert.equal(notice.envelope.event.reply.outcome, "accepted");
+  } finally {
+    if (client !== undefined) await client.close();
+    await Promise.all(background);
+    fixture.database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("standalone sessionless acceptance rolls back its Session and outbox notice when staging crashes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "oyster-sessionless-crash-"));
+  const databasePath = join(directory, "agent.sqlite");
+  const values = new Map();
+  const background = [];
+  let fixture = standaloneDeliveryFixture(databasePath, values, background);
+  let client;
+  try {
+    await fixture.agent.usePolicyDirectory({
+      directoryName: "team",
+      tenantId: defaultTenant,
+    });
+    const options = await fixture.agent.hostOptions();
+    client = await fixture.agent.client();
+    const key = "standalone-sessionless-crash";
+    options.mailRoom.stageAcceptedNotice = () => {
+      const admissions = fixture.storage.sql
+        .exec(
+          "SELECT session_id FROM session_command_admissions WHERE request_id = ?",
+          key,
+        )
+        .toArray();
+      assert.equal(admissions.length, 1);
+      const sessions = fixture.storage.sql
+        .exec("SELECT id FROM sessions WHERE id = ?", admissions[0].session_id)
+        .toArray();
+      assert.equal(sessions.length, 1);
+      throw new Error("Injected crash before accepted notice staging");
+    };
+    await assert.rejects(
+      fixture.agent.deliver(sessionlessEnvelope(key)),
+      /Session command admission is unavailable/u,
+    );
+
+    await client.close();
+    client = undefined;
+    fixture.database.close();
+    fixture = standaloneDeliveryFixture(databasePath, values, background);
+    await fixture.agent.usePolicyDirectory({
+      directoryName: "team",
+      tenantId: defaultTenant,
+    });
+    client = await fixture.agent.client();
+    assert.deepEqual((await client.listSessions()).sessions, []);
+    assert.equal(
+      fixture.storage.sql
+        .exec(
+          "SELECT id FROM session_command_admissions WHERE request_id = ?",
+          key,
+        )
+        .toArray().length,
+      0,
+    );
+    assert.equal(
+      fixture.storage.sql
+        .exec(
+          "SELECT key FROM carrier_post_rows WHERE key = ?",
+          `post:${key}:accepted`,
+        )
+        .toArray().length,
+      0,
+    );
+  } finally {
+    if (client !== undefined) await client.close();
+    await Promise.all(background);
+    fixture.database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 const callerTask = {
   agentId: "recipient",
   sessionId: "recipient-session",
@@ -663,12 +1593,16 @@ for (const [dimension, variant] of [
   ["recipient", { input: { agentId: "other-recipient" } }],
   ["recipient Session", { input: { sessionId: "other-recipient-session" } }],
 ]) {
-  test(`delegation caller identity does not alias a distinct ${dimension}`, async (t) => {
+  const law =
+    dimension === "recipient Session"
+      ? "rejects a changed recipient Session under the same requestId"
+      : `does not alias a distinct ${dimension}`;
+  test(`delegation caller identity ${law}`, async (t) => {
     const f = delegationCallerFixture(t);
     const first = await f
       .open()
       .send(callerTask, "source-session", callerSignal(), callerInvocation);
-    const second = await f
+    const attempt = f
       .open(variant.scopeId, variant.agentId)
       .send(
         { ...callerTask, ...variant.input },
@@ -676,6 +1610,15 @@ for (const [dimension, variant] of [
         callerSignal(),
         callerInvocation,
       );
+    if (dimension === "recipient Session") {
+      await assert.rejects(
+        attempt,
+        (error) => error?.code === "request_conflict",
+      );
+      assert.equal(f.delivered.length, 1);
+      return;
+    }
+    const second = await attempt;
     assert.notEqual(second.commandId, first.commandId);
     assert.equal(f.delivered.length, 2);
     assert.notEqual(f.delivered[0].key, f.delivered[1].key);
@@ -2394,7 +3337,10 @@ test("an Agent's App tools reach only its pinned tenant's registry", async (t) =
       },
     },
     AGENT_DIRECTORY: {
-      getByName: () => ({ appToolPolicy: async () => null }),
+      getByName: () => ({
+        appToolPolicy: async () => null,
+        agentComputerSnapshot: async () => null,
+      }),
     },
     LOADER: {},
   };
@@ -2447,17 +3393,37 @@ test("an Agent's App tools reach only its pinned tenant's registry", async (t) =
   ]);
 });
 
-test("the contest Agent creates its model lease from the Luna Worker secret without an AI binding", async () => {
-  const agent = new StandaloneAgent(
-    { id: { name: "contest-luna" } },
+const gatewayModelChoice = {
+  keySource: "ai-gateway",
+  model: { providerId: "openai", modelId: "openai/gpt-6-luna" },
+};
+
+function modelTestAgent(name, env) {
+  const values = new Map();
+  return new StandaloneAgent(
     {
-      OYSTER_AGENT_MODEL: "@fungi/luna",
-      AI_GATEWAY_AUTH_TOKEN: "fixture-only-not-a-real-provider-key",
-      AI_GATEWAY_ACCOUNT_ID: "fixture-account",
-      AI_GATEWAY_ID: "fixture-gateway",
+      id: { name },
+      storage: {
+        get: async (key) => values.get(key),
+        put: async (key, value) => {
+          values.set(key, value);
+        },
+      },
     },
+    env,
   );
+}
+
+test("the contest Agent creates its model lease from the Luna Worker secret without an AI binding", async () => {
+  const agent = modelTestAgent("contest-luna", {
+    AI_GATEWAY_AUTH_TOKEN: "fixture-only-not-a-real-provider-key",
+    AI_GATEWAY_ACCOUNT_ID: "fixture-account",
+    AI_GATEWAY_ID: "fixture-gateway",
+  });
+  await agent.setModelChoice(gatewayModelChoice);
   const lease = await agent.modelSource().acquire({
+    sessionId: "gateway-selection",
+    preference: null,
     signal: new globalThis.AbortController().signal,
   });
   try {
@@ -2472,6 +3438,67 @@ test("the contest Agent creates its model lease from the Luna Worker secret with
   } finally {
     await lease.release();
   }
+});
+
+test("two standalone Agents retain different model and key-source choices after restart and edit", async () => {
+  const stores = [new Map(), new Map()];
+  const env = {
+    AI: {
+      fetch: async () => assert.fail("Acquisition must not send a request"),
+    },
+    AI_GATEWAY_AUTH_TOKEN: "fixture-secret-not-for-the-agent",
+    AI_GATEWAY_ACCOUNT_ID: "fixture-account",
+    AI_GATEWAY_ID: "fixture-gateway",
+  };
+  const agent = (index) =>
+    new StandaloneAgent(
+      {
+        id: { name: `model-agent-${index}` },
+        storage: {
+          get: async (key) => stores[index].get(key),
+          put: async (key, value) => {
+            stores[index].set(key, value);
+          },
+        },
+      },
+      env,
+    );
+  const workers = {
+    keySource: "workers-ai",
+    model: {
+      providerId: "cloudflare-workers-ai",
+      modelId: "@cf/moonshotai/kimi-k2.6",
+    },
+  };
+  const gateway = {
+    keySource: "ai-gateway",
+    model: { providerId: "openai", modelId: "openai/gpt-6-luna" },
+  };
+  await agent(0).setModelChoice(workers);
+  await agent(1).setModelChoice(gateway);
+  assert.deepEqual(await agent(0).readModelChoice(), workers);
+  assert.deepEqual(await agent(1).readModelChoice(), gateway);
+  const lease = await agent(0).modelSource().acquire({
+    sessionId: "two-agent-first",
+    preference: null,
+    signal: new AbortController().signal,
+  });
+  assert.equal(lease.model.provider, "cloudflare-workers-ai");
+  await lease.release();
+  await agent(0).setModelChoice(gateway);
+  assert.deepEqual(await agent(1).readModelChoice(), gateway);
+  assert.deepEqual(await agent(0).readModelChoice(), gateway);
+  const restarted = await agent(0).modelSource().acquire({
+    sessionId: "two-agent-restarted",
+    preference: null,
+    signal: new AbortController().signal,
+  });
+  assert.equal(restarted.model.provider, "openai");
+  await restarted.release();
+  assert.equal(
+    JSON.stringify([...stores[0], ...stores[1]]).includes("fixture-secret"),
+    false,
+  );
 });
 
 test("Luna streams through the existing Veil gateway owner without exposing its credential", async (context) => {
@@ -2490,13 +3517,15 @@ test("Luna streams through the existing Veil gateway owner without exposing its 
     );
   });
   const env = {
-    OYSTER_AGENT_MODEL: "@fungi/luna",
     AI_GATEWAY_AUTH_TOKEN: "fixture-gateway-secret",
     AI_GATEWAY_ACCOUNT_ID: "account",
     AI_GATEWAY_ID: "gateway",
   };
-  const agent = new StandaloneAgent({ id: { name: "luna" } }, env);
+  const agent = modelTestAgent("luna", env);
+  await agent.setModelChoice(gatewayModelChoice);
   const lease = await agent.modelSource().acquire({
+    sessionId: "luna-gateway",
+    preference: null,
     signal: new globalThis.AbortController().signal,
   });
   try {
@@ -2521,14 +3550,10 @@ test("Luna streams through the existing Veil gateway owner without exposing its 
   } finally {
     await lease.release();
   }
-  assert.throws(
-    () =>
-      new StandaloneAgent(
-        { id: { name: "luna" } },
-        { OYSTER_AGENT_MODEL: "@fungi/luna", AI: {} },
-      ).modelSource(),
-    /Configure the Luna AI Gateway/u,
-  );
+  const missingGateway = modelTestAgent("missing-gateway", { AI: {} });
+  assert.deepEqual(await missingGateway.setModelChoice(gatewayModelChoice), {
+    error: "key_not_connected",
+  });
 });
 
 for (const binding of [false, true]) {
@@ -2553,19 +3578,21 @@ for (const binding of [false, true]) {
         );
       };
       if (!binding) context.mock.method(globalThis, "fetch", fetch);
-      const agent = new StandaloneAgent(
-        { id: { name: "typed-provider" } },
+      const agent = modelTestAgent(
+        "typed-provider",
         binding
           ? { AI: { fetch } }
           : {
-              OYSTER_AGENT_MODEL: "@fungi/luna",
               AI_GATEWAY_AUTH_TOKEN: "fixture-only-gateway",
               AI_GATEWAY_ACCOUNT_ID: "fixture-account",
               AI_GATEWAY_ID: "fixture-gateway",
             },
       );
+      if (!binding) await agent.setModelChoice(gatewayModelChoice);
       const controller = new globalThis.AbortController();
       const lease = await agent.modelSource().acquire({
+        sessionId: "typed-provider",
+        preference: null,
         signal: controller.signal,
       });
       try {

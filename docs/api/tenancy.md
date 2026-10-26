@@ -83,7 +83,7 @@ type ReadonlyTenantRegistry = Readonly<{
     owners: readonly string[];
     domains: readonly string[];
   }> | null>;
-  status: Promise<"active" | "deleting" | "suspended" | null>;
+  status: Promise<"active" | "suspended" | "deleting" | null>;
   membershipOf: Promise<Readonly<{
     memberId: string;
     role: "owner" | "member";

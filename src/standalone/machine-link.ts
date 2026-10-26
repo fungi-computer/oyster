@@ -289,6 +289,10 @@ export class MachineLinkDO extends DurableObject<StandaloneMachineLinkEnv> {
     },
   });
 
+  override alarm() {
+    return this.link.alarm();
+  }
+
   override fetch(request: Request) {
     return this.link.fetch(request);
   }
@@ -325,6 +329,10 @@ export class MachineLinkDO extends DurableObject<StandaloneMachineLinkEnv> {
 
   readErasure() {
     return this.link.readErasure();
+  }
+
+  deadLetters(id: MachineLinkIdentity, afterKey?: string) {
+    return this.link.deadLetters(id, afterKey);
   }
 
   override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {

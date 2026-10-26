@@ -22,7 +22,7 @@ export function createHomeAwareAgentMailNamespace(options: {
     deviceId: string,
     envelope: PostEnvelope,
   ) => Promise<PostDeliveryResult>;
-  /** Host's Agent grammar: throws unless the receipt is a well-formed Accepted. */
+  /** Host's Agent grammar: validates Accepted or Held without conflating them. */
   accepted: (receipt: Schema.Json) => void;
 }): PostRoute<never, never>["namespace"] {
   return {
@@ -48,8 +48,7 @@ export function createHomeAwareAgentMailNamespace(options: {
           address.scopeId !== options.sender.teamId ||
           address.agentId !== agentId ||
           mail.to.agentId !== agentId ||
-          mail.from.agentId !== options.sender.agentId ||
-          new TextEncoder().encode(JSON.stringify(mail)).byteLength > 256 * 1024
+          mail.from.agentId !== options.sender.agentId
         )
           return "refused";
         const projected = await options.home(agentId);
@@ -69,7 +68,7 @@ export function createHomeAwareAgentMailNamespace(options: {
           !("receipt" in result)
         )
           throw new Error(
-            "Agent mail acknowledgment lacks an Accepted receipt",
+            "Agent mail acknowledgment lacks a valid acceptance or Held receipt",
           );
         if (result.status !== "refused") options.accepted(result.receipt);
         return result;

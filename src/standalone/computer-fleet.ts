@@ -24,7 +24,7 @@ export const standaloneFleetRequestSchema = z.discriminatedUnion("operation", [
     page: computerPageSchema,
   }),
   z.strictObject({
-    operation: z.enum(["read", "resolve", "start", "select"]),
+    operation: z.enum(["read", "resolve", "state", "start", "select"]),
     computerId: fleetComputerId,
   }),
   z.strictObject({

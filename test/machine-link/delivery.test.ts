@@ -91,7 +91,7 @@ await test(
     const sending = route.namespace.getByName("receiver").deliver(envelope);
     await local.receive(await Effect.runPromise(Deferred.await(outbound)));
     await hub.receive(await Effect.runPromise(Deferred.await(acknowledgment)));
-    await assert.rejects(sending, /Accepted receipt/);
+    await assert.rejects(sending, /valid acceptance or Held receipt/);
   },
 );
 
@@ -182,7 +182,24 @@ await test("offline failure stays retryable; receiptless acknowledgment cannot b
   await assert.rejects(route.deliver(), /recipient_offline/u);
   assert.equal(route.hosted.length, 0);
   route.respond("accepted");
-  await assert.rejects(route.deliver(), /Accepted receipt/u);
+  await assert.rejects(route.deliver(), /valid acceptance or Held receipt/u);
+});
+
+await test("the machine Post route forwards typed Held custody without treating it as command acceptance", async () => {
+  const route = fixture({
+    kind: "machine",
+    deviceId: "laptop",
+  });
+  const receipt = {
+    status: "held",
+    reason: "recipient_offline",
+    message: "waiting: recipient offline",
+  } as const;
+  const acknowledgment = { status: "accepted", receipt } as const;
+  route.respond(acknowledgment);
+  assert.deepEqual(await route.deliver(), acknowledgment);
+  assert.equal(route.machine.length, 1);
+  assert.equal(route.hosted.length, 0);
 });
 
 await test("the existing reply-disclosure check still runs before home transport", async () => {

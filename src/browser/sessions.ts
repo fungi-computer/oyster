@@ -20,18 +20,19 @@ import { CloudBrowserUpstreamError } from "./errors.js";
  * - Binding: `binding.fetch("http://fake.host/v1/devtools/…")`, the endpoints
  *   a Workers Browser Run binding answers.
  *
+ * Chromium on staging uses browser contexts rather than Browser Run endpoints.
  * Provider session ids stay inside the module; agent leases use their own ids.
  */
 
 export type AcquireOptions = Readonly<{
-  /** Provider idle keep-alive, clamped to Browser Run's 10s–20min range. */
+  /** Browser Run idle keep-alive (10s–20min); Chromium has no equivalent. */
   keepAliveMs: number;
-  /** Provider guardrail: the only hosts this session may load. */
+  /** Browser Run provider guardrail; Chromium relies on its caller's URL gate. */
   allowedDomains?: readonly string[];
 }>;
 
 /**
- * The provider half of the host port. Built only by the two functions below.
+ * The provider half of the host port.
  * Each step is separate so `createBrowser` owns a provider session id from the
  * moment it exists, including when its CDP connect then fails.
  */
@@ -45,7 +46,7 @@ export type BrowserSessions = Readonly<{
     sessionId: string,
     signal: AbortSignal,
   ) => Promise<"closed" | "closing">;
-  /** Reads the provider's session record until it reports an end time. @internal */
+  /** Confirm provider closure (Chromium checks context absence). @internal */
   confirmClosed: (sessionId: string, deadlineAt: number) => Promise<void>;
 }>;
 
@@ -213,4 +214,184 @@ export function bindingSessions(binding: BrowserBinding): BrowserSessions {
     connect: (url, headers, signal) =>
       openCdpSocket(fetcher, url, headers, signal),
   });
+}
+
+/** Staging uses Chromium's native CDP browser contexts; no session store. */
+export function onboxBrowserSessions(
+  origin: string,
+  fetcher: HttpFetch = (url, init) => fetch(url, init),
+): BrowserSessions {
+  const base = new URL(origin);
+  if (
+    base.protocol !== "http:" ||
+    base.hostname !== "127.0.0.1" ||
+    base.username ||
+    base.password ||
+    base.pathname !== "/" ||
+    base.search ||
+    base.hash
+  )
+    throw new TypeError("On-box browser origin must be bare IPv4 loopback");
+  const browserEndpointSchema = z.object({ webSocketDebuggerUrl: z.url() });
+  const contextsSchema = z.object({ browserContextIds: z.array(z.string()) });
+  const createdContextSchema = z.object({
+    browserContextId: z.string().min(1),
+  });
+  async function connectBrowser(signal: AbortSignal): Promise<CdpClient> {
+    // Chromium's native discovery endpoint is not a Botanical session server.
+    let discovery: Response;
+    try {
+      discovery = await fetcher(new URL("/json/version", base).href, {
+        signal,
+      });
+    } catch (cause) {
+      if (signal.aborted) throw cause;
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.connect",
+        status: null,
+        message: "On-box Chromium is unavailable",
+      });
+    }
+    if (!discovery.ok)
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.connect",
+        status: discovery.status,
+        message: "On-box Chromium is unavailable",
+      });
+    let body: unknown;
+    try {
+      body = await discovery.json();
+    } catch (cause) {
+      if (signal.aborted) throw cause;
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.connect",
+        status: null,
+        message: "On-box browser returned an unreadable CDP endpoint",
+      });
+    }
+    const discovered = browserEndpointSchema.safeParse(body);
+    if (!discovered.success)
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.connect",
+        status: null,
+        message: "On-box browser returned an unreadable CDP endpoint",
+      });
+    const { webSocketDebuggerUrl } = discovered.data;
+    const endpoint = new URL(webSocketDebuggerUrl);
+    if (
+      endpoint.protocol !== "ws:" ||
+      endpoint.hostname !== "127.0.0.1" ||
+      endpoint.port !== base.port ||
+      !/^\/devtools\/browser\/[^/]+$/u.test(endpoint.pathname) ||
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.search ||
+      endpoint.hash
+    )
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.connect",
+        status: null,
+        message: "On-box browser returned an invalid CDP endpoint",
+      });
+    return createCdpClient(
+      await openCdpSocket(
+        fetcher,
+        endpoint.href.replace(/^ws:/u, "http:"),
+        {},
+        signal,
+      ),
+    );
+  }
+  async function contexts(client: CdpClient, signal: AbortSignal) {
+    const result = contextsSchema.safeParse(
+      await client.call("Target.getBrowserContexts", {}, { signal }),
+    );
+    if (!result.success)
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.contexts",
+        status: null,
+        message: "On-box browser returned unreadable contexts",
+      });
+    return result.data.browserContextIds;
+  }
+  return {
+    create: async (_options, signal) => {
+      // Chromium has no idle keep-alive or allowedDomains create guardrail:
+      // Oyster's Agent URL policy and the boot page request gate remain active.
+      // A Chromium restart ends every context; no restart recovery is claimed.
+      const client = await connectBrowser(signal);
+      try {
+        const created = createdContextSchema.safeParse(
+          await client.call("Target.createBrowserContext", {}, { signal }),
+        );
+        if (!created.success)
+          throw new CloudBrowserUpstreamError({
+            op: "onbox.create",
+            status: null,
+            message: "On-box browser returned an unreadable context",
+          });
+        const { browserContextId } = created.data;
+        try {
+          await client.call(
+            "Target.createTarget",
+            { url: "about:blank", browserContextId },
+            { signal },
+          );
+          return browserContextId;
+        } catch (error) {
+          await client.call(
+            "Target.disposeBrowserContext",
+            { browserContextId },
+            { signal },
+          );
+          throw error;
+        }
+      } finally {
+        client.close();
+      }
+    },
+    connect: async (id, signal) => {
+      const client = await connectBrowser(signal);
+      try {
+        if (!(await contexts(client, signal)).includes(id))
+          throw new CloudBrowserUpstreamError({
+            op: "onbox.connect",
+            status: null,
+            message: "On-box browser context is gone",
+          });
+        return { ...client, browserContextId: id };
+      } catch (error) {
+        client.close();
+        throw error;
+      }
+    },
+    release: async (id, signal) => {
+      const client = await connectBrowser(signal);
+      try {
+        if ((await contexts(client, signal)).includes(id))
+          await client.call(
+            "Target.disposeBrowserContext",
+            { browserContextId: id },
+            { signal },
+          );
+        return "closed";
+      } finally {
+        client.close();
+      }
+    },
+    confirmClosed: async (id, deadlineAt) => {
+      const signal = AbortSignal.timeout(Math.max(1, deadlineAt - Date.now()));
+      const client = await connectBrowser(signal);
+      try {
+        if (!(await contexts(client, signal)).includes(id)) return;
+      } finally {
+        client.close();
+      }
+      throw new CloudBrowserUpstreamError({
+        op: "onbox.close.confirm",
+        status: null,
+        message: "On-box browser did not confirm closure",
+      });
+    },
+  };
 }

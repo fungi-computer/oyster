@@ -33,6 +33,15 @@ import { appToolSchemas, appToolFamilySchemas } from "@fungi.computer/forage";
 import { Knapsack } from "@fungi.computer/knapsack";
 import * as Schema from "effect/Schema";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
+import {
+  computerCreateRequestSchema,
+  computerPageSchema,
+} from "@fungi.computer/computer/fleet/inventory-wire";
+import { computerStateSchema } from "@fungi.computer/computer/fleet/wire";
+import { teamComputerDirectorySchema } from "@fungi.computer/nacre/workbench";
+import type { InvocationContext } from "@fungi.computer/mycelium";
+import type { ComputerControlPort } from "./computer-control-port.js";
+export type { ComputerControlPort } from "./computer-control-port.js";
 import type { OysterHost, OysterPrincipal, OysterJson } from "./host.js";
 import { keyAppAccess } from "./keys.js";
 import type { TenantPrincipal } from "./tenant.js";
@@ -51,6 +60,102 @@ export type OysterMcpCatalogSnapshot = Readonly<{
   /** An omitted module has no grant. */
   grants: Grants;
 }>;
+
+const fleetIds = defineIdFamily({
+  family: "mcp-computer-control",
+  version: 1,
+  kinds: { request: { prefix: "computer_request" } },
+});
+const fleetComputerId = z.strictObject({
+  computerId: z.string().min(1).max(256),
+});
+const fleetCreate = z.strictObject({
+  name: computerCreateRequestSchema.shape.name
+    .unwrap()
+    .nullable()
+    .default(null),
+  requestId: computerCreateRequestSchema.shape.requestId
+    .nullable()
+    .default(null),
+});
+const fleetComputer = z.strictObject({
+  computerId: z.string(),
+  name: z.string(),
+});
+const fleetCreation = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("created"),
+    requestId: z.string(),
+    computer: fleetComputer,
+  }),
+  z.strictObject({
+    kind: z.enum(["uncertain", "denied", "conflict", "invalid"]),
+    requestId: z.string(),
+  }),
+]);
+
+/** One set of schemas and operations for MCP and direct broker invocation. */
+export function computerControlSpecs(port: ComputerControlPort) {
+  return {
+    list: {
+      replay: "safe" as const,
+      access: "read" as const,
+      description:
+        "List a page of permitted Computers. Follow nextOffset for another page.",
+      input: computerPageSchema,
+      output: teamComputerDirectorySchema,
+      /** Return an admitted inventory page to MCP or the retained broker. */
+      execute: (
+        input: z.output<typeof computerPageSchema>,
+        context: InvocationContext,
+      ) => port.list(input, context),
+    },
+    state: {
+      replay: "safe" as const,
+      access: "read" as const,
+      description:
+        "Read runtime state without waking a Computer, including its live admission queue position.",
+      input: fleetComputerId,
+      output: computerStateSchema,
+      /** Return liveness without waking the runtime. */
+      execute: (
+        input: z.output<typeof fleetComputerId>,
+        context: InvocationContext,
+      ) => port.state(input.computerId, context),
+    },
+    start: {
+      replay: "unsafe" as const,
+      description:
+        "Start a hosted Computer through ordinary admission. Waits until connected; poll computers.state while queued. Safe to retry.",
+      input: fleetComputerId,
+      output: computerStateSchema,
+      /** Admit and start this Computer. */
+      execute: (
+        input: z.output<typeof fleetComputerId>,
+        context: InvocationContext,
+      ) => port.start(input.computerId, context),
+    },
+    create: {
+      replay: "unsafe" as const,
+      description:
+        "Create a Computer with an optional friendly name. Request identity is generated automatically. If the outcome is uncertain, retry with its returned requestId and the original name input; do not start a second creation.",
+      input: fleetCreate,
+      output: fleetCreation,
+      /** Mint one identity or preserve the requestId for an uncertain retry. */
+      execute: async (
+        input: z.output<typeof fleetCreate>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetCreation>> => {
+        const requestId = input.requestId ?? fleetIds.request.generate();
+        const result = await port.create(
+          { name: input.name ?? undefined, requestId },
+          context,
+        );
+        return { ...result, requestId };
+      },
+    },
+  };
+}
 
 /** Mints the requestId a tool family tool sends on the caller's behalf to its
  * declared `call` method: each MCP call is its own independent run, never a
@@ -609,9 +714,9 @@ export async function oysterAppMethods(
 
 /**
  * Capture the host's fixed Computer for one caller as a Knapsack source.
- * The host decides whether the caller holds Computer access; the Computer
- * owner accepts every call. Null when the host has no Computer or the caller
- * has no access. Grants name exactly the one captured module.
+ * The host decides whether the caller holds Computer access; the ComputerDO
+ * still checks its host-issued grant on every call. Null when the host has no
+ * Computer or the caller has no access. Grants name the captured module.
  */
 export async function oysterComputerTools(
   host: Pick<OysterHost, "computerId" | "computer">,
@@ -638,12 +743,12 @@ export async function oysterComputerTools(
  * methods, plus the host's Computer when the caller holds Computer access.
  * A key sees exactly the installations and levels its own grants admit, and
  * the Computer only with its own `computer.use` grant; each App retains its
- * own caller checks regardless. The owner's stored write approval of an
- * Agent's App tools is that principal's confirmation for App writes, so a
- * headless client can write; the shared MCP server asks the client to
- * approve every other write (an owner's own calls, the Computer). Each call
- * still re-admits the key, rechecks that same stored approval, and passes
- * the App's gate.
+ * own caller checks regardless. App writes use the host's approval record;
+ * stored approval of an Agent's App tools can permit headless App writes.
+ * The shared MCP server elicits consent for explicitly confirmed operations,
+ * including every advertised Workspace Computer call, even reads. Each call
+ * still re-admits the key, checks current App approval and passes the App's
+ * gate.
  */
 export function oysterMcpCatalogLoad(
   host: Pick<
@@ -655,6 +760,7 @@ export function oysterMcpCatalogLoad(
     | "backgroundOriginKey"
     | "computerId"
     | "computer"
+    | "computerControl"
     | "capabilities"
     | "appToolPolicy"
     | "keys"
@@ -694,6 +800,43 @@ export function oysterMcpCatalogLoad(
       installations,
     );
     const computer = await oysterComputerTools(host, principal);
+    const fleet = host.computerControl?.(principal) ?? null;
+    const fleetSpecs = fleet === null ? null : computerControlSpecs(fleet);
+    const fleetSource: CapabilitySource[] =
+      fleetSpecs === null
+        ? []
+        : [
+            {
+              id: "oyster-computer-control",
+              acquire: () =>
+                Promise.resolve({
+                  snapshot: {
+                    version: "team-computer-control",
+                    modules: [
+                      Mycelium.module({
+                        id: "team-computer-control",
+                        name: "computers",
+                        operations: {
+                          list: Mycelium.operation(fleetSpecs.list),
+                          state: Mycelium.operation(fleetSpecs.state),
+                          start: Mycelium.operation({
+                            ...fleetSpecs.start,
+                            confirm: true,
+                          }),
+                          create: Mycelium.operation({
+                            ...fleetSpecs.create,
+                            confirm: true,
+                          }),
+                        },
+                      }),
+                    ],
+                  },
+                  release: () => Promise.resolve(),
+                }),
+            },
+          ];
+    const fleetGrants: Grants =
+      fleet === null ? {} : { "team-computer-control": "write" };
     const control = await host.workflows?.(principal);
     const workflowSources: CapabilitySource[] =
       control == null
@@ -717,14 +860,19 @@ export function oysterMcpCatalogLoad(
       return {
         instructions:
           "Installed Apps on this Oyster. Each App is env.<APP>; dotted method names are nested properties, e.g. env.BONSAI.repos.list({}). Use forage.search / forage.describe to find methods.",
-        grants: { ...apps.grants, ...workflowGrants },
-        sources: [apps, ...workflowSources],
+        grants: { ...apps.grants, ...workflowGrants, ...fleetGrants },
+        sources: [apps, ...workflowSources, ...fleetSource],
       };
     return {
       instructions:
         'Installed Apps and this Oyster\'s Computer. Each App is env.<APP>; dotted method names are nested properties, e.g. env.BONSAI.repos.list({}). The Computer is env.computers.workspace, e.g. env.computers.workspace.exec({command: "ls"}). Use forage.search / forage.describe to find methods.',
-      grants: { ...apps.grants, ...computer.grants, ...workflowGrants },
-      sources: [apps, computer, ...workflowSources],
+      grants: {
+        ...apps.grants,
+        ...computer.grants,
+        ...workflowGrants,
+        ...fleetGrants,
+      },
+      sources: [apps, computer, ...workflowSources, ...fleetSource],
     };
   };
 }

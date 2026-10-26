@@ -20,6 +20,14 @@ import {
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
 import { agentAvatarSchema } from "./agent-avatars.js";
+import type {
+  AgentModelChoice,
+  AgentModelRefusal,
+} from "./standalone/agent-model-choice.js";
+export type {
+  AgentModelChoice,
+  AgentModelRefusal,
+} from "./standalone/agent-model-choice.js";
 import {
   agentAvatar,
   agentList,
@@ -146,6 +154,19 @@ export type OysterAgents = Readonly<{
     avatar: Avatar,
     principal: OysterPrincipal,
   ): Promise<OysterAgent | Readonly<{ error: "not_found" | "not_granted" }>>;
+  /** Owner-only, secret-free Agent default; an unknown Agent cannot be configured. */
+  readModelChoice(agentId: string): Promise<AgentModelChoice | null>;
+  /** Parse the owner's JSON through the deployable Agent's model preference schema. */
+  decodeModelChoice(json: string): AgentModelChoice | null;
+  /** Persist a supported model and source reference for this Agent, or return an explicit refusal. */
+  setModelChoice(
+    agentId: string,
+    choice: AgentModelChoice,
+    principal: OysterPrincipal,
+  ): Promise<
+    | AgentModelChoice
+    | Readonly<{ error: "not_found" | "not_granted" | AgentModelRefusal }>
+  >;
   /** This Agent's App-tool policy status, or `null` for no such Agent. */
   policyStatus(agentId: string): Promise<AgentToolPolicyStatus | null>;
   /** Read this Agent's stored App-tool approval; absence requires re-approval. A key's App access is its own grants (Ear Tag), not this policy. */
@@ -489,6 +510,47 @@ async function approvePolicy(
 /** Host-owned direct approval under the admitted owner; never an App capability. */
 export function agentApprovalRoutes(agents: OysterAgents): Hono<OysterEnv> {
   return new Hono<OysterEnv>()
+    .get("/api/agent-models/:agentId", async (context) => {
+      if (
+        context.req.raw.headers.has("X-Oyster-Installation") ||
+        !oysterPrincipalIsOwner(context.get("principal"))
+      )
+        return refusal(403, "Owner only");
+      const agentId = context.req.param("agentId");
+      if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+      const choice = await agents.readModelChoice(agentId);
+      return choice === null
+        ? refusal(404, "No such agent")
+        : Response.json(choice);
+    })
+    .put("/api/agent-models/:agentId", async (context) => {
+      if (
+        context.req.raw.headers.has("X-Oyster-Installation") ||
+        !oysterPrincipalIsOwner(context.get("principal"))
+      )
+        return refusal(403, "Owner only");
+      const agentId = context.req.param("agentId");
+      if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+      const input = agents.decodeModelChoice(await context.req.text());
+      if (input === null) return refusal(400, "Invalid model choice");
+      const choice = await agents.setModelChoice(
+        agentId,
+        input,
+        context.get("principal"),
+      );
+      if ("error" in choice && choice.error === "invalid_model_choice")
+        return refusal(400, "Invalid model choice");
+      return "error" in choice
+        ? refusal(
+            choice.error === "not_found"
+              ? 404
+              : choice.error === "not_granted"
+                ? 403
+                : 409,
+            choice.error,
+          )
+        : Response.json(choice);
+    })
     .get("/api/agent-policies/:agentId", async (context) => {
       if (context.req.raw.headers.has("X-Oyster-Installation"))
         return refusal(403, "Owner direct only");
