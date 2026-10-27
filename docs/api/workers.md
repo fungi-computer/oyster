@@ -253,6 +253,7 @@ approvalGet(
         | "outcome-unknown"
         | "identity-conflict"
         | null;
+     denialNote?: string;
      requestedAt: number;
      expiresAt: number;
      updatedAt: number;
@@ -289,9 +290,9 @@ Read one member-scoped view; the native home resolves membership again.
 `"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
 \| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
 `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"` \| `null`;
-`requestedAt`: `number`; `expiresAt`: `number`; `updatedAt`: `number`;
-`revision`: `number`; \}; `canAnswer`: `boolean`; `canSetAutoApprove`:
-`boolean`; \} \| `null`\>
+`denialNote?`: `string`; `requestedAt`: `number`; `expiresAt`: `number`;
+`updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`: `boolean`;
+`canSetAutoApprove`: `boolean`; \} \| `null`\>
 
 ##### approvalAnswer()
 
@@ -353,6 +354,7 @@ approvalAnswer(
            | "outcome-unknown"
            | "identity-conflict"
            | null;
+        denialNote?: string;
         requestedAt: number;
         expiresAt: number;
         updatedAt: number;
@@ -377,6 +379,7 @@ approvalAnswer(
      | "in-flight"
      | "outcome-unknown"
      | "identity-conflict";
+  denialNote?: string;
 }>>;
 ```
 
@@ -388,10 +391,11 @@ Persist an eligible answer and attempt its native decision work once.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pin`                    | `Readonly`\<\{ `tenantId`: `string`; `origin`: `string`; \}\>                                                                                         |
 | `actor`                  | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \} |
-| `input`                  | \{ `recordId`: `string`; `decision`: `"approve"` \| `"deny"`; `expectedRevision`: `number`; \}                                                        |
+| `input`                  | \{ `recordId`: `string`; `decision`: `"approve"` \| `"deny"`; `expectedRevision`: `number`; `denialNote?`: `string`; \}                               |
 | `input.recordId`         | `string`                                                                                                                                              |
 | `input.decision`         | `"approve"` \| `"deny"`                                                                                                                               |
 | `input.expectedRevision` | `number`                                                                                                                                              |
+| `input.denialNote?`      | `string`                                                                                                                                              |
 
 ###### Returns
 
@@ -408,13 +412,14 @@ Persist an eligible answer and attempt its native decision work once.
 `reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
 `"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
 `"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
-`"identity-conflict"` \| `null`; `requestedAt`: `number`; `expiresAt`: `number`;
-`updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`: `boolean`;
-`canSetAutoApprove`: `boolean`; \}; \}\> \| `Readonly`\<\{ `kind`: `"refused"`;
-`reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
-`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
-`"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
-`"identity-conflict"`; \}\>\>
+`"identity-conflict"` \| `null`; `denialNote?`: `string`; `requestedAt`:
+`number`; `expiresAt`: `number`; `updatedAt`: `number`; `revision`: `number`;
+\}; `canAnswer`: `boolean`; `canSetAutoApprove`: `boolean`; \}; \}\> \|
+`Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \| `"expired"` \|
+`"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
+\| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
+`"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`; `denialNote?`:
+`string`; \}\>\>
 
 ##### approvalSetAutoApprove()
 
@@ -439,6 +444,7 @@ approvalSetAutoApprove(
      | "in-flight"
      | "outcome-unknown"
      | "identity-conflict";
+  denialNote?: string;
 }>
   | Readonly<{
   kind: "updated";
@@ -478,9 +484,10 @@ it.
 `"expired"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
 `"stale-revision"` \| `"declined"` \| `"fenced"` \| `"not-granted"` \|
 `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`;
-\}\> \| `Readonly`\<\{ `kind`: `"updated"`; `rule`: \{ `scope`: \{ `agentId`:
-`string` \| `null`; \}; `family`: \{ `module`: `string` \| `null`; `access`:
-`"write"` \| `"external"`; \}; `enabled`: `boolean`; \}; \}\>\>
+`denialNote?`: `string`; \}\> \| `Readonly`\<\{ `kind`: `"updated"`; `rule`: \{
+`scope`: \{ `agentId`: `string` \| `null`; \}; `family`: \{ `module`: `string`
+\| `null`; `access`: `"write"` \| `"external"`; \}; `enabled`: `boolean`; \};
+\}\>\>
 
 ##### installationOperation()
 

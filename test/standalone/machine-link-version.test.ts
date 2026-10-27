@@ -62,6 +62,7 @@ it("an authenticated version mismatch refuses the dial with upgrade fungi", asyn
         });
       },
       receive: () => Promise.resolve("refused"),
+      disposition: () => Promise.resolve("accepted"),
       scheduleWake: () => Promise.resolve(),
       report: (_operation, cause) => {
         reports.push(cause);

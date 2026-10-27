@@ -31,6 +31,7 @@ export function agentMail(
     await recover();
     if (tick === undefined) throw new Error("Agent Post lane is not open");
     await tick();
+    await mail.stageUndeliverableReplies();
   };
   const mail = new AgentMail({ ...options, post: runtime, drain });
   const host = {
@@ -67,6 +68,8 @@ export function agentMail(
   >;
   return {
     host,
-    deliver: (value: Parameters<AgentMail["send"]>[0]) => mail.send(value),
+    deliver: (value: Parameters<AgentMail["send"]>[0]) => {
+      return mail.send(value);
+    },
   };
 }

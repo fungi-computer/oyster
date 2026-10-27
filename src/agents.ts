@@ -7,6 +7,7 @@
  * transport (`/browser/…`), served by the adapter behind the same App grants.
  */
 import { Hono, type MiddlewareHandler } from "hono";
+import { keyAgentAccess, type LiveOysterKey } from "./keys.js";
 import type { AppToolPolicy } from "./apps/tools.js";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
@@ -231,8 +232,9 @@ function refusal(status: number, error: string): Response {
 /** Agent adapters admitted against each App's declared capabilities. */
 export function agentCapabilities(
   agents: OysterAgents,
+  liveKey: (keyId: string) => Promise<LiveOysterKey | null>,
 ): readonly OysterCapability[] {
-  const routes = createAgentRoutes(agents);
+  const routes = createAgentRoutes(agents, liveKey);
   const shared = { base: "/", routes };
   return [
     {
@@ -315,9 +317,43 @@ export function agentCapabilities(
   ];
 }
 
-function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
+function createAgentRoutes(
+  agents: OysterAgents,
+  liveKey: (keyId: string) => Promise<LiveOysterKey | null>,
+): Hono<CapabilityEnv> {
   const routes = new Hono<CapabilityEnv>();
-  routes.get("/agents", async () => Response.json(await agents.list()));
+  // Every Agent and Session lookup shares this live principal-scoped door.
+  const access = async (principal: OysterPrincipal, agentId: string) => {
+    if (oysterPrincipalIsOwner(principal)) return true;
+    if (principal.actor.kind !== "team-key") return false;
+    const key = await liveKey(principal.actor.keyId);
+    return key !== null && keyAgentAccess(key, agentId);
+  };
+  routes.use("/agents/:agentId/*", async (context, next) => {
+    if (!(await access(context.env.principal, context.req.param("agentId"))))
+      return refusal(403, "Agent access denied");
+    await next();
+    return undefined;
+  });
+  routes.use("/agent-policies/:agentId", async (context, next) => {
+    if (!(await access(context.env.principal, context.req.param("agentId"))))
+      return refusal(403, "Agent access denied");
+    await next();
+    return undefined;
+  });
+  routes.get("/agents", async (context) => {
+    const listed = await agents.list();
+    const actor = context.env.principal.actor;
+    if (oysterPrincipalIsOwner(context.env.principal))
+      return Response.json(listed);
+    if (actor.kind !== "team-key") return Response.json([]);
+    const key = await liveKey(actor.keyId);
+    return Response.json(
+      key === null
+        ? []
+        : listed.filter((agent) => keyAgentAccess(key, agent.agentId)),
+    );
+  });
   routes.post("/agents", async (context) => {
     const { principal } = context.env;
     if (!oysterPrincipalIsOwner(principal))
@@ -415,22 +451,43 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
     return response ?? refusal(404, "No such agent");
   });
 
-  routes.get("/member/inbox", async () => {
+  routes.get("/member/inbox", async (context) => {
     const inbox = await agents.inbox();
+    const principal = context.env.principal;
+    if (oysterPrincipalIsOwner(principal))
+      return Response.json({
+        items: inbox.items,
+        next: null,
+        cursor: inbox.revision,
+      });
+    if (principal.actor.kind !== "team-key")
+      return refusal(403, "Agent access denied");
+    const key = await liveKey(principal.actor.keyId);
     return Response.json({
-      items: inbox.items,
+      items:
+        key === null
+          ? []
+          : inbox.items.filter(
+              (item) => "agentId" in item && keyAgentAccess(key, item.agentId),
+            ),
       next: null,
-      cursor: inbox.revision,
+      // The global revision changes for ungranted Agents too. Key feeds have
+      // no scoped event stream, so expose neither that revision nor its events.
+      cursor: 0,
     });
   });
-  routes.get("/member/inbox/notices", () =>
-    Response.json({ items: [], next: null }),
+  routes.get("/member/inbox/notices", (context) =>
+    oysterPrincipalIsOwner(context.env.principal)
+      ? Response.json({ items: [], next: null })
+      : refusal(403, "Agent access denied"),
   );
   routes.post("/member/inbox/visits", async (context) => {
     const body = Schema.decodeUnknownOption(visitSchema)(
       await context.req.json(),
     );
     if (body._tag === "None") return refusal(400, "Invalid visit");
+    if (!(await access(context.env.principal, body.value.agentId)))
+      return refusal(403, "Agent access denied");
     return (await agents.visit(body.value.agentId, body.value.sessionId))
       ? new Response(null, { status: 204 })
       : refusal(404, "No such Session");
@@ -438,6 +495,10 @@ function createAgentRoutes(agents: OysterAgents): Hono<CapabilityEnv> {
   // The feed is small (one person's agents), so a change is announced as a
   // `reset` and the client re-reads the whole inbox.
   routes.get("/member/inbox/events", (context) => {
+    // The unscoped revision also changes for other Agents. Do not expose it
+    // until a principal-scoped revision exists.
+    if (!oysterPrincipalIsOwner(context.env.principal))
+      return refusal(403, "Agent access denied");
     const after = Number(context.req.query("after") ?? "0");
     const signal = context.req.raw.signal;
     const encoder = new TextEncoder();

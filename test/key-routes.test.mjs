@@ -203,7 +203,7 @@ test("owner-only: a non-owner member is refused every /api/keys route", async ()
   assert.equal(revoked.status, 403);
 });
 
-const ownerKeySecret = "fixture-owner-key-at-least-24-characters";
+const ownerKeySecret = "fixture-owner-key-at-least-24-characters"; //gitleaks:allow
 
 test("a revoked key is refused 401 on its very next authenticated request", async () => {
   const keys = keysNamespace();

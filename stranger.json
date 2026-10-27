@@ -197,6 +197,8 @@
     "package/dist/machine-link/client.js",
     "package/dist/machine-link/delivery.d.ts",
     "package/dist/machine-link/delivery.js",
+    "package/dist/machine-link/disposition.d.ts",
+    "package/dist/machine-link/disposition.js",
     "package/dist/machine-link/enrollment.d.ts",
     "package/dist/machine-link/enrollment.js",
     "package/dist/machine-link/fences.d.ts",

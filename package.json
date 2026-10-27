@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -103,6 +103,18 @@
     "./event-recipients": {
       "types": "./dist/event-recipients.d.ts",
       "import": "./dist/event-recipients.js"
+    },
+    "./channels/ids": {
+      "types": "./dist/channels/ids.d.ts",
+      "import": "./dist/channels/ids.js"
+    },
+    "./channels/binding": {
+      "types": "./dist/channels/binding.d.ts",
+      "import": "./dist/channels/binding.js"
+    },
+    "./channels/conversations": {
+      "types": "./dist/channels/conversations.d.ts",
+      "import": "./dist/channels/conversations.js"
     },
     "./app-storage": {
       "types": "./dist/app-storage.d.ts",
@@ -264,7 +276,7 @@
     "stranger": "tsx ../../tooling/repository/src/artifacts/cli.ts --repo-root ../.. .",
     "test:packed-native": "node --import tsx test/stranger/qualify-packed.mjs",
     "test:background-replay": "node test/background-replay.native.mjs",
-    "test:standalone": "vitest run --config vitest.standalone.config.mjs && node --import tsx --test test/standalone/agent-caller.test.mjs test/standalone/workers-media.test.mjs test/standalone/workers-computer.test.mjs test/standalone/workflow-git-pass-frame.test.mjs test/standalone/webhook-abuse.test.mjs test/standalone/webhook-custody.test.mjs test/standalone/webhook-ingress.test.mjs test/standalone/workers-workflows.test.mjs test/standalone/workflow-provider.test.mjs test/standalone/standalone-tenancy.test.mjs test/standalone/standalone-registry.test.mjs",
+    "test:standalone": "vitest run --config vitest.standalone.config.mjs && node --import tsx --test test/standalone/agent-caller.test.mjs test/standalone/workers-media.test.mjs test/standalone/workers-computer.test.mjs test/standalone/workflow-git-pass-frame.test.mjs test/standalone/webhook-abuse.test.mjs test/standalone/webhook-custody.test.mjs test/standalone/webhook-ingress.test.mjs test/standalone/workers-workflows.test.mjs test/standalone/workflow-provider.test.mjs test/standalone/standalone-tenancy.test.mjs test/standalone/standalone-registry.test.mjs && node --import tsx test/standalone/agent-key-access.proof.mjs",
     "test:source-builds": "node test/source-distribution-build.native.mjs",
     "test:git-door": "node test/git-example.native.mjs",
     "test:page-launch": "node --test test/page-launch.browser.mjs",

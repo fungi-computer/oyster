@@ -17,6 +17,7 @@ let approvedPolicy = { status: "pending", revision: "agent_1:requested" };
 let inboxReads = 0;
 let revisionReads = 0;
 let inboxRevision = 3;
+let inboxItems = [];
 const adapter = {
   list: async () => agents,
   create: async (name, requestId, principal, actor, avatar) => {
@@ -89,7 +90,7 @@ const adapter = {
   },
   inbox: async () => {
     inboxReads += 1;
-    return { items: [], revision: inboxRevision };
+    return { items: inboxItems, revision: inboxRevision };
   },
   revision: async () => {
     revisionReads += 1;
@@ -108,7 +109,23 @@ const principalOf = (who) => {
       return null;
   }
 };
-const capabilities = agentCapabilities(adapter);
+let agentGrants = [];
+const liveKey = async (keyId) =>
+  keyId === "key"
+    ? {
+        keyId,
+        owner: "owner",
+        grantVersion: 1,
+        grants: [
+          {
+            capability: "apps.use",
+            targets: { kind: "selected", ids: ["capability-fixture"] },
+          },
+          ...agentGrants,
+        ],
+      }
+    : null;
+const capabilities = agentCapabilities(adapter, liveKey);
 const declared = [
   "agent.list",
   "agent.manage",
@@ -122,6 +139,7 @@ const host = await capabilityFixture({
   capabilities: declared,
   adapters: capabilities,
   agents: adapter,
+  liveKey,
   authenticate: async (request) => {
     const principal = principalOf(request.headers.get("x-who"));
     return principal === null
@@ -156,7 +174,15 @@ assert.equal((await create("key")).status, 403);
 const created = await (await create("owner")).json();
 assert.equal(created.agentId, "agent_1");
 assert.equal((await (await create("owner")).json()).agentId, "agent_1");
-assert.equal((await call("/agents", {}, "key")).status, 403);
+assert.deepEqual(await (await call("/agents", {}, "key")).json(), []);
+for (const path of [
+  "/agents/agent_1/sessions",
+  "/agents/agent_1/sessions/s/prompt",
+  "/agents/agent_1/sessions/s/events",
+  "/agents/agent_1/browser/sessions/s/browser/events",
+]) {
+  assert.equal((await call(path, {}, "key")).status, 403, path);
+}
 assert.equal((await call("/agents/agent_1/sessions?limit=5")).status, 200);
 assert.deepEqual(forwarded, ["/sessions"]);
 assert.equal(
@@ -209,6 +235,43 @@ assert.equal(
 );
 assert.equal((await rename("Gardener", "agent_9")).status, 404);
 const second = await (await create("owner", "r2")).json();
+agentGrants = [
+  { capability: "agents.use", targets: { kind: "selected", ids: ["agent_1"] } },
+];
+assert.deepEqual(
+  (await (await call("/agents", {}, "key")).json()).map(
+    (agent) => agent.agentId,
+  ),
+  ["agent_1"],
+);
+assert.equal((await call("/agents/agent_1/sessions", {}, "key")).status, 200);
+assert.equal(
+  (await call("/agents/agent_1/sessions/s/prompt", { method: "POST" }, "key"))
+    .status,
+  200,
+);
+assert.equal(
+  (await call("/agents/agent_1/sessions/s/events", {}, "key")).status,
+  200,
+);
+assert.equal(
+  (await call(`/agents/${second.agentId}/sessions`, {}, "key")).status,
+  403,
+);
+inboxItems = [
+  { agentId: "agent_1", sessionId: "one", state: "unavailable" },
+  { agentId: second.agentId, sessionId: "private", state: "unavailable" },
+];
+assert.deepEqual(
+  await (await call("/member/inbox", {}, "key")).json(),
+  { items: [inboxItems[0]], next: null, cursor: 0 },
+  "a key sees only granted Sessions and no Oyster-wide revision",
+);
+inboxItems = [];
+assert.deepEqual(
+  (await (await call("/agents")).json()).map((agent) => agent.agentId),
+  ["agent_1", second.agentId],
+);
 assert.equal((await rename("Gardener", second.agentId)).status, 409);
 assert.equal(renameWrites, 1, "a name conflict never writes");
 
@@ -346,13 +409,13 @@ assert.equal(
 );
 const denied = await capabilityFixture({
   capabilities: declared,
-  adapters: agentCapabilities(adapter),
+  adapters: agentCapabilities(adapter, liveKey),
   admitted: false,
 });
 assert.equal((await call("/agents", {}, "owner", denied.app)).status, 403);
 const sendOnly = await capabilityFixture({
   capabilities: ["agent.send"],
-  adapters: agentCapabilities(adapter),
+  adapters: agentCapabilities(adapter, liveKey),
 });
 assert.equal(
   (

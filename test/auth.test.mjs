@@ -8,7 +8,7 @@ import {
 
 const { Request, URLSearchParams } = globalThis;
 
-const key = "fixture-owner-key-1234567890";
+const key = "fixture-owner-key-1234567890"; //gitleaks:allow
 const ownerId = "canonical-stored-owner";
 const origin = "https://owner.example.test";
 

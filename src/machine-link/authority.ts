@@ -4,6 +4,7 @@ import type {
   PostEnvelope,
 } from "@fungi.computer/carrier/post";
 import type { MachineAgentHome } from "./home.js";
+import type { MachineLinkDispositionMail } from "./disposition.js";
 
 const id = z.string().min(1).max(256);
 export const machineLinkIdentitySchema = z.strictObject({
@@ -91,6 +92,11 @@ export type MachineLinkAuthority = Readonly<{
   directory(
     id: MachineLinkIdentity,
   ): Promise<readonly { agentId: string; name: string }[]>;
+  /** Current home of one Team Agent, including machine-hosted homes. */
+  agentHome(
+    id: MachineLinkIdentity,
+    agentId: string,
+  ): Promise<MachineAgentHome | null>;
   /** Sender, actor and the target's actual home, rechecked for this act. */
   resolveTarget(
     id: MachineLinkIdentity,
@@ -105,6 +111,18 @@ export type MachineLinkAuthority = Readonly<{
     target: MachineLinkTargetFacts,
     envelope: PostEnvelope,
   ): Promise<PostDeliveryResult>;
+  /** Deliver a typed expiry reply authenticated by this device's held row. */
+  deliverUndeliverable(
+    id: MachineLinkIdentity,
+    original: MachineLinkDispositionMail,
+    reply: MachineLinkDispositionMail,
+  ): Promise<PostDeliveryResult>;
+  /** Ask the sending link to attest that it durably staged this disposition. */
+  verifyRelayDisposition(
+    relay: MachineLinkIdentity,
+    original: PostEnvelope,
+    reply: PostEnvelope,
+  ): Promise<boolean>;
   /** Whether this link's replay ledger may be erased now. */
   canErase(id: MachineLinkIdentity): Promise<boolean>;
   /** Push one committed fence fact to the device's link (C2 promptness). */

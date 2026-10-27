@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
+import type { BirdDogMail } from "@fungi.computer/bird-dog";
 import type {
   PostEnvelope,
   PostDeliveryResult,
 } from "@fungi.computer/carrier/post";
 import type { MachineAgentHome } from "../../src/machine-link/home.js";
 import { createHomeAwareAgentMailNamespace } from "../../src/machine-link/delivery.js";
+import { deliverUndeliverableMail } from "../../src/machine-link/delivery.js";
+import type { MachineLinkDispositionMail } from "../../src/machine-link/disposition.js";
 import {
   agentMailRoute,
   machineAgentCodecs,
@@ -29,7 +33,7 @@ const homeAwareRoute = (
     () => Promise.resolve(undefined),
   );
 
-const mail = {
+const mail: BirdDogMail = {
   key: "one-mail",
   from: { kind: "agent", agentId: "sender", sessionId: "creator" },
   to: { kind: "agent", agentId: "receiver", sessionId: "local-session" },
@@ -43,6 +47,63 @@ const envelope: PostEnvelope = {
   address: { scopeId: "team", agentId: "receiver" },
   event: mail,
 };
+const dispositionOriginal: MachineLinkDispositionMail = {
+  key: mail.key,
+  kind: "agentMail",
+  address: { scopeId: "team", agentId: "receiver" },
+  event: mail,
+};
+const undeliverableReply: MachineLinkDispositionMail = {
+  key: `${mail.key}:reply:0`,
+  kind: "agentMail",
+  address: { scopeId: "team", agentId: "sender" },
+  event: {
+    key: `${mail.key}:reply:0`,
+    from: { kind: "system", systemId: "hub" },
+    to: mail.from,
+    replyTo: [],
+    content: "undeliverable",
+    createdAt: 2,
+    reply: { outcome: "undeliverable", reason: "recipient_offline" },
+  },
+};
+
+await test("an expiry reply follows the original sender's current machine home", async () => {
+  const sent: PostEnvelope[] = [];
+  let accepted: Schema.Json | undefined;
+  const held: PostDeliveryResult = {
+    status: "accepted",
+    receipt: {
+      status: "held",
+      reason: "recipient_offline",
+      message: "waiting: recipient offline",
+    },
+  };
+  assert.deepEqual(
+    await deliverUndeliverableMail({
+      identity: { teamId: "team", deviceId: "expired-device" },
+      original: dispositionOriginal,
+      reply: undeliverableReply,
+      senderHome: { kind: "machine", deviceId: "sender-device" },
+      hosted: {
+        getByName: () => ({
+          deliver: () => Promise.reject(new Error("hosted route not selected")),
+        }),
+      },
+      machine: (deviceId, value) => {
+        assert.equal(deviceId, "sender-device");
+        sent.push(value);
+        return Promise.resolve(held);
+      },
+      accepted: (receipt) => {
+        accepted = receipt;
+      },
+    }),
+    held,
+  );
+  assert.deepEqual(sent, [undeliverableReply]);
+  assert.deepEqual(accepted, held.receipt);
+});
 
 await test(
   "the machine Post channel cannot promote a receiptless acknowledgment into Agent acceptance",

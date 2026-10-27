@@ -71,6 +71,17 @@ test("native Oyster HTTP controls persist owner policy through the real registry
     "the native host must mount its real approvals route",
   );
   assert.deepEqual(await listed.json(), { items: [], nextCursor: null });
+  const invalidAnswer = await request("answer", {
+    recordId: "absent",
+    decision: "approve",
+    expectedRevision: 1,
+    denialNote: "This is feedback, not approval",
+  });
+  assert.equal(invalidAnswer.status, 200);
+  assert.deepEqual(await invalidAnswer.json(), {
+    kind: "refused",
+    reason: "not-eligible",
+  });
   const rule = {
     scope: { agentId: null },
     family: { module: null, access: "write" },

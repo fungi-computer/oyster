@@ -85,7 +85,7 @@ import {
   permissionSaveSchema,
 } from "./apps/permissions.js";
 import type { AppToolPolicy } from "./apps/tools.js";
-import type { LiveOysterKey } from "./keys.js";
+import { keyAppAccess, type LiveOysterKey } from "./keys.js";
 import {
   deriveDeclaredOperations,
   appCallOperation,
@@ -1075,6 +1075,11 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
           kind: "capability-route",
           capability: capability.permission,
           operation,
+          effect:
+            (context.req.method === "GET" || context.req.method === "HEAD") &&
+            context.req.header("Upgrade")?.toLowerCase() !== "websocket"
+              ? "read"
+              : "write",
         }).kind === "refused"
       )
         continue;
@@ -1088,10 +1093,19 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   });
 
   app.get("/", async (context) => {
-    const publicHome = context.get("principal").actor.kind === "visitor";
+    const actor = context.get("principal").actor;
+    const publicHome = actor.kind === "visitor";
+    const key =
+      actor.kind === "team-key"
+        ? ((await host.keys?.live(actor.keyId)) ?? null)
+        : null;
     if (!publicHome && host.homeInstallationId !== undefined) {
       const home = await host.installations.get(host.homeInstallationId);
-      if (home?.status === "enabled")
+      if (
+        home?.status === "enabled" &&
+        (actor.kind !== "team-key" ||
+          (key !== null && keyAppAccess(key, home.installationId) !== null))
+      )
         return context.redirect(
           `/apps/${encodeURIComponent(home.installationId)}/`,
         );
@@ -1099,7 +1113,10 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     const installations = (await host.installations.list()).filter(
       (installation) =>
         installation.status === "enabled" &&
-        (!publicHome || installation.visibility === "public"),
+        (!publicHome || installation.visibility === "public") &&
+        (actor.kind !== "team-key" ||
+          (key !== null &&
+            keyAppAccess(key, installation.installationId) !== null)),
     );
     if (publicHome) {
       const apps: {
@@ -1557,11 +1574,12 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     for (const capability of host.capabilities ?? []) {
       const methods = Object.fromEntries(
         Object.entries(capability.methods).filter(
-          ([name]) =>
+          ([name, method]) =>
             admits(facts, {
               kind: "capability-route",
               capability: capability.permission,
               operation: `route:${capability.id}:${name}`,
+              effect: method.method === "GET" ? "read" : "write",
             }).kind === "admitted",
         ),
       );
@@ -1581,6 +1599,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
               kind: "capability-route",
               capability: "apps.call",
               operation: appCallOperation(call.appId, method),
+              effect: "write",
             }).kind === "admitted",
         ),
       )
@@ -1940,6 +1959,7 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
           kind: "capability-route",
           capability: "apps.call",
           operation: appCallOperation(appId, method),
+          effect: "write",
         }).kind === "admitted"
       );
     };

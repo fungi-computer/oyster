@@ -389,6 +389,7 @@ it("keeps route and backend approvals separate and preserves host resource selec
         kind: "capability-route",
         capability: "computer.readFile",
         operation: "route:computer.readFile:open",
+        effect: "read",
       },
     ),
   ).toEqual({ kind: "admitted", grants: [] });
@@ -412,6 +413,7 @@ it("keeps route and backend approvals separate and preserves host resource selec
         kind: "capability-route",
         capability: "computer.writeFile",
         operation: "route:computer.writeFile:open",
+        effect: "write",
       },
     ),
   ).toEqual({ kind: "refused", code: "not_approved" });
@@ -898,6 +900,7 @@ it("method approval rows grant neither backend bindings nor capability routes", 
       kind: "capability-route",
       capability: "computer.readFile",
       operation: "route:computer.readFile:open",
+      effect: "read",
     }),
   ).toEqual({ kind: "refused", code: "not_approved" });
 });
@@ -1420,11 +1423,39 @@ it("an apps.open affordance preserves stored operation and resource ceilings", a
   ).toBeNull();
 });
 
+it("a read-level App key cannot invoke a write capability route", async () => {
+  const current = await approvedFacts();
+  const reader: GateFacts = {
+    ...current,
+    principal: { actor: { kind: "team-key", keyId: "reader" }, role: null },
+    access: {
+      bindingName: "NOTES",
+      level: "read",
+      revision: "key:reader:1",
+      grantedBy: "owner",
+    },
+  };
+  const route = {
+    kind: "capability-route",
+    capability: "computer.readFile",
+    operation: "route:computer.readFile:open",
+  } as const;
+  expect(admits(reader, { ...route, effect: "read" })).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  expect(admits(reader, { ...route, effect: "write" })).toEqual({
+    kind: "refused",
+    code: "level_too_low",
+  });
+});
+
 it("approvals routes require their own current installation consent", async () => {
   const request = {
     kind: "capability-route",
     capability: "approvals",
     operation: "route:approvals:list",
+    effect: "write",
   } as const;
   expect(admits(await approvedFacts(), request)).toEqual({
     kind: "refused",

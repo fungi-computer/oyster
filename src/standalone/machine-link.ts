@@ -1,4 +1,7 @@
-import { machineAgentReservations } from "@fungi.computer/shiitake/delegation";
+import {
+  machineAgentCodecs,
+  machineAgentReservations,
+} from "@fungi.computer/shiitake/delegation";
 import {
   createMachineEnrollment,
   MachineEnrollmentRefused,
@@ -33,6 +36,7 @@ import {
   type MachineLinkFenceResult,
 } from "../machine-link/index.js";
 import { createMachineLink } from "../machine-link/workers.js";
+import { deliverUndeliverableMail } from "../machine-link/delivery.js";
 import type {
   PostEnvelope,
   PostDeliveryResult,
@@ -118,6 +122,8 @@ export function standaloneMachineLinkAuthority(
     },
     currentFence: async (id) =>
       id.teamId !== teamId ? null : directory().machineFence(id),
+    agentHome: async (id, agentId) =>
+      id.teamId !== teamId ? null : directory().agentHome(agentId),
     directory: async (id) => {
       if (!(await authority.admitDevice(id)).live)
         throw new MachineLinkRefused("actor_not_allowed");
@@ -147,6 +153,32 @@ export function standaloneMachineLinkAuthority(
         facts.targetAgentId,
         envelope,
       );
+    },
+    deliverUndeliverable: async (id, original, reply) => {
+      if ((await authority.currentFence(id)) === null) return "refused";
+      const mail = original.event;
+      if (mail.from.kind !== "agent") return "refused";
+      const home = await authority.agentHome(id, mail.from.agentId);
+      if (home === null) throw new MachineLinkRefused("unavailable");
+      return await deliverUndeliverableMail({
+        identity: id,
+        original,
+        reply,
+        senderHome: home,
+        hosted: env.AGENTS,
+        accepted: machineAgentCodecs.accepted,
+        machine: async (deviceId, envelope) => {
+          const destination = { teamId, deviceId };
+          return await env.MACHINE_LINK.getByName(
+            machineLinkName(destination),
+          ).deliverRelayDisposition(destination, id, original, envelope);
+        },
+      });
+    },
+    verifyRelayDisposition: async (relay, original, reply) => {
+      return await env.MACHINE_LINK.getByName(
+        machineLinkName(relay),
+      ).hasStagedDisposition(relay, original, reply);
     },
     canErase: async (id) => {
       if (id.teamId !== teamId) return false;
@@ -304,6 +336,23 @@ export class MachineLinkDO extends DurableObject<StandaloneMachineLinkEnv> {
     envelope: PostEnvelope,
   ): Promise<PostDeliveryResult> {
     return this.link.deliver(id, caller, agentId, envelope);
+  }
+
+  deliverRelayDisposition(
+    id: MachineLinkIdentity,
+    relay: MachineLinkIdentity,
+    original: PostEnvelope,
+    reply: PostEnvelope,
+  ): Promise<PostDeliveryResult> {
+    return this.link.deliverRelayDisposition(id, relay, original, reply);
+  }
+
+  hasStagedDisposition(
+    id: MachineLinkIdentity,
+    original: PostEnvelope,
+    reply: PostEnvelope,
+  ): Promise<boolean> {
+    return this.link.hasStagedDisposition(id, original, reply);
   }
 
   operation(

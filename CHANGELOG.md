@@ -1,5 +1,65 @@
 # @fungi.computer/oyster
 
+## 0.5.0
+
+### Minor Changes
+
+- Changes since 0.4.1:
+
+  - fix(oyster): satisfy lint for scoped inbox and proof
+  - fix(oyster): avoid leaking unscoped inbox revisions to keys
+  - fix(oyster): scope named keys to granted Agents
+  - fix(darkroom): route only gateway-compatible media inputs through AI Gateway
+  - fix(release): inline Gitleaks fixture allows
+  - fix(oyster): default standalone media to AI Gateway
+  - fix(approvals): bound confirmation and refuse invalid noted approvals
+  - feat(oyster): own channel conversations across hosts
+  - fix(oyster): inventory mesh disposition artifacts
+  - fix(oyster): inventory candidate diagnostic artifacts
+  - fix(oyster): type agent model choice storage writes
+  - fix(oyster): keep model choice storage type portable
+  - fix(oyster): inventory shipped agent and computer files
+  - fix(oyster): route install callers through bin
+  - fix(oyster): dispatch CLI from the declared bin
+  - fix(oyster): preserve live builds after unknown Computer output
+  - fix(mesh): type-check offline reply route fixtures
+  - fix(oyster): ship starter dependencies and continue failed installs
+  - fix(oyster): start App boot lease after asset metadata
+  - fix(oyster): bound builder failures and interrupt lost builds
+  - fix(mesh): admit authenticated frozen offline replies
+  - fix(mesh): retain seven-day relay custody
+  - fix(mesh): admit Hub offline dispositions
+  - fix(mesh): reply after carrier dead letters
+  - feat(oyster): authenticate staged relay dispositions
+  - feat(oyster): reply to expired machine mail
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.4.0
+  - @fungi.computer/bird-dog@0.2.1
+  - @fungi.computer/caps@0.3.1
+  - @fungi.computer/darkroom@0.3.0
+  - @fungi.computer/knapsack@0.3.1
+  - @fungi.computer/shiitake-extensions@0.3.0
+  - @fungi.computer/shiitake@0.5.0
+  - @fungi.computer/veil@0.2.1
+  - @fungi.computer/whistle@0.2.0
+  - @fungi.computer/braid@0.2.3
+  - @fungi.computer/nacre@0.0.3
+  - @fungi.computer/workflows-wire@0.2.3
+  - @fungi.computer/computer@0.3.1
+  - @fungi.computer/computer-contract@0.0.4
+  - @fungi.computer/zookeeper@0.0.4
+
 ## 0.4.1
 
 ### Patch Changes

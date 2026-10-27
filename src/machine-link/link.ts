@@ -25,9 +25,24 @@ import {
   type MachineLinkFenceResult,
   type MachineLinkIdentity,
 } from "./authority.js";
+import { machineLinkDisposition } from "./disposition.js";
 import { MachineLinkHost } from "./host.js";
 
 const pinKey = "machine-link:identity";
+
+function isRetainedRelayFence(
+  target: MachineLinkIdentity,
+  relay: MachineLinkIdentity,
+  fence: MachineLinkFenceFact | null,
+): boolean {
+  return (
+    relay.teamId === target.teamId &&
+    relay.deviceId !== target.deviceId &&
+    fence !== null &&
+    fence.teamId === relay.teamId &&
+    fence.deviceId === relay.deviceId
+  );
+}
 
 /** The Durable Object state a machine link needs from its host class. */
 export type MachineLinkState = Pick<
@@ -118,6 +133,20 @@ export function createMachineLink<Readback>(
     return { address, mail: body };
   };
 
+  const deliverUndeliverable = async (
+    identity: MachineLinkIdentity,
+    rawOriginal: PostEnvelope,
+    rawReply: PostEnvelope,
+  ): Promise<PostDeliveryResult> => {
+    const checked = machineLinkDisposition(identity, rawOriginal, rawReply);
+    if (checked === undefined) return "refused";
+    return await authority.deliverUndeliverable(
+      identity,
+      checked.original,
+      checked.reply,
+    );
+  };
+
   /**
    * The link's own sender check, whatever the host answered: the facts must
    * name the caller and actor it saw, a hosted caller must be hosted, and a
@@ -169,6 +198,7 @@ export function createMachineLink<Readback>(
     await current(identity);
     if (envelope.kind !== "agentMail") return "refused";
     const { address, mail: body } = mail(envelope);
+    if (body.from.kind !== "agent") return "refused";
     const caller: MachineLinkCaller = {
       kind: "device",
       deviceId: identity.deviceId,
@@ -196,6 +226,8 @@ export function createMachineLink<Readback>(
       replay: openReplayStore,
       directory: () => authority.directory(identity),
       receive: (_device, envelope) => receive(identity, envelope),
+      disposition: (original, reply) =>
+        deliverUndeliverable(identity, original, reply),
       scheduleWake: (at) => state.storage.setAlarm(at),
       report: options.report,
     }));
@@ -237,6 +269,13 @@ export function createMachineLink<Readback>(
       if (envelope.kind !== "agentMail") return "refused";
       const { address, mail: body } = mail(envelope);
       const facts = await checkedTarget(device, caller, agentId, null);
+      const senderMatches =
+        body.from.kind === "agent" && body.from.agentId === facts.callerAgentId;
+      const systemOfflineDisposition =
+        body.from.kind === "system" &&
+        body.reply?.outcome === "undeliverable" &&
+        body.reply.reason === "recipient_offline" &&
+        body.to.agentId === facts.targetAgentId;
       if (
         facts.targetHome.kind !== "machine" ||
         facts.targetHome.deviceId !== device.deviceId ||
@@ -244,10 +283,56 @@ export function createMachineLink<Readback>(
         address.scopeId !== facts.teamId ||
         address.agentId !== facts.targetAgentId ||
         body.to.agentId !== facts.targetAgentId ||
-        body.from.agentId !== facts.callerAgentId
+        (!senderMatches && !systemOfflineDisposition)
       )
         return "refused";
       return await hostFor(device).deliver(device.deviceId, envelope);
+    },
+
+    /** A relay's typed terminal reply to an Agent homed on this device. */
+    async deliverRelayDisposition(
+      input: MachineLinkIdentity,
+      relayInput: MachineLinkIdentity,
+      original: PostEnvelope,
+      reply: PostEnvelope,
+    ): Promise<PostDeliveryResult> {
+      const device = await current(input);
+      const relay = machineLinkIdentitySchema.parse(relayInput);
+      const retainedRelay = await authority.currentFence(relay);
+      if (!isRetainedRelayFence(device, relay, retainedRelay)) return "refused";
+      const checked = machineLinkDisposition(device, original, reply);
+      if (checked === undefined) return "refused";
+      if (
+        !(await authority.verifyRelayDisposition(
+          relay,
+          checked.original,
+          checked.reply,
+        ))
+      )
+        return "refused";
+      const home = await authority.agentHome(
+        device,
+        checked.reply.address.agentId,
+      );
+      if (home?.kind !== "machine" || home.deviceId !== device.deviceId)
+        return "refused";
+      return await hostFor(device).deliver(device.deviceId, checked.reply, {
+        refuseDuplicate: true,
+      });
+    },
+
+    /** Attest a still-pending disposition in this device's own Post outbox. */
+    async hasStagedDisposition(
+      input: MachineLinkIdentity,
+      original: PostEnvelope,
+      reply: PostEnvelope,
+    ): Promise<boolean> {
+      const device = await current(input);
+      return await hostFor(device).hasStagedDisposition(
+        device.deviceId,
+        original,
+        reply,
+      );
     },
 
     /** One finite Agent operation on this device, returning its receipt. */

@@ -358,16 +358,20 @@ optional bearer.
 ### agentCapabilities()
 
 ```ts
-function agentCapabilities(agents): readonly Readonly<object & object>[];
+function agentCapabilities(
+  agents,
+  liveKey,
+): readonly Readonly<object & object>[];
 ```
 
 Agent adapters admitted against each App's declared capabilities.
 
 #### Parameters
 
-| Parameter | Type                            |
-| --------- | ------------------------------- |
-| `agents`  | [`OysterAgents`](#oysteragents) |
+| Parameter | Type                                                                                                                                                                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents`  | [`OysterAgents`](#oysteragents)                                                                                                                                                                                                                                      |
+| `liveKey` | (`keyId`) => `Promise`\< \| `Readonly`\<\{ `keyId`: `string`; `owner`: `string`; `grantVersion`: `number`; `grants`: readonly `Readonly`\<\{ `capability`: [`OysterKeyCapability`](keys.md#oysterkeycapability); `targets`: `GrantTargets`; \}\>[]; \}\> \| `null`\> |
 
 #### Returns
 

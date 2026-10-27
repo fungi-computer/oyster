@@ -61,7 +61,7 @@ it("uses Oyster's digest cookie, refuses rotation and invalid recognized cookies
     ),
   ).resolves.toMatchObject({ kind: "principal" });
   get.mockResolvedValue({
-    key: "rotated-owner-secret-at-least-24-characters",
+    key: "rotated-owner-secret-at-least-24-characters", //gitleaks:allow
     memberId,
   });
   await expect(

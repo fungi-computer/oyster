@@ -54,6 +54,7 @@ export const gateRequestSchema = z.lazy(() =>
       kind: z.literal("capability-route"),
       capability: ownerCodec(appCapabilityIdSchema),
       operation: z.string().min(1),
+      effect: z.enum(["read", "write"]),
     }),
     z.strictObject({
       kind: z.literal("binding"),
@@ -421,6 +422,8 @@ export function admits(
     }
     case "capability-route": {
       if (visitor) return refusal("visitor_read_only");
+      if (request.effect === "write" && facts.access?.level === "read")
+        return refusal("level_too_low");
       if (
         !request.operation.startsWith("route:") ||
         !facts.declaration.capabilities.includes(request.capability) ||

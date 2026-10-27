@@ -9,6 +9,7 @@ import {
 } from "@fungi.computer/puffball/app";
 import { computerList } from "@fungi.computer/agar/computer";
 import { agentApprovalRoutes, type OysterAgents } from "../agents.js";
+import type { LiveOysterKey } from "../keys.js";
 import type { Installation } from "../apps/index.js";
 import { fileCapabilities, type FileSource } from "../files.js";
 import {
@@ -38,6 +39,7 @@ export type CapabilityFixtureOptions = Readonly<{
   visitor?: boolean;
   authenticate?: (request: Request) => Promise<OysterAuthResult>;
   agents?: OysterAgents;
+  liveKey?: (keyId: string) => Promise<LiveOysterKey | null>;
 }>;
 
 /** One Oyster host with a single installation whose capability grants the options shape. */
@@ -137,7 +139,7 @@ export async function capabilityFixture(
   if (options.visitor) installation = { ...installation, visibility: "public" };
   const readOnly = () =>
     Promise.reject(new Error("Fixture installations are read-only"));
-  const base: OysterHost = {
+  let base: OysterHost = {
     bootUi: () => Promise.resolve({ kind: "passed" as const }),
     auth: {
       resolve: () =>
@@ -177,6 +179,8 @@ export async function capabilityFixture(
     },
     capabilities,
   };
+  if (options.liveKey !== undefined)
+    base = { ...base, keys: { live: options.liveKey } };
   const host: OysterHost =
     options.agents === undefined
       ? base

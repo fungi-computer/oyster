@@ -14,7 +14,7 @@
 
 ```ts
 type OysterKeyCapability =
-  "apps.read" | "apps.use" | "computer.use" | "machine.enroll";
+  "apps.read" | "apps.use" | "agents.use" | "computer.use" | "machine.enroll";
 ```
 
 Every capability an Oyster key may carry.
@@ -88,8 +88,9 @@ const oysterKeyVocabulary: GrantVocabulary<OysterKeyCapability>;
 `apps.use` also reaches `apps.read` (one level, per `defineGrants`'s own
 `implies`): a key that may change an App's data may also read it. `computer.use`
 has no narrower capability under it; the Computer is on or off, host-wide.
-`machine.enroll` admits enrollment only; it implies no App or Computer access.
-The enrollment owner, not this vocabulary, owns one-use consumption.
+`agents.use` selects Agent ids independently of App grants. `machine.enroll`
+admits enrollment only; it implies no App or Computer access. The enrollment
+owner, not this vocabulary, owns one-use consumption.
 
 ---
 
@@ -156,6 +157,27 @@ name for MCP) to reach the full `AppToolAccess`.
 
 \| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`:
 `string`; \} \| `null`
+
+---
+
+### keyAgentAccess()
+
+```ts
+function keyAgentAccess(key, agentId): boolean;
+```
+
+Agent access is scoped to the granted Agent ids, never inferred from App grants.
+
+#### Parameters
+
+| Parameter | Type                              |
+| --------- | --------------------------------- |
+| `key`     | [`LiveOysterKey`](#liveoysterkey) |
+| `agentId` | `string`                          |
+
+#### Returns
+
+`boolean`
 
 ---
 

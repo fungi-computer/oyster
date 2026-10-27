@@ -91,7 +91,7 @@ Data.TaggedError("CloudBrowserUrlDenied").message;
 
 ### CloudBrowserUpstreamError
 
-The provider (Cloudflare Browser Run) answered with a failure.
+The configured provider answered with a failure or is unreachable.
 
 #### Extends
 
@@ -593,10 +593,11 @@ type BrowserLimits = Readonly<{
 
 `@fungi.computer/oyster/browser`: the one agent browser for the Hub and a
 standalone Oyster. A host builds the port from a provider (`browserRunSessions`
-or `bindingSessions`, plus Browser Run Quick Reads when it has them), its
-required metering owner and an event sink; `createBrowser` owns lease ownership,
-egress policy and billing order; `browserCapabilitySource` is the agent's
-`cloudBrowser` tool. Raw CDP stays internal to this directory.
+or `bindingSessions` or `onboxBrowserSessions` on staging, plus Browser Run
+Quick Reads when it has them), its required metering owner and an event sink;
+`createBrowser` owns lease ownership, egress policy and billing order;
+`browserCapabilitySource` is the agent's `cloudBrowser` tool. Raw CDP stays
+internal to this directory.
 
 ---
 
@@ -643,10 +644,11 @@ type Browser = Readonly<{
 
 `@fungi.computer/oyster/browser`: the one agent browser for the Hub and a
 standalone Oyster. A host builds the port from a provider (`browserRunSessions`
-or `bindingSessions`, plus Browser Run Quick Reads when it has them), its
-required metering owner and an event sink; `createBrowser` owns lease ownership,
-egress policy and billing order; `browserCapabilitySource` is the agent's
-`cloudBrowser` tool. Raw CDP stays internal to this directory.
+or `bindingSessions` or `onboxBrowserSessions` on staging, plus Browser Run
+Quick Reads when it has them), its required metering owner and an event sink;
+`createBrowser` owns lease ownership, egress policy and billing order;
+`browserCapabilitySource` is the agent's `cloudBrowser` tool. Raw CDP stays
+internal to this directory.
 
 ---
 
@@ -1058,9 +1060,9 @@ caller (`browser.ts`) owns the deadline through `signal`.
 type BrowserSessions = Readonly<{}>;
 ```
 
-The provider half of the host port. Built only by the two functions below. Each
-step is separate so `createBrowser` owns a provider session id from the moment
-it exists, including when its CDP connect then fails.
+The provider half of the host port. Each step is separate so `createBrowser`
+owns a provider session id from the moment it exists, including when its CDP
+connect then fails.
 
 ---
 
@@ -1338,10 +1340,11 @@ function createBrowser(host, limits): Browser;
 
 `@fungi.computer/oyster/browser`: the one agent browser for the Hub and a
 standalone Oyster. A host builds the port from a provider (`browserRunSessions`
-or `bindingSessions`, plus Browser Run Quick Reads when it has them), its
-required metering owner and an event sink; `createBrowser` owns lease ownership,
-egress policy and billing order; `browserCapabilitySource` is the agent's
-`cloudBrowser` tool. Raw CDP stays internal to this directory.
+or `bindingSessions` or `onboxBrowserSessions` on staging, plus Browser Run
+Quick Reads when it has them), its required metering owner and an event sink;
+`createBrowser` owns lease ownership, egress policy and billing order;
+`browserCapabilitySource` is the agent's `cloudBrowser` tool. Raw CDP stays
+internal to this directory.
 
 #### Parameters
 
@@ -1434,6 +1437,27 @@ A standalone Oyster's own Workers BROWSER binding.
 | Parameter | Type                                |
 | --------- | ----------------------------------- |
 | `binding` | [`BrowserBinding`](#browserbinding) |
+
+#### Returns
+
+[`BrowserSessions`](#browsersessions)
+
+---
+
+### onboxBrowserSessions()
+
+```ts
+function onboxBrowserSessions(origin, fetcher?): BrowserSessions;
+```
+
+Staging uses Chromium's native CDP browser contexts; no session store.
+
+#### Parameters
+
+| Parameter | Type                      |
+| --------- | ------------------------- |
+| `origin`  | `string`                  |
+| `fetcher` | [`HttpFetch`](#httpfetch) |
 
 #### Returns
 

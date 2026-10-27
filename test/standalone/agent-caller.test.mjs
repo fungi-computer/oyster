@@ -2798,7 +2798,7 @@ test("the standalone directory retains replay, oldest-first names and visits acr
 });
 
 test("HTTP credentials and forged agent claims never authenticate an internal agent", async () => {
-  const ownerKey = "owner-fixture-secret-24-characters";
+  const ownerKey = "owner-fixture-secret-24-characters"; //gitleaks:allow
   const key = "agent-key-fixture";
   const auth = ownerOrKeyAuth(ownerKey, "owner", () => ({
     verify: async (value) =>
@@ -2972,7 +2972,7 @@ test("the agent host captures one App source per acquisition and retains agent a
   const calls = [];
   const env = {
     OYSTER_ORIGIN: "https://oyster.test",
-    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters",
+    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters", //gitleaks:allow
     OYSTER_COMPUTER_ID: "agent-workspace",
     REGISTRY: {
       getByName: () => ({
@@ -3212,7 +3212,7 @@ test("the Agent tool host derives the same App catalog as the MCP host for Compu
   const calls = [];
   const env = {
     OYSTER_ORIGIN: "https://oyster.test",
-    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters",
+    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters", //gitleaks:allow
     OYSTER_COMPUTER_ID: "agent-workspace",
     REGISTRY: {
       getByName: () => ({
@@ -3324,7 +3324,7 @@ test("an Agent's App tools reach only its pinned tenant's registry", async (t) =
   const registries = [];
   const env = {
     OYSTER_ORIGIN: "https://oyster.test",
-    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters",
+    OYSTER_OWNER_KEY: "owner-fixture-secret-24-characters", //gitleaks:allow
     OYSTER_COMPUTER_ID: "agent-workspace",
     REGISTRY: {
       getByName: (name) => {

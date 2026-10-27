@@ -24,6 +24,7 @@ import {
   type PostRow,
   type PostRuntime,
 } from "@fungi.computer/carrier/post";
+import { undeliverableReply } from "@fungi.computer/bird-dog";
 import { BirdDogMailSchema } from "@fungi.computer/bird-dog/effect";
 import { machineAgentOperationSchema } from "@fungi.computer/seam/machine-link-protocol";
 import {
@@ -32,6 +33,7 @@ import {
   type WatchdogSqliteOwner,
 } from "@fungi.computer/watchdog";
 import { createMachineLinkSockets } from "./presence.js";
+import { machineLinkDisposition } from "./disposition.js";
 
 const attachmentSchema = z.strictObject({
   deviceId: z.string().min(1).max(256),
@@ -72,6 +74,9 @@ const previousCustodyReceipt = (existing: PostRow): PostDeliveryResult => {
 type PostRuntimeCell = {
   current: PostRuntime<Record<string, PostRegistryRoute>> | undefined;
 };
+type MachineLinkDeadLetter = ReturnType<
+  PostRuntime<Record<string, PostRegistryRoute>>["deadLetters"]
+>["letters"][number];
 const custodyAddress = Schema.Struct({
   scopeId: Schema.String,
   agentId: Schema.String,
@@ -85,6 +90,15 @@ const machineMailEnvelope = Schema.Struct({
   kind: Schema.Literal("agentMail"),
   address: custodyAddress,
   event: BirdDogMailSchema,
+});
+const machineDispositionEnvelope = Schema.Struct({
+  key: Schema.String,
+  kind: Schema.Literal("machineLinkDisposition"),
+  address: custodyAddress,
+  event: Schema.Struct({
+    original: machineMailEnvelope,
+    reply: BirdDogMailSchema,
+  }),
 });
 const machineAgentEnvelope = Schema.Struct({
   key: Schema.String,
@@ -131,6 +145,11 @@ export class MachineLinkHost {
         device: MachineLinkDevice,
         envelope: PostEnvelope,
       ) => Promise<PostDeliveryResult>;
+      /** Deliver one relay-authored reply to its original sender. */
+      disposition: (
+        original: PostEnvelope,
+        reply: PostEnvelope,
+      ) => Promise<PostDeliveryResult>;
       /** Arm the Durable Object alarm for Carrier/Watchdog progress. */
       scheduleWake: (at: number) => Promise<void>;
       /** The host's failure log for refused dials and closed links. */
@@ -147,6 +166,28 @@ export class MachineLinkHost {
         namespace: {
           getByName: () => ({
             deliver: (envelope) => this.deliverToSocket(envelope),
+          }),
+        },
+      }),
+      machineLinkDisposition: definePostRoute({
+        addressKind: "machineLinkAgent",
+        address: custodyAddress,
+        event: machineDispositionEnvelope.fields.event,
+        name: ({ agentId }) => agentId,
+        namespace: {
+          getByName: () => ({
+            deliver: async (envelope) => {
+              const typed = Schema.decodeUnknownSync(
+                machineDispositionEnvelope,
+                { onExcessProperty: "error" },
+              )(envelope);
+              return await this.options.disposition(typed.event.original, {
+                key: typed.key,
+                kind: "agentMail",
+                address: typed.address,
+                event: typed.event.reply,
+              });
+            },
           }),
         },
       }),
@@ -220,6 +261,8 @@ export class MachineLinkHost {
     await this.publishDirectory(socket, deviceId);
     await this.releaseCustody();
     await this.drainCustody();
+    await this.stageUndeliverableReplies();
+    await this.drainCustody();
   }
 
   private async publishDirectory(
@@ -291,6 +334,7 @@ export class MachineLinkHost {
   async deliver(
     deviceId: string,
     envelope: PostEnvelope,
+    options: Readonly<{ refuseDuplicate?: boolean }> = {},
   ): Promise<PostDeliveryResult> {
     this.deviceId = deviceId;
     await this.options.authorize(deviceId);
@@ -303,7 +347,12 @@ export class MachineLinkHost {
     )(envelope);
     if (typedEnvelope.kind === "machineAgent")
       return await this.deliverLiveOperation(deviceId, socket, typedEnvelope);
-    return await this.deliverCustodyMail(deviceId, socket, typedEnvelope);
+    return await this.deliverCustodyMail(
+      deviceId,
+      socket,
+      typedEnvelope,
+      options.refuseDuplicate === true,
+    );
   }
 
   private async deliverLiveOperation(
@@ -321,18 +370,29 @@ export class MachineLinkHost {
     deviceId: string,
     socket: WebSocket | undefined,
     envelope: Schema.Schema.Type<typeof machineMailEnvelope>,
+    refuseDuplicate = false,
   ): Promise<PostDeliveryResult> {
     const { post } = await this.custody();
     const existing = post.read(envelope.key);
     if (existing !== undefined) {
+      if (refuseDuplicate) return "refused";
       this.owner.transactionSync(() => {
         post.send(envelope);
       });
       return previousCustodyReceipt(existing);
     }
-    this.owner.transactionSync(() => {
+    const duplicate = this.owner.transactionSync(() => {
+      if (post.read(envelope.key) !== undefined) return true;
       post.send(envelope);
+      return false;
     });
+    if (duplicate) {
+      if (refuseDuplicate) return "refused";
+      const raced = post.read(envelope.key);
+      return raced === undefined
+        ? recipientOffline
+        : previousCustodyReceipt(raced);
+    }
     await this.options.scheduleWake(post.nextWake() ?? Date.now());
     if (socket === undefined) return recipientOffline;
     await this.publishDirectory(socket, deviceId);
@@ -345,12 +405,102 @@ export class MachineLinkHost {
   /** Run due Carrier work; expired rows remain visible as Carrier dead letters. */
   async alarm(): Promise<void> {
     await this.drainCustody();
+    await this.stageUndeliverableReplies();
+    await this.drainCustody();
   }
 
-  /** Expose terminal custody rows so S9 can stage its own disposition reply. */
+  /** Turn each terminal incoming-mail row into a durable reply outbox row. */
+  private async stageUndeliverableReplies(): Promise<void> {
+    const { post } = await this.custody();
+    let cursor: string | undefined;
+    do {
+      const page = post.deadLetters(64, cursor);
+      for (const letter of page.letters)
+        this.stageUndeliverableReply(post, letter);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+  }
+
+  private stageUndeliverableReply(
+    post: PostRuntime<Record<string, PostRegistryRoute>>,
+    letter: MachineLinkDeadLetter,
+  ): void {
+    if (
+      (letter.reason !== "exhausted" && letter.reason !== "expired") ||
+      letter.envelope.kind !== "agentMail"
+    )
+      return;
+    const original = Schema.decodeUnknownSync(machineMailEnvelope, {
+      onExcessProperty: "error",
+    })(letter.envelope);
+    if (
+      original.event.reply !== undefined ||
+      original.event.from.kind !== "agent"
+    )
+      return;
+    const replyKey = `${original.key}:reply:0`;
+    if (post.read(replyKey) !== undefined) return;
+    const reply: PostEnvelope = {
+      key: replyKey,
+      kind: "agentMail",
+      address: {
+        scopeId: original.address.scopeId,
+        agentId: original.event.from.agentId,
+      },
+      event: undeliverableReply(original.event, Date.now()),
+    };
+    const disposition: PostEnvelope = {
+      key: replyKey,
+      kind: "machineLinkDisposition",
+      address: reply.address,
+      event: { original, reply: reply.event },
+    };
+    this.owner.transactionSync(() => {
+      if (post.read(replyKey) === undefined) post.send(disposition);
+    });
+  }
+
+  /** Expose terminal custody rows for the device-owned diagnostic surface. */
   async deadLetters(afterKey?: string) {
     const { post } = await this.custody();
     return post.deadLetters(64, afterKey);
+  }
+
+  /** Prove a disposition is still present in this link's durable Post outbox. */
+  async hasStagedDisposition(
+    deviceId: string,
+    original: PostEnvelope,
+    reply: PostEnvelope,
+  ): Promise<boolean> {
+    this.deviceId = deviceId;
+    await this.options.authorize(deviceId);
+    const identity = { teamId: this.options.teamId, deviceId };
+    const requested = machineLinkDisposition(identity, original, reply);
+    if (requested === undefined) return false;
+    const { post } = await this.custody();
+    const row = post.read(requested.reply.key);
+    if (row?.state !== "pending") return false;
+    try {
+      const staged = Schema.decodeUnknownSync(machineDispositionEnvelope, {
+        onExcessProperty: "error",
+      })(row.envelope);
+      const stagedDisposition = machineLinkDisposition(
+        identity,
+        staged.event.original,
+        {
+          key: staged.key,
+          kind: "agentMail",
+          address: staged.address,
+          event: staged.event.reply,
+        },
+      );
+      return (
+        stagedDisposition !== undefined &&
+        JSON.stringify(stagedDisposition) === JSON.stringify(requested)
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async deliverToSocket(

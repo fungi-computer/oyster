@@ -1689,7 +1689,7 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   const base = oysterWorkerHost(env, auth, policyOptions);
   const capabilities = [
     ...(base.capabilities ?? []),
-    ...(agents === undefined ? [] : agentCapabilities(agents)),
+    ...(agents === undefined ? [] : agentCapabilities(agents, keysLive)),
     ...(options.capabilities?.(env, workspace, keysLive) ?? []),
   ];
   let gitOptions: OysterWorkerGitOptions<Env> = { scope };

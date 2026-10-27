@@ -236,7 +236,7 @@ test("mesh connect preserves the typed seed refusal as readable recovery JSON", 
   const env = {
     OYSTER_ORIGIN: origin,
     OYSTER_OWNER_NAME: input.owner.subject,
-    OYSTER_OWNER_KEY: "standalone-mesh-owner-key-24-characters",
+    OYSTER_OWNER_KEY: "standalone-mesh-owner-key-24-characters", //gitleaks:allow
     TENANTS: { getByName: () => probe.owner },
   };
   try {
@@ -524,7 +524,7 @@ test("cold seed refuses suspended or deleting authority without repairing it", a
 
 test("HTTP and root readers share the stored canonical owner and live membership version", async () => {
   const probe = fixture();
-  const credential = "standalone-test-owner-key-24-characters";
+  const credential = "standalone-test-owner-key-24-characters"; //gitleaks:allow
   // ownerOrKeyAuth requires a verified key's own stored owner to match the
   // live canonical registry member id (stored.memberId below), not the
   // configured OYSTER_OWNER_NAME label; set once that id is known.
@@ -673,7 +673,7 @@ function countedEnv(probe, calls, credential) {
 test("one request admits with exactly one TENANTS read, reused by its authentication", async () => {
   const probe = fixture();
   const calls = [];
-  const credential = "standalone-count-owner-key-24-characters";
+  const credential = "standalone-count-owner-key-24-characters"; //gitleaks:allow
   try {
     const shared = await standaloneTenancy(
       countedEnv(probe, calls, credential),
@@ -718,7 +718,7 @@ test("one request admits with exactly one TENANTS read, reused by its authentica
 test("revoked membership refuses the next request though an earlier one was admitted", async () => {
   const probe = fixture();
   const calls = [];
-  const credential = "standalone-revoke-owner-key-24-characters";
+  const credential = "standalone-revoke-owner-key-24-characters"; //gitleaks:allow
   try {
     const shared = await standaloneTenancy(
       countedEnv(probe, calls, credential),
@@ -754,7 +754,7 @@ test("revoked membership refuses the next request though an earlier one was admi
 test("a stale membership version never survives into a later entry", async () => {
   const probe = fixture();
   const calls = [];
-  const credential = "standalone-stale-owner-key-24-characters";
+  const credential = "standalone-stale-owner-key-24-characters"; //gitleaks:allow
   try {
     const shared = await standaloneTenancy(
       countedEnv(probe, calls, credential),

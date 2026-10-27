@@ -199,7 +199,7 @@ test("multiple Computers create list and start retain identities across standalo
   const settingsCalls = [];
   const env = {
     OYSTER_ORIGIN: "https://fleet.test",
-    OYSTER_OWNER_KEY: "fleet-fixture-owner-key-24-characters",
+    OYSTER_OWNER_KEY: "fleet-fixture-owner-key-24-characters", //gitleaks:allow
     OYSTER_COMPUTER_ID: "default-workspace",
     OYSTER_OWNER_NAME: "owner",
     TENANTS: { getByName: () => tenants },

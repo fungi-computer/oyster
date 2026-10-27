@@ -10,6 +10,29 @@ Run every command exactly as written, from the directory each step names.
 Compare its output with the expected output before you go on. When a step fails,
 read the "If it fails" notes under it before trying anything else.
 
+## Before you start
+
+- **Cloudflare plan:** SQLite-backed Durable Objects are available on Workers
+  Free; they do not by themselves require Paid. Cloudflare's SQLite-backed
+  Durable Objects limits list 30 seconds of CPU per request by default,
+  configurable to 5 minutes. See Cloudflare's
+  [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
+  and
+  [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+- **Agent chat and AI Gateway:** By default, Agent chat uses the Workers AI
+  binding; it needs no separate provider key or Gateway setup. Prints uses your
+  account's default AI Gateway (created automatically); set `AI_GATEWAY_ID` to
+  use another. The routed models include `openai/gpt-image-2` and video IDs
+  `bytedance/seedance-2.0`, `bytedance/seedance-2.0-fast`,
+  `bytedance/seedance-2.0-mini`, `google/veo-3.1`, `google/veo-3.1-fast` and
+  `minimax/h3-max`.
+
+- **Deployment plan:** Step 7 needs Workers Paid because this deployment uses
+  Containers for the Computer image; Cloudflare lists Containers as available on
+  the
+  [Workers Paid plan](https://developers.cloudflare.com/containers/platform/).
+  SQLite-backed Durable Objects alone do not require Paid.
+
 ## What Oyster is
 
 - Oyster hosts Apps on one Cloudflare Worker, or on celld, a Workers-compatible

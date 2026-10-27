@@ -9,6 +9,8 @@ import {
 } from "@fungi.computer/carrier/post";
 import { agentMailAddressSchema } from "@fungi.computer/seam/machine-link-protocol";
 import { decodeMachineAgentHome, type MachineAgentHome } from "./home.js";
+import type { MachineLinkIdentity } from "./authority.js";
+import type { MachineLinkDispositionMail } from "./disposition.js";
 
 /**
  * Home selection only, as the namespace under the host's disclosure-owning
@@ -42,13 +44,20 @@ export function createHomeAwareAgentMailNamespace(options: {
         const mail = Schema.decodeUnknownSync(BirdDogMailSchema, {
           onExcessProperty: "error",
         })(envelope.event);
+        const senderMatches =
+          mail.from.kind === "agent" &&
+          mail.from.agentId === options.sender.agentId;
+        const systemOfflineDisposition =
+          mail.from.kind === "system" &&
+          mail.reply?.outcome === "undeliverable" &&
+          mail.reply.reason === "recipient_offline";
         if (
           envelope.kind !== "agentMail" ||
           envelope.key !== mail.key ||
           address.scopeId !== options.sender.teamId ||
           address.agentId !== agentId ||
           mail.to.agentId !== agentId ||
-          mail.from.agentId !== options.sender.agentId
+          (!senderMatches && !systemOfflineDisposition)
         )
           return "refused";
         const projected = await options.home(agentId);
@@ -75,4 +84,32 @@ export function createHomeAwareAgentMailNamespace(options: {
       },
     }),
   };
+}
+
+/** Route one checked expiry reply through the same home-aware mail owner. */
+export function deliverUndeliverableMail(options: {
+  identity: MachineLinkIdentity;
+  original: MachineLinkDispositionMail;
+  reply: MachineLinkDispositionMail;
+  senderHome: MachineAgentHome;
+  hosted: PostRoute<never, never>["namespace"];
+  machine: (
+    deviceId: string,
+    envelope: PostEnvelope,
+  ) => Promise<PostDeliveryResult>;
+  accepted: (receipt: Schema.Json) => void;
+}): Promise<PostDeliveryResult> {
+  const sent = options.original.event;
+  if (sent.from.kind !== "agent") return Promise.resolve("refused");
+  const senderAgentId = sent.from.agentId;
+  return createHomeAwareAgentMailNamespace({
+    sender: { teamId: options.identity.teamId, agentId: sent.to.agentId },
+    home: (agentId) =>
+      Promise.resolve(agentId === senderAgentId ? options.senderHome : null),
+    hosted: options.hosted,
+    machine: options.machine,
+    accepted: options.accepted,
+  })
+    .getByName(senderAgentId)
+    .deliver(options.reply);
 }

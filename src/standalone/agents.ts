@@ -27,6 +27,12 @@ import type { PostEnvelope } from "@fungi.computer/carrier/post";
 import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
 import { agentMail } from "./agent-mail.js";
 import {
+  createChannelConversations,
+  type ChannelConversations,
+} from "../channels/conversations.js";
+import type { ConversationBinding } from "../channels/binding.js";
+import { channelSessionDoor } from "./channel-session-door.js";
+import {
   createStandaloneMachineEnrollment,
   standaloneMachineAgentHome,
   standaloneMachineLinkAuthority,
@@ -439,6 +445,27 @@ export abstract class StandaloneAgentBase<
 > extends ShiitakeDO<Env> {
   /** The deployable root's host for this Agent's pinned tenant. */
   protected abstract hostFor(scope: TenantScope): Promise<OysterHost>;
+  /**
+   * Compose Oyster's channel owner on this Agent's real store and Shiitake.
+   * A host must supply its own binding lookup after authenticating its edge;
+   * this does not install an inbound route or mint provider credentials.
+   */
+  protected channelConversations(
+    binding: (bindingId: string) => ConversationBinding | null,
+  ): ChannelConversations {
+    return createChannelConversations({
+      sql: this.ctx.storage.sql,
+      transactionSync: (body) => this.ctx.storage.transactionSync(body),
+      binding,
+      door: channelSessionDoor(
+        () => this.shiitake(),
+        () => {
+          // Standalone Agents have no Hub Team grants to deliver.
+        },
+      ),
+      now: () => Date.now(),
+    });
+  }
   /** Each installed Release's verified catalog surface, built once per Release for this Agent's lifetime. */
   #appSurfaces: AppSurfaceCache | undefined;
   private uiOwner: UiConnection | undefined;
@@ -751,8 +778,8 @@ export abstract class StandaloneAgentBase<
         if (pin === null || mail.reply === undefined)
           throw new Error("Delegated reply identity is unavailable");
         if (mail.reply.outcome === "undeliverable") return undefined;
-        if (mail.from.sessionId === undefined)
-          throw new Error("Delegated reply Session is unavailable");
+        if (mail.from.kind !== "agent")
+          throw new Error("Delegated reply Agent identity is unavailable");
         return (await this.machineClient()).settlement(
           mail.from.agentId,
           mail.from.sessionId,
@@ -760,6 +787,8 @@ export abstract class StandaloneAgentBase<
           mail.to.agentId,
         );
       },
+      onUndeliverable: (original) =>
+        this.delegation().localUndeliverable(original),
       wake: () => this.wakeRuntime(),
     }));
   }

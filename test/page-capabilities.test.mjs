@@ -940,16 +940,19 @@ function agentTransportRegistry(contracts) {
   const unexpected = () => {
     throw new Error("Page transport must not call the host adapter directly");
   };
-  const descriptors = agentCapabilities({
-    list: unexpected,
-    create: unexpected,
-    appToolPolicy: unexpected,
-    approveAppToolPolicy: unexpected,
-    fetch: unexpected,
-    inbox: unexpected,
-    revision: unexpected,
-    visit: unexpected,
-  });
+  const descriptors = agentCapabilities(
+    {
+      list: unexpected,
+      create: unexpected,
+      appToolPolicy: unexpected,
+      approveAppToolPolicy: unexpected,
+      fetch: unexpected,
+      inbox: unexpected,
+      revision: unexpected,
+      visit: unexpected,
+    },
+    async () => null,
+  );
   const registry = createCapabilityRegistry();
   for (const contract of contracts) {
     const descriptor = descriptors.find((item) => item.id === contract.id);
