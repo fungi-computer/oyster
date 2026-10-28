@@ -983,3 +983,21 @@ test("Gill options scope grants to the declared options source", async () => {
   assert.equal(call.source, "choices");
   assert.deepEqual(call.facts.grants, []);
 });
+
+test("an Oyster serves a public robots.txt and marks every response noindex", async () => {
+  const host = await computerHost(null, null);
+  const app = createOyster({ ...host });
+  const robots = await app.request("/robots.txt");
+  assert.equal(robots.status, 200);
+  assert.equal(await robots.text(), "User-agent: *\nDisallow: /\n");
+  assert.match(robots.headers.get("Content-Type") ?? "", /^text\/plain/u);
+  assert.equal(robots.headers.get("X-Robots-Tag"), "noindex, nofollow");
+  for (const path of ["/", "/login", "/api/installations"]) {
+    const response = await app.request(path);
+    assert.equal(
+      response.headers.get("X-Robots-Tag"),
+      "noindex, nofollow",
+      path,
+    );
+  }
+});

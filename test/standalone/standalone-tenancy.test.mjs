@@ -524,6 +524,7 @@ test("cold seed refuses suspended or deleting authority without repairing it", a
 
 test("HTTP and root readers share the stored canonical owner and live membership version", async () => {
   const probe = fixture();
+  const expectedFailures = [];
   const credential = "standalone-test-owner-key-24-characters"; //gitleaks:allow
   // ownerOrKeyAuth requires a verified key's own stored owner to match the
   // live canonical registry member id (stored.memberId below), not the
@@ -533,6 +534,10 @@ test("HTTP and root readers share the stored canonical owner and live membership
     OYSTER_ORIGIN: input.origin,
     OYSTER_OWNER_NAME: input.owner.subject,
     OYSTER_OWNER_KEY: credential,
+    OYSTER_KEY_SESSIONS: {
+      resolve: async (value) =>
+        value === "host-owned-session" ? { keyId: "named-key" } : null,
+    },
     TENANTS: {
       getByName: (name) => {
         assert.equal(name, "registry");
@@ -541,6 +546,10 @@ test("HTTP and root readers share the stored canonical owner and live membership
     },
     KEYS: {
       getByName: () => ({
+        live: async (keyId) =>
+          keyId === "named-key"
+            ? { keyId, owner: keyOwner, grantVersion: 1, grants: [] }
+            : null,
         verify: async () => ({
           kind: "ok",
           value: {
@@ -605,6 +614,34 @@ test("HTTP and root readers share the stored canonical owner and live membership
       kind: "admitted",
       principal: { actor: { kind: "team-key", keyId: "named-key" } },
     });
+    const browser = new globalThis.Request(`${input.origin}/apps/notes/`, {
+      headers: { Cookie: "oyster_key_session=host-owned-session" },
+    });
+    assert.deepEqual(await selected.auth.authenticate(browser), {
+      kind: "admitted",
+      principal: { actor: { kind: "team-key", keyId: "named-key" } },
+    });
+    assert.deepEqual(
+      await selected.auth.authenticate(
+        new globalThis.Request(browser.url, {
+          headers: {
+            Cookie:
+              "oyster_session=stale; oyster_key_session=host-owned-session",
+          },
+        }),
+      ),
+      { kind: "refused", status: 401 },
+      "the standalone owner adapter's recognized-cookie refusal is final",
+    );
+    const unbound = await standaloneTenancy({
+      ...env,
+      OYSTER_KEY_SESSIONS: undefined,
+    });
+    const withoutSessions = await unbound.oyster.resolve(browser);
+    assert.deepEqual(await withoutSessions.auth.authenticate(browser), {
+      kind: "refused",
+      status: 401,
+    });
     await probe.owner.setStatus(shared.tenantId, "suspended");
     assert.equal(await shared.owner(), null);
     assert.equal(await selected.auth.resolve(owner.actor), null);
@@ -616,6 +653,10 @@ test("HTTP and root readers share the stored canonical owner and live membership
       kind: "refused",
       status: 403,
     });
+    assert.deepEqual(
+      await selected.auth.authenticate(new globalThis.Request(browser)),
+      { kind: "refused", status: 403 },
+    );
     await probe.owner.delete(shared.tenantId);
     assert.equal(await shared.owner(), null);
     assert.equal(
@@ -629,8 +670,9 @@ test("HTTP and root readers share the stored canonical owner and live membership
       }),
       /missing/u,
     );
+    expectedFailures.push(/missing/u);
   } finally {
-    probe.close([/missing/u]);
+    probe.close(expectedFailures);
   }
 });
 

@@ -305,6 +305,30 @@ frame or guestEnv factory is accepted.
 
 ---
 
+### edgeVerifiedObjectCache()
+
+```ts
+function edgeVerifiedObjectCache(cache, origin): VerifiedObjectCache;
+```
+
+The zone's edge cache as a [VerifiedObjectCache](host.md#verifiedobjectcache):
+each verified object under a digest-named key on `origin` that no route serves.
+A failed write is logged and answers `unstored`; the next reader verifies from
+the store again.
+
+#### Parameters
+
+| Parameter | Type                                    |
+| --------- | --------------------------------------- |
+| `cache`   | `Pick`\<`Cache`, `"match"` \| `"put"`\> |
+| `origin`  | `string`                                |
+
+#### Returns
+
+[`VerifiedObjectCache`](host.md#verifiedobjectcache)
+
+---
+
 ### r2ArtifactStore()
 
 ```ts
@@ -435,7 +459,8 @@ function createCloudflareInvocationGate<Host, FacetClass>(
 ): InvocationGate<Host>;
 ```
 
-End the native App facet before shared frame admission releases its permit.
+End the native App facet when live authority closes early, before the gate
+admits again.
 
 #### Type Parameters
 

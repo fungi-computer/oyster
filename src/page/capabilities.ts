@@ -5,7 +5,7 @@ import { AppError, type CapabilityContract } from "@fungi.computer/agar";
 import type { AppHostLaunch } from "@fungi.computer/agar/host";
 import { parseJsonValue } from "@fungi.computer/whistle/wire";
 import type { CapabilityDescriptor } from "../capability-descriptor.js";
-import { computerTargetUrl } from "./computer-target.js";
+import { computerTargetUrl } from "../computer-target.js";
 
 const queryInput = Schema.Record(
   Schema.String,

@@ -115,6 +115,7 @@ import {
   createCloudflareAppInstance,
   r2ArtifactStore,
   createCloudflareInvocationGate,
+  edgeVerifiedObjectCache,
   decodeFrameBindingProps,
   captureFrameBindingReply,
   type FrameBindingReply,
@@ -133,10 +134,9 @@ import {
   type InvocationGate,
 } from "./invocation.js";
 import { deliverBackground, deliverGitPush } from "./internal/delivery.js";
+import { releaseCache } from "./internal/host-gate.js";
 import {
   createOyster,
-  verifyRelease,
-  defaultAssetPolicy,
   type InstallationCommit,
   type InstanceHandle,
   type InstanceResult,
@@ -362,6 +362,7 @@ export class OysterRegistry<
   }
 
   readonly #rootData: ReturnType<typeof createOysterRootData>;
+  readonly #releases = releaseCache(r2ArtifactStore(this.env.RELEASES));
   /** Append-only App source seed receipts; a Git-capable subclass forks over these. */
   protected readonly appSourceReceipts: ReturnType<
     typeof createOysterAppSourceReceipts
@@ -430,13 +431,7 @@ export class OysterRegistry<
       installations: {
         list: () => Promise.resolve(this.list()),
       },
-      resolveRelease: (release) =>
-        verifyRelease(
-          r2ArtifactStore(env.RELEASES),
-          release,
-          defaultAssetPolicy,
-          false,
-        ),
+      resolveRelease: this.#releases,
     });
   }
   /** The installation owner's RPC: admit, read, load, plan or commit one
@@ -644,12 +639,7 @@ export class OysterRegistry<
                 installation.release.appId !== expected.selection.appId))
           )
             throw new AppStorageError("unavailable");
-          const resolved = await verifyRelease(
-            r2ArtifactStore(this.env.RELEASES),
-            installation.release,
-            defaultAssetPolicy,
-            false,
-          );
+          const resolved = await this.#releases(installation.release);
           if (
             expected !== undefined &&
             resolved.backend?.digest !== expected.artifactDigest
@@ -1352,11 +1342,9 @@ export class OysterInstance<
     input: readonly unknown[],
   ): Promise<OysterBindingResult> {
     const props = decodeFrameBindingProps(raw);
-    const frame = this.frames.active();
-    if (
-      props.instanceId !== frame.facts.instanceId ||
-      props.frameId !== frame.frameId
-    )
+    // The packet's own frame: a closed or foreign frame id refuses.
+    const frame = this.frames.active(props.frameId);
+    if (props.instanceId !== frame.facts.instanceId)
       throw new AppInstanceError("revoked");
     assertBackgroundBinding(frame, props.binding);
     // A guest packet is its own entry: exactly one registry read re-admits it.
@@ -1394,7 +1382,8 @@ export class OysterInstance<
       method,
       args,
     );
-    if (this.frames.active() !== frame) throw new AppInstanceError("revoked");
+    if (this.frames.active(props.frameId) !== frame)
+      throw new AppInstanceError("revoked");
     assertBackgroundBinding(frame, props.binding);
     return descriptor.decodeResult(result);
   }
@@ -1928,10 +1917,7 @@ export function oysterWorkerHost(
     },
     auth,
     workbench: {
-      directory: async () => {
-        await installations.list();
-        return registry().directory();
-      },
+      directory: () => registry().directory(),
       storage: (installationId, ownerId) => ({
         read: (key) => registry().storageRead(installationId, ownerId, key),
         write: (input) =>
@@ -1943,6 +1929,10 @@ export function oysterWorkerHost(
     },
     guestLimits: guestLimits(options.guestLimits),
     artifacts,
+    // Workers and workerd keep a zone cache; a runtime without one reads R2.
+    ...("caches" in globalThis && {
+      uiCache: edgeVerifiedObjectCache(caches.default, scope.origin),
+    }),
     bootUi: oysterBootUi(env, scope),
     // File-only hosts may keep workspace files beside their Release artifacts.
     capabilities: [

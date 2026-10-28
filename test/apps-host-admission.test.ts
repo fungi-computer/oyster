@@ -44,6 +44,14 @@ import { installationSchema } from "../src/apps/installation.js";
 import { appPermissionsWireSchema } from "../src/apps/permissions.js";
 import type { AppToolPolicy } from "../src/apps/tools.js";
 import type { InvocationFacts } from "../src/invocation.js";
+import {
+  keySessionAuth,
+  keySessionCookieName,
+  ownerKeyCookieName,
+  ownerOrKeyAuth,
+} from "../src/auth.js";
+import type { LiveOysterKey } from "../src/keys.js";
+import { parse } from "hono/utils/cookie";
 
 const databases: DatabaseSync[] = [];
 afterEach(() => {
@@ -845,6 +853,98 @@ const toolPrincipals: { name: string; principal: TenantPrincipal }[] = [
   { name: "key", principal: { actor: { kind: "team-key", keyId: "key" } } },
   { name: "Agent", principal: { actor: { kind: "agent", agentId: "agent" } } },
 ];
+it("a named-key browser cookie opens only its granted private App, without changing the owner cookie or API boundary", async () => {
+  const f = await fixture();
+  await f.install("notes");
+  await f.install("other");
+  const ownerKey = "fixture-cookie-owner-key-24-characters"; //gitleaks:allow
+  let current: LiveOysterKey | null = {
+    keyId: "browser-key",
+    owner: "owner",
+    grantVersion: 1,
+    grants: [
+      {
+        capability: "apps.read",
+        targets: { kind: "selected", ids: ["notes"] },
+      },
+    ],
+  };
+  const keys = {
+    live: (keyId: string) =>
+      Promise.resolve(keyId === "browser-key" ? current : null),
+    verify: () => Promise.reject(new Error("No bearer secret expected")),
+  };
+  const app = createOyster({
+    ...f.host,
+    keys,
+    auth: keySessionAuth(
+      ownerOrKeyAuth(ownerKey, "owner", () => keys),
+      "owner",
+      () => keys,
+      {
+        resolve: (value) =>
+          Promise.resolve(
+            value === "opaque-browser-session"
+              ? { keyId: "browser-key" }
+              : null,
+          ),
+      },
+    ),
+  });
+  const browser = {
+    Cookie: `${keySessionCookieName}=opaque-browser-session`,
+    Accept: "text/html",
+  };
+  const page = await app.request("/apps/notes/", { headers: browser });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("Content-Type")).toContain("text/html");
+  expect((await app.request("/apps/other/", { headers: browser })).status).toBe(
+    403,
+  );
+  const other = f.records.get("other");
+  if (other === undefined) throw new Error("Expected the other installation");
+  f.records.set("other", { ...other, visibility: "public" });
+  expect((await app.request("/apps/other/")).status).toBe(200);
+  expect((await app.request("/apps/other/", { headers: browser })).status).toBe(
+    403,
+  );
+  const home = await (await app.request("/", { headers: browser })).text();
+  expect(home).toContain('href="/apps/notes/"');
+  expect(home).not.toContain('href="/apps/other/"');
+  expect(
+    (await app.request("/api/installations", { headers: browser })).status,
+  ).toBe(403);
+  const unknown = await app.request("/apps/notes/", {
+    headers: { Cookie: `${keySessionCookieName}=not-a-session` },
+  });
+  expect(unknown.status).toBe(401);
+
+  const login = await app.request("/login", {
+    method: "POST",
+    body: new URLSearchParams({ key: ownerKey }),
+  });
+  expect(login.status).toBe(303);
+  const ownerValue = parse(login.headers.get("Set-Cookie") ?? "")[
+    ownerKeyCookieName
+  ];
+  expect(ownerValue).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  if (ownerValue === undefined) throw new Error("Expected the owner cookie");
+  const ownerBrowser = {
+    Cookie: `${ownerKeyCookieName}=${ownerValue}; ${browser.Cookie}`,
+  };
+  expect(
+    (await app.request("/apps/other/", { headers: ownerBrowser })).status,
+  ).toBe(200);
+  expect(
+    (await app.request("/api/installations", { headers: ownerBrowser })).status,
+  ).toBe(200);
+  current = null;
+  expect(
+    (await app.request("/apps/notes/", { headers: { Cookie: browser.Cookie } }))
+      .status,
+  ).toBe(401);
+});
+
 it.each(toolPrincipals)(
   "uses attested $name tool policy instead of inferred write authority over HTTP",
   async ({ principal }) => {

@@ -131,15 +131,21 @@ it("one page owner isolates mounts and identically named Sessions across Agents"
       firstDirectory,
       first.agentCommands,
     );
-    expect(await invokeUi(firstUi, "shared", "execute", "first:paint")).toEqual(
-      { status: "handled", result: "first" },
-    );
+    expect(
+      await invokeUi(firstUi, "shared", "execute", {
+        namespace: "first",
+        id: "paint",
+      }),
+    ).toEqual({ status: "handled", result: "first" });
     expect(await invokeUi(firstUi, "unselected", "discover")).toEqual({
       status: "unavailable",
       reason: "browser_not_connected",
     });
-    for (const commandId of ["second:paint", "first:human"])
-      expect(await invokeUi(firstUi, "shared", "execute", commandId)).toEqual({
+    for (const command of [
+      { namespace: "second", id: "paint" },
+      { namespace: "first", id: "human" },
+    ])
+      expect(await invokeUi(firstUi, "shared", "execute", command)).toEqual({
         status: "missing",
       });
     expect(invoke).toHaveBeenCalledOnce();
@@ -158,13 +164,19 @@ it("one page owner isolates mounts and identically named Sessions across Agents"
     });
     expect(await invokeUi(secondUi, "shared", "discover")).toMatchObject({
       status: "available",
-      commands: [{ commandId: "second:paint" }],
+      commands: [{ command: { namespace: "second", id: "paint" } }],
     });
     expect(
-      await invokeUi(secondUi, "shared", "execute", "first:paint"),
+      await invokeUi(secondUi, "shared", "execute", {
+        namespace: "first",
+        id: "paint",
+      }),
     ).toEqual({ status: "missing" });
     expect(
-      await invokeUi(secondUi, "shared", "execute", "second:paint"),
+      await invokeUi(secondUi, "shared", "execute", {
+        namespace: "second",
+        id: "paint",
+      }),
     ).toEqual({ status: "handled", result: "second" });
 
     const streams = requests.filter((request) => request.method === "GET");

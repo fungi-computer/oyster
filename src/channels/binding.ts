@@ -12,10 +12,31 @@ export type ConversationBinding = Readonly<{
         verifier: "fungi-v1" | "github" | "secret-url";
         eventsPerMinute: number;
       }>
-    | Readonly<{ provider: "web" | "discord" | "email" | "game" }>;
+    | Readonly<{
+        provider: "web";
+        siteKey: string;
+        origins: readonly string[];
+        accent?: string | undefined;
+      }>
+    | Readonly<{ provider: "discord" | "email" | "game" }>;
   /** Zod's optional binding projection may carry an explicit undefined. */
   limits?: BindingLimits | undefined;
 }>;
+
+/** Does one allowlisted origin admit this exact browser origin? */
+export function originAllowed(
+  allowed: readonly string[],
+  origin: string,
+): boolean {
+  return allowed.some((entry) => {
+    if (!entry.startsWith("https://*.")) return entry === origin;
+    const suffix = entry.slice("https://*".length);
+    if (!origin.startsWith("https://") || !origin.endsWith(suffix))
+      return false;
+    const label = origin.slice("https://".length, -suffix.length);
+    return label.length > 0 && !label.includes(".");
+  });
+}
 
 /** Per-party edge limits applied before any work is accepted. */
 export const bindingLimitsSchema = z.strictObject({

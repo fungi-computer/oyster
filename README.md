@@ -62,6 +62,10 @@ Workers AI, Workflows and media.
 
 ## Quick start: deploy your own Oyster
 
+Deciding what to run?
+[Is Oyster for you?](https://docs.fungi.computer/is-oyster-for-you/) compares
+agent Computers and App builds with Cloudflare Workers Builds.
+
 You need:
 
 - a Cloudflare account on Workers Paid, with Containers, Artifacts, Workers AI,
@@ -69,11 +73,12 @@ You need:
 - Docker, which Wrangler uses to build the Computer's container image;
 - Node 24, pnpm 11 or newer and Git.
 
-The first install takes about 15 to 20 minutes, most of it the seven App builds
-on the Computer, one after another. Start a project, add Oyster, its Computer
-and Wrangler, and copy the example Worker out of the package. The local pnpm
-policy allows esbuild and workerd to install their native binaries and disables
-unneeded optional dependency scripts, so a fresh install exits successfully:
+The first install takes about 15 to 20 minutes, mostly building the seven Apps
+on the Computer. By default, Oyster builds two Apps at a time. Start a project,
+add Oyster, its Computer and Wrangler, and copy the example Worker out of the
+package. The local pnpm policy allows esbuild and workerd to install their
+native binaries and disables unneeded optional dependency scripts, so a fresh
+install exits successfully:
 
 ```sh
 mkdir my-oyster && cd my-oyster
@@ -462,10 +467,43 @@ the Computer. `examples/standalone/wrangler.jsonc` declares every binding it
 uses. Set the owner key as a secret (`OYSTER_OWNER_KEY`, 24+ characters) and
 deploy with `wrangler deploy`. Sign in at `/login`.
 
+Hosts may supply the optional `OYSTER_KEY_SESSIONS` binding, implementing
+`OysterKeySessionResolver` from `@fungi.computer/oyster/auth`. Its
+`resolve(value)` returns `{ keyId }` for a live host-owned session, or `null`.
+The host mints and expires opaque sessions and sets the `keySessionCookieName`
+cookie; it is not a named key's bearer secret. Hosts should use `Path=/`,
+`HttpOnly`, `Secure` and `SameSite=Lax` (or stricter) as defense in depth.
+Oyster independently checks request provenance. Cookie-only GET/HEAD navigation
+is allowed. Other methods require `Origin` to be present and equal the request
+URL's origin, and refuse `Sec-Fetch-Site: cross-site`. Missing `Origin` is
+refused, using the same strict predicate as the channel's POST routes. Oyster
+stores no browser sessions. `keySessionAuth` wraps ordinary `ownerOrKeyAuth` at
+the standalone tenancy composition root. Each cookie admission reopens the live
+key and checks its canonical owner; every authenticated door still uses that
+key's current grants. App pages refuse keys without App access, even when the
+App is public to visitors. Explicit header authentication is unchanged, and a
+failed Authorization header cannot fall back to a named-key cookie. The owner
+cookie and owner-only management API are unchanged; without the binding
+named-key cookies admit nobody.
+
+The celld example is a limited trial, not the full Cloudflare setup above. It
+requires access to Fungi's private celld fork and Botanical source repository.
+Use `examples/standalone/wrangler.celld.jsonc` beside `worker.ts`, not the
+Cloudflare-only config. The published `0.5.0` tarball does not yet contain this
+celld example; copy it from your authorized Botanical source checkout until a
+package including it is released.
+
 The layers it is built from stay exported for hosts that compose their own:
-`@fungi.computer/oyster/workers` (Releases, Instances, MCP and App storage) and
-`@fungi.computer/oyster/workers-git` (the git door), with `oysterAppMethods`
-supplying the installed App catalog to an Agent runtime.
+`@fungi.computer/oyster/turnstile` owns Cloudflare challenge configuration and
+token verification. Hosts supply their origin, verification timeout and safe
+error reporter; they retain their own challenged routes and HTTP responses.
+Configuration keeps the explicit `TURNSTILE=off` opt-out and fails closed on
+HTTPS hosts without both keys. Hub retains its five-second verification policy.
+
+Other host building blocks: `@fungi.computer/oyster/workers` (Releases,
+Instances, MCP and App storage) and `@fungi.computer/oyster/workers-git` (the
+git door), with `oysterAppMethods` supplying the installed App catalog to an
+Agent runtime.
 
 Pack and install an App with `@fungi.computer/oyster/pack`: `packRelease` turns
 an exact Git commit and a canonical build recipe into a Release with immutable

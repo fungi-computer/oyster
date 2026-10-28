@@ -423,10 +423,6 @@ test("workbench directory and every storage operation use the host-selected regi
           return Promise.resolve(null);
         };
         return {
-          list: () => {
-            calls.push({ name, operation: "list", args: [] });
-            return Promise.resolve([]);
-          },
           directory: () => record("directory"),
           storageRead: (...args) => record("read", ...args),
           storageWrite: (...args) => record("write", ...args),
@@ -452,7 +448,6 @@ test("workbench directory and every storage operation use the host-selected regi
     await storage.reset(reset);
     await storage.events("desktop");
     assert.deepEqual(calls.splice(0), [
-      { name, operation: "list", args: [] },
       { name, operation: "directory", args: [] },
       { name, operation: "read", args: ["notes", "owner", "desktop"] },
       { name, operation: "write", args: ["notes", "owner", write] },

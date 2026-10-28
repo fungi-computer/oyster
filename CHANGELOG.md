@@ -1,5 +1,61 @@
 # @fungi.computer/oyster
 
+## 0.6.0
+
+### Minor Changes
+
+- Changes since 0.5.0:
+
+  - fix(oyster): scope Git door keys to their granted Apps
+  - feat(oyster): keep Oyster hosts out of search
+  - fix(oyster): copy forwarded responses before Server-Timing appends
+  - fix(oyster): require P11 origin proof for key cookies
+  - fix(oyster): guard named-key cookie writes against CSRF
+  - fix(mule): share typed retry decisions across model consumers
+  - fix(oyster): strip the window Computer hint before forwarding Agent Session
+    requests
+  - fix(oyster): settle an expired frame's guest abort without a dropped catch
+  - fix(oyster): answer every verified-cache write with an outcome
+  - perf(oyster): report each request's Durable Object waits in Server-Timing
+  - perf(oyster): run an App's read calls side by side
+  - perf(oyster): keep an App's guest warm after a finished frame
+  - perf(oyster): name a desktop Gill from the shell's latest directory
+  - perf(oyster): serve App UI objects from the edge cache by digest
+  - feat(oyster): admit host-resolved named-key browser sessions
+  - perf(oyster): open an App window without re-reading the directory
+  - perf(oyster): drop the discarded installation list before the directory
+  - perf(oyster): verify each Release once in the Registry
+  - feat(oyster): resolve visitor Agent after edge authentication
+  - feat(oyster): compose visitor channel through Shiitake client
+  - feat(oyster): own anonymous web visitor identity
+  - feat(oyster): own web channel binding facts
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.5.0
+  - @fungi.computer/bird-dog@0.3.0
+  - @fungi.computer/caps@0.4.0
+  - @fungi.computer/knapsack@0.4.0
+  - @fungi.computer/nacre@0.1.0
+  - @fungi.computer/shiitake-extensions@0.4.0
+  - @fungi.computer/shiitake@0.6.0
+  - @fungi.computer/whistle@0.3.0
+  - @fungi.computer/braid@0.2.4
+  - @fungi.computer/darkroom@0.3.1
+  - @fungi.computer/workflows-wire@0.2.4
+  - @fungi.computer/computer@0.3.2
+  - @fungi.computer/computer-contract@0.0.5
+  - @fungi.computer/mycelium@0.2.3
+  - @fungi.computer/zookeeper@0.0.5
+
 ## 0.5.0
 
 ### Minor Changes

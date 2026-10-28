@@ -20,7 +20,7 @@ import {
 } from "@fungi.computer/knapsack/ui/browser";
 import type { WhistleRuntime } from "@fungi.computer/whistle";
 import { createPageLifetime } from "./lifetime.js";
-import { computerTargetUrl } from "./computer-target.js";
+import { computerTargetUrl } from "../computer-target.js";
 import * as Schema from "effect/Schema";
 import {
   AppError,

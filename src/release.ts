@@ -120,6 +120,36 @@ export async function readVerified(
   return bytes;
 }
 
+/**
+ * Copies of verified artifacts near the reader, keyed by content digest. An
+ * entry holds only bytes that already matched its digest, so a hit is served
+ * without another store read or hash.
+ */
+export type VerifiedObjectCache = Readonly<{
+  /** The cached bytes for `digest`, or null on a miss. */
+  match: (digest: Sha256Digest) => Promise<ReadableStream<Uint8Array> | null>;
+  /** Keep verified bytes; an unstored write only costs the next reader a store read. */
+  put: (
+    digest: Sha256Digest,
+    bytes: Uint8Array,
+  ) => Promise<"stored" | "unstored">;
+}>;
+
+/** {@link readVerified} through an optional digest-keyed cache it fills on a miss. */
+export async function readCachedVerified(
+  store: ArtifactStore,
+  cache: VerifiedObjectCache | undefined,
+  artifactRef: ArtifactRef,
+  digest: Sha256Digest,
+): Promise<ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer>> {
+  const hit = await cache?.match(digest);
+  if (hit !== undefined && hit !== null) return hit;
+  const bytes = await readVerified(store, artifactRef, digest);
+  await cache?.put(digest, bytes);
+  // A response body owns a plain ArrayBuffer, whatever view the store returned.
+  return new Uint8Array(bytes);
+}
+
 const decodeText = (bytes: Uint8Array) =>
   new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
 

@@ -21,6 +21,7 @@ import {
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
 import { agentAvatarSchema } from "./agent-avatars.js";
+import { computerTargetParam } from "./computer-target.js";
 import type {
   AgentModelChoice,
   AgentModelRefusal,
@@ -447,6 +448,9 @@ function createAgentRoutes(
     const length = Number(incoming.headers.get("content-length") ?? "0");
     if (length > maxAgentRequestBytes) return refusal(413, "Request too large");
     const target = new URL(`https://agent.internal${path}${url.search}`);
+    // A desk window's Computer routing hint is the host's to admit; the
+    // Agent's Session routes decode a closed query that refuses it.
+    target.searchParams.delete(computerTargetParam);
     const response = await agents.fetch(agentId, new Request(target, incoming));
     return response ?? refusal(404, "No such agent");
   });

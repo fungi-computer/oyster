@@ -3,9 +3,7 @@ import type { VerifiedRelease } from "./release.js";
 import type { Installation } from "./apps/installation.js";
 import { approvedBindingGrants, type InvocationGrants } from "./apps/gate.js";
 import { appToolPolicySchema } from "./apps/tools.js";
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import {
@@ -234,7 +232,7 @@ export async function admitBackgroundFrame(
 }
 /** The host's native guest-abort and authority-close hooks. */
 export type InvocationGatePorts<Host> = Readonly<{
-  /** Stop the guest when the captured invocation's authority closes. */
+  /** Stop the guest when live authority closes early (revocation, expiry). */
   abortGuest: () => Promise<void>;
   /** Release the host resources belonging to this completed or revoked frame. */
   close: (frame: InvocationFrame<Host>) => Promise<void>;
@@ -249,8 +247,8 @@ export type InvocationGate<Host> = Readonly<{
     host: Host,
     work: (frame: InvocationFrame<Host>) => Promise<A>,
   ) => Promise<A>;
-  /** Resolve the sole admitted frame, refusing outside an active invocation. */
-  active: () => InvocationFrame<Host>;
+  /** Resolve one live frame by its id, refusing a closed or unknown frame. */
+  active: (frameId: string) => InvocationFrame<Host>;
   /** Close live authority, optionally restricted to frames of a selected run. */
   revoke: (
     reason?: Error,
@@ -259,6 +257,8 @@ export type InvocationGate<Host> = Readonly<{
   /** Serialize supervisor metadata/erasure without opening guest authority. */
   exclusive: <A>(work: () => Promise<A>) => Promise<A>;
 }>;
+/** Foreground reads one Instance runs at once; every other frame runs alone. */
+const concurrentReadFrames = 8;
 const frameIds = defineIdFamily({
   family: "app-invocation-frame",
   version: 1,
@@ -297,35 +297,92 @@ function immutableFacts(facts: InvocationFacts): InvocationFacts {
   return Object.freeze(facts);
 }
 
-/** Serialize authority, preempt replay only for verified writes, and close each guest before admission. */
+/**
+ * First-come permits over one guest: a waiting exclusive frame holds back
+ * every frame queued after it, so a stream of reads never starves a write.
+ */
+function orderedPermits(total: number) {
+  let available = total;
+  const waiting: { permits: number; enter: () => void }[] = [];
+  const admit = () => {
+    for (
+      let next = waiting[0];
+      next !== undefined && next.permits <= available;
+      next = waiting[0]
+    ) {
+      waiting.shift();
+      available -= next.permits;
+      next.enter();
+    }
+  };
+  return async <A>(permits: number, work: () => Promise<A>): Promise<A> => {
+    await new Promise<void>((enter) => {
+      waiting.push({ permits, enter });
+      admit();
+    });
+    try {
+      return await work();
+    } catch (cause) {
+      throw cause instanceof Error
+        ? cause
+        : new Error("App invocation failed", { cause });
+    } finally {
+      available += permits;
+      admit();
+    }
+  };
+}
+
+/** A foreground call to a verified read method; only these share the guest. */
+function concurrentRead(facts: InvocationFacts): boolean {
+  return (
+    facts.subject.kind === "call" &&
+    facts.subject.replay === undefined &&
+    facts.subject.method?.effect === "read"
+  );
+}
+
+/**
+ * Admit frames against one guest. Verified foreground reads share it, up to
+ * eight at once; writes, raw backend requests, Gills and replay run alone. Every guest binding packet names its frame, so a finished
+ * frame's leftover timers cannot borrow a later frame's authority and a
+ * normal finish keeps the guest warm. Closing authority early (revocation,
+ * expiry, a write preempting replay) aborts the guest and so every frame
+ * sharing it; replay only yields to a verified write.
+ */
 export function createInvocationGate<Host>(
   ports: InvocationGatePorts<Host>,
 ): InvocationGate<Host> {
-  const permit = Semaphore.makeUnsafe(1);
+  const withPermits = orderedPermits(concurrentReadFrames);
   const now = ports.now ?? Date.now;
   let foregroundWaiting = 0;
-  let active:
-    | {
-        frame: InvocationFrame<Host>;
-        controller: AbortController;
-        closing?: Promise<void>;
-      }
-    | undefined;
-  const close = (
-    state: NonNullable<typeof active>,
-    reason: Error,
-  ): Promise<void> => {
+  type LiveFrame = {
+    frame: InvocationFrame<Host>;
+    controller: AbortController;
+    closing?: Promise<void>;
+  };
+  const live = new Map<string, LiveFrame>();
+  const finish = (state: LiveFrame, reason: Error): Promise<void> => {
     if (state.closing) return state.closing;
-    if (active === state) active = undefined;
+    live.delete(state.frame.frameId);
     state.controller.abort(reason);
-    state.closing = (async () => {
-      try {
-        await ports.abortGuest();
-      } finally {
-        await ports.close(state.frame);
-      }
-    })();
+    state.closing = ports.close(state.frame);
     return state.closing;
+  };
+  // The guest is shared: aborting it ends every live frame's guest work, and
+  // each of those frames closes only after the guest abort has completed.
+  const abortAll = (reason: Error): Promise<void> => {
+    const states = [...live.values()];
+    for (const state of states) {
+      live.delete(state.frame.frameId);
+      state.controller.abort(reason);
+    }
+    const guest = ports.abortGuest();
+    for (const state of states)
+      state.closing ??= guest.finally(() => ports.close(state.frame));
+    return Promise.all([guest, ...states.map((state) => state.closing)]).then(
+      () => undefined,
+    );
   };
   const run = async <A>(
     input: InvocationFacts,
@@ -352,74 +409,74 @@ export function createInvocationGate<Host>(
         queuedForeground &&
         facts.subject.kind === "call" &&
         facts.subject.method?.effect === "write" &&
-        active?.frame.facts.subject.kind === "call" &&
-        active.frame.facts.subject.replay !== undefined
+        [...live.values()].some(
+          ({ frame }) =>
+            frame.facts.subject.kind === "call" &&
+            frame.facts.subject.replay !== undefined,
+        )
       )
-        await close(active, new AppInstanceError("revoked"));
-      return await Effect.runPromise(
-        permit.withPermits(1)(
-          Effect.tryPromise({
-            try: async () => {
-              if (
-                facts.subject.kind === "call" &&
-                facts.subject.replay !== undefined &&
-                foregroundWaiting > 0
-              )
-                throw new AppInstanceError("revoked");
-              if (queuedForeground) {
-                foregroundWaiting -= 1;
-                queuedForeground = false;
-              }
-              const { deadlineAt } = facts;
-              if (deadlineAt <= now()) throw new AppInstanceError("expired");
-              const frameId = frameIds.frame.generate();
-              const controller = new AbortController();
-              const frame = Object.freeze({
-                frameId,
-                facts,
-                host,
-                signal: controller.signal,
-              });
-              const state = { frame, controller };
-              active = state;
-              let timer: ReturnType<typeof setTimeout> | undefined;
-              let stop: () => void = () => undefined;
-              const revoked = new Promise<never>((_resolve, reject) => {
-                const onAbort = () => {
-                  const reason: unknown = controller.signal.reason;
-                  reject(
-                    reason instanceof Error
-                      ? reason
-                      : new AppInstanceError("revoked"),
-                  );
-                };
-                controller.signal.addEventListener("abort", onAbort, {
-                  once: true,
-                });
-                stop = () => {
-                  controller.signal.removeEventListener("abort", onAbort);
-                };
-                timer = setTimeout(
-                  () => {
-                    controller.abort(new AppInstanceError("expired"));
-                  },
-                  Math.max(0, deadlineAt - now()),
-                );
-              });
-              try {
-                return await Promise.race([work(frame), revoked]);
-              } finally {
-                clearTimeout(timer);
-                stop();
-                await close(state, new AppInstanceError("revoked"));
-              }
-            },
-            catch: (cause) =>
-              cause instanceof Error
-                ? cause
-                : new Error("App invocation failed", { cause }),
-          }),
-        ),
+        await abortAll(new AppInstanceError("revoked"));
+      return await withPermits(
+        concurrentRead(facts) ? 1 : concurrentReadFrames,
+        async () => {
+          if (
+            facts.subject.kind === "call" &&
+            facts.subject.replay !== undefined &&
+            foregroundWaiting > 0
+          )
+            throw new AppInstanceError("revoked");
+          if (queuedForeground) {
+            foregroundWaiting -= 1;
+            queuedForeground = false;
+          }
+          const { deadlineAt } = facts;
+          if (deadlineAt <= now()) throw new AppInstanceError("expired");
+          const frameId = frameIds.frame.generate();
+          const controller = new AbortController();
+          const frame = Object.freeze({
+            frameId,
+            facts,
+            host,
+            signal: controller.signal,
+          });
+          const state: LiveFrame = { frame, controller };
+          live.set(frameId, state);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let stop: () => void = () => undefined;
+          const revoked = new Promise<never>((_resolve, reject) => {
+            const onAbort = () => {
+              const reason: unknown = controller.signal.reason;
+              reject(
+                reason instanceof Error
+                  ? reason
+                  : new AppInstanceError("revoked"),
+              );
+            };
+            controller.signal.addEventListener("abort", onAbort, {
+              once: true,
+            });
+            stop = () => {
+              controller.signal.removeEventListener("abort", onAbort);
+            };
+            timer = setTimeout(
+              () => {
+                // An expired frame's guest may still be running. Each frame's own
+                // run awaits its close, so a failure reaches that caller.
+                void Promise.allSettled([
+                  abortAll(new AppInstanceError("expired")),
+                ]);
+              },
+              Math.max(0, deadlineAt - now()),
+            );
+          });
+          try {
+            return await Promise.race([work(frame), revoked]);
+          } finally {
+            clearTimeout(timer);
+            stop();
+            await finish(state, new AppInstanceError("revoked"));
+          }
+        },
       );
     } finally {
       if (queuedForeground) foregroundWaiting -= 1;
@@ -427,36 +484,25 @@ export function createInvocationGate<Host>(
   };
   return {
     run,
-    exclusive: (work) =>
-      Effect.runPromise(
-        permit.withPermits(1)(
-          Effect.tryPromise({
-            try: work,
-            catch: (cause) =>
-              cause instanceof Error
-                ? cause
-                : new Error("Instance supervisor operation failed", { cause }),
-          }),
-        ),
-      ),
-    active: () => {
+    exclusive: (work) => withPermits(concurrentReadFrames, work),
+    active: (frameId) => {
+      const state = live.get(frameId);
       if (
-        active === undefined ||
-        active.controller.signal.aborted ||
-        active.frame.facts.deadlineAt <= now()
+        state === undefined ||
+        state.controller.signal.aborted ||
+        state.frame.facts.deadlineAt <= now()
       )
         throw new AppInstanceError("revoked");
-      return active.frame;
+      return state.frame;
     },
     revoke: (reason = new AppInstanceError("revoked"), target) => {
-      if (active === undefined) return Promise.resolve();
-      if (
-        target !== undefined &&
-        (active.frame.facts.subject.kind !== "call" ||
-          active.frame.facts.subject.context.workflow?.runId !== target.runId)
-      )
-        return Promise.resolve();
-      return close(active, reason);
+      const matched = [...live.values()].some(
+        ({ frame }) =>
+          target === undefined ||
+          (frame.facts.subject.kind === "call" &&
+            frame.facts.subject.context.workflow?.runId === target.runId),
+      );
+      return matched ? abortAll(reason) : Promise.resolve();
     },
   };
 }

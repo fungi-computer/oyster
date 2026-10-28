@@ -375,24 +375,17 @@ A capability adapter whose routes require live installation admission.
 ### OysterVariables
 
 ```ts
-type OysterVariables = object;
+type OysterVariables = TimingVariables & object;
 ```
 
 What the host stamps once per request; inner routes read it with `c.get`.
 
-#### Properties
+#### Type Declaration
 
-##### principal
-
-```ts
-principal: OysterPrincipal;
-```
-
-##### installation?
-
-```ts
-optional installation?: Installation;
-```
+| Name            | Type                                   |
+| --------------- | -------------------------------------- |
+| `principal`     | [`OysterPrincipal`](#oysterprincipal)  |
+| `installation?` | [`Installation`](apps.md#installation) |
 
 ---
 
@@ -473,6 +466,7 @@ type OysterHost = Readonly<{
   auth: OysterAuth;
   backgroundOriginKey?: () => Promise<CryptoKey>;
   artifacts: ArtifactStore;
+  uiCache?: VerifiedObjectCache;
   installations: InstallationStore;
   instances: InstanceDirectory;
   bootUi: (release) => Promise<UiBootCheckOutcome>;
@@ -1308,6 +1302,21 @@ type VerifiedRelease = Readonly<{
 ```
 
 A Release whose root, UI and backend artifacts were read and verified.
+
+---
+
+### VerifiedObjectCache
+
+```ts
+type VerifiedObjectCache = Readonly<{
+  match: (digest) => Promise<ReadableStream<Uint8Array> | null>;
+  put: (digest, bytes) => Promise<"stored" | "unstored">;
+}>;
+```
+
+Copies of verified artifacts near the reader, keyed by content digest. An entry
+holds only bytes that already matched its digest, so a hit is served without
+another store read or hash.
 
 ## Variables
 

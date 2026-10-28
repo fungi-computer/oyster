@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { endTime, startTime } from "hono/timing";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import {
@@ -10,6 +11,7 @@ import {
   type OysterAuth,
   type OysterEnv,
 } from "../host.js";
+import { computerTargetParam } from "../computer-target.js";
 import type { StandaloneRegistry } from "./registry.js";
 
 /** Fleet controls never accept an actor from the request body. */
@@ -70,7 +72,7 @@ export async function standaloneComputerSelection(
 ): Promise<string> {
   if (incoming === undefined) return registry.selectedComputer();
   const requested = new URL(incoming.request.url).searchParams.getAll(
-    "computerId",
+    computerTargetParam,
   );
   if (requested.length === 0) return registry.selectedComputer();
   const admission = await incoming.auth.authenticate(incoming.request);
@@ -125,16 +127,20 @@ export function standaloneComputerFleetRoutes(
     if (!oysterPrincipalIsOwner(principal))
       return context.json({ error: "Owner only" }, 403);
     const registry = registryFor();
+    startTime(context, "fleet");
     const admitted = await registry.computerFleet(principal.actor.memberId, {
       operation: "list",
       page: { limit: 1, offset: 0 },
     });
+    endTime(context, "fleet");
     if (admitted === null || "error" in admitted)
       return fleetResponse(admitted);
+    startTime(context, "registry");
     const [directory, computerId] = await Promise.all([
       registry.directory(),
       registry.selectedComputer(),
     ]);
+    endTime(context, "registry");
     return context.json({
       ...directory,
       computer: { computerId, name: computerId },

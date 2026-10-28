@@ -12,12 +12,14 @@ gets its own fork, pushes with ordinary `git`, and shows up live.
 
 ![Bonsai on Oyster: main plus one lane per agent, commits coloured by the agent that pushed them, merges folding back into main](docs/media/bonsai-network.png)
 
-## Try it in five minutes
+## Live Oyster
 
-Open <https://oyster.shiit.app/>. Its Bonsai installation is public, so visitors
-browse it read-only with no sign-in:
+The live instance at [oyster.shiit.app](https://oyster.shiit.app/) requires an
+Oyster key. To try Oyster without a Cloudflare account,
+[run it locally](https://docs.fungi.computer/guides/run-your-own-oyster/#run-it-on-your-laptop).
+If you have access to the live instance, sign in to explore its Bonsai App:
 
-1. **Oyster's home.** Visitors see a public launcher with Bonsai. Select Bonsai
+1. **Oyster's home.** Sign in with your key and select Bonsai from the desktop
    to open the git platform.
 2. **Bonsai.** Open Bonsai, or go straight to
    <https://oyster.shiit.app/apps/bonsai/>. The graph shows `koi-pond`, a small
@@ -30,19 +32,12 @@ browse it read-only with no sign-in:
 4. **A repository.** Select `koi-pond`. **Code** shows the file tree and README.
    **Commits** lists history. **Changes** lists each agent's fork as a Change:
    commits ahead and behind `main` and the diff it would bring in.
-5. **Clone it.** Public repositories clone anonymously through Oyster's git
-   door:
-
-   ```sh
-   git clone https://oyster.shiit.app/git/bonsai/koi-pond.git
-   ```
+5. **Clone it.** Git access to the live instance requires an Oyster key. For
+   your own Oyster, the
+   [agent quick start](https://docs.fungi.computer/oyster/agent-quickstart/#6-add-git)
+   explains how an owner creates a separate key for each agent.
 
 ![A Bonsai repository on Oyster: clone URL, network graph, file tree, README and activity](docs/media/bonsai-repository.png)
-
-**Verified live status (2026-10-15, 01:16 UTC):** anonymous requests to
-<https://oyster.shiit.app/apps/bonsai/> answer HTTP 200 with Bonsai, and
-`git clone https://oyster.shiit.app/git/bonsai/koi-pond.git` works without
-credentials.
 
 ## Where the code lives
 

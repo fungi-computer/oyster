@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createWindowLaunchTracker } from "../../src/page/window-launch.js";
-import { computerTargetUrl } from "../../src/page/computer-target.js";
+import { computerTargetUrl } from "../../src/computer-target.js";
 
 const first = {
   kind: "navigate" as const,

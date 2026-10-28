@@ -14,29 +14,39 @@ import {
   type VerifiedRelease,
 } from "../release.js";
 
+/** Verified Releases one cache keeps; the least recently added leaves first. */
+const releaseCacheLimit = 256;
+
 /**
- * Verify each Release once per process: a failed read is not cached, so the
- * next request reads it again. Installation verified every asset; serving
- * verifies each on read.
+ * Verify each Release once per owner (an isolate's HTTP host, or the
+ * Registry): a failed read is not cached, so the next request reads it again.
+ * Installation verified every asset; serving verifies each on read. A Release
+ * is content-addressed and immutable, so the key is its ID and root digest and
+ * a hit never goes stale; the bound only forgets the oldest-verified Releases.
  */
 export function releaseCache(
   artifacts: ArtifactStore,
+  limit = releaseCacheLimit,
 ): (release: Release) => Promise<VerifiedRelease> {
   const verified = new Map<string, Promise<VerifiedRelease>>();
   return (release) => {
     const key = `${release.releaseId}:${release.artifact.artifactDigest}`;
     let entry = verified.get(key);
     if (entry === undefined) {
-      // A failed read is not cached: the next request reads the Release again.
-      // Installation verified every asset; serving verifies each on read.
-      entry = verifyRelease(artifacts, release, defaultAssetPolicy, false).then(
-        (value) => value,
-        (cause: unknown) => {
-          verified.delete(key);
-          throw cause;
-        },
-      );
+      entry = verifyRelease(
+        artifacts,
+        release,
+        defaultAssetPolicy,
+        false,
+      ).catch((cause: unknown) => {
+        verified.delete(key);
+        throw cause;
+      });
       verified.set(key, entry);
+      for (const oldest of verified.keys()) {
+        if (verified.size <= limit) break;
+        verified.delete(oldest);
+      }
     }
     return entry;
   };

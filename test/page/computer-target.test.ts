@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computerTargetUrl } from "../../src/page/computer-target.js";
+import { computerTargetUrl } from "../../src/computer-target.js";
 
 describe("a window's Computer routing hint", () => {
   it("does not change a fixed/default host request", () => {

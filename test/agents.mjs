@@ -1,4 +1,4 @@
-/* global Request, Response, URL, Headers, console */
+/* global Request, URL, Headers, console, fetch */
 import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { agentCapabilities } from "../dist/agents.js";
@@ -86,7 +86,8 @@ const adapter = {
   fetch: async (agentId, request) => {
     if (!agents.some((agent) => agent.agentId === agentId)) return null;
     forwarded.push(new URL(request.url).pathname);
-    return Response.json({ ok: true });
+    // A Durable Object stub answers like fetch: its headers are immutable.
+    return fetch('data:application/json,{"ok":true}');
   },
   inbox: async () => {
     inboxReads += 1;
@@ -185,6 +186,13 @@ for (const path of [
 }
 assert.equal((await call("/agents/agent_1/sessions?limit=5")).status, 200);
 assert.deepEqual(forwarded, ["/sessions"]);
+// Starting a conversation forwards to the Agent's own immutable response;
+// the timing middleware still names the request's waits on a copy of it.
+const started = await call("/agents/agent_1/sessions", { method: "POST" });
+assert.equal(started.status, 200);
+assert.deepEqual(await started.json(), { ok: true });
+assert.match(started.headers.get("Server-Timing") ?? "", /total;dur=/u);
+assert.equal(forwarded.at(-1), "/sessions");
 assert.equal(
   (await call("/agents/agent_1/browser/sessions/s/browser/events")).status,
   200,

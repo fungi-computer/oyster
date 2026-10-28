@@ -42,6 +42,8 @@ export async function homePageFixture({
   shellCode = "export const mountShell = async () => () => {};",
   computerId,
   ownerRoutes,
+  uiCache,
+  onArtifactRead = () => undefined,
 } = {}) {
   const { createAppBuild } = await import("@fungi.computer/puffball/app");
   const { assetBuildMediaType } =
@@ -273,6 +275,23 @@ export async function homePageFixture({
   );
   const host = {
     homeInstallationId: home,
+    // The admitted key may open the App, but never gains owner shell services.
+    keys: {
+      live: async (keyId) =>
+        keyId === "owner"
+          ? {
+              keyId,
+              owner: "owner",
+              grantVersion: 1,
+              grants: [
+                {
+                  capability: "apps.read",
+                  targets: { kind: "selected", ids: ["desktop"] },
+                },
+              ],
+            }
+          : null,
+    },
     // UI-only Releases boot in the host's runner; this fixture has nothing to boot.
     bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
@@ -303,7 +322,10 @@ export async function homePageFixture({
     },
     installations,
     artifacts: {
-      get: (ref) => Promise.resolve(artifacts.get(ref) ?? null),
+      get: (ref) => {
+        onArtifactRead(ref);
+        return Promise.resolve(artifacts.get(ref) ?? null);
+      },
       put: () => Promise.reject(new Error("Read only")),
     },
     instances: {
@@ -315,6 +337,7 @@ export async function homePageFixture({
   if (pageScript !== null) host.pageScript = pageScript;
   if (computerId !== undefined) host.computerId = computerId;
   if (ownerRoutes !== undefined) host.ownerRoutes = ownerRoutes;
+  if (uiCache !== undefined) host.uiCache = uiCache;
   if (rootData)
     host.workbench = {
       directory: () => Promise.resolve({ apps: [], roles: {} }),

@@ -219,7 +219,7 @@ it.each([
     const firstDiscovery = await invokeUi(ui, "session_stage", "discover");
     expect(firstDiscovery).toMatchObject({
       status: "available",
-      commands: [{ commandId: "stage:set-scene" }],
+      commands: [{ command: { namespace: "stage", id: "set-scene" } }],
     });
     expect(await invokeUi(ui, "session_stage", "execute")).toEqual({
       status: "handled",
@@ -230,7 +230,7 @@ it.each([
     await app.commands.register(replacement, () => "scene replaced");
     expect(await invokeUi(ui, "session_stage", "discover")).toMatchObject({
       status: "available",
-      commands: [{ commandId: "stage:replace-scene" }],
+      commands: [{ command: { namespace: "stage", id: "replace-scene" } }],
     });
     expect(await invokeUi(ui, "session_stage", "execute")).toEqual({
       status: "missing",
@@ -250,7 +250,10 @@ it.each([
       reason: "browser_not_connected",
     });
     expect(
-      await invokeUi(ui, "session_second", "execute", "stage:replace-scene"),
+      await invokeUi(ui, "session_second", "execute", {
+        namespace: "stage",
+        id: "replace-scene",
+      }),
     ).toEqual({
       status: "handled",
       result: "scene replaced",
@@ -273,7 +276,7 @@ it.each([
     });
     expect(await invokeUi(ui, "session_stage", "discover")).toMatchObject({
       status: "available",
-      commands: [{ commandId: "stage:replace-scene" }],
+      commands: [{ command: { namespace: "stage", id: "replace-scene" } }],
     });
     if (closing === "pagehide") parent.dispatchEvent(new Event("pagehide"));
     else await host.disconnect();

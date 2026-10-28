@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -111,6 +111,26 @@
     "./channels/binding": {
       "types": "./dist/channels/binding.d.ts",
       "import": "./dist/channels/binding.js"
+    },
+    "./channels/visitors": {
+      "types": "./dist/channels/visitors.d.ts",
+      "import": "./dist/channels/visitors.js"
+    },
+    "./channels/visitor-request": {
+      "types": "./dist/channels/visitor-request.d.ts",
+      "import": "./dist/channels/visitor-request.js"
+    },
+    "./channels/visitor-stream-slots": {
+      "types": "./dist/channels/visitor-stream-slots.d.ts",
+      "import": "./dist/channels/visitor-stream-slots.js"
+    },
+    "./channels/visitor-channel": {
+      "types": "./dist/channels/visitor-channel.d.ts",
+      "import": "./dist/channels/visitor-channel.js"
+    },
+    "./channels/visitor-edge": {
+      "types": "./dist/channels/visitor-edge.d.ts",
+      "import": "./dist/channels/visitor-edge.js"
     },
     "./channels/conversations": {
       "types": "./dist/channels/conversations.d.ts",
@@ -232,6 +252,10 @@
       "types": "./dist/auth.d.ts",
       "import": "./dist/auth.js"
     },
+    "./turnstile": {
+      "types": "./dist/turnstile.d.ts",
+      "import": "./dist/turnstile.js"
+    },
     "./apps": {
       "types": "./dist/apps/index.d.ts",
       "import": "./dist/apps/index.js"
@@ -265,7 +289,7 @@
     "build": "pnpm run clean && tsc -p tsconfig.build.json && tsc -p src/page/tsconfig.build.json && node scripts/build-page.mjs && node scripts/build-candidate-cli.mjs",
     "clean": "node --input-type=module --eval \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit && tsc -p src/page/tsconfig.json && tsc -p examples/tsconfig.json && tsc -p examples/notes-app/ui/tsconfig.json && tsc -p src/build/tsconfig.json && tsc -p src/build/snapshot-programs/tsconfig.json && tsc -p test/build/tsconfig.json && tsc -p test/page/tsconfig.json && tsc -p test/standalone/tsconfig.json",
-    "test": "pnpm run test:boot-ui && node test/core.mjs && vitest run --config vitest.config.mjs && vitest run --config vitest.browser.config.mjs && node --test test/mcp-catalog.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/startup-graph.test.mjs test/guest-security.test.mjs test/host-routes.test.mjs test/visibility-authority-resync.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs && node --import tsx --test test/page-capabilities.test.mjs test/approval-page.test.mjs test/approval-native-control.test.mjs test/approval-handoff.test.mjs test/external-app.test.mjs test/retired-frame-binding.test.mjs test/machine-link/home.test.mjs test/machine-link/enrollment.test.ts test/machine-link/fences.test.ts test/machine-link/audience.test.ts test/machine-link/presence.test.ts test/machine-link/client.test.ts test/machine-link/delivery.test.ts test/machine-link/custody.test.ts test/machine-link/replay-capacity.test.ts && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs test/installation-commit-race.test.mjs && node --import tsx --test test/older-oyster-store.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs && vitest run --config vitest.tenancy-node.config.mjs && vitest run --config vitest.tenancy-cloudflare.config.mjs && vitest run --config vitest.tenancy-cloudflare-eviction.config.mjs && vitest run --config vitest.tenancy-cold-directory.config.mjs && pnpm run test:standalone",
+    "test": "pnpm run test:boot-ui && node test/core.mjs && vitest run --config vitest.config.mjs && vitest run --config vitest.browser.config.mjs && node --test test/mcp-catalog.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/startup-graph.test.mjs test/guest-security.test.mjs test/host-routes.test.mjs test/visibility-authority-resync.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs test/git-key-scope.test.mjs && node --import tsx --test test/page-capabilities.test.mjs test/approval-page.test.mjs test/approval-native-control.test.mjs test/approval-handoff.test.mjs test/external-app.test.mjs test/retired-frame-binding.test.mjs test/machine-link/home.test.mjs test/machine-link/enrollment.test.ts test/machine-link/fences.test.ts test/machine-link/audience.test.ts test/machine-link/presence.test.ts test/machine-link/client.test.ts test/machine-link/delivery.test.ts test/machine-link/custody.test.ts test/machine-link/replay-capacity.test.ts && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs test/installation-commit-race.test.mjs && node --import tsx --test test/older-oyster-store.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs && vitest run --config vitest.tenancy-node.config.mjs && vitest run --config vitest.tenancy-cloudflare.config.mjs && vitest run --config vitest.tenancy-cloudflare-eviction.config.mjs && vitest run --config vitest.tenancy-cold-directory.config.mjs && pnpm run test:standalone",
     "lint": "eslint src test examples --max-warnings=0 && oxlint --config ../../oxlint.config.ts --deny-warnings src test examples",
     "format:check": "node ../../tooling/repository/scripts/format-package-check.mjs",
     "lint:anti-slop": "node ../../tooling/repository/scripts/lint-package-anti-slop.mjs",
@@ -277,6 +301,7 @@
     "test:packed-native": "node --import tsx test/stranger/qualify-packed.mjs",
     "test:background-replay": "node test/background-replay.native.mjs",
     "test:standalone": "vitest run --config vitest.standalone.config.mjs && node --import tsx --test test/standalone/agent-caller.test.mjs test/standalone/workers-media.test.mjs test/standalone/workers-computer.test.mjs test/standalone/workflow-git-pass-frame.test.mjs test/standalone/webhook-abuse.test.mjs test/standalone/webhook-custody.test.mjs test/standalone/webhook-ingress.test.mjs test/standalone/workers-workflows.test.mjs test/standalone/workflow-provider.test.mjs test/standalone/standalone-tenancy.test.mjs test/standalone/standalone-registry.test.mjs && node --import tsx test/standalone/agent-key-access.proof.mjs",
+    "test:visitor-edge-browser": "node test/standalone/visitor-edge.browser.mjs",
     "test:source-builds": "node test/source-distribution-build.native.mjs",
     "test:git-door": "node test/git-example.native.mjs",
     "test:page-launch": "node --test test/page-launch.browser.mjs",

@@ -28,6 +28,9 @@ it("classifies only the matching contract-closed request at the standalone host"
     () => {
       // Classification requires no Session or grants.
     },
+    () => {
+      throw new Error("Classification requires no conversation owner");
+    },
   );
   expect(
     door.errorKind(
@@ -82,7 +85,11 @@ it("admits one visitor turn into Shiitake, replays it once, and refuses changed 
     const binding = {
       bindingId,
       lifecycle: "active" as const,
-      selector: { provider: "web" as const },
+      selector: {
+        provider: "web" as const,
+        siteKey: channelIds.site.generate(),
+        origins: ["https://example.com"],
+      },
     };
     let active = true;
     const conversations = createChannelConversations({
@@ -96,6 +103,7 @@ it("admits one visitor turn into Shiitake, replays it once, and refuses changed 
         () => {
           // This direct Shiitake host has no Team grants.
         },
+        () => conversations,
       ),
       now: () => 1_000_000,
     });
@@ -142,6 +150,67 @@ it("admits one visitor turn into Shiitake, replays it once, and refuses changed 
     expect(
       (await host.agent.session(accepted.sessionId).read()).terminals,
     ).toHaveLength(1);
+  } finally {
+    await host.close();
+    database.close();
+  }
+});
+
+it("releases a visitor intake reservation only after the real Session host closed that request", async () => {
+  const database = new DatabaseSync(":memory:");
+  const owner = fromNodeSqlite(database);
+  const host = await memoryHost({
+    owner,
+    meta: { schema: FungiMessageMetaSchema },
+  });
+  try {
+    const binding: ConversationBinding = {
+      bindingId: channelIds.binding.generate(),
+      lifecycle: "active",
+      selector: {
+        provider: "web",
+        siteKey: channelIds.site.generate(),
+        origins: ["https://example.com"],
+      },
+    };
+    const realDoor = channelSessionDoor(
+      () => Promise.resolve(host.agent),
+      () => undefined,
+      () => conversations,
+    );
+    const conversations = createChannelConversations({
+      ...owner,
+      binding: (id) => (id === binding.bindingId ? binding : null),
+      door: {
+        ...realDoor,
+        prompt: async (sessionId, input) => {
+          // Pause acceptance at the same boundary as a racing visitor recall.
+          await realDoor.withdraw(sessionId, input.requestId);
+          return realDoor.prompt(sessionId, input);
+        },
+      },
+      now: () => 1_000_000,
+    });
+    const visitorId = channelIds.visitor.generate();
+    expect(
+      await conversations.receive({
+        bindingId: binding.bindingId,
+        conversation: visitorId,
+        eventId: "withdrawn-event",
+        party: { kind: "visitor", visitorId },
+        text: "Withdrawn before acceptance",
+        sourceRequestId: "original-request",
+      }),
+    ).toEqual({ kind: "denied", reason: "event_conflict" });
+    expect(
+      owner.sql
+        .exec(
+          "SELECT event_id FROM hub_channel_intake WHERE binding_id=? AND event_id=?",
+          binding.bindingId,
+          "withdrawn-event",
+        )
+        .toArray(),
+    ).toEqual([]);
   } finally {
     await host.close();
     database.close();
@@ -215,7 +284,11 @@ it("the standalone Agent uses its own store and refuses an unmapped binding", as
     const binding: ConversationBinding = {
       bindingId,
       lifecycle: "active",
-      selector: { provider: "web" },
+      selector: {
+        provider: "web",
+        siteKey: channelIds.site.generate(),
+        origins: ["https://example.com"],
+      },
     };
     expect(await agent.receive(event, null)).toEqual({
       kind: "denied",

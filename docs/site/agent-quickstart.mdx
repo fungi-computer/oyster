@@ -10,6 +10,10 @@ Run every command exactly as written, from the directory each step names.
 Compare its output with the expected output before you go on. When a step fails,
 read the "If it fails" notes under it before trying anything else.
 
+Not sure Oyster fits the job?
+[Is Oyster for you?](https://docs.fungi.computer/is-oyster-for-you/) compares it
+with Cloudflare Workers Builds before you install anything.
+
 ## Before you start
 
 - **Cloudflare plan:** SQLite-backed Durable Objects are available on Workers
@@ -303,8 +307,8 @@ If it fails:
 
 - `SESSION` is empty: the `initialize` call was refused. Check the key as in
   step 3.
-- Named keys for each agent (`POST /api/keys`) come with the Git worker in
-  step 6. The plain standalone Worker answers `404` there.
+- The copied Worker already includes `POST /api/keys`. Use the owner key to
+  create a separate key for each agent; no extra Worker is needed.
 
 ## 6. Add Git
 

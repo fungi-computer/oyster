@@ -966,7 +966,7 @@ function putContentObject(
   object,
   body,
   mediaType,
-): Promise<"refused" | "stored">;
+): Promise<"stored" | "refused">;
 ```
 
 Stream one object into the store under its digest. The store refuses a body
@@ -987,7 +987,7 @@ the body is discarded, never stored.
 
 #### Returns
 
-`Promise`\<`"refused"` \| `"stored"`\>
+`Promise`\<`"stored"` \| `"refused"`\>
 
 ---
 

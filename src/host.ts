@@ -66,6 +66,7 @@ import {
 export type { GuestLimits } from "./guest-policy.js";
 import { appFacetResponse } from "./backend-request.js";
 import { Hono, type Context } from "hono";
+import { endTime, startTime, timing, type TimingVariables } from "hono/timing";
 import { bodyLimit } from "hono/body-limit";
 import { match } from "path-to-regexp";
 import * as Schema from "effect/Schema";
@@ -119,9 +120,10 @@ import {
 } from "./index.js";
 import {
   parseRelease,
-  readVerified,
+  readCachedVerified,
   sha256,
   type ArtifactStore,
+  type VerifiedObjectCache,
   type VerifiedRelease,
 } from "./release.js";
 import { createGitDoor, type GitDoorTarget } from "./git.js";
@@ -155,6 +157,7 @@ export {
   sha256,
   verifyRelease,
   type ArtifactStore,
+  type VerifiedObjectCache,
   type VerifiedRelease,
 } from "./release.js";
 
@@ -356,7 +359,7 @@ export type OysterCapability = Readonly<
 >;
 
 /** What the host stamps once per request; inner routes read it with `c.get`. */
-export type OysterVariables = {
+export type OysterVariables = TimingVariables & {
   principal: OysterPrincipal;
   installation?: Installation;
 };
@@ -386,6 +389,8 @@ export type OysterHost = Readonly<{
    */
   backgroundOriginKey?: () => Promise<CryptoKey>;
   artifacts: ArtifactStore;
+  /** Digest-keyed copies of verified UI objects; absent, every read is verified from `artifacts`. */
+  uiCache?: VerifiedObjectCache;
   installations: InstallationStore;
   instances: InstanceDirectory;
   /** Report-only host UI check; backend construction remains Instance-owned and blocking. */
@@ -657,6 +662,21 @@ const tabIcon = `<link rel="icon" type="image/svg+xml" href="${fungiFaviconHref}
 export function createOyster(host: OysterHost): Hono<OysterEnv> {
   const limits = guestLimits(host.guestLimits);
   const app = new Hono<OysterEnv>();
+  // Server-Timing names the Durable Object hops a request waited on.
+  // An upgraded socket keeps its response untouched.
+  app.use(
+    timing({
+      totalDescription: "Oyster",
+      enabled: (context) => context.res.status !== 101,
+    }),
+  );
+  // A forwarded Durable Object or fetch response has immutable headers;
+  // give the timing middleware a copy it can append Server-Timing to.
+  app.use(async (context, next) => {
+    await next();
+    if (context.res.status !== 101)
+      context.res = new Response(context.res.body, context.res);
+  });
   const releaseOf = releaseCache(host.artifacts);
   const operationDescriptors = host.capabilities ?? [];
   const gateFacts = (
@@ -763,6 +783,33 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
         : new PageAssetsLoadError(cause);
     }));
 
+  // An Oyster is a private instance, never a search result: every response
+  // says so, and robots.txt is public so crawlers read the rule rather than a
+  // 401 (which Google treats as "crawl everything").
+  app.use("*", async (context, next) => {
+    await next();
+    try {
+      context.res.headers.set("X-Robots-Tag", "noindex, nofollow");
+    } catch (cause) {
+      // Fetched responses (proxied Apps, the git door) have immutable headers.
+      if (!(cause instanceof TypeError)) throw cause;
+      const { body, status, statusText, headers } = context.res;
+      const marked = new Headers(headers);
+      marked.set("X-Robots-Tag", "noindex, nofollow");
+      context.res = new Response(body, { status, statusText, headers: marked });
+    }
+  });
+  app.get(
+    "/robots.txt",
+    () =>
+      new Response("User-agent: *\nDisallow: /\n", {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+        },
+      }),
+  );
+
   // The home page imports this host-owned entry, never the Release module's
   // own URL: released Oyster 0.2.0 served that URL immutable, so a browser may
   // hold a copy it would import without a request. The entry is never cached
@@ -800,9 +847,11 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   // App UI: digest-pinned, sandboxed, and readable without a session because
   // the opaque-origin frame cannot carry one.
   app.get("/ui/:installationId/:releaseId/*", async (context) => {
+    startTime(context, "registry");
     const installation = await host.installations.get(
       context.req.param("installationId"),
     );
+    endTime(context, "registry");
     if (
       installation?.status !== "enabled" ||
       installation.release.releaseId !== context.req.param("releaseId")
@@ -815,17 +864,20 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     if (release.ui === null) return refusal(404, "This App has no UI");
     if (release.ui.kind === "html") {
       if (path !== "/") return refusal(404, "Not found");
-      const bytes = await readVerified(
+      const body = await readCachedVerified(
         host.artifacts,
+        host.uiCache,
         release.ui.artifactRef,
         release.ui.digest,
       );
-      return new Response(new Uint8Array(bytes), {
+      return new Response(body, {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Security-Policy": `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: data:; media-src blob:; font-src data:; connect-src 'none'; frame-src 'none'; frame-ancestors ${origin}; base-uri 'none'; form-action 'none'; sandbox ${appSandbox}`,
           "X-Content-Type-Options": "nosniff",
-          "Cache-Control": "no-store",
+          // Digest-pinned like an assets UI's index.html: the frame's
+          // authority is its host connection, never these bytes.
+          "Cache-Control": "public, max-age=31536000, immutable",
         },
       });
     }
@@ -837,13 +889,14 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     const shellEntry = wanted === shellModuleAssetPath;
     if (shellEntry && !(await shellApproved(installation, release)))
       return noStoreRefusal(403, "not_approved");
-    const bytes = await readVerified(
+    const body = await readCachedVerified(
       host.artifacts,
+      host.uiCache,
       asset.artifactRef,
       asset.digest,
     );
     const scope = `${origin}${prefix}/`;
-    return new Response(new Uint8Array(bytes), {
+    return new Response(body, {
       headers: {
         "Content-Type": asset.contentType,
         "Content-Security-Policy": `default-src 'none'; script-src ${scope} 'wasm-unsafe-eval'; style-src ${scope} 'unsafe-inline'; img-src ${scope} blob: data:; media-src blob:; font-src ${scope} data:; connect-src data: ${scope}; worker-src blob:; frame-src 'none'; frame-ancestors ${origin}; base-uri 'none'; form-action 'none'; sandbox ${appSandbox}`,
@@ -953,9 +1006,22 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
               ? null
               : git.buildPass(presented.value, target);
           const result = await host.auth.authenticate(request);
-          return result.kind === "admitted"
-            ? git.writerOf(result.principal)
-            : null;
+          if (result.kind !== "admitted") return null;
+          // A named key signs Git in only where its own grants reach that
+          // App: a clone needs App read, a push App use. Otherwise it is
+          // anonymous, which reaches only a public repository's reads.
+          const { actor } = result.principal;
+          if (actor.kind === "team-key") {
+            const key = (await host.keys?.live(actor.keyId)) ?? null;
+            const access =
+              key === null ? null : keyAppAccess(key, target.installationId);
+            if (
+              access === null ||
+              (target.scope === "write" && access.level !== "write")
+            )
+              return null;
+          }
+          return git.writerOf(result.principal);
         },
         isPublic: async (installationId) =>
           (await host.installations.get(installationId))?.visibility ===
@@ -1223,7 +1289,9 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     if (!oysterPrincipalIsOwner(context.get("principal")))
       return refusal(403, "Owner only");
     if (host.workbench === undefined) return refusal(404, "Not found");
+    startTime(context, "registry");
     let directory = await host.workbench.directory();
+    endTime(context, "registry");
     if (host.computerId !== undefined)
       directory = {
         ...directory,
@@ -1556,10 +1624,11 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   const enabled = async (context: Context<OysterEnv>) => {
     const installationId = context.req.param("installationId") ?? "";
     const resolved = context.get("installation");
-    const installation =
-      resolved?.installationId === installationId
-        ? resolved
-        : await host.installations.get(installationId);
+    if (resolved?.installationId === installationId)
+      return resolved.status === "enabled" ? resolved : null;
+    startTime(context, "registry");
+    const installation = await host.installations.get(installationId);
+    endTime(context, "registry");
     return installation?.status === "enabled" ? installation : null;
   };
 
@@ -1570,6 +1639,8 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
     const declaration = release.declaration;
     const principal = context.get("principal");
     const facts = await gateFacts(installation, release, principal);
+    if (principal.actor.kind === "team-key" && facts.access === null)
+      return refusal(403, "App access denied");
     const capabilities: CapabilityDescriptor[] = [];
     for (const capability of host.capabilities ?? []) {
       const methods = Object.fromEntries(
@@ -1923,13 +1994,16 @@ export function createOyster(host: OysterHost): Hono<OysterEnv> {
   app.post("/apps/:installationId/methods/:name", async (context) => {
     const installation = await enabled(context);
     if (installation === null) return refusal(404, "Not found");
-    return executeMethod(
+    startTime(context, "method", "admission and Instance call");
+    const response = await executeMethod(
       installation,
       await releaseOf(installation.release),
       context.get("principal"),
       context.req.param("name"),
       context.req.raw,
     );
+    endTime(context, "method");
+    return response;
   });
 
   app.post("/apps/:caller/calls/:appId/:method", async (context) => {

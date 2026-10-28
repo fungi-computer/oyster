@@ -1,0 +1,66 @@
+{
+  // Copy beside this package's worker.ts into a celld project as wrangler.jsonc.
+  // Set OYSTER_ORIGIN to the public HTTPS origin and keep the owner key out of
+  // this file (.dev.vars for dev; --secret-name / --secrets-file for a fleet).
+  "name": "oyster",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  // The React build uses console.createTask() without this production define.
+  "define": { "process.env.NODE_ENV": "\"production\"" },
+  "workflows": [
+    {
+      "binding": "GRAPH_WORKFLOWS",
+      "name": "oyster-graphs",
+      "class_name": "StandaloneGraphWorkflow",
+    },
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // celld requires distinct bucket names (unlike the Cloudflare example, which
+  // uses oyster-releases for both); these are prefixes in the same fleet bucket.
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "oyster-releases" },
+    { "binding": "APP_ARTIFACTS", "bucket_name": "oyster-media" },
+  ],
+  "vars": {
+    "OYSTER_ORIGIN": "https://oyster.example",
+    "OYSTER_COMPUTER_ID": "workspace",
+    "OYSTER_HOME_INSTALLATION": "tourtois",
+    "OYSTER_OWNER_NAME": "owner",
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANTS", "class_name": "StandaloneTenants" },
+      { "name": "MCP", "class_name": "OysterMcp" },
+      { "name": "REGISTRY", "class_name": "OysterRegistry" },
+      { "name": "WORKFLOW_RUNS", "class_name": "StandaloneWorkflowRuns" },
+      { "name": "INSTANCES", "class_name": "StandaloneInstance" },
+      { "name": "COMPUTER", "class_name": "ComputerDO" },
+      { "name": "KEYS", "class_name": "OysterKeys" },
+      { "name": "WEBHOOKS", "class_name": "OysterWebhooks" },
+      { "name": "AGENTS", "class_name": "StandaloneAgent" },
+      { "name": "AGENT_DIRECTORY", "class_name": "AgentDirectory" },
+      { "name": "MACHINE_LINK", "class_name": "MachineLinkDO" },
+      { "name": "MEDIA_OPERATION", "class_name": "MediaOperationDO" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "oyster-v1",
+      "new_sqlite_classes": [
+        "StandaloneTenants",
+        "OysterMcp",
+        "OysterRegistry",
+        "StandaloneWorkflowRuns",
+        "StandaloneInstance",
+        "ComputerDO",
+        "OysterKeys",
+        "OysterWebhooks",
+        "StandaloneAgent",
+        "AgentDirectory",
+        "MachineLinkDO",
+        "MediaOperationDO",
+      ],
+    },
+  ],
+}

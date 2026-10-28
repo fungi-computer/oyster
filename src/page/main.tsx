@@ -1,7 +1,12 @@
 import { observeDesktopGill } from "./gill-observation.js";
 import { createShellAppAccess } from "./app-access.js";
 import { createWindowLaunchTracker } from "./window-launch.js";
-import { computerTargetUrl } from "./computer-target.js";
+import { computerTargetUrl } from "../computer-target.js";
+import {
+  childInstallationAddress,
+  childMatchesLaunch,
+  sharedRead,
+} from "./child-selection.js";
 import { createGillClient } from "@fungi.computer/gills";
 import { createRoot } from "react-dom/client";
 import { Alert } from "@fungi.computer/caps/components/alert";
@@ -23,6 +28,7 @@ import {
 import {
   workbenchDirectorySchema,
   workbenchComputerDirectorySchema,
+  type WorkbenchDirectory,
 } from "@fungi.computer/nacre/workbench-directory";
 import {
   appSandbox,
@@ -68,8 +74,19 @@ async function json(path: string) {
     });
   return S.decodeUnknownSync(S.Json)(await response.json());
 }
-const directory = async () =>
-  workbenchDirectorySchema.parse(await json("/api/workbench/directory"));
+/**
+ * The shell's latest directory read. It is metadata only: whether this host
+ * offers its owner's fleet as window context (fixed for a host) and which
+ * installation declares a desktop Gill. Every route it leads to re-admits.
+ */
+let lastDirectory: WorkbenchDirectory | undefined;
+const directory = sharedRead(async () => {
+  lastDirectory = workbenchDirectorySchema.parse(
+    await json("/api/workbench/directory"),
+  );
+  return lastDirectory;
+});
+const knownDirectory = async () => lastDirectory ?? (await directory());
 async function configuration(href: string): Promise<OysterAppConfig> {
   const response = await fetch(href, {
     headers: { Accept: "application/json" },
@@ -108,31 +125,18 @@ function resolveLaunch(
   return { ...resolved, title: input.title };
 }
 async function currentChild(launch: WorkbenchResolvedChild["launch"]) {
-  const address = new URL(launch.href, window.location.origin);
-  const row = (await directory()).apps.find(
-    (app) =>
-      app.surfaceId === launch.surfaceId && app.availability === "available",
-  );
-  if (
-    row?.surfacePath !== address.pathname ||
-    row.appId !== launch.appId ||
-    row.releaseId !== launch.releaseId
-  )
-    throw unavailable("that App selection");
-  const computerTarget =
-    row.computer === "owner-fleet"
-      ? (address.searchParams.get("computerId") ?? undefined)
-      : undefined;
+  const address = childInstallationAddress(launch.href, window.location.origin);
+  if (address === null) throw unavailable("that App selection");
+  const fleet = (await knownDirectory()).computerContext === "owner-fleet";
+  const computerTarget = fleet
+    ? (address.searchParams.get("computerId") ?? undefined)
+    : undefined;
+  // The App's own configuration is the one fresh read of what this address
+  // serves; the launch must still name exactly that installation and Release.
   const config = await configuration(
-    computerTargetUrl(row.surfacePath, computerTarget),
+    computerTargetUrl(address.pathname, computerTarget),
   );
-  if (
-    config.appId !== row.appId ||
-    config.releaseId !== row.releaseId ||
-    config.installationId !== row.installationId ||
-    config.authorityVersion !== row.authorityVersion ||
-    (computerTarget !== undefined && config.computerId !== computerTarget)
-  )
+  if (!childMatchesLaunch(launch, address.pathname, config, computerTarget))
     throw unavailable("that changed App selection");
   return { ...config, computerTarget };
 }
@@ -196,7 +200,9 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
     const request = S.decodeUnknownSync(workbenchGillRequestSchema, {
       onExcessProperty: "error",
     })(raw);
-    const app = (await directory()).apps.find(
+    // The Gill route re-admits the installation, so the shell's latest read
+    // is enough to name it; one more directory read per Gill is not needed.
+    const app = (await knownDirectory()).apps.find(
       (item) =>
         item.surfaceId === request.surfaceId &&
         item.availability === "available",

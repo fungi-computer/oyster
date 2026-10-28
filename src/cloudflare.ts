@@ -32,6 +32,7 @@ import type {
   ArtifactHeads,
   ArtifactStore,
   ArtifactStreams,
+  VerifiedObjectCache,
 } from "./release.js";
 import {
   appBackendBindingKinds,
@@ -68,6 +69,39 @@ import {
 } from "./index.js";
 
 const bindingWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
+
+/**
+ * The zone's edge cache as a {@link VerifiedObjectCache}: each verified object
+ * under a digest-named key on `origin` that no route serves. A failed write is
+ * logged and answers `unstored`; the next reader verifies from the store again.
+ */
+export function edgeVerifiedObjectCache(
+  cache: Pick<Cache, "match" | "put">,
+  origin: string,
+): VerifiedObjectCache {
+  const key = (digest: string) =>
+    new Request(new URL(`/_oyster/verified/${digest}`, origin));
+  return {
+    match: async (digest) => (await cache.match(key(digest)))?.body ?? null,
+    put: async (digest, bytes) => {
+      try {
+        await cache.put(
+          key(digest),
+          new Response(new Uint8Array(bytes), {
+            headers: { "Cache-Control": "public, max-age=31536000, immutable" },
+          }),
+        );
+        return "stored";
+      } catch (cause) {
+        console.error("Verified object cache write failed", {
+          digest,
+          failure: cause instanceof Error ? cause.name : "non-error rejection",
+        });
+        return "unstored";
+      }
+    },
+  };
+}
 
 /** Store Release artifacts without loading the Worker ownership barrel. */
 export function r2ArtifactStore(
@@ -406,7 +440,7 @@ export type AppInstanceLoader<FacetClass> = Readonly<{
   }>;
 }>;
 
-/** End the native App facet before shared frame admission releases its permit. */
+/** End the native App facet when live authority closes early, before the gate admits again. */
 export function createCloudflareInvocationGate<Host, FacetClass>(
   ctx: Pick<AppInstanceContext<FacetClass>, "facets">,
   close: (frame: InvocationFrame<Host>) => Promise<void>,

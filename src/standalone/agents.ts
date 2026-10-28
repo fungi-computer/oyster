@@ -1,5 +1,10 @@
-import { normalizeModel, streamModel } from "@fungi.computer/mule/effect";
-import { observeProviderStatus } from "@fungi.computer/mule/effect";
+import {
+  isRetryableProviderRejection,
+  normalizeModel,
+  observeProviderStatus,
+  streamModel,
+  type ProviderRejection,
+} from "@fungi.computer/mule/effect";
 import type {
   Api,
   AssistantMessage,
@@ -189,10 +194,13 @@ function observedModels(
     acquire: ({ signal }) => {
       const retryableMessages = new WeakSet<AssistantMessage>();
       const safeFailures = new WeakMap<AssistantMessage, string>();
-      const failure = (message: AssistantMessage, code: string) => {
+      const failure = (
+        message: AssistantMessage,
+        rejection: ProviderRejection | undefined,
+      ) => {
         // Pi can include raw response bodies in errorMessage. No provider
         // prose enters a Session, retry journal, model context or diagnostics.
-        const safe = `Model request failed (${code}). Retry the request.`;
+        const safe = `Model request failed (${rejection?.code ?? "provider_rejected"}). Retry the request.`;
         const terminal: AssistantMessage = {
           role: "assistant",
           content: [],
@@ -205,7 +213,8 @@ function observedModels(
           timestamp: message.timestamp,
         };
         safeFailures.set(terminal, safe);
-        if (code === "provider_unavailable") retryableMessages.add(terminal);
+        if (isRetryableProviderRejection(rejection))
+          retryableMessages.add(terminal);
         return terminal;
       };
       return Promise.resolve({
@@ -230,7 +239,7 @@ function observedModels(
                 if (event.type === "error") {
                   const terminal = failure(
                     event.error,
-                    observed.rejection()?.code ?? "provider_rejected",
+                    observed.rejection(event.error),
                   );
                   events.push({ ...event, error: terminal });
                   events.end(terminal);
@@ -243,7 +252,7 @@ function observedModels(
                 ) {
                   const terminal = failure(
                     event.message,
-                    observed.rejection()?.code ?? "provider_rejected",
+                    observed.rejection(event.message),
                   );
                   events.push({ ...event, message: terminal });
                   events.end(terminal);
@@ -254,10 +263,7 @@ function observedModels(
               const result = await response.result();
               events.end(
                 result.stopReason === "error" || result.stopReason === "aborted"
-                  ? failure(
-                      result,
-                      observed.rejection()?.code ?? "provider_rejected",
-                    )
+                  ? failure(result, observed.rejection(result))
                   : result,
               );
             } catch {
@@ -286,7 +292,7 @@ function observedModels(
                   stopReason: signal.aborted ? "aborted" : "error",
                   timestamp: Date.now(),
                 },
-                "provider_unavailable",
+                { code: "provider_unavailable" },
               );
               events.push({
                 type: "error",
@@ -453,7 +459,7 @@ export abstract class StandaloneAgentBase<
   protected channelConversations(
     binding: (bindingId: string) => ConversationBinding | null,
   ): ChannelConversations {
-    return createChannelConversations({
+    const owner = createChannelConversations({
       sql: this.ctx.storage.sql,
       transactionSync: (body) => this.ctx.storage.transactionSync(body),
       binding,
@@ -462,9 +468,11 @@ export abstract class StandaloneAgentBase<
         () => {
           // Standalone Agents have no Hub Team grants to deliver.
         },
+        () => owner,
       ),
       now: () => Date.now(),
     });
+    return owner;
   }
   /** Each installed Release's verified catalog surface, built once per Release for this Agent's lifetime. */
   #appSurfaces: AppSurfaceCache | undefined;

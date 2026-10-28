@@ -1,4 +1,5 @@
-// qualify-packed.mjs supplies the strict Workers environment explicitly.
+// qualify-packed.mjs supplies Wrangler's runtime types; repository stranger
+// separately checks the DOM-facing declarations with skipLibCheck false.
 import {
   createCloudflareAppInstance,
   type AppInstanceLoader,

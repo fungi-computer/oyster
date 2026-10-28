@@ -4,7 +4,6 @@ import {
   FungiMessageMetaSchema,
   type FungiAuthor,
   type AuthorMeta,
-  type MessageMetaValue,
 } from "@fungi.computer/agar/agents";
 import { handoffSchema, type Handoff } from "@fungi.computer/agar/channels";
 import {
@@ -209,12 +208,11 @@ export type ChannelWithdrawResult =
       sessionId?: string;
     }>;
 
-/** Only the pending fields a channel visitor can read. */
-export type ChannelPendingPrompt = Readonly<{
+/** A host-projected intent contains no private metadata or internal request key. */
+export type VisitorPendingPrompt = Readonly<{
   requestId: string;
   commandId: string;
   text: string;
-  meta?: MessageMetaValue | undefined;
   delivery: "steer" | "followUp";
   images?:
     | readonly Readonly<{
@@ -223,6 +221,12 @@ export type ChannelPendingPrompt = Readonly<{
         mimeType: string;
       }>[]
     | undefined;
+}>;
+
+/** Only public baseline pagination crosses the visitor Session port. */
+export type VisitorReadOptions = Readonly<{
+  limit?: number;
+  before?: string;
 }>;
 
 /** The channel's narrow Session port; hosts translate to their durable client. */
@@ -234,7 +238,22 @@ export type SessionDoor = Readonly<{
   latestPending: (
     sessionId: string,
     visitor: FungiAuthor,
-  ) => Promise<ChannelPendingPrompt | null>;
+  ) => Promise<VisitorPendingPrompt | null>;
+  participantDocument: (
+    sessionId: string,
+    visitorId: string,
+    options: VisitorReadOptions,
+  ) => Promise<string>;
+  participantStream: (
+    sessionId: string,
+    visitorId: string,
+    options: Readonly<{
+      expiresAt: number;
+      now: () => number;
+      release: () => void;
+      canRead: () => Promise<boolean>;
+    }>,
+  ) => Promise<ReadableStream<Uint8Array>>;
   createSession: (requestId: string) => Promise<string>;
   /** Deliver this conversation Session's tool grants to the runtime. */
   deliverGrants: (sessionId: string) => void;

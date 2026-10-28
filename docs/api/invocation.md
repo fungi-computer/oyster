@@ -122,7 +122,7 @@ The host's native guest-abort and authority-close hooks.
 ```ts
 type InvocationGate<Host> = Readonly<{
   run: <A>(facts, host, work) => Promise<A>;
-  active: () => InvocationFrame<Host>;
+  active: (frameId) => InvocationFrame<Host>;
   revoke: (reason?, target?) => Promise<void>;
   exclusive: <A>(work) => Promise<A>;
 }>;
@@ -412,8 +412,12 @@ only its decision.
 function createInvocationGate<Host>(ports): InvocationGate<Host>;
 ```
 
-Serialize authority, preempt replay only for verified writes, and close each
-guest before admission.
+Admit frames against one guest. Verified foreground reads share it, up to eight
+at once; writes, raw backend requests, Gills and replay run alone. Every guest
+binding packet names its frame, so a finished frame's leftover timers cannot
+borrow a later frame's authority and a normal finish keeps the guest warm.
+Closing authority early (revocation, expiry, a write preempting replay) aborts
+the guest and so every frame sharing it; replay only yields to a verified write.
 
 #### Type Parameters
 

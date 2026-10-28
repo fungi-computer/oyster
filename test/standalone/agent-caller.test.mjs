@@ -25,11 +25,15 @@ import {
   sha256,
   verifyRelease,
 } from "@fungi.computer/oyster/host";
+import { agentCapabilities } from "@fungi.computer/oyster/agents";
 import { invocationCallerContext } from "@fungi.computer/oyster/invocation";
 import { defaultTenant, tenantScope } from "@fungi.computer/oyster/tenant";
 import { deriveDeclaredOperations } from "@fungi.computer/oyster/apps";
 import { instanceIds } from "@fungi.computer/oyster";
-import { approvedInstallation } from "@fungi.computer/oyster/testing";
+import {
+  approvedInstallation,
+  capabilityFixture,
+} from "@fungi.computer/oyster/testing";
 import { fauxModel } from "@fungi.computer/mule/testing";
 import { memoryHost, fauxModelSource } from "@fungi.computer/shiitake/testing";
 import { run as runMule } from "@fungi.computer/mule/effect";
@@ -330,6 +334,73 @@ test("standalone owner attaches fleet and configured Computers without an App, r
     policy.status,
     200,
     "the real owner route sees the stored Agent",
+  );
+  await t.test(
+    "a new conversation starts through standalone Oyster with Server-Timing",
+    async () => {
+      const bound = {
+        ...env,
+        AGENTS: {
+          getByName: (id) => ({
+            fetch: async (request) => {
+              const result = await env.AGENTS.getByName(id).fetch(request);
+              if (request.method === "POST")
+                assert.equal(result.status, 201, "the real Agent creates it");
+              // Worker DO stubs return fetch Responses with immutable headers.
+              // Carry the real Agent's body across that representation boundary.
+              return globalThis.fetch(
+                `data:application/json,${encodeURIComponent(await result.text())}`,
+              );
+            },
+          }),
+        },
+      };
+      const fixture = await capabilityFixture({
+        capabilities: ["agent.read", "agent.send"],
+        adapters: agentCapabilities(
+          standaloneAgents(
+            bound,
+            tenantScope(defaultTenant, env.OYSTER_ORIGIN),
+          ),
+          async () => null,
+        ),
+        authenticate: async (request) =>
+          request.headers.get("Authorization") === `Bearer ${ownerKey}`
+            ? { kind: "admitted", principal: owner }
+            : { kind: "refused", status: 401 },
+      });
+      const path = `/agents/${agent.agentId}/sessions`;
+      const call = (url, input) => {
+        const options = {
+          method: input === undefined ? "GET" : "POST",
+          headers: {
+            Authorization: `Bearer ${ownerKey}`,
+            "X-Oyster-Installation": "capability-fixture",
+            "Content-Type": "application/json",
+          },
+        };
+        if (input !== undefined) options.body = JSON.stringify(input);
+        return fixture.app.request(`https://oyster.test${url}`, options);
+      };
+      const response = await call(path, {
+        requestId: "grove-new-conversation",
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.match(response.headers.get("Server-Timing") ?? "", /total;dur=/u);
+      const { sessionId } = await response.json();
+      assert.ok(sessionId, "the Agent returns a Session address");
+      const sessions = await call(path);
+      assert.equal(sessions.status, 200);
+      assert.ok(
+        (await sessions.json()).sessions.some(
+          (session) => session.sessionId === sessionId,
+        ),
+        "the new Session appears in the Agent's list",
+      );
+      const read = await call(`${path}/${sessionId}`);
+      assert.equal(read.status, 200);
+      assert.equal((await read.json()).sessionId, sessionId);
+    },
   );
   await t.test(
     "owner model controls persist independent Agent choices and refuse unsupported custody",
@@ -3559,6 +3630,7 @@ test("Luna streams through the existing Veil gateway owner without exposing its 
 for (const binding of [false, true]) {
   for (const { status, code, retryable } of [
     { status: 503, code: "unavailable", retryable: true },
+    { status: 529, code: "overloaded_error", retryable: true },
     { status: 400, code: "invalid_request", retryable: false },
     { status: 429, code: "insufficient_quota", retryable: false },
     { status: 429, code: "rate_limit_exceeded", retryable: true },

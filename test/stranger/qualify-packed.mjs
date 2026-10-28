@@ -37,6 +37,15 @@ async function freePort() {
 }
 
 async function nativeConsumer(directory) {
+  const celldExample = join(
+    directory,
+    "node_modules/@fungi.computer/oyster/examples/standalone/wrangler.celld.jsonc",
+  );
+  assert.match(
+    await readFile(celldExample, "utf8"),
+    /"main": "worker.ts"/u,
+    "The celld example must be present in the installed tarball beside worker.ts",
+  );
   const nodeTypesVersion = JSON.parse(
     await readFile(
       join(directory, "node_modules/@types/node/package.json"),
@@ -45,28 +54,6 @@ async function nativeConsumer(directory) {
   ).version;
   const types = join(directory, "native-consumer.mts");
   await copyFile(new URL("./native-consumer.mts", import.meta.url), types);
-  const typeCommand = [
-    process.execPath,
-    resolve(repositoryRoot, "node_modules/typescript/bin/tsc"),
-    "--noEmit",
-    "--strict",
-    "--target",
-    "ES2024",
-    "--lib",
-    "ES2024,ESNext.Disposable",
-    "--module",
-    "NodeNext",
-    "--moduleResolution",
-    "NodeNext",
-    "--types",
-    "@cloudflare/workers-types/experimental",
-    "--skipLibCheck",
-    "false",
-    types,
-    join(directory, "node_modules/@types/node/web-globals/storage.d.ts"),
-  ];
-  const typed = await runCommand(typeCommand, { cwd: directory });
-  assert.ok(commandSucceeded(typed), typed.stdout + typed.stderr);
   const fixture = join(directory, "native-runtime.mjs");
   await copyFile(new URL("./native-runtime.mjs", import.meta.url), fixture);
   const config = join(directory, "wrangler.json");
@@ -84,6 +71,40 @@ async function nativeConsumer(directory) {
       migrations: [{ tag: "v1", new_sqlite_classes: ["PackedOysterProof"] }],
     }),
   );
+  const runtimeTypes = join(directory, "native-worker-runtime.d.ts");
+  const runtimeTypesCommand = [
+    process.execPath,
+    resolve(repositoryRoot, "node_modules/wrangler/bin/wrangler.js"),
+    "types",
+    "--include-runtime",
+    "--config",
+    config,
+    runtimeTypes,
+  ];
+  const generated = await runCommand(runtimeTypesCommand, { cwd: directory });
+  assert.ok(commandSucceeded(generated), generated.stdout + generated.stderr);
+  const typeCommand = [
+    process.execPath,
+    resolve(repositoryRoot, "node_modules/typescript/bin/tsc"),
+    "--noEmit",
+    "--strict",
+    "--target",
+    "ES2024",
+    "--lib",
+    "ES2024,ESNext.Disposable,DOM,DOM.Iterable",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    "--types",
+    "node",
+    "--skipLibCheck",
+    "true",
+    types,
+    runtimeTypes,
+  ];
+  const typed = await runCommand(typeCommand, { cwd: directory });
+  assert.ok(commandSucceeded(typed), typed.stdout + typed.stderr);
   const port = await freePort();
   const command = [
     resolve(repositoryRoot, "node_modules/.bin/wrangler"),
@@ -159,8 +180,9 @@ async function nativeConsumer(directory) {
     return {
       command,
       typeCommand,
+      runtimeTypesCommand,
       nodeTypesVersion,
-      strictDeclarations: "pass",
+      workerTypecheck: "pass",
       proof,
       durationMs: Date.now() - started,
     };

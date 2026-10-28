@@ -446,6 +446,49 @@ test("the shell entry and its module recheck current approval instead of immutab
   );
 });
 
+test("App UI bytes come from the host's verified cache, filled by the first verified read", async () => {
+  for (const shellModule of [false, true]) {
+    const cached = new Map();
+    const puts = [];
+    const reads = [];
+    const app = await homePageFixture({
+      shellModule,
+      onArtifactRead: (ref) => reads.push(ref),
+      uiCache: {
+        match: (digest) =>
+          Promise.resolve(
+            cached.has(digest) ? new Response(cached.get(digest)).body : null,
+          ),
+        put: (digest, bytes) => {
+          puts.push(digest);
+          cached.set(digest, bytes.slice());
+          return Promise.resolve("stored");
+        },
+      },
+    });
+    const path = shellModule
+      ? "/ui/desktop/rel_desktop/index.html"
+      : "/ui/desktop/rel_desktop/";
+    const first = await app.request(path);
+    assert.equal(first.status, 200);
+    assert.equal(
+      first.headers.get("Cache-Control"),
+      "public, max-age=31536000, immutable",
+    );
+    // Server-Timing names the Registry hop the UI request waited on.
+    assert.match(first.headers.get("Server-Timing") ?? "", /registry;dur=/u);
+    const html = await first.text();
+    assert.match(html, /Home fixture/u);
+    assert.equal(puts.length, 1);
+    const readsAfterFirst = reads.length;
+    const second = await app.request(path);
+    assert.equal(second.status, 200);
+    assert.equal(await second.text(), html);
+    assert.equal(reads.length, readsAfterFirst, "a hit reads no artifact");
+    assert.equal(puts.length, 1);
+  }
+});
+
 test("an App page learns apps.open only from its own Release declaration", async () => {
   for (const opens of [true, false]) {
     const app = await homePageFixture({ opens });

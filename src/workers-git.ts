@@ -1401,6 +1401,7 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
         hosts = new Map();
         environments.set(env, hosts);
       }
+      const started = Date.now();
       let resolved: ResolvedTenant | null;
       try {
         resolved = await root.admit(env, request);
@@ -1414,6 +1415,7 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
       if (refused !== null) return refused;
       const boot = await serveOysterBootCapability(request, env, scope);
       if (boot !== null) return boot;
+      const admitted = Date.now();
       let host: OysterGitWorkerHost;
       try {
         host = await root.hostFor(env, scope, request);
@@ -1421,6 +1423,7 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
         if (error instanceof HTTPException) return error.getResponse();
         throw error;
       }
+      const hosted = Date.now();
       const key = `${scope.tenantId}:${scope.origin}:${host.computerId ?? ""}`;
       let entry = hosts.get(key);
       let cache = true;
@@ -1440,12 +1443,31 @@ export function createOysterGitWorker<Env extends OysterGitWorkerEnv>(
       }
       entry.active += 1;
       try {
-        return await entry.app.fetch(request, env, ctx);
+        return withStageTimings(await entry.app.fetch(request, env, ctx), {
+          admit: admitted - started,
+          host: hosted - admitted,
+        });
       } finally {
         entry.active -= 1;
       }
     },
   };
+}
+
+/**
+ * Add the root's own stages (tenant admission, host selection) to the App
+ * server's Server-Timing, so a slow request names the hop it waited on. An
+ * upgraded socket keeps its response untouched.
+ */
+function withStageTimings(
+  response: Response,
+  stages: Readonly<Record<string, number>>,
+): Response {
+  if (response.status === 101) return response;
+  const timed = new Response(response.body, response);
+  for (const [name, duration] of Object.entries(stages))
+    timed.headers.append("Server-Timing", `${name};dur=${String(duration)}`);
+  return timed;
 }
 
 /** What `oysterWorkerGit` needs beyond the Worker's bindings. */

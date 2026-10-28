@@ -86,8 +86,10 @@ await test("disable fences authority before cancelling a held frame without wait
         catch: (cause) => new Error("Host cancellation failed", { cause }),
       }),
   });
+  let held = "";
   const result = gate
-    .run(facts, {}, async () => {
+    .run(facts, {}, async (frame) => {
+      held = frame.frameId;
       entered.resolve(undefined);
       await guest.promise;
     })
@@ -109,7 +111,7 @@ await test("disable fences authority before cancelling a held frame without wait
     assert.equal(failure.code, "disabled");
     assert.deepEqual(aborts, [failure]);
     assert.equal(nativeAborts, 1);
-    assert.throws(() => gate.active(), { code: "revoked" });
+    assert.throws(() => gate.active(held), { code: "revoked" });
   } finally {
     guest.resolve(undefined);
     await result;
@@ -254,89 +256,158 @@ await test("one frame latch blocks effects until its sealed claimed origin is ad
   assert.equal(retained.host.origin, "refused");
 });
 
-// Native Loader tests cover cancelling queued guest RPCs. This law covers
-// the gate: no new frame is admitted until the prior guest abort completes.
-for (const repeatedFacts of [false, true]) {
-  await test(
-    repeatedFacts
-      ? "identical facts get a fresh frame only after the prior guest is aborted"
-      : "the next caller waits for guest abort before acquiring the active frame",
-    async () => {
-      const instanceId = instanceIds.instance.generate();
-      const facts = (actor: InvocationFacts["subject"]): InvocationFacts =>
-        Schema.decodeUnknownSync(invocationFactsSchema)({
-          instanceId,
-          selection: {
-            instanceId,
-            owner: { kind: "installation", id: "notes" },
-            appId: "app_notes",
-            releaseId: "rel_example",
-            authorityVersion: 1,
-          },
-          artifactDigest: `sha256:${"1".repeat(64)}`,
-          subject: actor,
-          grants: [{ binding: "WORKFLOWS", operations: ["catalog"] }],
-          deadlineAt: Date.now() + 60_000,
-          ancestry: [],
-        });
-      const abortStarted = Promise.withResolvers<undefined>();
-      const aborted = Promise.withResolvers<undefined>();
-      let abortCount = 0;
-      const gate = createInvocationGate({
-        abortGuest: () => {
-          abortCount += 1;
-          abortStarted.resolve(undefined);
-          return aborted.promise;
-        },
-        close: () => Promise.resolve(),
-      });
-      const owner = facts({
-        kind: "call",
-        context: {
-          computerId: null,
-          actor: { kind: "member", memberId: "owner" },
-          role: "owner",
-          workflow: {
-            workflowId: "workflow_one",
-            runId: "run_one",
-            nodeId: "node_one",
-            armedBy: { kind: "member", memberId: "owner" },
-          },
-        },
-      });
-      const agent = facts({
-        kind: "call",
-        context: {
-          computerId: null,
-          actor: { kind: "agent", agentId: "agent_one" },
-        },
-      });
-      const first = gate.run(owner, {}, (frame) => {
-        assert.equal(gate.active(), frame);
-        return Promise.resolve(frame);
-      });
-      await abortStarted.promise;
-      assert.throws(() => gate.active(), { code: "revoked" });
-      let nextStarted = false;
-      const nextFacts = repeatedFacts ? owner : agent;
-      const next = gate.run(nextFacts, {}, (frame) => {
-        nextStarted = true;
-        assert.equal(gate.active(), frame);
-        return Promise.resolve(frame);
-      });
-      await Promise.resolve();
-      assert.equal(nextStarted, false);
-      aborted.resolve(undefined);
-      const previousFrame = await first;
-      const nextFrame = await next;
-      assert.equal(previousFrame.signal.aborted, true);
-      assert.notEqual(nextFrame.frameId, previousFrame.frameId);
-      assert.deepEqual(nextFrame.facts.subject, nextFacts.subject);
-      assert.equal(abortCount, 2);
-      assert.throws(() => gate.active(), { code: "revoked" });
+const sharedFacts = (
+  instanceId: string,
+  subject: InvocationFacts["subject"],
+): InvocationFacts =>
+  Schema.decodeUnknownSync(invocationFactsSchema)({
+    instanceId,
+    selection: {
+      instanceId,
+      owner: { kind: "installation", id: "notes" },
+      appId: "app_notes",
+      releaseId: "rel_example",
+      authorityVersion: 1,
+    },
+    artifactDigest: `sha256:${"1".repeat(64)}`,
+    subject,
+    grants: [{ binding: "WORKFLOWS", operations: ["catalog"] }],
+    deadlineAt: Date.now() + 60_000,
+    ancestry: [],
+  });
+const callBy = (
+  memberId: string,
+  effect?: "read" | "write",
+): InvocationFacts["subject"] => {
+  const context = {
+    computerId: null,
+    actor: { kind: "member" as const, memberId },
+    role: "owner" as const,
+  };
+  return effect === undefined
+    ? { kind: "call", context }
+    : { kind: "call", context, method: { name: `${effect}.one`, effect } };
+};
+
+await test("a finished frame keeps the guest warm and its id never resolves again", async () => {
+  const instanceId = instanceIds.instance.generate();
+  let aborts = 0;
+  const closed: string[] = [];
+  const gate = createInvocationGate({
+    abortGuest: () => {
+      aborts += 1;
+      return Promise.resolve();
+    },
+    close: (frame) => {
+      closed.push(frame.frameId);
+      return Promise.resolve();
+    },
+  });
+  const first = await gate.run(
+    sharedFacts(instanceId, callBy("owner")),
+    {},
+    (frame) => {
+      assert.equal(gate.active(frame.frameId), frame);
+      return Promise.resolve(frame);
     },
   );
-}
+  const second = await gate.run(
+    sharedFacts(instanceId, callBy("other")),
+    {},
+    (frame) => {
+      // A leftover packet naming the finished frame is refused.
+      assert.throws(() => gate.active(first.frameId), { code: "revoked" });
+      return Promise.resolve(frame);
+    },
+  );
+  assert.equal(first.signal.aborted, true);
+  assert.notEqual(second.frameId, first.frameId);
+  assert.deepEqual(closed, [first.frameId, second.frameId]);
+  assert.equal(aborts, 0);
+  assert.throws(() => gate.active(second.frameId), { code: "revoked" });
+});
+
+await test("verified reads share the guest; a write waits for them and runs alone", async () => {
+  const instanceId = instanceIds.instance.generate();
+  const gate = createInvocationGate({
+    abortGuest: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  });
+  const release = Promise.withResolvers<undefined>();
+  const entered: string[] = [];
+  const read = (memberId: string) =>
+    gate.run(
+      sharedFacts(instanceId, callBy(memberId, "read")),
+      {},
+      async (frame) => {
+        entered.push(memberId);
+        // Each packet resolves its own frame, never a sibling's.
+        assert.equal(gate.active(frame.frameId), frame);
+        await release.promise;
+        return frame;
+      },
+    );
+  const reads = [read("a"), read("b")];
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(entered, ["a", "b"]);
+  let wrote = false;
+  const write = gate.run(
+    sharedFacts(instanceId, callBy("c", "write")),
+    {},
+    () => {
+      wrote = true;
+      return Promise.resolve();
+    },
+  );
+  const later = read("d");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(wrote, false);
+  // The waiting write keeps later reads behind it.
+  assert.deepEqual(entered, ["a", "b"]);
+  release.resolve(undefined);
+  const [a, b] = await Promise.all(reads);
+  assert.notEqual(a?.frameId, b?.frameId);
+  await write;
+  assert.equal(wrote, true);
+  await later;
+  assert.deepEqual(entered, ["a", "b", "d"]);
+});
+
+await test("revocation aborts the shared guest once and closes every frame on it", async () => {
+  const instanceId = instanceIds.instance.generate();
+  let aborts = 0;
+  const gate = createInvocationGate({
+    abortGuest: () => {
+      aborts += 1;
+      return Promise.resolve();
+    },
+    close: () => Promise.resolve(),
+  });
+  const held = Promise.withResolvers<undefined>();
+  const started: Promise<void>[] = [];
+  const runs = ["a", "b"].map((memberId) => {
+    const entered = Promise.withResolvers<undefined>();
+    started.push(entered.promise);
+    return gate
+      .run(sharedFacts(instanceId, callBy(memberId, "read")), {}, async () => {
+        entered.resolve(undefined);
+        await held.promise;
+      })
+      .then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+  });
+  await Promise.all(started);
+  await gate.revoke();
+  const failures = await Promise.all(runs);
+  for (const failure of failures)
+    assert.ok(
+      failure instanceof AppInstanceError && failure.code === "revoked",
+    );
+  assert.equal(aborts, 1);
+  held.resolve(undefined);
+});
 
 await test("Instance admission preserves a typed refusal after waiting for the frame permit", async () => {
   const instanceId = instanceIds.instance.generate();
@@ -483,7 +554,7 @@ await test("read polls each simulated second wait for one replay step without in
       .run(facts(true, step + 1), {}, async (frame) => {
         entered.resolve(undefined);
         await exchange.promise;
-        assert.equal(gate.active(), frame);
+        assert.equal(gate.active(frame.frameId), frame);
         completedSteps += 1;
       })
       .then(
@@ -500,7 +571,8 @@ await test("read polls each simulated second wait for one replay step without in
       return Promise.resolve();
     });
     try {
-      assert.equal(aborts, step * 2);
+      // Finished frames keep the guest; nothing aborts it.
+      assert.equal(aborts, 0);
       assert.equal(readEntered, false);
       exchange.resolve(undefined);
       assert.deepEqual(await syncing, { kind: "completed" });
@@ -512,7 +584,7 @@ await test("read polls each simulated second wait for one replay step without in
     }
   }
   assert.equal(completedSteps, 3);
-  assert.equal(aborts, 6);
+  assert.equal(aborts, 0);
 });
 
 await test("a click preempts a held replay, closes its authority, then enters with fresh facts", async () => {
@@ -605,7 +677,7 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     clicked = true;
     assert.equal(closed, 1);
     assert.notEqual(frame.frameId, retained);
-    assert.deepEqual(gate.active().facts.grants, []);
+    assert.deepEqual(gate.active(frame.frameId).facts.grants, []);
     assert.deepEqual(frame.facts.subject, click.subject);
     push.resolve(undefined);
     await late.promise;
@@ -615,7 +687,7 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     // Count abort at the admission boundary, without releasing the held push.
     assert.equal(aborts, 1);
     assert.equal(clicked, false);
-    assert.throws(() => gate.active(), { code: "revoked" });
+    assert.throws(() => gate.active(retained), { code: "revoked" });
     cleanup.resolve(undefined);
     await next;
     assert.equal(clicked, true);
@@ -625,7 +697,8 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     push.resolve(undefined);
     await Promise.allSettled([syncing, next, refused]);
   }
-  assert.equal(aborts, 2);
+  // Only the preempted replay aborted the guest; the click finished warm.
+  assert.equal(aborts, 1);
   assert.equal(closed, 2);
 });
 

@@ -30,7 +30,10 @@ export async function invokeUi(
   connection: UiConnection,
   sessionId: string,
   operation: "discover" | "execute",
-  commandId = "stage:set-scene",
+  command: Readonly<{ namespace: string; id: string }> = {
+    namespace: "stage",
+    id: "set-scene",
+  },
 ) {
   const runtime = await Mycelium.make({
     sources: [connection.source],
@@ -38,7 +41,7 @@ export async function invokeUi(
     sandbox: directSandbox(async (bindings) => {
       const method = bindings.ui?.[operation];
       if (method === undefined) throw new Error("UI operation missing");
-      return method(operation === "discover" ? {} : { commandId });
+      return method(operation === "discover" ? {} : { command });
     }),
   });
   const lease = await runtime.acquire();
