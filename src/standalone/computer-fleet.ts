@@ -1,4 +1,3 @@
-import { Hono } from "hono";
 import { endTime, startTime } from "hono/timing";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -6,11 +5,13 @@ import {
   computerCreateRequestSchema,
   computerPageSchema,
 } from "@fungi.computer/computer/fleet";
+import { type OysterAuth, type OysterEnv } from "../host.js";
 import {
   oysterPrincipalIsOwner,
-  type OysterAuth,
-  type OysterEnv,
-} from "../host.js";
+  owner as ownerRoute,
+  routes as routeTable,
+  type Routes,
+} from "../authorization.js";
 import { computerTargetParam } from "../computer-target.js";
 import type { StandaloneRegistry } from "./registry.js";
 
@@ -110,47 +111,41 @@ export async function standaloneComputerSelection(
 /** Tenant-owner management controls over the same durable fleet as Hub. */
 export function standaloneComputerFleetRoutes(
   registryFor: () => DurableObjectStub<StandaloneRegistry>,
-): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
-  routes.use("/api/computers/*", async (context, next) =>
-    oysterPrincipalIsOwner(context.get("principal"))
-      ? next()
-      : context.json({ error: "Owner only" }, 403),
-  );
+): Routes<OysterEnv> {
+  const routes = routeTable<OysterEnv>();
+  const owner = ownerRoute("direct-or-app");
   routes.onError((error, context) => {
     if (error instanceof z.ZodError || error instanceof SyntaxError)
       return context.json({ error: "invalid_input" }, 400);
     throw error;
   });
-  routes.get("/api/workbench/directory", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    const registry = registryFor();
-    startTime(context, "fleet");
-    const admitted = await registry.computerFleet(principal.actor.memberId, {
-      operation: "list",
-      page: { limit: 1, offset: 0 },
-    });
-    endTime(context, "fleet");
-    if (admitted === null || "error" in admitted)
-      return fleetResponse(admitted);
-    startTime(context, "registry");
-    const [directory, computerId] = await Promise.all([
-      registry.directory(),
-      registry.selectedComputer(),
-    ]);
-    endTime(context, "registry");
-    return context.json({
-      ...directory,
-      computer: { computerId, name: computerId },
-      computerContext: "owner-fleet",
-    });
-  });
-  routes.get("/api/computers", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
+  routes.get(
+    "/api/workbench/directory",
+    owner,
+    async (context, { principal }) => {
+      const registry = registryFor();
+      startTime(context, "fleet");
+      const admitted = await registry.computerFleet(principal.actor.memberId, {
+        operation: "list",
+        page: { limit: 1, offset: 0 },
+      });
+      endTime(context, "fleet");
+      if (admitted === null || "error" in admitted)
+        return fleetResponse(admitted);
+      startTime(context, "registry");
+      const [directory, computerId] = await Promise.all([
+        registry.directory(),
+        registry.selectedComputer(),
+      ]);
+      endTime(context, "registry");
+      return context.json({
+        ...directory,
+        computer: { computerId, name: computerId },
+        computerContext: "owner-fleet",
+      });
+    },
+  );
+  routes.get("/api/computers", owner, async (context, { principal }) => {
     const page = computerPageSchema.parse({
       limit: Number(context.req.query("limit") ?? 100),
       offset: Number(context.req.query("offset") ?? 0),
@@ -162,24 +157,22 @@ export function standaloneComputerFleetRoutes(
       }),
     );
   });
-  routes.get("/api/workbench/computers", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    return fleetResponse(
-      await registryFor().computerFleet(principal.actor.memberId, {
-        operation: "choices",
-        page: computerPageSchema.parse({
-          limit: Number(context.req.query("limit") ?? 100),
-          offset: Number(context.req.query("offset") ?? 0),
+  routes.get(
+    "/api/workbench/computers",
+    owner,
+    async (context, { principal }) => {
+      return fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "choices",
+          page: computerPageSchema.parse({
+            limit: Number(context.req.query("limit") ?? 100),
+            offset: Number(context.req.query("offset") ?? 0),
+          }),
         }),
-      }),
-    );
-  });
-  routes.post("/api/computers", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
+      );
+    },
+  );
+  routes.post("/api/computers", owner, async (context, { principal }) => {
     const input = computerCreateRequestSchema.parse(await context.req.json());
     return fleetResponse(
       await registryFor().computerFleet(principal.actor.memberId, {
@@ -188,65 +181,76 @@ export function standaloneComputerFleetRoutes(
       }),
     );
   });
-  routes.post("/api/computers/:computerId/start", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    const result = await registryFor().computerFleet(principal.actor.memberId, {
-      operation: "start",
-      computerId: context.req.param("computerId"),
-    });
-    return fleetResponse(result);
-  });
-  routes.get("/api/computers/:computerId/internet-access", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    return fleetResponse(
-      await registryFor().computerFleet(principal.actor.memberId, {
-        operation: "read-internet-access",
-        computerId: context.req.param("computerId"),
-      }),
-    );
-  });
-  routes.put("/api/computers/:computerId/internet-access", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    const input = z
-      .strictObject({ enabled: z.boolean() })
-      .parse(await context.req.json());
-    return fleetResponse(
-      await registryFor().computerFleet(principal.actor.memberId, {
-        operation: "set-internet-access",
-        computerId: context.req.param("computerId"),
-        enabled: input.enabled,
-      }),
-    );
-  });
-  routes.get("/api/computers/:computerId", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    const result = await registryFor().computerFleet(principal.actor.memberId, {
-      operation: "read",
-      computerId: context.req.param("computerId"),
-    });
-    return fleetResponse(result);
-  });
-  routes.put("/api/computers/selected", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner only" }, 403);
-    const input = z
-      .strictObject({ computerId: fleetComputerId })
-      .parse(await context.req.json());
-    return fleetResponse(
-      await registryFor().computerFleet(principal.actor.memberId, {
-        operation: "select",
-        computerId: input.computerId,
-      }),
-    );
-  });
+  routes.post(
+    "/api/computers/:computerId/start",
+    owner,
+    async (context, { principal }) => {
+      const result = await registryFor().computerFleet(
+        principal.actor.memberId,
+        {
+          operation: "start",
+          computerId: context.req.param("computerId"),
+        },
+      );
+      return fleetResponse(result);
+    },
+  );
+  routes.get(
+    "/api/computers/:computerId/internet-access",
+    owner,
+    async (context, { principal }) => {
+      return fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "read-internet-access",
+          computerId: context.req.param("computerId"),
+        }),
+      );
+    },
+  );
+  routes.put(
+    "/api/computers/:computerId/internet-access",
+    owner,
+    async (context, { principal }) => {
+      const input = z
+        .strictObject({ enabled: z.boolean() })
+        .parse(await context.req.json());
+      return fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "set-internet-access",
+          computerId: context.req.param("computerId"),
+          enabled: input.enabled,
+        }),
+      );
+    },
+  );
+  routes.get(
+    "/api/computers/:computerId",
+    owner,
+    async (context, { principal }) => {
+      const result = await registryFor().computerFleet(
+        principal.actor.memberId,
+        {
+          operation: "read",
+          computerId: context.req.param("computerId"),
+        },
+      );
+      return fleetResponse(result);
+    },
+  );
+  routes.put(
+    "/api/computers/selected",
+    owner,
+    async (context, { principal }) => {
+      const input = z
+        .strictObject({ computerId: fleetComputerId })
+        .parse(await context.req.json());
+      return fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "select",
+          computerId: input.computerId,
+        }),
+      );
+    },
+  );
   return routes;
 }

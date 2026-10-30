@@ -1,4 +1,5 @@
-import { Hono } from "hono";
+import type { BlankEnv } from "hono/types";
+import { door, owner, routes, type Routes } from "../authorization.js";
 import { bodyLimit } from "hono/body-limit";
 import * as Schema from "effect/Schema";
 import { workflowWebhookCommandSchema } from "../webhooks.js";
@@ -31,9 +32,10 @@ export function standaloneWorkflowWebhookRoutes(
   hostFor: (
     request: Request,
   ) => Promise<Pick<OysterHost, "installations"> | null>,
-) {
-  return new Hono().all(
+): Routes<BlankEnv> {
+  return routes().all(
     "/api/installations/:installationId/workflows/webhooks/:bindingId",
+    door("a signed delivery; the library's run owner verifies its signature"),
     async (context) => {
       const host = await hostFor(context.req.raw);
       const installationId = context.req.param("installationId");
@@ -53,11 +55,11 @@ export function standaloneWorkflowWebhookRoutes(
 export function standaloneWorkflowWebhookControls(
   env: Pick<StandaloneWorkflowEnv, "WORKFLOW_RUNS">,
   hostFor: () => Promise<Pick<OysterHost, "installations">>,
-): Hono<OysterEnv> {
-  return new Hono<OysterEnv>().post(
+): Routes<OysterEnv> {
+  return routes<OysterEnv>().post(
     "/api/installations/:installationId/workflows/webhooks",
-    bodyLimit({ maxSize: 64 * 1024, onError: refused }),
-    async (context) => {
+    owner("direct-or-app"),
+    async (context, { principal }) => {
       const installationId = context.req.param("installationId");
       if (!(await libraryExists(await hostFor(), installationId)))
         return refused();
@@ -68,10 +70,11 @@ export function standaloneWorkflowWebhookControls(
       const command = workflowWebhookCommandSchema.safeParse(body.success);
       if (!command.success) return refused();
       return env.WORKFLOW_RUNS.getByName(installationId).webhookControl(
-        context.get("principal"),
+        principal,
         installationId,
         command.data,
       );
     },
+    { middleware: [bodyLimit({ maxSize: 64 * 1024, onError: refused })] },
   );
 }

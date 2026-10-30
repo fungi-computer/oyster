@@ -500,7 +500,7 @@ export async function nativeWorkflowHost({
   };
 }
 
-/** The two App/egress proofs require an operator-owned, already-running VM. */
+/** Attach an App proof to an operator-owned, already-running VM. */
 export async function nativeLabAppHost(root, name) {
   const { port, vars } = await labComputer();
   const { work, config } = await nativeFixtureWorkspace(root, `${name}-`);
@@ -529,7 +529,7 @@ export async function nativeLabAppHost(root, name) {
  * native proofs run it: the checked-out packages/computer image under
  * wrangler dev, owned and removed by this proof process.
  */
-async function platformContainerComputer(root, work, config) {
+async function platformContainerComputer(root, work, config, maxInstances) {
   const proof = "oyster-workflows-native";
   const owner = installProofContainerTrap(proof);
   const image = "botanical-oyster-workflows-native:local";
@@ -557,7 +557,7 @@ async function platformContainerComputer(root, work, config) {
       class_name: "ComputerDO",
       image: "./Dockerfile",
       instance_type: "standard-4",
-      max_instances: 1,
+      max_instances: maxInstances,
     },
   ];
 }
@@ -575,6 +575,7 @@ export async function nativeWorkflowRoot({
   main,
   artifactBucket,
   computer,
+  computerInstances = 1,
   ai = false,
 }) {
   const { work, config } = await nativeFixtureWorkspace(root, prefix);
@@ -582,7 +583,7 @@ export async function nativeWorkflowRoot({
   nativeArtifactBucket(config, artifactBucket);
   if (ai) config.ai = { binding: "AI" };
   if (computer === "platform-container")
-    await platformContainerComputer(root, work, config);
+    await platformContainerComputer(root, work, config, computerInstances);
   const computerOptions = computerHostOptions(computer);
   const tenantHost = "oyster.test";
   const tenantOrigin = `https://${tenantHost}`;

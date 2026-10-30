@@ -196,7 +196,7 @@ const adapter = {
     });
   },
 };
-const adapters = agentCapabilities(adapter, (keyId) => keyStub.live(keyId));
+const adapters = agentCapabilities(adapter);
 
 // ------------------------------------------------------------- installations
 const installations = new Map();
@@ -507,6 +507,24 @@ for (const path of [
     path,
   );
 }
+for (const operation of ["claims", "results"]) {
+  assert.equal(
+    (
+      await call(
+        `ungranted browser ${operation}`,
+        guestKey,
+        `/agents/${agentId}/browser/sessions/${sessionId}/browser/${operation}`,
+        {
+          method: "POST",
+          headers: { ...guestHeaders, "Content-Type": "application/json" },
+          body: "{}",
+        },
+      )
+    ).status,
+    403,
+    `an ungranted principal cannot post browser ${operation}`,
+  );
+}
 const scoped = await call("owner grants one Agent", ownerKey, "/api/keys", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -593,6 +611,26 @@ assert.equal(
   ).status,
   403,
 );
+for (const operation of ["events", "claims", "results"]) {
+  /** @type {RequestInit} */
+  const init = {
+    method: operation === "events" ? "GET" : "POST",
+    headers: { ...guestHeaders, "Content-Type": "application/json" },
+  };
+  if (operation !== "events") init.body = "{}";
+  assert.equal(
+    (
+      await call(
+        `other Agent browser ${operation} refused`,
+        scopedKey,
+        `/agents/${otherId}/browser/sessions/${sessionId}/browser/${operation}`,
+        init,
+      )
+    ).status,
+    403,
+    `a grant for one Agent cannot reach another Agent's browser ${operation}`,
+  );
+}
 assert.deepEqual(
   (
     await call("owner lists both", ownerKey, "/agents", {

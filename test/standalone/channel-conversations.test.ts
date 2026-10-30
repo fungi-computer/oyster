@@ -1,26 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
-import { memoryHost, fauxModelSource } from "@fungi.computer/shiitake/testing";
+import { memoryHost } from "@fungi.computer/shiitake/testing";
 import { ShiitakeError } from "@fungi.computer/shiitake";
-import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
 import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { expect, it } from "vitest";
 
 import { channelIds } from "../../src/channels/ids.js";
-import { channelSessionDoor } from "../../src/standalone/channel-session-door.js";
+import { channelSessionDoor } from "./channel-session-door.fixture.js";
 import type { ConversationBinding } from "../../src/channels/binding.js";
 import {
   createChannelConversations,
   type InboundEvent,
 } from "../../src/channels/conversations.js";
-import { StandaloneAgentBase } from "../../src/standalone/agents.js";
-import {
-  agentDurableObjectState,
-  agentEnv,
-  unavailable,
-} from "./agent-do-state.fixture.js";
-import { cloudflareStorageFixture } from "./cloudflare-storage.fixture.js";
 
 it("classifies only the matching contract-closed request at the standalone host", () => {
   const door = channelSessionDoor(
@@ -214,117 +205,5 @@ it("releases a visitor intake reservation only after the real Session host close
   } finally {
     await host.close();
     database.close();
-  }
-});
-
-/** The standalone Agent's real storage and Shiitake composition, without an inbound route. */
-class ChannelAgent extends StandaloneAgentBase {
-  protected hostFor(): never {
-    return unavailable();
-  }
-  protected override shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
-    return Promise.resolve({
-      extensions: { roster: [], grants: [] },
-      model: fauxModelSource([fauxAssistantMessage("Hello from Oyster")]),
-      meta: { schema: FungiMessageMetaSchema },
-      instructions: {
-        load: () =>
-          Promise.resolve({ revision: "channel-proof", text: "Reply." }),
-      },
-      tools: [],
-    });
-  }
-  receive(event: InboundEvent, binding: ConversationBinding | null) {
-    return this.channelConversations((id) =>
-      id === binding?.bindingId ? binding : null,
-    ).receive(event);
-  }
-  read(sessionId: string) {
-    return this.shiitake().then((agent) => agent.session(sessionId).read());
-  }
-  close() {
-    return this.closeShiitake();
-  }
-}
-
-it("the standalone Agent uses its own store and refuses an unmapped binding", async () => {
-  const database = new DatabaseSync(":memory:");
-  const owner = fromNodeSqlite(database);
-  const state = agentDurableObjectState(() => 0);
-  const tasks: Promise<unknown>[] = [];
-  let settled = 0;
-  const settleTasks = async () => {
-    while (settled < tasks.length) {
-      const pending = tasks.slice(settled);
-      settled += pending.length;
-      await Promise.all(pending);
-    }
-  };
-  // Keep the real DO fixture's surface; replace only storage with the same
-  // native SQLite adapter that Shiitake and the channel owner both consume.
-  Object.defineProperty(state, "storage", {
-    value: { ...state.storage, ...cloudflareStorageFixture(owner) },
-  });
-  Object.defineProperty(state, "waitUntil", {
-    value: (work: Promise<unknown>) => {
-      tasks.push(work);
-    },
-  });
-  const agent = new ChannelAgent(state, agentEnv());
-  try {
-    const bindingId = channelIds.binding.generate();
-    const visitorId = channelIds.visitor.generate();
-    const event: InboundEvent = {
-      bindingId,
-      eventId: "standalone-message",
-      conversation: visitorId,
-      party: { kind: "visitor", visitorId },
-      text: "Hello",
-    };
-    const binding: ConversationBinding = {
-      bindingId,
-      lifecycle: "active",
-      selector: {
-        provider: "web",
-        siteKey: channelIds.site.generate(),
-        origins: ["https://example.com"],
-      },
-    };
-    expect(await agent.receive(event, null)).toEqual({
-      kind: "denied",
-      reason: "unmapped",
-    });
-    const accepted = await agent.receive(event, binding);
-    expect(accepted).toMatchObject({ kind: "accepted", delivery: "new" });
-    if (accepted.kind !== "accepted") throw new Error("Expected acceptance");
-    expect(await agent.receive(event, binding)).toEqual({
-      ...accepted,
-      delivery: "replay",
-    });
-    await settleTasks();
-    expect(
-      (await agent.read(accepted.sessionId)).messages.filter(
-        (message) => message.value.role === "user",
-      ),
-    ).toHaveLength(1);
-    expect(
-      await agent.receive(
-        { ...event, eventId: "next-message" },
-        {
-          ...binding,
-          lifecycle: "suspended",
-        },
-      ),
-    ).toEqual({ kind: "denied", reason: "suspended" });
-  } finally {
-    try {
-      await settleTasks();
-    } finally {
-      try {
-        await agent.close();
-      } finally {
-        database.close();
-      }
-    }
   }
 });

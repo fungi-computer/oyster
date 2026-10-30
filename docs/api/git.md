@@ -29,8 +29,7 @@ type GitGrants = Readonly<{
 }>;
 ```
 
-Live host authority, reopened before every provider call. Null is an anonymous
-reader.
+Live host authority, reopened before every provider call.
 
 ---
 
@@ -129,7 +128,6 @@ type GitDoorHost = Readonly<{
      workflow?: WorkflowAttestation & object;
    }>
     | null>;
-  isPublic: Promise<boolean>;
   git: Promise<
      | Readonly<{
      push: Promise<Readonly<{
@@ -149,6 +147,18 @@ type GitDoorHost = Readonly<{
 ```
 
 Identity and selected installation come only from host-held ports.
+
+---
+
+### GitDoor
+
+```ts
+type GitDoor = Readonly<{
+  fetch: (request) => Promise<Response>;
+}>;
+```
+
+One smart-HTTP exchange's answer; the host declares the route it serves at.
 
 ---
 
@@ -207,9 +217,9 @@ storage.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ports`   | `Readonly`\<\{ `currentInstallation`: `Promise`\< \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `Schema.refine`\<`ReleaseId`, `Schema.String`\>; `appId`: `Schema.refine`\<`AppId`, `Schema.String`\>; `artifact`: `Schema.Struct`\<\{ `artifactRef`: `Schema.refine`\<`ArtifactRef`, `Schema.String`\>; `artifactDigest`: `Schema.refine`\<`Sha256Digest`, `Schema.String`\>; `provenance`: `Schema.Struct`\<\{ `sourceRevision`: ...; `sourceTreeDigest`: ...; `buildRecipeDigest`: ...; \}\>; \}\>; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `capabilityApproved`: `true`; `operations`: readonly ...[]; `resources`: ... \| ...; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: ... \| ... \| ...; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: ...; `memberId`: ...; \} \| \{ `kind`: ...; `agentId`: ...; \} \| \{ `kind`: ...; `keyId`: ...; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}\> \| `null`\>; `declaration`: `Promise`\< \| `Readonly`\<\{ `api?`: `AppApi`; `displayName?`: `string`; `capabilities`: readonly `AppCapabilityId`[]; `calls?`: readonly `Readonly`\<\{ `appId`: ...; `methods`: ...; \}\>[]; `guidance?`: `string`; `handlers`: readonly `AppHandler`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly `AppRole`[]; `storage?`: readonly `AppStorageKey`[]; `commands?`: readonly `AppDeclaredCommand`[]; `gills?`: readonly `AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: readonly ...[]; `sync?`: `Readonly`\<\{ `method`: ...; \}\>; \}\>; \}\> \| `null`\>; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ports`   | `Readonly`\<\{ `currentInstallation`: `Promise`\< \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `Schema.refine`\<`ReleaseId`, `Schema.String`\>; `appId`: `Schema.refine`\<`AppId`, `Schema.String`\>; `artifact`: `Schema.Struct`\<\{ `artifactRef`: `Schema.refine`\<`ArtifactRef`, `Schema.String`\>; `artifactDigest`: `Schema.refine`\<`Sha256Digest`, `Schema.String`\>; `provenance`: `Schema.Struct`\<\{ `sourceRevision`: ...; `sourceTreeDigest`: ...; `buildRecipeDigest`: ...; \}\>; \}\>; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ... \| ...; `capabilityApproved`: `true`; `operations`: readonly ...[]; `resources`: ... \| ...; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: ... \| ... \| ...; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \}\> \| `null`\>; `declaration`: `Promise`\< \| `Readonly`\<\{ `api?`: `AppApi`; `displayName?`: `string`; `capabilities`: readonly `AppCapabilityId`[]; `calls?`: readonly `Readonly`\<\{ `appId`: ...; `methods`: ...; \}\>[]; `guidance?`: `string`; `handlers`: readonly `AppHandler`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly `AppRole`[]; `storage?`: readonly `AppStorageKey`[]; `commands?`: readonly `AppDeclaredCommand`[]; `gills?`: readonly `AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: readonly ...[]; `sync?`: `Readonly`\<\{ `method`: ...; \}\>; \}\>; \}\> \| `null`\>; \}\> |
 
 #### Returns
 
@@ -227,7 +237,7 @@ Reopen the host authority for this repository and requested scope.
 
 | Parameter    | Type                  |
 | ------------ | --------------------- |
-| `writer`     | `GitWriter` \| `null` |
+| `writer`     | `GitWriter`           |
 | `repository` | `string`              |
 | `scope`      | `"read"` \| `"write"` |
 
@@ -328,11 +338,10 @@ null when it is not an exact Oyster Git exchange.
 ### createGitDoor()
 
 ```ts
-function createGitDoor(host): Hono;
+function createGitDoor(host): GitDoor;
 ```
 
-Mount one smart-HTTP door with no provider credentials or alternate write
-branch.
+One smart-HTTP door with no provider credentials or alternate write branch.
 
 #### Parameters
 
@@ -342,7 +351,7 @@ branch.
 
 #### Returns
 
-`Hono`
+[`GitDoor`](#gitdoor)
 
 ---
 

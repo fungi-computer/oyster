@@ -1,5 +1,4 @@
 /** Smart-HTTP routing; all writes enter the same admitted Git path. */
-import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { GitWriter } from "@fungi.computer/agar/git";
 import type { AdmittedGit } from "./git-admission.js";
@@ -13,13 +12,11 @@ export type GitDoorTarget = Readonly<{
 /** Identity and selected installation come only from host-held ports. */
 export type GitDoorHost = Readonly<{
   /** Resolve a host-authenticated actor for this exact repository and scope;
-   * null means an anonymous request. */
+   * null refuses the request. */
   authenticate(
     request: Request,
     target: GitDoorTarget,
   ): Promise<Extract<GitWriter, { kind: "actor" }> | null>;
-  /** Decide whether anonymous reads may reach the selected installation. */
-  isPublic(installationId: string): Promise<boolean>;
   /** Resolve the installation's admitted path without exposing provider credentials. */
   git(installationId: string): Promise<AdmittedGit | null>;
 }>;
@@ -87,31 +84,42 @@ async function bodyOf(request: Request): Promise<Uint8Array | Response> {
   }
   return body;
 }
-/** Mount one smart-HTTP door with no provider credentials or alternate write branch. */
-export function createGitDoor(host: GitDoorHost): Hono {
-  const door = new Hono();
-  const smartHttp = async (context: Context) => {
-    const routed = gitDoorRoute(context.req.method, new URL(context.req.url));
-    if (routed === null) return context.text("Not a git route", 404);
+/** One smart-HTTP exchange's answer; the host declares the route it serves at. */
+export type GitDoor = Readonly<{
+  /** Answer one smart-HTTP request at `/git/...`; anything else is 404. */
+  fetch: (request: Request) => Promise<Response>;
+}>;
+
+const text = (body: string, status: number) =>
+  new Response(body, {
+    status,
+    headers: { "Content-Type": "text/plain; charset=UTF-8" },
+  });
+
+/** One smart-HTTP door with no provider credentials or alternate write branch. */
+export function createGitDoor(host: GitDoorHost): GitDoor {
+  const smartHttp = async (incoming: Request) => {
+    const routed = gitDoorRoute(incoming.method, new URL(incoming.url));
+    if (routed === null) return text("Not a git route", 404);
     const { advertise, ...target } = routed;
     const { installationId, repository } = target;
     const writing = target.scope === "write";
-    const writer = await host.authenticate(context.req.raw, target);
-    if (writer === null && (writing || !(await host.isPublic(installationId))))
+    const writer = await host.authenticate(incoming, target);
+    if (writer === null)
       return new Response("A key is required", {
         status: 401,
         headers: { "WWW-Authenticate": 'Basic realm="Oyster git"' },
       });
     const git = await host.git(installationId);
-    if (git === null) return context.text("Installation Git unavailable", 403);
-    if (context.req.header("content-encoding") !== undefined)
-      return context.text("Compressed Git requests are not supported", 400);
-    const body = advertise ? null : await bodyOf(context.req.raw);
+    if (git === null) return text("Installation Git unavailable", 403);
+    if (incoming.headers.get("content-encoding") !== null)
+      return text("Compressed Git requests are not supported", 400);
+    const body = advertise ? null : await bodyOf(incoming);
     if (body instanceof Response) return body;
     const headers: Record<string, string> = {};
     for (const name of ["content-type", "accept", "git-protocol"]) {
-      const value = context.req.header(name);
-      if (value !== undefined) headers[name] = value;
+      const value = incoming.headers.get(name);
+      if (value !== null) headers[name] = value;
     }
     const request = {
       service: writing ? ("receive-pack" as const) : ("upload-pack" as const),
@@ -119,15 +127,13 @@ export function createGitDoor(host: GitDoorHost): Hono {
       headers,
       body,
     };
-    const response =
-      writing && writer !== null
-        ? await git.push(writer, repository, request)
-        : await git.read(writer, repository, request);
+    const response = writing
+      ? await git.push(writer, repository, request)
+      : await git.read(writer, repository, request);
     return new Response(new Uint8Array(response.body), {
       status: response.status,
       headers: response.headers,
     });
   };
-  door.all("/git/*", smartHttp);
-  return door;
+  return { fetch: smartHttp };
 }

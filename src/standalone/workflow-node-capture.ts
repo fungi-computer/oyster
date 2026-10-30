@@ -13,11 +13,8 @@ import {
   deriveDeclaredOperations,
   scopedBindings,
 } from "../apps/index.js";
-import {
-  oysterPrincipalIsOwner,
-  verifyRelease,
-  type OysterHost,
-} from "../host.js";
+import { verifyRelease, type OysterHost } from "../host.js";
+import { oysterPrincipalIsOwner } from "../authorization.js";
 import { invocationCallerContext } from "../invocation.js";
 import type { StandaloneWorkflowAuthorityReaders } from "./workflow-authority-readers.js";
 
@@ -73,7 +70,6 @@ export function createStandaloneWorkflowNodeCapture(
       principal: { actor: caller.actor, role: caller.role ?? null },
       installation: {
         status: installation.status,
-        visibility: installation.visibility,
         instanceId: installation.instanceId,
         authority: installation.authority,
         artifactDigest: installation.release.artifact.artifactDigest,

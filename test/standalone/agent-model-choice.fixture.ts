@@ -5,7 +5,7 @@ import standalone, {
 import { AgentModelRefused } from "../../src/standalone/agent-model-choice.js";
 import { standaloneAgents } from "../../src/standalone/agents.js";
 import { standaloneTenancy } from "../../src/standalone/tenancy.js";
-import { oysterPrincipalIsOwner } from "../../src/host.js";
+import { oysterPrincipalIsOwner } from "../../src/authorization.js";
 
 export * from "../../src/standalone/worker.js";
 

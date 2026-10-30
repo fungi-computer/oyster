@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { SubagentsProjection } from "@fungi.computer/shiitake-extensions/subagents";
 import * as Stream from "effect/Stream";
 import { Mycelium } from "@fungi.computer/mycelium";
+import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
 import { directSandbox } from "@fungi.computer/mycelium/testing";
 import {
   createOyster,
@@ -970,6 +971,68 @@ for (const home of [
   });
 }
 
+for (const method of ["schedules", "pauseSchedule", "deleteSchedule"]) {
+  for (const target of [
+    {
+      label: "machine",
+      exists: true,
+      home: { kind: "machine", deviceId: "device" },
+    },
+    { label: "missing home", exists: true, home: null },
+    { label: "unknown Agent", exists: false, home: null },
+  ]) {
+    test(`App ${method} refuses ${target.label} before addressing AGENTS`, async () => {
+      let addressed = 0;
+      const env = {
+        AGENT_DIRECTORY: {
+          getByName: () => ({
+            has: async () => target.exists,
+            agentHome: async () => target.home,
+          }),
+        },
+        AGENTS: {
+          getByName: () => {
+            addressed += 1;
+            throw new Error("An unavailable target must not address its owner");
+          },
+        },
+      };
+      // The real Instance admission is covered in workers-computer; here the
+      // admitted transport must stop at its existing directory/home fence.
+      const frame = {
+        frameId: "frame",
+        facts: { selection: { owner: { kind: "installation", id: "app" } } },
+        host: undefined,
+        signal: new AbortController().signal,
+      };
+      const input =
+        method === "schedules"
+          ? { agentId: "target" }
+          : {
+              agentId: "target",
+              kind: "almanac",
+              scheduleId: "once",
+            };
+      await assert.rejects(
+        dispatchAgentBinding(
+          env,
+          tenantScope(defaultTenant, "https://oyster.test"),
+          frame,
+          { instanceId: "instance", frameId: "frame", binding: "AGENTS" },
+          method,
+          [input],
+        ),
+        !target.exists
+          ? /No such agent/u
+          : target.home === null
+            ? { code: "revoked" }
+            : { name: "MachineLinkRefused", reason: "actor_not_allowed" },
+      );
+      assert.equal(addressed, 0);
+    });
+  }
+}
+
 test("App send preserves installation attribution for a hosted target", async () => {
   const sent = [];
   const accepted = { status: "accepted", commandId: "command" };
@@ -1355,6 +1418,43 @@ test("standalone: ordinary Agent creation freezes createdBy and preserves the hu
     assert.equal(parent.createdBy, null);
     assert.equal(child.createdBy, parent.agentId);
     assert.equal(directory.readCreator(child.agentId), "owner");
+    assert.equal(directory.createdBy(child.agentId), parent.agentId);
+    assert.equal(directory.createdBy(parent.agentId), null);
+    const beforeArchive = directory.revision();
+    assert.equal(directory.recordArchive(child.agentId, true, 1), true);
+    assert.equal(directory.has(child.agentId), true);
+    assert.equal(
+      directory.list().some((agent) => agent.agentId === child.agentId),
+      false,
+    );
+    assert.deepEqual(
+      directory.list({ archived: true }).map((agent) => agent.agentId),
+      [child.agentId],
+    );
+    const afterArchive = directory.revision();
+    assert.ok(afterArchive > beforeArchive);
+    assert.equal(directory.recordArchive(child.agentId, false, 0), false);
+    assert.equal(
+      directory.recordArchive(child.agentId, false, 1),
+      false,
+      "same-revision disagreement is not acknowledged",
+    );
+    assert.equal(directory.recordArchive(child.agentId, true, 1), true);
+    assert.equal(
+      directory.revision(),
+      afterArchive,
+      "stale or repeated repair does not bump",
+    );
+    assert.equal(
+      directory.list({ archived: true })[0]?.createdBy,
+      parent.agentId,
+    );
+    assert.equal(directory.recordArchive(child.agentId, false, 2), true);
+    assert.equal(directory.list({ archived: true }).length, 0);
+    assert.equal(
+      directory.list().some((agent) => agent.agentId === child.agentId),
+      true,
+    );
     assert.equal(
       (await create("Child", "child", parent.agentId)).agentId,
       child.agentId,
@@ -1423,7 +1523,8 @@ function standaloneDeliveryFixture(databasePath, values, background) {
     { agentId: "recipient", name: "Recipient", createdBy: null },
   ];
   const directory = {
-    list: async () => agents,
+    list: async (options) => (options?.archived === true ? [] : agents),
+    has: async (agentId) => agents.some((agent) => agent.agentId === agentId),
     agentComputerRevision: async () => null,
     agentComputerSnapshot: async () => null,
     open: async () => {
@@ -2960,11 +3061,13 @@ test("HTTP credentials and forged agent claims never authenticate an internal ag
 
 test("the agent host captures one App source per acquisition and retains agent attribution", async (t) => {
   const database = new DatabaseSync(":memory:");
-  const generation = createInstallationStoreGeneration(
-    fromNodeSqlite(database).sql,
+  const agentDatabase = new DatabaseSync(":memory:");
+  const { generation } = createInstallationStoreGeneration(
+    fromNodeSqlite(database),
   );
   t.after(() => {
     database.close();
+    agentDatabase.close();
   });
   const directory = newDirectory(
     { storage: fromNodeSqlite(database) },
@@ -3095,6 +3198,7 @@ test("the agent host captures one App source per acquisition and retains agent a
     {
       id: { name: agent.agentId },
       storage: {
+        ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
         get: async () => ({ directoryName: "agents", tenantId: "default" }),
       },
     },
@@ -3107,8 +3211,21 @@ test("the agent host captures one App source per acquisition and retains agent a
     "instructions do not project duplicate modules",
   );
   const { text } = await options.instructions.load({});
+  assert.ok(text.includes(forageDiscoveryInstructions));
   assert.match(text, /env\.BONSAI\.repos\.list\(\{\}\)/u);
   assert.doesNotMatch(text, /\["/u, "no bracket call syntax in the prompt");
+  assert.equal(text.match(/type AppApprovalResult/gu)?.length, 1);
+  const waitForApproval =
+    "On pending_approval, tell the person it is waiting for their approval; do not retry.";
+  assert.equal(text.split(waitForApproval).length - 1, 1);
+  assert.ok(
+    text.includes(
+      '  | { kind: "refused"; reason: string; denialNote?: string };\n' +
+        waitForApproval,
+    ),
+  );
+  assert.match(text, /kind: "pending_approval"; recordId: string/u);
+  assert.match(text, /kind: "refused"; reason: string; denialNote\?: string/u);
   const acquired = [];
   let legacyApproval = false;
   const source = options.tools.sources[0];
@@ -3210,10 +3327,14 @@ test("the agent host captures one App source per acquisition and retains agent a
 
 test("the Agent tool host derives the same App catalog as the MCP host for Computer and Media Apps", async (t) => {
   const database = new DatabaseSync(":memory:");
-  const generation = createInstallationStoreGeneration(
-    fromNodeSqlite(database).sql,
+  const agentDatabase = new DatabaseSync(":memory:");
+  const { generation } = createInstallationStoreGeneration(
+    fromNodeSqlite(database),
   );
-  t.after(() => database.close());
+  t.after(() => {
+    database.close();
+    agentDatabase.close();
+  });
   const directory = newDirectory(
     { storage: fromNodeSqlite(database) },
     { OYSTER_OWNER_NAME: "owner" },
@@ -3330,6 +3451,7 @@ test("the Agent tool host derives the same App catalog as the MCP host for Compu
     {
       id: { name: agent.agentId },
       storage: {
+        ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
         get: async () => ({ directoryName: "agents", tenantId: "default" }),
       },
     },
@@ -3389,8 +3511,8 @@ test("the Agent tool host derives the same App catalog as the MCP host for Compu
 test("an Agent's App tools reach only its pinned tenant's registry", async (t) => {
   const database = new DatabaseSync(":memory:");
   t.after(() => database.close());
-  const generation = createInstallationStoreGeneration(
-    fromNodeSqlite(database).sql,
+  const { generation } = createInstallationStoreGeneration(
+    fromNodeSqlite(database),
   );
   const registries = [];
   const env = {
@@ -3428,9 +3550,17 @@ test("an Agent's App tools reach only its pinned tenant's registry", async (t) =
     }
   }
   const acquire = async (pin) => {
+    const agentDatabase = new DatabaseSync(":memory:");
+    t.after(() => agentDatabase.close());
     const source = (
       await new Agent(
-        { id: { name: "tenant-agent" }, storage: { get: async () => pin } },
+        {
+          id: { name: "tenant-agent" },
+          storage: {
+            ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
+            get: async () => pin,
+          },
+        },
         env,
       ).options()
     ).tools.sources[0];

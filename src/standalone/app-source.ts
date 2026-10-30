@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { owner, routes as routeTable, type Routes } from "../authorization.js";
 import { bodyLimit } from "hono/body-limit";
 import * as Schema from "effect/Schema";
 import { AppInstanceError } from "../index.js";
@@ -63,19 +63,19 @@ export async function dispatchAppSourceBinding(
 }
 
 /** Operator-only: seed one App's editable source template (`install-apps.mjs`).
- * Mounted under `host.ownerRoutes`, already owner-key-gated for every `/api/*`
- * path before this handler runs (`host.ts`'s `oysterPrincipalIsOwner` check).
+ * Each route declares the owner requirement (`authorization.ts`).
  * The operator `git push`es the projected source to
  * `/api/apps/:appId/source.git`, then claims that head here. */
 export function appSourceOwnerRoutes(
   env: AppSourceBindingEnv,
   scope: TenantScope,
-): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
+): Routes<OysterEnv> {
+  const routes = routeTable<OysterEnv>();
   const registry = () => env.REGISTRY.getByName(scope.durableName("registry"));
   routes.on(
     ["GET", "POST"],
     "/api/apps/:appId/source.git/:suffix{info/refs|git-upload-pack|git-receive-pack}",
+    owner("direct-or-app"),
     (context) =>
       registry().exchangeTemplateSource(
         context.req.param("appId"),
@@ -85,10 +85,7 @@ export function appSourceOwnerRoutes(
   );
   routes.put(
     "/api/apps/:appId/source",
-    bodyLimit({
-      maxSize: TEMPLATE_SEED_CLAIM_MAX_BYTES,
-      onError: (context) => context.json({ kind: "invalid" }, 413),
-    }),
+    owner("direct-or-app"),
     async (context) => {
       const claim = parseTemplateSeedClaim(await context.req.text());
       if (claim === null) return context.json({ kind: "invalid" }, 400);
@@ -104,6 +101,14 @@ export function appSourceOwnerRoutes(
             ? 409
             : 503;
       return Response.json(result, { status });
+    },
+    {
+      middleware: [
+        bodyLimit({
+          maxSize: TEMPLATE_SEED_CLAIM_MAX_BYTES,
+          onError: (context) => context.json({ kind: "invalid" }, 413),
+        }),
+      ],
     },
   );
   return routes;

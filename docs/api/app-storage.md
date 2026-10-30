@@ -131,7 +131,7 @@ Whether `writer` may mutate `scope`; anything else is `owner_required`.
 | Parameter | Type                                    |
 | --------- | --------------------------------------- |
 | `writer`  | [`AppStorageWriter`](#appstoragewriter) |
-| `scope`   | `"member"` \| `"team"`                  |
+| `scope`   | `"team"` \| `"member"`                  |
 
 #### Returns
 

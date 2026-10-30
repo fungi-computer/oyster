@@ -112,7 +112,7 @@ export async function webhookHeaders(
 }
 
 export { createGitDoor, gitDoorRoute, smartHttpExchange } from "./git-door.js";
-export type { GitDoorHost, GitDoorTarget } from "./git-door.js";
+export type { GitDoor, GitDoorHost, GitDoorTarget } from "./git-door.js";
 export {
   createAdmittedGit,
   createInstallationGitAdmission,

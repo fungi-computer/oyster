@@ -10,10 +10,12 @@
 
 | Module                                              | Description |
 | --------------------------------------------------- | ----------- |
+| [agent-schedules](agent-schedules.md)               | -           |
 | [agents](agents.md)                                 | -           |
 | [app-storage](app-storage.md)                       | -           |
 | [apps](apps.md)                                     | -           |
 | [auth](auth.md)                                     | -           |
+| [authorization](authorization.md)                   | -           |
 | [browser/boot](browser/boot.md)                     | -           |
 | [browser](browser.md)                               | -           |
 | [build-contract](build-contract.md)                 | -           |

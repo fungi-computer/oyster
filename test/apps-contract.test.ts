@@ -58,9 +58,6 @@ const stored = {
   },
   releasePin: "pinned",
   status: "enabled",
-  visibility: "private",
-  approvedAnonymousMethods: [],
-  anonymousApproval: null,
   authority: {
     authorityVersion: 1,
     declaredOperationsDigest: `sha256:${"e".repeat(64)}`,
@@ -83,7 +80,7 @@ it("pins the Release and operation snapshot with explicit host state", () => {
     { declaredOperationsDigest: "unverified" },
     { instanceId: "not-an-instance" },
     { appId: "app_other" },
-    { visibility: undefined },
+    { status: undefined },
     { authorityVersion: 0 },
   ])
     expect(installationSchema.safeParse({ ...stored, ...change }).success).toBe(
@@ -182,7 +179,6 @@ it("keeps host identity, read-only storage and pre-read tool facts in the frozen
     declaredOperationsSchema.safeParse({
       artifactDigest: stored.release.artifact.artifactDigest,
       digest: stored.authority.declaredOperationsDigest,
-      anonymousMethods: [],
       capabilities: [
         {
           capability: "media.generation",
@@ -191,6 +187,31 @@ it("keeps host identity, read-only storage and pre-read tool facts in the frozen
       ],
     }).success,
   ).toBe(true);
+});
+
+it("has no anonymous-method consent anywhere in installation state or commands", () => {
+  // Oyster is owner-only: no installation, declared-operation snapshot or
+  // command can carry consent for anonymous callers.
+  const legacy = {
+    ...stored,
+    approvedAnonymousMethods: [],
+    anonymousApproval: null,
+  };
+  expect(installationSchema.safeParse(legacy).success).toBe(false);
+  expect(
+    declaredOperationsSchema.safeParse({
+      artifactDigest: stored.release.artifact.artifactDigest,
+      digest: stored.authority.declaredOperationsDigest,
+      capabilities: [],
+      anonymousMethods: [],
+    }).success,
+  ).toBe(false);
+  expect(
+    installationCommandSchema.safeParse({
+      kind: "approve-anonymous",
+      methods: [],
+    }).success,
+  ).toBe(false);
 });
 
 it("keeps identities explicit and grant commands distinct from state commands", () => {
@@ -233,9 +254,7 @@ it("keeps method ingress, admitted frame grants and refusals closed", () => {
   expectTypeOf<Extract<GateRequest, { kind: "method" }>["via"]>().toEqualTypeOf<
     "ui" | "agent" | "mcp" | "workflow"
   >();
-  expectTypeOf<GateFacts["principal"]["actor"]>().toEqualTypeOf<
-    HostActor | Readonly<{ kind: "visitor" }>
-  >();
+  expectTypeOf<GateFacts["principal"]["actor"]>().toEqualTypeOf<HostActor>();
   expectTypeOf<
     Extract<GateDecision, { kind: "admitted" }>["grants"]
   >().toEqualTypeOf<InvocationGrants>();

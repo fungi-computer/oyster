@@ -15,6 +15,11 @@ import { createShiitakeClient } from "@fungi.computer/shiitake/client";
 import * as Schema from "effect/Schema";
 import { appAgentSchema } from "@fungi.computer/agar/agents";
 import { desktopSnapshotSchema } from "../../../../apps/tourtois/src/desktop-api.js";
+import { parse as parseJsonc } from "jsonc-parser";
+import { readFile } from "node:fs/promises";
+import { waitForNativeRoot } from "../native-root-readiness.fixture.mjs";
+import { approveChosenDashboard } from "../../src/standalone/dashboard-approval.js";
+import { installationOperationSchema } from "../../src/installation-operations.js";
 
 async function runProof() {
   // A deliberate live proof, never a fake-provider fallback or an automatic batch leg.
@@ -30,111 +35,91 @@ async function runProof() {
       `Missing ${name}; source the authorized credential file without printing it`,
     );
   const repository = fileURLToPath(new URL("../../../../", import.meta.url));
-  execFileSync("pnpm", ["--dir", "packages/oyster", "build"], {
-    cwd: repository,
-    stdio: "pipe",
-  });
+  // Consume the ordinary workspace build; proof readers never rebuild shared dist.
   const sourceRevision = `git:${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim()}`;
 
   const work = await mkdtemp(join(tmpdir(), "tourtois-agent-live-"));
   // Reuse the maintained local standalone fixture's disposable owner sign-in value.
   const ownerKey = "local-sandbox-proof-owner";
+  const tenantHost = "oyster.test";
   let worker, workerStopped, client, session;
   let workerOutput = "";
   try {
-    const packed = await packRelease({
-      appId: "app_tourtois",
-      releaseId: "rel_desktopproof",
-      sourceDirectory: repository,
-      sourceRevision,
-      packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
-        cwd: repository,
-        encoding: "utf8",
-      }).trim(),
-      recipe: {
-        entry: "apps/tourtois/index.html",
-        assets: bundledHtmlRecipe.limits,
-        assetBase: "./",
-        maxOutputBytes: bundledHtmlRecipe.limits.maxTotalBytes,
-        backend: {
-          entry: "apps/tourtois/backend/index.ts",
-          exportName: "Tourtois",
-          compatibilityDate: "2026-09-04",
-          runtime: { kind: "durable-facet", stateSchema: 1 },
-        },
-      },
-      outDirectory: join(work, "release"),
-    });
-    log("PASS captured Tourtois source pack");
-    // Grove is the maintained declaring App for owner fleet management and
-    // Session transport. Tourtois receives no additional Agent permissions.
-    await packRelease({
-      appId: "app_grove",
-      releaseId: "rel_groveproof",
-      sourceDirectory: repository,
-      sourceRevision,
-      packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
-        cwd: repository,
-        encoding: "utf8",
-      }).trim(),
-      recipe: {
-        entry: "apps/grove/index.html",
-        assets: bundledHtmlRecipe.limits,
-        assetBase: "./",
-        maxOutputBytes: bundledHtmlRecipe.limits.maxTotalBytes,
-        backend: {
-          entry: "apps/grove/backend/index.ts",
-          exportName: "Grove",
-          compatibilityDate: "2026-09-04",
-          runtime: { kind: "durable-facet", stateSchema: 1 },
-        },
-      },
-      outDirectory: join(work, "grove-release"),
-    });
-    log("PASS captured declaring Grove source pack");
-    const config = join(work, "wrangler.json");
-    await writeFile(
-      config,
-      JSON.stringify({
-        name: "tourtois-headless-agent-proof",
-        main: fileURLToPath(
-          new URL("./tourtois-desktop-agent.worker.ts", import.meta.url),
-        ),
-        vars: {
-          OYSTER_OWNER_KEY: ownerKey,
-          OYSTER_OWNER_NAME: "owner",
-          OYSTER_HOME_INSTALLATION: "tourtois",
-          OYSTER_COMPUTER_ID: "agent-workspace",
-          AI_GATEWAY_ACCOUNT_ID: process.env.AI_GATEWAY_ACCOUNT_ID,
-          AI_GATEWAY_ID: process.env.AI_GATEWAY_ID,
-          AI_GATEWAY_AUTH_TOKEN: process.env.AI_GATEWAY_AUTH_TOKEN,
-        },
-        compatibility_date: "2026-09-04",
-        compatibility_flags: ["nodejs_compat"],
-        worker_loaders: [{ binding: "LOADER" }],
-        r2_buckets: [{ binding: "RELEASES", bucket_name: "tourtois-proof" }],
-        durable_objects: {
-          bindings: [
-            { name: "REGISTRY", class_name: "OysterRegistry" },
-            { name: "INSTANCES", class_name: "OysterInstance" },
-            { name: "AGENTS", class_name: "StandaloneAgent" },
-            { name: "AGENT_DIRECTORY", class_name: "AgentDirectory" },
-          ],
-        },
-        migrations: [
-          {
-            tag: "v1",
-            new_sqlite_classes: [
-              "OysterRegistry",
-              "OysterInstance",
-              "StandaloneAgent",
-              "AgentDirectory",
-            ],
+    const packApps = async () => {
+      const packed = await packRelease({
+        appId: "app_tourtois",
+        releaseId: "rel_desktopproof",
+        sourceDirectory: repository,
+        sourceRevision,
+        packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
+          cwd: repository,
+          encoding: "utf8",
+        }).trim(),
+        recipe: {
+          entry: "apps/tourtois/index.html",
+          assets: bundledHtmlRecipe.limits,
+          assetBase: "./",
+          maxOutputBytes: bundledHtmlRecipe.limits.maxTotalBytes,
+          backend: {
+            entry: "apps/tourtois/backend/index.ts",
+            exportName: "Tourtois",
+            compatibilityDate: "2026-09-04",
+            runtime: { kind: "durable-facet", stateSchema: 1 },
           },
-        ],
-      }),
-      { mode: 0o600 },
+        },
+        outDirectory: join(work, "release"),
+      });
+      log("PASS captured Tourtois source pack");
+      // Grove is the maintained declaring App for owner fleet management and
+      // Session transport. Tourtois receives no additional Agent permissions.
+      await packRelease({
+        appId: "app_grove",
+        releaseId: "rel_groveproof",
+        sourceDirectory: repository,
+        sourceRevision,
+        packageStoreDirectory: execFileSync("pnpm", ["store", "path"], {
+          cwd: repository,
+          encoding: "utf8",
+        }).trim(),
+        recipe: {
+          entry: "apps/grove/index.html",
+          assets: bundledHtmlRecipe.limits,
+          assetBase: "./",
+          maxOutputBytes: bundledHtmlRecipe.limits.maxTotalBytes,
+          backend: {
+            entry: "apps/grove/backend/index.ts",
+            exportName: "Grove",
+            compatibilityDate: "2026-09-04",
+            runtime: { kind: "durable-facet", stateSchema: 1 },
+          },
+        },
+        outDirectory: join(work, "grove-release"),
+      });
+      log("PASS captured declaring Grove source pack");
+      return packed;
+    };
+    const config = join(work, "wrangler.json");
+    const configuration = parseJsonc(
+      await readFile(
+        join(repository, "packages/oyster/deploy/wrangler.celld.jsonc"),
+        "utf8",
+      ),
     );
+    configuration.name = "tourtois-headless-agent-proof";
+    configuration.main = fileURLToPath(
+      new URL("./tourtois-desktop-agent.worker.ts", import.meta.url),
+    );
+    configuration.vars = {
+      ...configuration.vars,
+      OYSTER_OWNER_KEY: ownerKey,
+      OYSTER_HOME_INSTALLATION: "tourtois",
+      OYSTER_COMPUTER_ID: "agent-workspace",
+      OYSTER_ORIGIN: `https://${tenantHost}`,
+      AI_GATEWAY_ACCOUNT_ID: process.env.AI_GATEWAY_ACCOUNT_ID,
+      AI_GATEWAY_ID: process.env.AI_GATEWAY_ID,
+      AI_GATEWAY_AUTH_TOKEN: process.env.AI_GATEWAY_AUTH_TOKEN,
+    };
+    await writeFile(config, JSON.stringify(configuration), { mode: 0o600 });
     // The maintained standalone native proofs use Wrangler's ordinary CLI.
     const socket = createServer();
     await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -154,6 +139,10 @@ async function runProof() {
         String(port),
         "--persist-to",
         join(work, "state"),
+        "--local-upstream",
+        tenantHost,
+        "--upstream-protocol",
+        "https",
       ],
       { cwd: repository, stdio: ["ignore", "pipe", "pipe"], detached: true },
     );
@@ -164,43 +153,80 @@ async function runProof() {
       workerOutput = (workerOutput + chunk.toString()).slice(-1_048_576);
     });
     workerStopped = new Promise((resolve) => worker.once("exit", resolve));
-    const readyDeadline = Date.now() + 90_000;
-    for (;;) {
-      const ready = await fetch(`${origin}/login`, {
-        signal: AbortSignal.timeout(1_000),
-      }).then(
-        async (response) => {
-          await response.body?.cancel();
-          return response.ok;
-        },
-        () => false,
+    await waitForNativeRoot(worker, origin, {
+      milliseconds: 90_000,
+      interval: 250,
+      requestMilliseconds: 1_000,
+      label: "Local production root readiness",
+    }).catch((cause) => {
+      const diagnostics = stripVTControlCharacters(workerOutput)
+        .split("\n")
+        .filter((line) => line.includes("[ERROR]") || line.startsWith("Error:"))
+        .slice(-10)
+        .join("\n");
+      throw new Error(
+        `Local production root did not become ready: ${diagnostics || cause.message}`,
+        { cause },
       );
-      if (ready) break;
-      if (worker.exitCode !== null || Date.now() >= readyDeadline) {
-        const diagnostics = stripVTControlCharacters(workerOutput)
-          .split("\n")
-          .filter(
-            (line) => line.includes("[ERROR]") || line.startsWith("Error:"),
-          )
-          .slice(-10)
-          .join("\n");
-        throw new Error(
-          `Local production root did not become ready: ${diagnostics || "readiness deadline exceeded"}`,
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
+    });
     log("PASS local standalone root readiness");
+    const packed = await packApps();
+    const headers = {
+      Authorization: `Bearer ${ownerKey}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    let installationRequestId;
     const installed = await installRelease({
       directory: join(work, "release"),
       url: origin,
       key: ownerKey,
       installationId: "tourtois",
+      onAdmitted: (operation) => {
+        installationRequestId = operation.requestId;
+      },
     });
     assert.equal(
       installed.status,
       201,
       "Actual Tourtois installation must be admitted before any model call",
+    );
+    await installed.body?.cancel();
+    assert.ok(
+      installationRequestId,
+      "Retain the correlated installation request",
+    );
+    const status = new URL("/api/installations/tourtois/status", origin);
+    status.searchParams.set("requestId", installationRequestId);
+    const observed = await fetch(status, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+    assert.equal(observed.status, 200);
+    const operation = installationOperationSchema.parse(await observed.json());
+    assert.equal(operation.requestId, installationRequestId);
+    assert.equal(operation.installationId, "tourtois");
+    assert.equal(operation.state, "succeeded");
+    assert.equal(
+      operation.release.artifact.artifactDigest,
+      packed.release.artifact.artifactDigest,
+    );
+    const dashboardApproval = await approveChosenDashboard(
+      operation,
+      (method, path, body) => {
+        /** @type {RequestInit} */
+        const request = {
+          method,
+          headers,
+          signal: AbortSignal.timeout(15_000),
+        };
+        if (body !== undefined) request.body = JSON.stringify(body);
+        return fetch(new URL(path, origin), request);
+      },
+    );
+    assert.ok(
+      dashboardApproval,
+      "Approve only the fresh chosen dashboard's shell",
     );
     const groveInstalled = await installRelease({
       directory: join(work, "grove-release"),
@@ -209,10 +235,6 @@ async function runProof() {
       installationId: "grove",
     });
     assert.equal(groveInstalled.status, 201, "Install the real fleet caller");
-    const headers = {
-      Authorization: `Bearer ${ownerKey}`,
-      "Content-Type": "application/json",
-    };
     const getLayout = async () => {
       const response = await fetch(
         `${origin}/apps/tourtois/methods/layout.get`,
@@ -322,6 +344,7 @@ async function runProof() {
       model: "@fungi/luna",
       sourceRevision,
       releaseId: packed.release.releaseId,
+      dashboardApproval,
       agentId,
       sessionId,
       commandId: accepted.commandId,

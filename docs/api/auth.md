@@ -8,26 +8,6 @@
 
 # auth
 
-## Type Aliases
-
-### OysterKeySessionResolver
-
-```ts
-type OysterKeySessionResolver = Readonly<{
-  resolve: (value) => Promise<Readonly<{
-    keyId: string;
-  }> | null>;
-}>;
-```
-
-The host owns session minting, hashing/storage and expiry. A session resolves
-only to a key id, never to owner or grant authority. Hosts should use Path=/,
-HttpOnly, Secure and SameSite=Lax (or stricter) as defense in depth; Oyster
-independently checks request provenance. Cookie-only admission allows GET/HEAD
-navigation. Every other method requires Origin to be present and equal the
-request URL's origin, and Sec-Fetch-Site not to be cross-site. Missing Origin is
-refused.
-
 ## Variables
 
 ### ownerKeyCookieName
@@ -37,16 +17,6 @@ const ownerKeyCookieName: "oyster_session" = "oyster_session";
 ```
 
 Cookie emitted by ownerKeyAuth, for composing credential-specific adapters.
-
----
-
-### keySessionCookieName
-
-```ts
-const keySessionCookieName: "oyster_key_session" = "oyster_key_session";
-```
-
-Host-minted opaque sessions for named keys, separate from the owner cookie.
 
 ## Functions
 
@@ -87,31 +57,6 @@ The owner key, or a named key admitted as its canonical Team-key actor.
 | `ownerKey` | `string`                                                               |
 | `ownerId`  | `string`                                                               |
 | `keys`     | () => `Pick`\<[`OysterKeyStore`](keys.md#oysterkeystore), `"verify"`\> |
-
-#### Returns
-
-[`OysterAuth`](host.md#oysterauth)
-
----
-
-### keySessionAuth()
-
-```ts
-function keySessionAuth(auth, ownerId, keys, sessions): OysterAuth;
-```
-
-Add host-owned browser sessions to ownerOrKeyAuth. Explicit credentials and
-non-401 refusals keep their ordinary result; ambient cookies cannot undo them.
-Every cookie admission rechecks the key's liveness and canonical owner.
-
-#### Parameters
-
-| Parameter  | Type                                                                  |
-| ---------- | --------------------------------------------------------------------- |
-| `auth`     | [`OysterAuth`](host.md#oysterauth)                                    |
-| `ownerId`  | `string`                                                              |
-| `keys`     | () => `NonNullable`\<[`OysterHost`](host.md#oysterhost)\[`"keys"`\]\> |
-| `sessions` | [`OysterKeySessionResolver`](#oysterkeysessionresolver)               |
 
 #### Returns
 

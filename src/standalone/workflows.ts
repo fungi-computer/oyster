@@ -36,16 +36,21 @@ import {
 import {
   createWorkflowPublishedDefinitionPort,
   readPublishedWorkflow,
+  type ScheduleListInput,
 } from "@fungi.computer/workflows-wire";
 
 import type { InvocationFacts } from "../invocation.js";
-import type { OysterPrincipal } from "../host.js";
 import { workflowAgentAuthority } from "../workflow-agent-authority.js";
 import type {
   OysterGitWorkerEnv,
   OysterGitWorkerHost,
 } from "../workers-git.js";
-import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
+import {
+  defaultTenant,
+  tenantScope,
+  type TenantPrincipal,
+  type TenantScope,
+} from "../tenant.js";
 import { AppInstanceError } from "../index.js";
 import type { GitWriter, RepositoryRef } from "@fungi.computer/agar/git";
 import {
@@ -271,7 +276,7 @@ export abstract class StandaloneWorkflowRunsBase<
           },
         };
         let webhooks: ReturnType<
-          typeof createWorkflowWebhooks<OysterPrincipal>
+          typeof createWorkflowWebhooks<TenantPrincipal>
         > | null = null;
         const wake = async () => {
           const due = [
@@ -297,7 +302,7 @@ export abstract class StandaloneWorkflowRunsBase<
           env.WORKFLOW_WEBHOOK_BINDING_RATE !== undefined &&
           env.WORKFLOW_WEBHOOK_POLICY !== undefined
         )
-          webhooks = createWorkflowWebhooks<OysterPrincipal>({
+          webhooks = createWorkflowWebhooks<TenantPrincipal>({
             sql: ctx.storage.sql,
             transactionSync: (body) => ctx.storage.transactionSync(body),
             now: () => this.scheduleClock.now(),
@@ -569,8 +574,17 @@ export abstract class StandaloneWorkflowRunsBase<
       input,
     );
   }
-  async schedules(facts: InvocationFacts) {
-    return (await this.library(facts, "schedules")).schedules.list(facts);
+  async pauseSchedule(facts: InvocationFacts, input: { scheduleId: string }) {
+    return (await this.library(facts, "pauseSchedule")).schedules.pause(
+      facts,
+      input,
+    );
+  }
+  async schedules(facts: InvocationFacts, input: ScheduleListInput) {
+    return (await this.library(facts, "schedules")).schedules.list(
+      facts,
+      input,
+    );
   }
   async armEventTrigger(facts: InvocationFacts, input: TriggerArmTarget) {
     return (await this.library(facts, "armEventTrigger")).events.arm(
@@ -633,7 +647,7 @@ export abstract class StandaloneWorkflowRunsBase<
       })
       .fetch(request);
   }
-  async #isWebhookOwner(principal: OysterPrincipal) {
+  async #isWebhookOwner(principal: TenantPrincipal) {
     const shared = await standaloneTenancy(this.env);
     const current = await shared.owner();
     return (
@@ -643,7 +657,7 @@ export abstract class StandaloneWorkflowRunsBase<
   }
   /** Root-authenticated owner RPC; command data cannot nominate an actor or pin. */
   async webhookControl(
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     installationId: string,
     raw: unknown,
   ): Promise<Response> {
@@ -835,7 +849,7 @@ export abstract class StandaloneWorkflowRunsBase<
   }
   /** Host-only MCP control reopens the configured owner's authority on every call. */
   async control(
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     operation: "status" | "cancel",
     runId: string,
   ) {

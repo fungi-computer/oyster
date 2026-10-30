@@ -440,7 +440,7 @@ export function permissionScreen(
                   scope === "computer" ? "All Computers" : "All Agents",
                 ),
                 ...[...resources.values()].map((resource) =>
-                  row(resource, resource.label),
+                  row({ kind: resource.kind, id: resource.id }, resource.label),
                 ),
               ],
         switches: capabilities
@@ -488,4 +488,30 @@ export const appPermissionPageSchema = z.strictObject({
   appName: z.string(),
   artifactDigest: ownerCodec(sha256DigestSchema),
   permissions: appPermissionsWireSchema,
+  canEdit: z.boolean(),
+  resources: z.array(
+    z.strictObject({
+      kind: z.string(),
+      id: z.string(),
+      label: z.string(),
+    }),
+  ),
 });
+
+/** A host's live authority and resource directory, never browser-minted grants. */
+export type AppPermissionsViewData = z.output<typeof appPermissionPageSchema>;
+
+/**
+ * Hosts authenticate, fence and commit; the shared view owns the permission draft.
+ * @interface
+ */
+export type AppPermissionsPort = Readonly<{
+  /** Read the installation's current permissions, whether the caller can edit them, and the available resources. */
+  read(appKey: string): Promise<AppPermissionsViewData | "unavailable">;
+  /** Submit edited grants with the store generation, authority version and artifact digest. The host checks authorization and freshness before saving. */
+  submit(
+    appKey: string,
+    pins: PermissionPins,
+    changes: readonly GrantChange[],
+  ): Promise<"accepted" | "stale" | "refused" | "unavailable" | "unconfirmed">;
+}>;

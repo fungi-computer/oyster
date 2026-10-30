@@ -64,12 +64,3 @@ it("refuses a verified Release without git.repository", async () => {
   await expect(f.admits(writer, "notes", "read")).resolves.toBe(false);
   await expect(f.admits(writer, "notes", "write")).resolves.toBe(false);
 });
-
-it("keeps the existing anonymous visibility rule on the same live reader", async () => {
-  const f = await fixture();
-  await expect(f.admits(null, "notes", "read")).resolves.toBe(false);
-  f.setCurrent({ ...f.installation, visibility: "public" });
-  await expect(f.admits(null, "notes", "read")).resolves.toBe(true);
-  f.setCurrent({ ...f.installation, visibility: "private" });
-  await expect(f.admits(null, "notes", "read")).resolves.toBe(false);
-});

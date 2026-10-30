@@ -8,6 +8,195 @@
 
 # apps
 
+## Interfaces
+
+### AppPermissionsPort
+
+Hosts authenticate, fence and commit; the shared view owns the permission draft.
+
+#### Methods
+
+##### read()
+
+```ts
+readonly read(appKey): Promise<
+  | "unavailable"
+  | {
+  storeGeneration: string;
+  installationId: string;
+  appId: string;
+  appName: string;
+  artifactDigest: Sha256Digest;
+  permissions: {
+     authority: {
+        authorityVersion: number;
+        declaredOperationsDigest: Sha256Digest;
+        approvedGrants: readonly Readonly<{
+           capability:   | "computer.list"
+              | "computer.readFile"
+              | "computer.writeFile"
+              | "computer.execute"
+              | "approvals"
+              | "agent.list"
+              | "agent.manage"
+              | "agent.rename"
+              | "agent.avatar"
+              | "agent.toolPolicy"
+              | "agent.read"
+              | "agent.send"
+              | "llm.generation"
+              | "media.generation"
+              | "games:servers"
+              | "git.repository"
+              | "apps.open"
+              | "apps.call"
+              | "app.storage"
+              | "app.events.emit"
+              | "team.workbenchHost"
+              | "marketplace.browse"
+              | "marketplace.purchase"
+              | "workflow.run"
+              | "workflow.publish"
+              | "workflow.arm"
+              | "world"
+              | "channels.read"
+              | "channels.personal.manage";
+           capabilityApproved: true;
+           operations: readonly string[];
+           resources: "tenant-scope" | readonly Readonly<...>[];
+        }>[];
+        approval:   | Readonly<{
+           by:   | {
+              kind: "member";
+              memberId: string;
+            }
+              | {
+              kind: "agent";
+              agentId: string;
+            }
+              | {
+              kind: "team-key";
+              keyId: string;
+            };
+           at: number;
+           authorityVersion: number;
+         }>
+           | null;
+     };
+     declaredOperations: {
+        artifactDigest: Sha256Digest;
+        digest: Sha256Digest;
+        capabilities: readonly Readonly<{
+           capability:   | "computer.list"
+              | "computer.readFile"
+              | "computer.writeFile"
+              | "computer.execute"
+              | "approvals"
+              | "agent.list"
+              | "agent.manage"
+              | "agent.rename"
+              | "agent.avatar"
+              | "agent.toolPolicy"
+              | "agent.read"
+              | "agent.send"
+              | "llm.generation"
+              | "media.generation"
+              | "games:servers"
+              | "git.repository"
+              | "apps.open"
+              | "apps.call"
+              | "app.storage"
+              | "app.events.emit"
+              | "team.workbenchHost"
+              | "marketplace.browse"
+              | "marketplace.purchase"
+              | "workflow.run"
+              | "workflow.publish"
+              | "workflow.arm"
+              | "world"
+              | "channels.read"
+              | "channels.personal.manage";
+           operations: readonly string[];
+        }>[];
+     };
+  };
+  canEdit: boolean;
+  resources: object[];
+}>;
+```
+
+Read the installation's current permissions, whether the caller can edit them,
+and the available resources.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `appKey`  | `string` |
+
+###### Returns
+
+`Promise`\< \| `"unavailable"` \| \{ `storeGeneration`: `string`;
+`installationId`: `string`; `appId`: `string`; `appName`: `string`;
+`artifactDigest`: `Sha256Digest`; `permissions`: \{ `authority`: \{
+`authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`;
+`approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`:
+readonly `string`[]; `resources`: `"tenant-scope"` \| readonly
+`Readonly`\<...\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`:
+`"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
+`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`;
+`authorityVersion`: `number`; \}\> \| `null`; \}; `declaredOperations`: \{
+`artifactDigest`: `Sha256Digest`; `digest`: `Sha256Digest`; `capabilities`:
+readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `operations`: readonly `string`[]; \}\>[]; \}; \};
+`canEdit`: `boolean`; `resources`: `object`[]; \}\>
+
+##### submit()
+
+```ts
+readonly submit(
+   appKey,
+   pins,
+   changes
+): Promise<"stale" | "refused" | "unavailable" | "accepted" | "unconfirmed">;
+```
+
+Submit edited grants with the store generation, authority version and artifact
+digest. The host checks authorization and freshness before saving.
+
+###### Parameters
+
+| Parameter               | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `appKey`                | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `pins`                  | \{ `storeGeneration`: `string`; `authorityVersion`: `number`; `artifactDigest`: `Sha256Digest`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `pins.storeGeneration`  | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `pins.authorityVersion` | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `pins.artifactDigest`   | `Sha256Digest`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `changes`               | readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[]; \}\> \| `null`; \}\>[] |
+
+###### Returns
+
+`Promise`\<`"stale"` \| `"refused"` \| `"unavailable"` \| `"accepted"` \|
+`"unconfirmed"`\>
+
 ## Type Aliases
 
 ### PermissionCatalogEntry
@@ -44,11 +233,7 @@ Consent and resource semantics belong to the grant owner, not its UI.
 
 ```ts
 type HostPrincipal = Readonly<{
-  actor:
-    | HostActor
-    | Readonly<{
-        kind: "visitor";
-      }>;
+  actor: HostActor;
   role: "owner" | "member" | null;
 }>;
 ```
@@ -73,8 +258,7 @@ One decoded method, route, binding or catalog admission request.
 type GateFacts = Readonly<{
   principal: HostPrincipal;
   installation: Readonly<
-    Pick<Installation, "status" | "visibility" | "instanceId" | "authority"> &
-      object
+    Pick<Installation, "status" | "instanceId" | "authority"> & object
   >;
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
@@ -222,6 +406,7 @@ type GrantContext = Readonly<{
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
   now: number;
+  builtInShell?: boolean;
 }>;
 ```
 
@@ -305,9 +490,7 @@ type InstallationContext = Readonly<{
   declaredOperations: DeclaredOperations;
   now: number;
   identity: Pick<Installation, "installationId" | "instanceId">;
-  anonymousConsent?: Readonly<{
-    memberId: string;
-  }>;
+  builtInShell?: boolean;
 }>;
 ```
 
@@ -408,28 +591,6 @@ type InstallationReader = Readonly<{
            | null;
      };
      status: "enabled" | "disabled" | "deleted";
-     visibility: "private" | "public";
-     approvedAnonymousMethods: readonly Readonly<{
-        name: string;
-        digest: Sha256Digest;
-     }>[];
-     anonymousApproval:   | Readonly<{
-        by:   | {
-           kind: ...;
-           memberId: ...;
-         }
-           | {
-           kind: ...;
-           agentId: ...;
-         }
-           | {
-           kind: ...;
-           keyId: ...;
-         };
-        at: number;
-        authorityVersion: number;
-      }>
-        | null;
   }>[]>;
   get: Promise<
      | Readonly<{
@@ -495,28 +656,6 @@ type InstallationReader = Readonly<{
            | null;
      };
      status: "enabled" | "disabled" | "deleted";
-     visibility: "private" | "public";
-     approvedAnonymousMethods: readonly Readonly<{
-        name: string;
-        digest: Sha256Digest;
-     }>[];
-     anonymousApproval:   | Readonly<{
-        by:   | {
-           kind: ...;
-           memberId: ...;
-         }
-           | {
-           kind: ...;
-           agentId: ...;
-         }
-           | {
-           kind: ...;
-           keyId: ...;
-         };
-        at: number;
-        authorityVersion: number;
-      }>
-        | null;
    }>
     | null>;
 }>;
@@ -684,6 +823,16 @@ Generation, authority version and artifact digest fencing a permission edit.
 
 ---
 
+### AppPermissionsViewData
+
+```ts
+type AppPermissionsViewData = z.output<typeof appPermissionPageSchema>;
+```
+
+A host's live authority and resource directory, never browser-minted grants.
+
+---
+
 ### AppToolPolicy
 
 ```ts
@@ -733,35 +882,35 @@ Every capability selects one consent class and one resource grammar.
 
 | Name                                                                    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| <a id="property-approvals"></a> `approvals`                             | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentlist"></a> `agent.list`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentmanage"></a> `agent.manage`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentrename"></a> `agent.rename`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentavatar"></a> `agent.avatar`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agenttoolpolicy"></a> `agent.toolPolicy`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentread"></a> `agent.read`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-agentsend"></a> `agent.send`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-computerlist"></a> `computer.list`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-computerreadfile"></a> `computer.readFile`              | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-computerwritefile"></a> `computer.writeFile`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-computerexecute"></a> `computer.execute`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-llmgeneration"></a> `llm.generation`                    | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-mediageneration"></a> `media.generation`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-gamesservers"></a> `games:servers`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-gitrepository"></a> `git.repository`                    | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-appsopen"></a> `apps.open`                              | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-appscall"></a> `apps.call`                              | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-appstorage"></a> `app.storage`                          | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-appeventsemit"></a> `app.events.emit`                   | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-teamworkbenchhost"></a> `team.workbenchHost`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-marketplacebrowse"></a> `marketplace.browse`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-marketplacepurchase"></a> `marketplace.purchase`        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-workflowrun"></a> `workflow.run`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-workflowpublish"></a> `workflow.publish`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-workflowarm"></a> `workflow.arm`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-world"></a> `world`                                     | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-channelsread"></a> `channels.read`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
-| <a id="property-channelspersonalmanage"></a> `channels.personal.manage` | `Readonly`\<\{ `group`: \| `"computers"` \| `"agents"` \| `"generation"` \| `"other"` \| `"apps"` \| `"workflows"` \| `"git"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"shell"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"schedule"` \| `"search"` \| `"complete"` \| `"oyster"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"tourtois"` \| `"allApps"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-approvals"></a> `approvals`                             | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentlist"></a> `agent.list`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentmanage"></a> `agent.manage`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentrename"></a> `agent.rename`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentavatar"></a> `agent.avatar`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agenttoolpolicy"></a> `agent.toolPolicy`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentread"></a> `agent.read`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-agentsend"></a> `agent.send`                            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerlist"></a> `computer.list`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerreadfile"></a> `computer.readFile`              | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerwritefile"></a> `computer.writeFile`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-computerexecute"></a> `computer.execute`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-llmgeneration"></a> `llm.generation`                    | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-mediageneration"></a> `media.generation`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-gamesservers"></a> `games:servers`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-gitrepository"></a> `git.repository`                    | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appsopen"></a> `apps.open`                              | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appscall"></a> `apps.call`                              | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appstorage"></a> `app.storage`                          | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-appeventsemit"></a> `app.events.emit`                   | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-teamworkbenchhost"></a> `team.workbenchHost`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-marketplacebrowse"></a> `marketplace.browse`            | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-marketplacepurchase"></a> `marketplace.purchase`        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowrun"></a> `workflow.run`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowpublish"></a> `workflow.publish`                | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-workflowarm"></a> `workflow.arm`                        | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-world"></a> `world`                                     | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-channelsread"></a> `channels.read`                      | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
+| <a id="property-channelspersonalmanage"></a> `channels.personal.manage` | `Readonly`\<\{ `group`: \| `"computers"` \| `"workflows"` \| `"git"` \| `"agents"` \| `"generation"` \| `"bazaar"` \| `"data"` \| `"channels"` \| `"apps"` \| `"shell"` \| `"other"`; `label`: `string`; `caption`: `string`; `description`: `string`; `sigil`: \| `"error"` \| `"read"` \| `"write"` \| `"computer"` \| `"list"` \| `"run"` \| `"agent"` \| `"bonsai"` \| `"prints"` \| `"inkcap"` \| `"vishnu"` \| `"generateText"` \| `"generateMedia"` \| `"buyApps"` \| `"browseBazaar"` \| `"chat"` \| `"readConversations"` \| `"listAgents"` \| `"createAgents"` \| `"sendPrompts"` \| `"connected"` \| `"working"` \| `"complete"` \| `"installApps"` \| `"restricted"` \| `"trellis"` \| `"games"` \| `"oyster"` \| `"tourtois"` \| `"allApps"` \| `"search"` \| `"browser"` \| `"internet"` \| `"members"` \| `"sell"` \| `"schedule"` \| `"fungi"`; `consent`: `"affordance"` \| `"install"` \| `"ask"`; `scope`: `"computer"` \| `"agent"` \| `null`; `warning`: `string` \| `null`; \}\> |
 
 ---
 
@@ -918,7 +1067,6 @@ const gateRefusalSchema: ZodLazy<
         approval_required: "approval_required";
         requires_not_granted: "requires_not_granted";
         invalid_input: "invalid_input";
-        visitor_read_only: "visitor_read_only";
       }>;
     },
     $strict
@@ -1132,10 +1280,6 @@ host-owned.
 const declaredOperationsSchema: ZodLazy<ZodObject<{
   artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
   digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-  anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
-     name: ZodPipe<ZodUnknown, ZodTransform<string, unknown>>;
-     digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-  }, $strict>>>>;
   capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
      capability: ZodPipe<ZodUnknown, ZodTransform<
         | ...
@@ -1221,28 +1365,6 @@ const installationSchema: ZodObject<{
      disabled: "disabled";
      deleted: "deleted";
   }>;
-  visibility: ZodEnum<{
-     private: "private";
-     public: "public";
-  }>;
-  approvedAnonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
-     name: ZodPipe<ZodUnknown, ZodTransform<string, unknown>>;
-     digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-  }, $strict>>>>;
-  anonymousApproval: ZodNullable<ZodLazy<ZodReadonly<ZodObject<{
-     by: ZodMiniDiscriminatedUnion<[ZodMiniObject<{
-        kind: ...;
-        memberId: ...;
-      }, $strip>, ZodMiniObject<{
-        kind: ...;
-        agentId: ...;
-      }, $strip>, ZodMiniObject<{
-        kind: ...;
-        keyId: ...;
-     }, $strip>], "kind">;
-     at: ZodNumber;
-     authorityVersion: ZodLazy<ZodNumber>;
-  }, $strict>>>>;
 }, $strict>;
 ```
 
@@ -1253,82 +1375,58 @@ Resolved immutable Release plus host-owned installation and approval state.
 ### installationCommandSchema
 
 ```ts
-const installationCommandSchema: ZodLazy<
-  ZodDiscriminatedUnion<
-    [
-      ZodObject<
-        {
-          release: ZodPipe<
-            ZodUnknown,
-            ZodTransform<
-              {
-                releaseId: ReleaseId;
-                appId: AppId;
-                artifact: {
-                  artifactRef: ArtifactRef;
-                  artifactDigest: Sha256Digest;
-                  provenance: {
-                    sourceRevision: SourceRevision;
-                    sourceTreeDigest: Sha256Digest;
-                    buildRecipeDigest: Sha256Digest;
-                  };
-                };
-              },
-              unknown
-            >
-          >;
-          releasePin: ZodEnum<{
-            pinned: "pinned";
-            floating: "floating";
-          }>;
-          kind: ZodLiteral<"install">;
-        },
-        $strict
-      >,
-      ZodObject<
-        {
-          release: ZodPipe<
-            ZodUnknown,
-            ZodTransform<
-              {
-                releaseId: ReleaseId;
-                appId: AppId;
-                artifact: {
-                  artifactRef: ArtifactRef;
-                  artifactDigest: Sha256Digest;
-                  provenance: {
-                    sourceRevision: SourceRevision;
-                    sourceTreeDigest: Sha256Digest;
-                    buildRecipeDigest: Sha256Digest;
-                  };
-                };
-              },
-              unknown
-            >
-          >;
-          releasePin: ZodEnum<{
-            pinned: "pinned";
-            floating: "floating";
-          }>;
-          kind: ZodLiteral<"select-release">;
-        },
-        $strict
-      >,
-      ZodObject<
-        {
-          kind: ZodLiteral<"set-status">;
-          status: ZodEnum<{
-            enabled: "enabled";
-            disabled: "disabled";
-            deleted: "deleted";
-          }>;
-        },
-        $strict
-      >,
-    ],
-    "kind"
-  >
->;
+const installationCommandSchema: ZodLazy<ZodDiscriminatedUnion<[ZodObject<{
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  releasePin: ZodEnum<{
+     pinned: "pinned";
+     floating: "floating";
+  }>;
+  kind: ZodLiteral<"install">;
+}, $strict>, ZodObject<{
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  releasePin: ZodEnum<{
+     pinned: "pinned";
+     floating: "floating";
+  }>;
+  kind: ZodLiteral<"select-release">;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"set-status">;
+  status: ZodEnum<{
+     enabled: "enabled";
+     disabled: "disabled";
+     deleted: "deleted";
+  }>;
+}, $strict>, ZodObject<{
+  kind: ZodLiteral<"change-grants">;
+  changes: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
+     capability: ZodPipe<..., ...>;
+     grant: ZodNullable<...>;
+  }, $strict>>>>;
+}, $strict>], "kind">>;
 ```
 
 Host commands; floating targets have already been resolved to immutable
@@ -1383,10 +1481,6 @@ const appPermissionsWireSchema: ZodObject<{
   declaredOperations: ZodLazy<ZodObject<{
      artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
      digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-     anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
-        name: ZodPipe<..., ...>;
-        digest: ZodPipe<..., ...>;
-     }, $strict>>>>;
      capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<{
         capability: ZodPipe<..., ...>;
         operations: ZodLazy<...>;
@@ -1466,10 +1560,15 @@ const appPermissionPageSchema: ZodObject<{
      declaredOperations: ZodLazy<ZodObject<{
         artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
         digest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
-        anonymousMethods: ZodReadonly<ZodArray<ZodReadonly<ZodObject<..., ...>>>>;
         capabilities: ZodReadonly<ZodArray<ZodReadonly<ZodObject<..., ...>>>>;
      }, $strict>>;
   }, $strict>;
+  canEdit: ZodBoolean;
+  resources: ZodArray<ZodObject<{
+     kind: ZodString;
+     id: ZodString;
+     label: ZodString;
+  }, $strict>>;
 }, $strict>;
 ```
 
@@ -1580,7 +1679,11 @@ readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{
 ### approvedBindingGrants()
 
 ```ts
-function approvedBindingGrants(installation, declaration): readonly object[];
+function approvedBindingGrants(
+  installation,
+  declaration,
+  resource?,
+): readonly object[];
 ```
 
 Approved binding operations from an already verified declaration. Hosts still
@@ -1588,10 +1691,11 @@ pin the selection/version/artifact and compare running frame grants as a subset.
 
 #### Parameters
 
-| Parameter      | Type                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------ |
-| `installation` | `Pick`\<[`GateFacts`](#gatefacts)\[`"installation"`\], `"status"` \| `"authority"`\> |
-| `declaration`  | `AppDeclaration`                                                                     |
+| Parameter      | Type                                                                                 | Default value |
+| -------------- | ------------------------------------------------------------------------------------ | ------------- |
+| `installation` | `Pick`\<[`GateFacts`](#gatefacts)\[`"installation"`\], `"status"` \| `"authority"`\> | `undefined`   |
+| `declaration`  | `AppDeclaration`                                                                     | `undefined`   |
+| `resource`     | \| `"any"` \| `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>                  | `"any"`       |
 
 #### Returns
 
@@ -1611,11 +1715,11 @@ resource authority.
 
 #### Parameters
 
-| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Default value |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `captured` | readonly `object`[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `undefined`   |
-| `method?`  | `Readonly`\<\{ `description`: `string`; `input`: `object`; `output`: `object`; `effect`: `"read"` \| `"write"` \| `"external"`; `requires`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`)[]; `pending?`: `true`; `hidden?`: `true`; `anonymous?`: `true`; `present?`: `Readonly`\<\{ `verb`: `string`; \}\>; \}\> | `undefined`   |
-| `ceiling?` | `"read"` \| `"write"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `"write"`     |
+| Parameter  | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Default value |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `captured` | readonly `object`[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `undefined`   |
+| `method?`  | `Readonly`\<\{ `description`: `string`; `input`: \{ \[`key`: `string`\]: \| `null` \| `string` \| `number` \| `false` \| `true` \| AppApiJsonObject \| \{ \[`index`: `number`\]: AppApiJsonValue; `length`: `number`; \}; \}; `output`: \{ \[`key`: `string`\]: \| `null` \| `string` \| `number` \| `false` \| `true` \| AppApiJsonObject \| \{ \[`index`: `number`\]: AppApiJsonValue; `length`: `number`; \}; \}; `effect`: `"read"` \| `"write"` \| `"external"`; `requires`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`)[]; `pending?`: `true`; `hidden?`: `true`; `present?`: `Readonly`\<\{ `verb`: `string`; \}\>; \}\> | `undefined`   |
+| `ceiling?` | `"read"` \| `"write"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `"write"`     |
 
 #### Returns
 
@@ -1634,9 +1738,9 @@ to scopedBindings; its default write ceiling does not encode caller access.
 
 #### Parameters
 
-| Parameter | Type                                                             |
-| --------- | ---------------------------------------------------------------- |
-| `facts`   | `Pick`\<[`GateFacts`](#gatefacts), `"principal"` \| `"access"`\> |
+| Parameter | Type                                            |
+| --------- | ----------------------------------------------- |
+| `facts`   | `Pick`\<[`GateFacts`](#gatefacts), `"access"`\> |
 
 #### Returns
 
@@ -1829,11 +1933,11 @@ Pure transition; hosts retain transactions, receipts, epochs and delivery.
 
 #### Parameters
 
-| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `current`    | \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; `visibility`: `"private"` \| `"public"`; `approvedAnonymousMethods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; `anonymousApproval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}\> \| `null` |
-| `rawCommand` | \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"install"`; \} \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"select-release"`; \} \| \{ `kind`: `"set-status"`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} \| \{ `kind`: `"set-visibility"`; `visibility`: `"private"` \| `"public"`; \} \| \{ `kind`: `"change-grants"`; `changes`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly `string`[]; `resources`: `"tenant-scope"` \| readonly `Readonly`\<...\>[]; \}\> \| `null`; \}\>[]; \} \| \{ `kind`: `"approve-anonymous"`; `methods`: readonly `Readonly`\<\{ `name`: `string`; `digest`: `Sha256Digest`; \}\>[]; \}                                                                                                                                                                                                                                                            |
-| `context`    | [`InstallationContext`](#installationcontext)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Parameter    | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `current`    | \| `Readonly`\<\{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \}\> \| `null` |
+| `rawCommand` | \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"install"`; \} \| \{ `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `kind`: `"select-release"`; \} \| \{ `kind`: `"set-status"`; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \} \| \{ `kind`: `"change-grants"`; `changes`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `grant`: \| `Readonly`\<\{ `operations`: readonly `string`[]; `resources`: `"tenant-scope"` \| readonly `Readonly`\<...\>[]; \}\> \| `null`; \}\>[]; \}                                                      |
+| `context`    | [`InstallationContext`](#installationcontext)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 #### Returns
 
@@ -1877,10 +1981,6 @@ function deriveDeclaredOperations(
   Readonly<{
     artifactDigest: Sha256Digest;
     digest: Sha256Digest;
-    anonymousMethods: readonly Readonly<{
-      name: string;
-      digest: Sha256Digest;
-    }>[];
     capabilities: readonly Readonly<{
       capability:
         | "computer.list"
@@ -1941,18 +2041,16 @@ host adapters.
 #### Returns
 
 `Promise`\<`Readonly`\<\{ `artifactDigest`: `Sha256Digest`; `digest`:
-`Sha256Digest`; `anonymousMethods`: readonly `Readonly`\<\{ `name`: `string`;
-`digest`: `Sha256Digest`; \}\>[]; `capabilities`: readonly `Readonly`\<\{
-`capability`: \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
-`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
-`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"`
-\| `"media.generation"` \| `"games:servers"` \| `"git.repository"` \|
-`"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`; `operations`: readonly
-`string`[]; \}\>[]; \}\>\>
+`Sha256Digest`; `capabilities`: readonly `Readonly`\<\{ `capability`: \|
+`"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
+`"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \|
+`"agent.rename"` \| `"agent.avatar"` \| `"agent.toolPolicy"` \| `"agent.read"`
+\| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`; `operations`: readonly `string`[]; \}\>[]; \}\>\>
 
 ---
 

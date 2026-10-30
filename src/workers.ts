@@ -134,6 +134,7 @@ import {
   type InvocationGate,
 } from "./invocation.js";
 import { deliverBackground, deliverGitPush } from "./internal/delivery.js";
+import { reportSlowInvocation } from "./internal/invocation-timing.js";
 import { releaseCache } from "./internal/host-gate.js";
 import {
   createOyster,
@@ -180,6 +181,8 @@ export type OysterBindingResult =
 /** Verified backend custody is captured in the frame, never in a current-context field. */
 export type OysterInvocationHost = BackgroundFrameState &
   Readonly<{
+    /** This frame's guest binding packets and the wall time they waited. */
+    bindingWaits: { count: number; ms: number };
     artifact: Backend;
     declaration: AppDeclaration | null;
     /** The verified declared method; opaque backend and lifecycle frames have none. */
@@ -244,7 +247,9 @@ const approvalHomePinRow = Schema.Struct({
 export class OysterRegistry<
   Env extends OysterWorkerEnv = OysterWorkerEnv,
 > extends DurableObject<Env> {
-  readonly #generation: () => string;
+  readonly #installationStore: ReturnType<
+    typeof createInstallationStoreGeneration
+  >;
   /** Decided once, before this version writes anything, and never revised. */
   readonly #installationsFromOlderOyster: boolean;
   #approval: OysterApprovalHome | undefined;
@@ -386,7 +391,7 @@ export class OysterRegistry<
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS installations (installation_id TEXT PRIMARY KEY, record TEXT NOT NULL) STRICT",
     );
-    this.#generation = createInstallationStoreGeneration(ctx.storage.sql);
+    this.#installationStore = createInstallationStoreGeneration(ctx.storage);
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS boot_capabilities (id TEXT PRIMARY KEY, token_digest TEXT NOT NULL, expires_at INTEGER NOT NULL, record TEXT NOT NULL) STRICT",
     );
@@ -704,7 +709,11 @@ export class OysterRegistry<
   }
   /** Durable store identity, regenerated only when the store itself is replaced. */
   generation(): string {
-    return this.#generation();
+    return this.#installationStore.generation();
+  }
+  /** Permanent audit fact for the owner Home's empty installation notice. */
+  installationResetAt(): number | null {
+    return this.#installationStore.resetAt();
   }
   /** Native RPC returns a closed result; callers never classify a transported Error. */
   async compareAndPut(
@@ -1346,9 +1355,24 @@ export class OysterInstance<
     const frame = this.frames.active(props.frameId);
     if (props.instanceId !== frame.facts.instanceId)
       throw new AppInstanceError("revoked");
+    const started = Date.now();
+    try {
+      return await this.dispatchBindingCall(frame, props, method, input);
+    } finally {
+      frame.host.bindingWaits.count += 1;
+      frame.host.bindingWaits.ms += Date.now() - started;
+    }
+  }
+
+  private async dispatchBindingCall(
+    frame: InvocationFrame<OysterInvocationHost>,
+    props: FrameBindingProps,
+    method: string,
+    input: readonly unknown[],
+  ): Promise<OysterBindingResult> {
     assertBackgroundBinding(frame, props.binding);
     // A guest packet is its own entry: exactly one registry read re-admits it.
-    await this.assertCurrent(frame);
+    const current = await this.assertCurrent(frame);
     const row = this.bindings[props.binding];
     const descriptor = row?.methods[method];
     // Operations declared by the verified Release; absent bindings grant nothing.
@@ -1369,12 +1393,19 @@ export class OysterInstance<
       throw new AppInstanceError("binding_unavailable");
     }
     const args = descriptor.decodeArgs(input);
-    if (
-      !descriptor
-        .requiredOperations(args)
-        .every((operation) => granted.includes(operation))
-    )
+    const required = descriptor.requiredOperations(args);
+    if (!required.every((operation) => granted.includes(operation)))
       throw new AppInstanceError("binding_not_granted");
+    if (descriptor.requestedResource !== undefined) {
+      const selected =
+        approvedBindingGrants(
+          current,
+          frame.host.declaration ?? emptyAppDeclaration,
+          descriptor.requestedResource(args),
+        ).find((grant) => grant.binding === props.binding)?.operations ?? [];
+      if (!required.every((operation) => selected.includes(operation)))
+        throw new AppInstanceError("binding_not_granted");
+    }
     const result = await row.dispatch(
       this.#bindingContext,
       frame,
@@ -1441,7 +1472,7 @@ export class OysterInstance<
   /** One registry read re-admits a guest binding packet against its frame. */
   private async assertCurrent(
     frame: InvocationFrame<OysterInvocationHost>,
-  ): Promise<void> {
+  ): Promise<Installation> {
     frame.signal.throwIfAborted();
     const selected = frame.facts.selection;
     const current = await this.env.REGISTRY.getByName(
@@ -1476,6 +1507,7 @@ export class OysterInstance<
       )
     )
       throw new AppInstanceError("revoked");
+    return current;
   }
   private async withFrame<A>(
     raw: InvocationFacts,
@@ -1487,6 +1519,7 @@ export class OysterInstance<
     tenantId: TenantId = defaultTenant,
     methodName?: string,
   ): Promise<A> {
+    const entered = Date.now();
     this.requireTenant(tenantId);
     const facts = Schema.decodeUnknownSync(invocationFactsSchema, {
       onExcessProperty: "error",
@@ -1499,6 +1532,7 @@ export class OysterInstance<
       throw new AppInstanceError("instance_identity_mismatch");
     const release = this.release(facts.selection.releaseId);
     const resolved = await this.backends(release);
+    const verified = Date.now();
     if (resolved?.digest !== facts.artifactDigest)
       throw new AppInstanceError("invalid_invocation_facts");
     if (
@@ -1548,6 +1582,7 @@ export class OysterInstance<
       };
     }
     let host: OysterInvocationHost = {
+      bindingWaits: { count: 0, ms: 0 },
       artifact: { release, ...resolved },
       declaration: resolved.declaration,
       origin: "unchecked",
@@ -1557,9 +1592,19 @@ export class OysterInstance<
     // Facts carry the authority admitted at the request's top. The Instance
     // checks them against the owner state the host applied to it, never by
     // calling back up to the registry.
-    return this.frames.run(scoped, host, (frame) =>
-      work(this.runtimeFor(limits), frame),
-    );
+    let admitted = verified;
+    try {
+      return await this.frames.run(scoped, host, (frame) => {
+        admitted = Date.now();
+        return work(this.runtimeFor(limits), frame);
+      });
+    } finally {
+      reportSlowInvocation(methodName ?? facts.subject.kind, host, {
+        entered,
+        verified,
+        admitted,
+      });
+    }
   }
   private release(releaseId: string): Release {
     const row = this.ctx.storage.sql

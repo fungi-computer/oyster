@@ -27,11 +27,11 @@ import type { Installation } from "./apps/installation.js";
 
 /** Installation-scoped storage; transport and credentials stay with its provider adapter. */
 export type GitStore = GitBinding;
-/** Live host authority, reopened before every provider call. Null is an anonymous reader. */
+/** Live host authority, reopened before every provider call. */
 export type GitGrants = Readonly<{
   /** Reopen the host authority for this repository and requested scope. */
   admits(
-    writer: GitWriter | null,
+    writer: GitWriter,
     repository: string,
     scope: "read" | "write",
   ): Promise<boolean>;
@@ -43,14 +43,11 @@ export function createInstallationGitAdmission(
     declaration(current: Installation): Promise<AppDeclaration | null>;
   }>,
 ): GitGrants["admits"] {
-  return async (writer) => {
+  return async () => {
     const current = await ports.currentInstallation();
     if (current === null) return false;
     const declaration = await ports.declaration(current);
-    return (
-      declaration?.capabilities.includes("git.repository") === true &&
-      (writer !== null || current.visibility === "public")
-    );
+    return declaration?.capabilities.includes("git.repository") === true;
   };
 }
 
@@ -76,7 +73,7 @@ export type AdmittedGit = Readonly<{
   ): Promise<GitExchangeResponse>;
   /** Recheck host read authority before exchanging provider bytes. */
   read(
-    writer: Extract<GitWriter, { kind: "actor" }> | null,
+    writer: Extract<GitWriter, { kind: "actor" }>,
     repository: string,
     request: GitExchangeRequest,
   ): Promise<GitExchangeResponse>;
@@ -105,14 +102,14 @@ export function createAdmittedGit(
 ): AdmittedGit {
   const { store, grants, policy, journal } = ports;
   async function admit(
-    writer: GitWriter | null,
+    writer: GitWriter,
     repository: string,
     scope: "read" | "write",
   ) {
     gitRepositoryNameSchema.parse(repository);
-    if (writer !== null) gitWriterSchema.parse(writer);
+    gitWriterSchema.parse(writer);
     if (
-      writer?.kind === "installation" &&
+      writer.kind === "installation" &&
       writer.installationId !== ports.installationId
     )
       throw new Error("Git installation authority mismatch");

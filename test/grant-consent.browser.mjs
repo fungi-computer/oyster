@@ -16,12 +16,14 @@ import {
   installationOperationSchema,
 } from "../dist/installation-operations.js";
 
-async function shellPage(t, approved) {
+async function shellPage(t, approved, shellCode) {
   const app = await homePageFixture({
     approved,
     shellModule: true,
     pageScript: null,
-    shellCode: `
+    shellCode:
+      shellCode ??
+      `
       document.documentElement.dataset.shellImported = "yes";
       export const mountShell = async (root) => {
         document.documentElement.dataset.shellMounted = "yes";
@@ -56,6 +58,73 @@ async function shellPage(t, approved) {
   });
   return { app, page, imports };
 }
+
+test("framed grants keep the owner editor, omit Back, and report dirty and accepted state to their same-origin parent", async (t) => {
+  const { page } = await shellPage(
+    t,
+    true,
+    `
+      export const mountShell = async (root) => {
+        globalThis.permissionMessages = [];
+        const frame = document.createElement("iframe");
+        frame.id = "permissions-frame";
+        frame.style.width = "100%";
+        frame.style.height = "640px";
+        const receive = (event) => {
+          if (event.origin === location.origin && event.source === frame.contentWindow)
+            globalThis.permissionMessages.push(event.data);
+        };
+        window.addEventListener("message", receive);
+        frame.src = "/api/installations/desktop/grants";
+        root.append(frame);
+        return () => {
+          window.removeEventListener("message", receive);
+          frame.remove();
+        };
+      };
+    `,
+  );
+  await page.goto("http://localhost/apps/desktop/");
+  const frame = page.frameLocator("#permissions-frame");
+  await frame.getByRole("button", { name: "Revoke", exact: true }).waitFor();
+  assert.equal(await frame.locator(".caps-centered-card-stage").count(), 0);
+  assert.equal(
+    await frame.getByRole("heading", { name: "desktop permissions" }).count(),
+    0,
+    "The framed editor does not repeat its parent's App heading",
+  );
+  assert.equal(
+    await frame.getByRole("link", { name: "Back to Apps" }).count(),
+    0,
+  );
+  const shell = frame.getByLabel("Shell permissions", { exact: true });
+  await shell.getByRole("button", { name: "Revoke", exact: true }).click();
+  await page.waitForFunction(() =>
+    globalThis.permissionMessages.some(
+      (message) =>
+        message.type === "oyster.permissions" &&
+        message.event === "state" &&
+        message.state === "dirty",
+    ),
+  );
+  await shell
+    .getByRole("button", { name: "Confirm revoke", exact: true })
+    .click();
+  await frame
+    .getByRole("status")
+    .filter({ hasText: "Permissions saved." })
+    .waitFor();
+  const messages = await page.evaluate(() => globalThis.permissionMessages);
+  assert.deepEqual(
+    messages.filter((message) => message.event === "accepted"),
+    [{ type: "oyster.permissions", event: "accepted", state: "clean" }],
+  );
+  assert.deepEqual(messages.at(-1), {
+    type: "oyster.permissions",
+    event: "state",
+    state: "clean",
+  });
+});
 
 async function assertShellRefused(page, imports) {
   await page.waitForLoadState("networkidle");
@@ -152,7 +221,8 @@ test("a tombstoned approved shell is not imported or mounted on its next load", 
 test("owner consent submits explicit Release-bound approvals through the installation gate", async () => {
   const browser = await chromium.launch({ headless: true });
   const output = new globalThis.URL(
-    "file:///home/levi/Botanical-cto/lanes/video/app-permissions-01/",
+    "../../../.botanical/permissions/grant-consent/",
+    import.meta.url,
   );
   await mkdir(output, { recursive: true });
   const links = [];
@@ -227,6 +297,21 @@ test("owner consent submits explicit Release-bound approvals through the install
         await page
           .getByRole("heading", { name: "Bonsai permissions" })
           .waitFor();
+        assert.equal(
+          await page.locator("html").getAttribute("data-theme"),
+          theme === "dark" ? "mocha" : "latte",
+        );
+        for (const colorScheme of [
+          theme === "dark" ? "light" : "dark",
+          theme,
+        ]) {
+          await page.emulateMedia({ colorScheme });
+          await page.waitForFunction(
+            (expected) =>
+              globalThis.document.documentElement.dataset.theme === expected,
+            colorScheme === "dark" ? "mocha" : "latte",
+          );
+        }
         const send = page.getByRole("checkbox", { name: "Send events" });
         assert.equal(await send.isChecked(), false);
         await page.screenshot({
@@ -385,16 +470,17 @@ test("a Permissions tab open across delete and reinstall cannot save onto the ne
   );
 
   // The tab still shows the deleted installation; it tries to approve the shell.
-  await stale.getByRole("checkbox", { name: "Arrange the workbench" }).check();
-  await stale.getByRole("button", { name: "Save permissions" }).click();
-  await stale.waitForFunction(
-    () =>
-      (globalThis.document.querySelector('[role="status"]')?.textContent ??
-        "") !== "",
-  );
+  await stale.getByRole("button", { name: "Allow", exact: true }).click();
+  await stale
+    .getByRole("button", { name: "Confirm allow", exact: true })
+    .click();
+  const notice = stale.getByRole("status").filter({
+    hasText: "This App is no longer available. Reload before trying again.",
+  });
+  await notice.waitFor();
   assert.deepEqual(
     {
-      status: await stale.getByRole("status").textContent(),
+      status: await notice.textContent(),
       retired: (await record("desktop")).status,
       fresh: (await record(fresh.installationId)).authority,
     },
@@ -406,10 +492,12 @@ test("a Permissions tab open across delete and reinstall cannot save onto the ne
   );
 
   const page = await open(fresh.installationId);
-  const shell = page.getByRole("checkbox", { name: "Arrange the workbench" });
-  assert.equal(await shell.isChecked(), false);
-  await shell.check();
-  await page.getByRole("button", { name: "Save permissions" }).click();
+  const shell = page.getByLabel("Shell permissions", { exact: true });
+  await shell.getByLabel("Shell not allowed").waitFor({ state: "attached" });
+  await shell.getByRole("button", { name: "Allow", exact: true }).click();
+  await shell
+    .getByRole("button", { name: "Confirm allow", exact: true })
+    .click();
   await page.getByText("Permissions saved").waitFor();
   const saved = await record(fresh.installationId);
   assert.equal(

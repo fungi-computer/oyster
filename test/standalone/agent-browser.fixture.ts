@@ -4,7 +4,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/host";
+import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/authorization";
 import { standaloneAgents } from "../../src/standalone/agents.js";
 import {
   standaloneTenancy,

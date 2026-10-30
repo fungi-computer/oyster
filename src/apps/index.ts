@@ -43,6 +43,8 @@ export {
   type PermissionEdit,
   type PermissionScreen,
   type AppPermissionsWire,
+  type AppPermissionsPort,
+  type AppPermissionsViewData,
   grantRequestFor,
   pendingCapabilities,
   type GrantRequestDecision,

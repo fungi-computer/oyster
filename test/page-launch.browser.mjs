@@ -186,25 +186,10 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
         { actor: { kind: "member", memberId: "owner" }, role: "owner" },
         null,
       ],
-      // An anonymous reader of the public App is the host's visitor.
-      ["private-computer", null, null],
     ]) {
       const host = await computerHost(principal, computerId);
-      const installations =
-        principal === null
-          ? {
-              ...host.installations,
-              get: async (id) => {
-                const installation = await host.installations.get(id);
-                return (
-                  installation && { ...installation, visibility: "public" }
-                );
-              },
-            }
-          : host.installations;
       const app = createOyster({
         ...host,
-        installations,
         capabilities: [
           {
             ...computerSlots.ports,

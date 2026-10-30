@@ -22,6 +22,11 @@ import * as Option from "effect/Option";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import { candidateFailureDiagnostic } from "./build/candidate-diagnostic.js";
 import {
+  buildJobDiagnostic,
+  buildJobLogSchema,
+  type BuildJobLog,
+} from "./build/job-log.js";
+import {
   parseArtifactRef,
   parseReleaseId,
   type Release,
@@ -204,7 +209,12 @@ export type OysterBuildComputer = Readonly<{
     timeoutMs: number;
   }): Promise<
     Readonly<{
-      output?: Readonly<{ exitCode: number | null; stderr?: string }> | null;
+      output: Readonly<{
+        exitCode: number | null;
+        stderr?: string;
+      }> | null;
+      /** Raw combined events captured before the Computer reply's stream bounds. */
+      log: BuildJobLog;
     }>
   >;
 }>;
@@ -400,13 +410,15 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     status: "succeeded" | "failed" | "interrupted" | "revoked",
     detail: string | null,
   ) => {
+    const diagnostic =
+      detail === null ? null : buildJobDiagnostic(jobId, detail);
     owner.sql.exec(
       `UPDATE oyster_build_jobs SET installation=CASE WHEN ?='succeeded' THEN installation ELSE ${failedInstallation} END,
         status=?, detail=?, expires_at=MIN(expires_at, ?) WHERE job_id=? AND status='running'`,
       status,
-      detail,
+      diagnostic,
       status,
-      detail,
+      diagnostic,
       now(),
       jobId,
     );
@@ -416,6 +428,11 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     if (job === null) throw new Error("Unknown build job");
     return job;
   };
+  // A job-scoped immutable object in the same artifact store as its build.
+  // It is read only through the owner build door, never exposed as a Release.
+  const logRef = (jobId: string) =>
+    parseArtifactRef(`artifact:build-log-${jobId}`);
+  const logCodec = Schema.fromJsonString(buildJobLogSchema);
 
   const publisher = createTeamBuildPublisher({
     teamId: options.tenantId,
@@ -468,8 +485,13 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
           command: input.command,
           timeoutMs: input.timeoutMs,
         });
-        if (result.output === undefined || result.output === null)
-          throw new BuildOutcomeUnknown();
+        await options.artifacts.put(
+          logRef(input.jobId),
+          new TextEncoder().encode(
+            Schema.encodeUnknownSync(logCodec)(result.log),
+          ),
+        );
+        if (result.output === null) throw new BuildOutcomeUnknown();
         return result;
       },
       deliverTeamGitEvents: () => Promise.resolve(0),
@@ -721,6 +743,14 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       expire();
       const job = readJob(jobId);
       return job === null ? null : view(job);
+    },
+    /** Full raw output; the host applies the same principal guard as `read`. */
+    async readLog(jobId: string): Promise<BuildJobLog | null> {
+      if (readJob(jobId) === null) return null;
+      const bytes = await options.artifacts.get(logRef(jobId));
+      return bytes === null
+        ? null
+        : Schema.decodeUnknownSync(logCodec)(new TextDecoder().decode(bytes));
     },
     /** Discover the current source's latest job from the caller's Git owner,
      * never a job id remembered in a browser or another installation's repo. */
@@ -1029,3 +1059,5 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
 }
 
 export type OysterAppBuilds = ReturnType<typeof createOysterAppBuilds>;
+
+export { buildJobLogMaxBytes, type BuildJobLog } from "./build/job-log.js";

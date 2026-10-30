@@ -925,7 +925,7 @@ it("settles a fresh Workflow install that the owner would have to approve as nee
 
 // Registering a repository as an App is the owner's consent for its merge
 // Workflow to create that App's installation. It never widens authority.
-it("keeps a Workflow-created installation private with no grants or anonymous methods, and later Workflows cannot widen it", async () => {
+it("keeps a Workflow-created installation with no grants, and later Workflows cannot widen it", async () => {
   const state = await fixture();
   try {
     state.prepareGate.resolve(undefined);
@@ -939,9 +939,6 @@ it("keeps a Workflow-created installation private with no grants or anonymous me
     const fresh = state.rows.get("notes");
     if (fresh === undefined) throw new Error("Installation missing");
     expect(fresh).toMatchObject({
-      visibility: "private",
-      approvedAnonymousMethods: [],
-      anonymousApproval: null,
       authority: { approvedGrants: [], approval: null },
     });
     // A later Workflow may reuse exactly that approval...
@@ -951,9 +948,6 @@ it("keeps a Workflow-created installation private with no grants or anonymous me
     const upgraded = state.rows.get("notes");
     expect(upgraded?.release).toEqual(next);
     expect(upgraded).toMatchObject({
-      visibility: "private",
-      approvedAnonymousMethods: [],
-      anonymousApproval: null,
       authority: { approvedGrants: [], approval: null },
     });
     // ...but never approve a capability the owner has not granted.

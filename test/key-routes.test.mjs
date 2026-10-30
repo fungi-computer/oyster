@@ -10,11 +10,8 @@ import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
 import { createOyster } from "../dist/host.js";
 import { fromNodeSqlite } from "@fungi.computer/ear-tag/keys/node";
-import {
-  keyAllowsComputerUse,
-  keyAppAccess,
-  oysterKeyVocabulary,
-} from "../dist/keys.js";
+import { oysterKeyVocabulary } from "../dist/keys.js";
+import { keyAllowsComputerUse, keyAppAccess } from "../dist/authorization.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 
 // workers-git.js imports `cloudflare:workers` at module scope for its
@@ -141,16 +138,6 @@ test("refuses an agent_-shaped name at issuance: Bonsai's mayPush treats a key n
     });
     assert.equal(response.status, 400, name);
   }
-});
-
-test("refuses the reserved name visitor: invocation.ts uses team-key:visitor for anonymous readers", async () => {
-  const app = await ownerApp();
-  const response = await app.request("/api/keys", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "visitor", grants: allAppsGrant }),
-  });
-  assert.equal(response.status, 400);
 });
 
 test("never reuses a name, even one a revoked key held", async () => {

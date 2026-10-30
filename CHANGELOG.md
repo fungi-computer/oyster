@@ -1,5 +1,103 @@
 # @fungi.computer/oyster
 
+## 0.7.0
+
+### Minor Changes
+
+- Changes since 0.6.0:
+
+  - fix(darkroom): fit video references by their short edge
+  - feat(repository): scope docs-only gates
+  - fix(oyster): reserve build log artifact namespace
+  - fix(oyster): bound build logs to two mebibytes on demand
+  - fix(oyster): stop shared read cohorts at final admission drain
+  - feat(oyster): retain owner-readable build job logs
+  - fix(tourtois): fit framed permissions into Settings
+  - fix(tourtois): frame Oyster-owned App permissions
+  - fix(oyster): stop guest work before releasing App admission
+  - fix(oyster): declare backend data reset and recovery limits
+  - fix(oyster): report retained App data reachability after reset
+  - fix(oyster): perform the owner-only installation store reset
+  - feat(oyster): expose retained Agent schedule controls
+  - fix(oyster): defer owner inventory registry acquisition
+  - fix(oyster): inventory dashboard approval outputs
+  - fix(oyster): reuse chosen-dashboard approval in desktop proof
+  - fix(forage): retain load-on-request App catalogs on current Integration
+  - fix(oyster): compact Shell consent and bind the home pre-grant
+  - fix(oyster): close window bridge qualification gaps
+  - fix(oyster): refuse stale archive projection repair
+  - fix(oyster): distinguish archive replay from projection advance
+  - fix(oyster)!: remove named-key browser sessions and the standalone channel
+    hook
+  - fix(oyster)!: remove owner consent for anonymous App methods
+  - fix(oyster)!: remove the visitor principal and installation visibility
+  - fix(oyster): expose permission props and preserve failure diagnostics
+  - feat(workflows): pause schedules and page installation reads
+  - feat(oyster): share App permissions and provision the home Shell
+  - fix(agents): pass Team principal to archive owner RPC and initialize Oyster
+    fixture
+  - fix(oyster): close every anonymous door
+  - feat(oyster): bridge live window commands to the selected Agent
+  - fix(oyster): brand route tables and serve them only as fetch views
+  - feat(prints): add authorized Agent media parity
+  - fix(oyster): read requirements from their mint record and run nothing before
+    the gate
+  - fix(oyster): restore published oyster-v1 migration set
+  - fix(oyster): make route requirements unforgeable and decorators headers-only
+  - fix(oyster): give MachineLinkDO its own migration tag
+  - fix(hub): pause archived schedules and admit Team admins
+  - fix(oyster): compile Agent App tool schemas only when used
+  - fix(oyster): route every host request through one authorization owner
+  - fix(oyster): hash shared fixtures reached by standalone tests
+  - perf(oyster): log where a slow App invocation waited inside its Instance
+  - fix(oyster): register version marker and mirror HEAD
+  - fix(hub): align archive owner boundary and gate checks
+  - feat(oyster): expose standalone package version
+  - feat(hub): archive and restore Team Agents with owner admission
+  - fix(oyster): keep archive store types private to their module
+  - feat(oyster): archive agents without deleting their work
+  - fix(trellis): merge landed Hub native fixtures into schedules
+  - fix(prints): merge video recovery and charge-safe failures
+  - fix(trellis): merge current invocation shutdown contract
+  - fix(trellis): checkpoint schedule owner integration merge
+  - fix(prints): reconcile Agent media parity with integration
+  - fix(oyster): keep every door closed through authorization.ts
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.6.0
+  - @fungi.computer/bird-dog@0.3.1
+  - @fungi.computer/braid@0.3.0
+  - @fungi.computer/burrow@0.2.0
+  - @fungi.computer/caps@0.5.0
+  - @fungi.computer/computer@0.4.0
+  - @fungi.computer/darkroom@0.4.0
+  - @fungi.computer/forage@0.2.1
+  - @fungi.computer/mycelium@0.3.0
+  - @fungi.computer/puffball@0.3.0
+  - @fungi.computer/shiitake-extensions@0.5.0
+  - @fungi.computer/shiitake@0.7.0
+  - @fungi.computer/sprite-zdog@0.3.0
+  - @fungi.computer/workflows-wire@0.3.0
+  - @fungi.computer/nacre@0.1.1
+  - @fungi.computer/knapsack@0.4.1
+  - @fungi.computer/zookeeper@0.0.6
+  - @fungi.computer/computer-contract@0.0.6
+
 ## 0.6.0
 
 ### Minor Changes

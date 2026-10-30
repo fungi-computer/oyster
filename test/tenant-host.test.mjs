@@ -18,7 +18,23 @@ import { backendMediaType } from "@fungi.computer/puffball/backend";
 import { instanceIds } from "../dist/index.js";
 import { BOOT_CAPABILITY_HEADER } from "../dist/boot-capability.js";
 import { defaultTenant, tenantIdSchema, tenantScope } from "../dist/tenant.js";
+import { serveHost } from "../dist/authorization.js";
 import { withBackendConstruction } from "./boot-construction.fixture.ts";
+
+/** Serve one capability's declared table as the owner the host admitted. */
+const servedAsOwner = (table) =>
+  serveHost(
+    table,
+    () =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: {
+          actor: { kind: "member", memberId: "owner" },
+          role: "owner",
+        },
+      }),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -471,11 +487,13 @@ test("tenant workspace files do not overwrite one another and default names stay
     },
   };
   const files = (scope) =>
-    oysterWorkerHost(
-      { OYSTER_ORIGIN: "https://oyster.test", RELEASES: bucket },
-      auth,
-      { scope },
-    ).capabilities[0].routes;
+    servedAsOwner(
+      oysterWorkerHost(
+        { OYSTER_ORIGIN: "https://oyster.test", RELEASES: bucket },
+        auth,
+        { scope },
+      ).capabilities[0].routes,
+    );
   const alice = files(scopeOf("aa"));
   const bob = files(scopeOf("bb"));
   const legacy = files(undefined);
@@ -536,7 +554,9 @@ test("an explicit workspace source and globally unique Instance lookup keep thei
   assert.equal(host.computerId, "selected-workspace");
   assert.equal(
     await (
-      await host.capabilities[0].routes.request("/content?path=/notes.txt")
+      await servedAsOwner(host.capabilities[0].routes).request(
+        "/content?path=/notes.txt",
+      )
     ).text(),
     "Custom",
   );

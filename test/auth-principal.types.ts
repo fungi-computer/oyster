@@ -1,12 +1,8 @@
-import type {
-  OysterAuth,
-  OysterAuthResult,
-  OysterPrincipal,
-} from "../src/host.js";
+import type { OysterAuth, OysterAuthResult } from "../src/host.js";
 import type { TenantPrincipal } from "../src/tenant.js";
 
-// Authentication emits only the canonical tenant grammar; the visitor is the
-// host's own admission, never an authenticated credential.
+// Authentication emits only the canonical tenant grammar; no anonymous
+// principal exists.
 type ResultPrincipal = Extract<
   OysterAuthResult,
   { kind: "admitted" }
@@ -29,24 +25,24 @@ const visitorNotAuthenticated: {
 const legacyOwnerExcluded: {
   kind: "owner";
   id: string;
-} extends OysterPrincipal
+} extends TenantPrincipal
   ? false
   : true = true;
 const legacyKeyExcluded: {
   kind: "key";
   id: string;
-} extends OysterPrincipal
+} extends TenantPrincipal
   ? false
   : true = true;
 const legacyAgentExcluded: {
   kind: "agent";
   id: string;
-} extends OysterPrincipal
+} extends TenantPrincipal
   ? false
   : true = true;
 const memberRoleRequired: {
   actor: { kind: "member"; memberId: string };
-} extends OysterPrincipal
+} extends TenantPrincipal
   ? false
   : true = true;
 void [

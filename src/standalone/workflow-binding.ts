@@ -19,6 +19,9 @@ import {
   eventTriggersReplySchema,
   scheduleArmReplySchema,
   scheduleDisarmInputSchema,
+  schedulePauseInputSchema,
+  schedulePauseReplySchema,
+  scheduleListInputSchema,
   schedulesReplySchema,
   triggerDisarmReplySchema,
   triggerListInputSchema,
@@ -61,6 +64,7 @@ export type WorkflowRunCalls = Pick<
   | "cancel"
   | "answerReview"
   | "armSchedule"
+  | "pauseSchedule"
   | "disarmSchedule"
   | "schedules"
   | "armEventTrigger"
@@ -95,7 +99,9 @@ const workflowArgs = {
   armSchedule: (args: unknown) => z.tuple([triggerArmTargetSchema]).parse(args),
   disarmSchedule: (args: unknown) =>
     z.tuple([scheduleDisarmInputSchema]).parse(args),
-  schedules: (args: unknown) => z.tuple([triggerListInputSchema]).parse(args),
+  pauseSchedule: (args: unknown) =>
+    z.tuple([schedulePauseInputSchema]).parse(args),
+  schedules: (args: unknown) => z.tuple([scheduleListInputSchema]).parse(args),
   armEventTrigger: (args: unknown) =>
     z.tuple([triggerArmTargetSchema]).parse(args),
   disarmEventTrigger: (args: unknown) =>
@@ -112,6 +118,7 @@ const workflowResults = {
   answerReview: answerReviewReply,
   armSchedule: scheduleArmReplySchema,
   disarmSchedule: triggerDisarmReplySchema,
+  pauseSchedule: schedulePauseReplySchema,
   schedules: schedulesReplySchema,
   armEventTrigger: eventArmReplySchema,
   disarmEventTrigger: triggerDisarmReplySchema,
@@ -125,6 +132,7 @@ const workflowMethod = z.enum([
   "cancel",
   "answerReview",
   "armSchedule",
+  "pauseSchedule",
   "disarmSchedule",
   "schedules",
   "armEventTrigger",
@@ -313,10 +321,16 @@ export async function dispatchWorkflowBinding(
       result = await runs.disarmSchedule(frame.facts, input);
       break;
     }
-    case "schedules":
-      workflowArgs.schedules(args);
-      result = await runs.schedules(frame.facts);
+    case "pauseSchedule": {
+      const [input] = workflowArgs.pauseSchedule(args);
+      result = await runs.pauseSchedule(frame.facts, input);
       break;
+    }
+    case "schedules": {
+      const [input] = workflowArgs.schedules(args);
+      result = await runs.schedules(frame.facts, input);
+      break;
+    }
     case "armEventTrigger": {
       const [input] = workflowArgs.armEventTrigger(args);
       result = await runs.armEventTrigger(frame.facts, input);

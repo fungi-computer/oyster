@@ -534,10 +534,6 @@ test("HTTP and root readers share the stored canonical owner and live membership
     OYSTER_ORIGIN: input.origin,
     OYSTER_OWNER_NAME: input.owner.subject,
     OYSTER_OWNER_KEY: credential,
-    OYSTER_KEY_SESSIONS: {
-      resolve: async (value) =>
-        value === "host-owned-session" ? { keyId: "named-key" } : null,
-    },
     TENANTS: {
       getByName: (name) => {
         assert.equal(name, "registry");
@@ -614,34 +610,26 @@ test("HTTP and root readers share the stored canonical owner and live membership
       kind: "admitted",
       principal: { actor: { kind: "team-key", keyId: "named-key" } },
     });
+    // A named key signs in only by header: a browser cookie naming one
+    // admits nobody, even where the environment still carries the retired
+    // OYSTER_KEY_SESSIONS resolver.
     const browser = new globalThis.Request(`${input.origin}/apps/notes/`, {
       headers: { Cookie: "oyster_key_session=host-owned-session" },
     });
-    assert.deepEqual(await selected.auth.authenticate(browser), {
-      kind: "admitted",
-      principal: { actor: { kind: "team-key", keyId: "named-key" } },
-    });
-    assert.deepEqual(
-      await selected.auth.authenticate(
-        new globalThis.Request(browser.url, {
-          headers: {
-            Cookie:
-              "oyster_session=stale; oyster_key_session=host-owned-session",
-          },
-        }),
-      ),
-      { kind: "refused", status: 401 },
-      "the standalone owner adapter's recognized-cookie refusal is final",
-    );
-    const unbound = await standaloneTenancy({
+    const retired = await standaloneTenancy({
       ...env,
-      OYSTER_KEY_SESSIONS: undefined,
+      OYSTER_KEY_SESSIONS: {
+        resolve: async (value) =>
+          value === "host-owned-session" ? { keyId: "named-key" } : null,
+      },
     });
-    const withoutSessions = await unbound.oyster.resolve(browser);
-    assert.deepEqual(await withoutSessions.auth.authenticate(browser), {
-      kind: "refused",
-      status: 401,
-    });
+    for (const tenancy of [shared, retired])
+      assert.deepEqual(
+        await (
+          await tenancy.oyster.resolve(browser)
+        ).auth.authenticate(browser),
+        { kind: "refused", status: 401 },
+      );
     await probe.owner.setStatus(shared.tenantId, "suspended");
     assert.equal(await shared.owner(), null);
     assert.equal(await selected.auth.resolve(owner.actor), null);

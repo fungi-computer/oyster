@@ -74,8 +74,7 @@ type LiveOysterKey = Readonly<{
 
 The minimal live facts `OysterHost`'s `keys.live` port returns: enough to gate
 one call, never the key's name or timestamps. `null` for an unknown, revoked,
-expired or suspended key -- the same closed set `keyAppAccess` and
-`keyAllowsComputerUse` already treat as no authority.
+expired or suspended key, which `authorization.ts` treats as no authority.
 
 ## Variables
 
@@ -122,99 +121,3 @@ A grant reaching every current and future installation for `capability`.
 #### Returns
 
 `Grant`\<[`OysterKeyCapability`](#oysterkeycapability)\>
-
----
-
-### keyAppAccess()
-
-```ts
-function keyAppAccess(
-  key,
-  installationId,
-): {
-  level: "read" | "write";
-  revision: string;
-  grantedBy: string;
-} | null;
-```
-
-One live key's access to one installation: `write` when its grants admit
-`apps.use` there, `read` when they admit `apps.read`, otherwise `null` --
-including for an installation added after the key was issued, unless the key
-holds "All Apps" (`targets: {kind: "all"}`). The same shape as an Agent's stored
-[AppToolPolicy](apps.md#apptoolpolicy); its caller adds `bindingName` (which
-varies by caller: the plain installation id for the gate, the uppercased binding
-name for MCP) to reach the full `AppToolAccess`.
-
-#### Parameters
-
-| Parameter        | Type                              |
-| ---------------- | --------------------------------- |
-| `key`            | [`LiveOysterKey`](#liveoysterkey) |
-| `installationId` | `string`                          |
-
-#### Returns
-
-\| \{ `level`: `"read"` \| `"write"`; `revision`: `string`; `grantedBy`:
-`string`; \} \| `null`
-
----
-
-### keyAgentAccess()
-
-```ts
-function keyAgentAccess(key, agentId): boolean;
-```
-
-Agent access is scoped to the granted Agent ids, never inferred from App grants.
-
-#### Parameters
-
-| Parameter | Type                              |
-| --------- | --------------------------------- |
-| `key`     | [`LiveOysterKey`](#liveoysterkey) |
-| `agentId` | `string`                          |
-
-#### Returns
-
-`boolean`
-
----
-
-### keyAllowsComputerUse()
-
-```ts
-function keyAllowsComputerUse(key): boolean;
-```
-
-Whether a live key's own grants turn its Computer access on. Off by default.
-
-#### Parameters
-
-| Parameter | Type                              |
-| --------- | --------------------------------- |
-| `key`     | [`LiveOysterKey`](#liveoysterkey) |
-
-#### Returns
-
-`boolean`
-
----
-
-### keyAllowsMachineEnroll()
-
-```ts
-function keyAllowsMachineEnroll(key): boolean;
-```
-
-Whether a live key's grants permit a one-use device enrollment.
-
-#### Parameters
-
-| Parameter | Type                              |
-| --------- | --------------------------------- |
-| `key`     | [`LiveOysterKey`](#liveoysterkey) |
-
-#### Returns
-
-`boolean`

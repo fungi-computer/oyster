@@ -13,7 +13,7 @@ import { invocationCallerContext } from "../dist/invocation.js";
 import { parseAppMethodCallContext } from "@fungi.computer/puffball/app-method-runtime";
 import { appSurfaceCache, oysterAppMethods } from "../dist/mcp.js";
 import { computerHost } from "./computer-host.fixture.mjs";
-import { Hono } from "hono";
+import { routes } from "../dist/authorization.js";
 import { computerSlots } from "../dist/computer.js";
 
 test("the page's fresh admission reports current Computer permission and refuses disabled installations", async () => {
@@ -21,7 +21,7 @@ test("the page's fresh admission reports current Computer permission and refuses
     {
       ...computerSlots.terminal,
       permission: "computer.execute",
-      routes: new Hono(),
+      routes: routes(),
     },
   ];
   const host = await computerHost(
@@ -190,16 +190,6 @@ test("an unconfigured Oyster does not adopt a Computer from method input", async
     actor: { kind: "member", memberId: "owner" },
     role: "owner",
   });
-});
-
-test("a visitor receives no Computer even when the host configured one", () => {
-  assert.deepEqual(
-    invocationCallerContext({ actor: { kind: "visitor" } }, "host-workspace"),
-    {
-      computerId: null,
-      actor: { kind: "team-key", keyId: "visitor" },
-    },
-  );
 });
 
 test("a tenant principal's registry facts never enter the caller grammar", () => {

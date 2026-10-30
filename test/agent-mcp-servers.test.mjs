@@ -1,10 +1,10 @@
 /* global Headers, Request */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Hono } from "hono";
 import { agentMcpServerRoutes } from "../dist/agents.js";
+import { serveHost } from "../dist/authorization.js";
 
-/** The host's admitted principals; anyone else is the anonymous visitor. */
+/** The host's admitted principals; anyone else is an Agent. */
 const principalOf = (who) => {
   switch (who) {
     case "owner":
@@ -12,7 +12,7 @@ const principalOf = (who) => {
     case "key":
       return { actor: { kind: "team-key", keyId: "key" } };
     default:
-      return { actor: { kind: "visitor" } };
+      return { actor: { kind: "agent", agentId: "agent_1" } };
   }
 };
 
@@ -56,13 +56,16 @@ function fixture() {
       return true;
     },
   };
-  // The host stamps the request's one admitted principal before owner routes.
-  const routes = new Hono()
-    .use("*", async (context, next) => {
-      context.set("principal", principalOf(context.req.header("x-who")));
-      await next();
-    })
-    .route("/", agentMcpServerRoutes(adapter));
+  // The host's one admission per request.
+  const routes = serveHost(
+    agentMcpServerRoutes(adapter),
+    (request) =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: principalOf(request.headers.get("x-who") ?? undefined),
+      }),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
   const call = (path, init = {}, who = "owner") => {
     const headers = new Headers(init.headers);
     headers.set("content-type", "application/json");

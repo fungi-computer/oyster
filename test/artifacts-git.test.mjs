@@ -1,3 +1,4 @@
+/* global Request */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { registerHooks } from "node:module";
@@ -6,6 +7,10 @@ import { URL } from "node:url";
 import * as Schema from "effect/Schema";
 import { invokeNativeGit } from "@fungi.computer/agar/git-rpc";
 import { approvedInstallation } from "../dist/testing/index.js";
+
+/** A Git door answers whole requests; resolve a path against one origin. */
+const gitFetch = (door, path, init) =>
+  door.fetch(new Request(new URL(path, "https://oyster.test"), init));
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -970,11 +975,14 @@ test("smart HTTP returns 404 for a missing provider repository without retrying 
     },
   });
   const door = createGitDoor({
-    authenticate: async () => null,
-    isPublic: async () => true,
+    authenticate: async () => ({
+      kind: "actor",
+      actor: { kind: "member", memberId: "owner" },
+    }),
     git: async () => git,
   });
-  const response = await door.request(
+  const response = await gitFetch(
+    door,
     "/git/bonsai/missing.git/info/refs?service=git-upload-pack",
   );
   assert.equal(response.status, 404);
@@ -993,7 +1001,6 @@ test("smart HTTP authenticates against the exact repository and scope it names",
       targets.push(target);
       return null;
     },
-    isPublic: async () => false,
     git: async () => {
       throw new Error("An unauthenticated request must not reach Git");
     },
@@ -1002,7 +1009,7 @@ test("smart HTTP authenticates against the exact repository and scope it names",
     "/git/bonsai/pond.git/info/refs?service=git-upload-pack",
     "/git/bonsai/pond.git/info/refs?service=git-receive-pack",
   ])
-    assert.equal((await door.request(path)).status, 401);
+    assert.equal((await gitFetch(door, path)).status, 401);
   assert.deepEqual(targets, [
     { installationId: "bonsai", repository: "pond", scope: "read" },
     { installationId: "bonsai", repository: "pond", scope: "write" },
@@ -1026,11 +1033,11 @@ test("smart HTTP never logs or echoes a presented bearer pass", async () => {
         request.headers.get("authorization") === `Bearer ${secret}`
           ? { kind: "actor", actor: { kind: "member", memberId: "owner" } }
           : null,
-      isPublic: async () => false,
       git: async () => null,
     });
     for (const service of ["git-upload-pack", "git-receive-pack"]) {
-      const response = await door.request(
+      const response = await gitFetch(
+        door,
         `/git/bonsai/pond.git/info/refs?service=${service}`,
         { headers: { Authorization: `Bearer ${secret}` } },
       );

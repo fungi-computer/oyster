@@ -45,10 +45,16 @@ import {
   createOysterAppBuilds,
   migrateOysterAppBuilds,
   oysterAppBuildTimeoutMs,
+  buildJobLogMaxBytes,
   type OysterAppBuildOptions,
   type OysterBuildComputer,
   type OysterBuildLocation,
+  type BuildJobLog,
 } from "../src/app-builds.js";
+import { createBuildJobLog } from "../src/build/job-log.js";
+import { standaloneBuildRoutes } from "../src/standalone/builds.js";
+import { serveHost } from "../src/authorization.js";
+import type { OysterAuthResult } from "../src/host.js";
 import {
   verifyRelease,
   type ArtifactHeads,
@@ -232,6 +238,11 @@ function fixture(
   },
   /** The output whose objects the builder uploads before it reports. */
   uploaded: BuildOutput | null = built,
+  buildOutput: Readonly<{
+    stdout?: string;
+    stderr?: string;
+    log?: BuildJobLog;
+  }> = {},
 ) {
   const store = memoryStore();
   let hostedBackend = true;
@@ -242,7 +253,16 @@ function fixture(
       ),
     async runBuild(input) {
       if (uploaded !== null) await upload(store, uploaded);
-      return { output: { exitCode: await simulate(input) } };
+      const exitCode = await simulate(input);
+      const capture = createBuildJobLog();
+      if (buildOutput.stdout !== undefined)
+        capture.append(new TextEncoder().encode(buildOutput.stdout));
+      if (buildOutput.stderr !== undefined)
+        capture.append(new TextEncoder().encode(buildOutput.stderr));
+      return {
+        output: { exitCode, stderr: buildOutput.stderr ?? "" },
+        log: buildOutput.log ?? capture.finish(),
+      };
     },
   };
   const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
@@ -274,6 +294,151 @@ function fixture(
     },
   };
 }
+
+it("retains a failing build's complete combined output in its existing artifact store across reopen", async () => {
+  const stdout = "compiler stdout\n";
+  const stderr = "Tourtois compile failed: café 🍄\r\n" + "e".repeat(50_000);
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout,
+    stderr,
+  });
+  const started = await f.builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner",
+  });
+  const completed = await started.run();
+  const log = await f.reopen().readLog(completed.jobId);
+  expect(log).not.toBeNull();
+  expect(log?.truncated).toBeNull();
+  expect(base64url.decode(log?.output ?? "")).toEqual(
+    new TextEncoder().encode(stdout + stderr),
+  );
+  expect(completed.detail?.length).toBeLessThanOrEqual(200);
+  expect(completed.detail).toContain("?log");
+  expect(f.store.objects.size).toBe(1);
+  const routes = standaloneBuildRoutes(() => ({
+    startBuild: () => Promise.resolve({ kind: "refused", reason: "no_source" }),
+    readBuild: (jobId) => Promise.resolve(f.reopen().read(jobId)),
+    readBuildLog: (jobId) => f.reopen().readLog(jobId),
+  }));
+  const served = serveHost(
+    routes,
+    (request): Promise<OysterAuthResult> =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: {
+          actor: {
+            kind: "member",
+            memberId: request.headers.get("member") ?? "guest",
+          },
+          role: request.headers.get("member") === "owner" ? "owner" : "member",
+        },
+      }),
+    { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
+  );
+  const url = `https://oyster.test/api/builds/${completed.jobId}?log`;
+  const response = await served.request(url, { headers: { member: "owner" } });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(log);
+  const refused = await served.request(url, { headers: { member: "guest" } });
+  expect(refused.status).toBe(403);
+  expect(await refused.text()).not.toContain(stderr.slice(0, 20));
+  expect(await f.reopen().readLog("unknown")).toBeNull();
+});
+
+it("allocates only for output received by a tiny build", () => {
+  const capture = createBuildJobLog();
+  expect(capture.allocatedBytes).toBe(0);
+  expect(base64url.decode(capture.finish().output).byteLength).toBe(0);
+  capture.append(new TextEncoder().encode("ok\n"));
+  expect(capture.allocatedBytes).toBeLessThanOrEqual(4096);
+  expect(base64url.decode(capture.finish().output)).toEqual(
+    new TextEncoder().encode("ok\n"),
+  );
+});
+
+it("grows the tail ring on demand and retains the latest bytes after wrap", () => {
+  const capture = createBuildJobLog();
+  const half = buildJobLogMaxBytes / 2;
+  capture.append(new Uint8Array(half).fill(72));
+  capture.append(new Uint8Array(3).fill(65));
+  expect(capture.allocatedBytes).toBeLessThan(buildJobLogMaxBytes);
+  for (let index = 0; index < 300; index += 1)
+    capture.append(new Uint8Array(4096).fill(index % 256));
+  // Once the head is full, the tail must never allocate more than its 1 MiB.
+  expect(capture.allocatedBytes - half).toBeLessThanOrEqual(half);
+  const result = capture.finish();
+  const expectedTail = new Uint8Array(3 + 300 * 4096);
+  expectedTail.fill(65, 0, 3);
+  for (let index = 0; index < 300; index += 1)
+    expectedTail.fill(index % 256, 3 + index * 4096, 3 + (index + 1) * 4096);
+  expect(result.truncated).toEqual({
+    droppedBytes: expectedTail.length - half,
+  });
+  const bytes = base64url.decode(result.output);
+  // Deep-equal walks millions of individual array entries in Vitest, making
+  // this otherwise cheap ring proof time out under gate load.
+  expect(bytes.subarray(0, half).every((byte) => byte === 72)).toBe(true);
+  expect(
+    bytes
+      .subarray(half)
+      .every(
+        (byte, index) =>
+          byte === expectedTail[expectedTail.length - half + index],
+      ),
+  ).toBe(true);
+});
+
+it("grows both retained log buffers logarithmically across small writes", () => {
+  const capture = createBuildJobLog();
+  const chunk = new Uint8Array(64);
+  const half = buildJobLogMaxBytes / 2;
+  let reallocations = 0;
+  let previousCapacity = capture.allocatedBytes;
+  for (let index = 0; index < (2 * half) / chunk.byteLength + 1; index += 1) {
+    capture.append(chunk);
+    if (capture.allocatedBytes !== previousCapacity) {
+      reallocations += 1;
+      previousCapacity = capture.allocatedBytes;
+    }
+  }
+  // 4 KiB initial capacity then doubling to 1 MiB: nine growths per buffer.
+  expect(reallocations).toBeLessThanOrEqual(18);
+  expect(capture.allocatedBytes).toBe(buildJobLogMaxBytes);
+});
+
+it("keeps exactly a 2 MiB head/tail and counts discarded raw bytes, including split UTF-8", async () => {
+  const capture = createBuildJobLog();
+  const head = new Uint8Array(buildJobLogMaxBytes / 2).fill(72);
+  const tail = new Uint8Array(buildJobLogMaxBytes / 2).fill(84);
+  const middle = new TextEncoder().encode("🍄\r\n");
+  capture.append(head);
+  capture.append(middle.subarray(0, 1));
+  capture.append(middle.subarray(1));
+  capture.append(tail.subarray(0, 29));
+  capture.append(tail.subarray(29));
+  const raw = capture.finish();
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    log: raw,
+  });
+  const started = await f.builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner",
+  });
+  await started.run();
+  const log = await f.reopen().readLog(started.build.jobId);
+  expect(log?.truncated).toEqual({ droppedBytes: 6 });
+  const bytes = base64url.decode(log?.output ?? "");
+  expect(bytes.byteLength).toBe(2 * 1024 * 1024);
+  expect(bytes.subarray(0, head.byteLength).every((byte) => byte === 72)).toBe(
+    true,
+  );
+  expect(bytes.subarray(head.byteLength).every((byte) => byte === 84)).toBe(
+    true,
+  );
+});
 
 /** The upload grant the fixed command carries to the Computer's builder. */
 function grantOf(command: string): string {
@@ -562,8 +727,10 @@ it("fails a manifest whose object was never uploaded", async () => {
   const { done, store } = await buildWith(() => undefined, null);
   expect(done.status).toBe("failed");
   expect(done.release).toBeNull();
-  // Nothing was written for it: no asset manifest, no root.
-  expect(store.objects.size).toBe(0);
+  // The job log is retained, but no asset manifest or Release root is written.
+  expect([...store.objects.keys()]).toEqual([
+    `artifact:build-log-${done.jobId}`,
+  ]);
 });
 
 it("fails a manifest whose stored object has another size or an unverified digest", async () => {
@@ -657,7 +824,10 @@ function restartedOwners(clock: { now: number }, missingOutput = false) {
           runBuild: ({ command }) => {
             commands.push(command);
             return missingOutput
-              ? Promise.resolve({ output: null })
+              ? Promise.resolve({
+                  output: null,
+                  log: createBuildJobLog().finish(),
+                })
               : new Promise<never>(() => undefined);
           },
         },
@@ -805,7 +975,10 @@ it("keeps a build running when the Computer loses its result, and completes it f
         buildBackend: () => Promise.resolve({ kind: "hosted" }),
         runBuild: (input) => {
           command = input.command;
-          return Promise.resolve({ output: null });
+          return Promise.resolve({
+            output: null,
+            log: createBuildJobLog().finish(),
+          });
         },
       },
     },
@@ -996,7 +1169,7 @@ async function submitUnder(
   return { submitted, done, store };
 }
 
-/** An over-policy manifest writes nothing beyond its uploaded objects and
+/** An over-policy manifest writes nothing beyond its uploaded objects and job log and
  * settles failed; the bound itself builds. */
 async function expectBound(
   recipe: (limit: number) => AppPublisherCoreConfigInput["recipe"],
@@ -1007,7 +1180,14 @@ async function expectBound(
   expect(over.submitted).toBe(422);
   expect(over.done.status).toBe("failed");
   expect(over.done.release).toBeNull();
-  expect(over.store.objects.size).toBe(stageBuildOutput(output).objects.length);
+  expect([...over.store.objects.keys()].sort()).toEqual(
+    [
+      ...stageBuildOutput(output).objects.map((object) =>
+        contentObjectRef(object.digest),
+      ),
+      `artifact:build-log-${over.done.jobId}`,
+    ].sort(),
+  );
   const at = await submitUnder(recipe(limit), output);
   expect(at.submitted).toBe(200);
   expect(at.done.status).toBe("succeeded");

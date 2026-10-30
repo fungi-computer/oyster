@@ -1,4 +1,3 @@
-import { Hono } from "hono";
 import {
   attachedBackendId,
   hostedBackingSchema,
@@ -15,6 +14,7 @@ import {
 } from "@fungi.computer/agar/computer";
 import { verifyRelease } from "../host.js";
 import { r2ArtifactStore } from "../workers.js";
+import { createBuildJobLog } from "../build/job-log.js";
 import {
   createStandalonePreview,
   previewOrigins,
@@ -92,11 +92,16 @@ import type { InvocationFrame } from "../invocation.js";
 import { computerSlots } from "../computer.js";
 import {
   oysterPrincipalId,
-  oysterPrincipalIsOwner,
   type CapabilityEnv,
   type OysterCapability,
-  type OysterPrincipal,
 } from "../host.js";
+import {
+  authorityOf,
+  computer as computerRoute,
+  owner,
+  reachesComputer,
+  routes as routeTable,
+} from "../authorization.js";
 import type {
   OysterBindingRow,
   OysterInvocationHost,
@@ -104,13 +109,12 @@ import type {
   OysterWorkspace,
 } from "../workers.js";
 import type { OysterKeys, OysterKeysLivePort } from "../workers-git.js";
-import { keyAllowsComputerUse } from "../keys.js";
 import {
   oysterAppBuildTimeoutMs,
   type OysterBuildBackend,
 } from "../app-builds.js";
 import type { StandaloneRegistry } from "./registry.js";
-import type { TenantScope } from "../tenant.js";
+import type { TenantPrincipal, TenantScope } from "../tenant.js";
 import {
   workflowGitStepGrant,
   type WorkflowGitStepEnv,
@@ -203,27 +207,21 @@ function grant(computerId: string, actor: string): ComputerGrant {
 }
 
 /**
- * The Computer grant actor for an admitted owner or member; null for an
- * Agent or visitor. A key only when its own `computer.use` grant allows it
- * -- off by default, so an unknown, revoked, expired or suspended key, or
- * one issued with no Computer grant, is also null. `keysLive` is the one
- * owner-checked port every caller reaches a key's liveness through (the
- * same one `host.keys.live` is); a caller with none -- the Media binding's
- * own workspace selection never calls through to a principal at all --
- * fails every team-key closed rather than falling back to an unchecked read.
+ * The Computer grant actor for a principal `authorization.ts` lets reach the
+ * Computer; null otherwise. `keysLive` is the one owner-checked port every
+ * caller reaches a key's liveness through (the same one `host.keys.live`
+ * is); a caller with none -- the Media binding's own workspace selection
+ * never calls through to a principal at all -- fails every key closed.
  */
 async function computerActor(
-  principal: OysterPrincipal,
+  principal: TenantPrincipal,
   keysLive: OysterKeysLivePort | undefined,
 ): Promise<string | null> {
-  if (principal.actor.kind === "visitor" || principal.actor.kind === "agent")
-    return null;
-  if (principal.actor.kind === "team-key") {
-    const key =
-      keysLive === undefined ? null : await keysLive(principal.actor.keyId);
-    if (key === null || !keyAllowsComputerUse(key)) return null;
-  }
-  return JSON.stringify(principal);
+  const authority = await authorityOf(principal, {
+    liveKey: keysLive ?? (() => Promise.resolve(null)),
+    appToolPolicy: () => null,
+  });
+  return reachesComputer(authority) ? JSON.stringify(principal) : null;
 }
 
 /** Each advertised Computer tool, the grant action that accepts it, and its result. */
@@ -479,12 +477,19 @@ export class ComputerDO
     command: string;
     timeoutMs: number;
   }): Promise<
-    Readonly<{ output: { exitCode: number | null; stderr: string } | null }>
+    Readonly<{
+      output: {
+        exitCode: number | null;
+        stderr: string;
+      } | null;
+      log: import("../build/job-log.js").BuildJobLog;
+    }>
   > {
     const admitted = await this.previewBindings.REGISTRY.getByName(
       "registry",
     ).admitBuildExecution(input.jobId, this.state.id.toString());
     if (!admitted) throw new AppInstanceError("revoked");
+    const log = createBuildJobLog();
     const result = await this.executeOperationAfterAcceptance(
       {
         command: input.command,
@@ -495,11 +500,22 @@ export class ComputerDO
       () => undefined,
       "hosted",
       { maximumTimeMs: oysterAppBuildTimeoutMs },
+      undefined,
+      undefined,
+      {
+        onEvent(event) {
+          if (event.name === "stdout" || event.name === "stderr")
+            log.append(event.value);
+        },
+      },
     );
     const output = z
       .object({ exitCode: z.number().nullable(), stderr: z.string() })
       .safeParse(result.output);
-    return { output: output.success ? output.data : null };
+    return {
+      output: output.success ? output.data : null,
+      log: log.finish(),
+    };
   }
 
   /** Issue preview tickets for every exposed port, or refuse typed. */
@@ -916,90 +932,77 @@ export function standaloneWorkspace(
 
 /**
  * Owner/key capability routes over the selected Computer's native
- * namespace. `keysLive` is the same owner-checked port `standaloneWorkspace`
- * takes; a caller with none fails every team-key request closed.
+ * namespace. Each route declares the Computer requirement, so a key reaches
+ * it only with its own `computer.use` grant (`authorization.ts`).
  */
 export function standaloneComputerCapabilities(
   env: StandaloneComputerEnv,
   workspace: OysterWorkspace,
-  keysLive?: OysterKeysLivePort,
 ): readonly OysterCapability[] {
-  const routes = new Hono<
-    CapabilityEnv & { Variables: { authority: ComputerGrant } }
-  >();
-  routes.use("*", async (context, next) => {
-    const actor = await computerActor(context.env.principal, keysLive);
-    if (actor === null)
-      return context.json(
-        { error: "Computer access requires an owner or key" },
-        403,
-      );
-    context.set("authority", grant(workspace.computerId, actor));
-    return next();
-  });
+  const routes = routeTable<CapabilityEnv>();
+  const reach = computerRoute();
+  const authority = (principal: TenantPrincipal) =>
+    grant(workspace.computerId, JSON.stringify(principal));
   const computer = () => env.COMPUTER.getByName(workspace.computerId);
-  routes.get("/ports", async (context) => {
-    if (previewOrigins(env) === null)
-      return context.json({ error: "port_previews_not_configured" });
-    const { principal, installation } = context.env;
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "Owner preview access required" }, 403);
-    const ownerId = oysterPrincipalId(principal);
-    const authority = context.get("authority");
-    const reply = await computer().portPreviews(
-      {
-        ...authority,
-        provenance: { ...authority.provenance, actor: `owner:${ownerId}` },
-      },
-      {
-        ownerId,
-        installationId: installation.installationId,
-        selection: selectionOf(installation),
-        artifactDigest: installation.release.artifact.artifactDigest,
-      },
-    );
-    return reply.kind === "ok"
-      ? context.json(reply.value)
-      : context.json(
-          { error: reply.code, message: reply.message },
-          appMethodRefusalStatus[reply.code],
-        );
-  });
+  routes.get(
+    "/ports",
+    owner("direct-or-app"),
+    async (context, { principal }) => {
+      if (previewOrigins(env) === null)
+        return context.json({ error: "port_previews_not_configured" });
+      const { installation } = context.env;
+      const ownerId = oysterPrincipalId(principal);
+      const ownerAuthority = authority(principal);
+      const reply = await computer().portPreviews(
+        {
+          ...ownerAuthority,
+          provenance: {
+            ...ownerAuthority.provenance,
+            actor: `owner:${ownerId}`,
+          },
+        },
+        {
+          ownerId,
+          installationId: installation.installationId,
+          selection: selectionOf(installation),
+          artifactDigest: installation.release.artifact.artifactDigest,
+        },
+      );
+      return reply.kind === "ok"
+        ? context.json(reply.value)
+        : context.json(
+            { error: reply.code, message: reply.message },
+            appMethodRefusalStatus[reply.code],
+          );
+    },
+  );
   // The host wire body is `{ port }`, as on Hub; it is parsed here.
-  routes.post("/ports/expose", async (context) => {
+  routes.post("/ports/expose", reach, async (context, { principal }) => {
     const input = computerPortInputSchema.safeParse(await context.req.json());
     if (!input.success) return context.json({ error: "invalid_input" }, 400);
     return Response.json(
-      await computer().value(
-        context.get("authority"),
-        "exposePort",
-        input.data,
-      ),
+      await computer().value(authority(principal), "exposePort", input.data),
     );
   });
   // The host wire body is `{ port }`, as on Hub; it is parsed here.
-  routes.post("/ports/unexpose", async (context) => {
+  routes.post("/ports/unexpose", reach, async (context, { principal }) => {
     const input = computerPortInputSchema.safeParse(await context.req.json());
     if (!input.success) return context.json({ error: "invalid_input" }, 400);
     return Response.json(
-      await computer().value(
-        context.get("authority"),
-        "unexposePort",
-        input.data,
-      ),
+      await computer().value(authority(principal), "unexposePort", input.data),
     );
   });
-  routes.get("/processes", async (context) =>
+  routes.get("/processes", reach, async (_context, { principal }) =>
     Response.json(
-      await computer().value(context.get("authority"), "processList", {}),
+      await computer().value(authority(principal), "processList", {}),
     ),
   );
-  routes.post("/processes/start", async (context) => {
+  routes.post("/processes/start", reach, async (context, { principal }) => {
     const input = processStartHttpBody.safeParse(await context.req.json());
     if (!input.success) return context.json({ error: "invalid_input" }, 400);
     const result = processStartReply.parse(
       await computer().value(
-        context.get("authority"),
+        authority(principal),
         "processStart",
         computerValueSchema.parse({
           ...input.data,
@@ -1010,19 +1013,15 @@ export function standaloneComputerCapabilities(
     return Response.json(result, { status: "error" in result ? 409 : 200 });
   });
   // The host wire body is `{ id }`, as on Hub; it is parsed here.
-  routes.post("/processes/kill", async (context) => {
+  routes.post("/processes/kill", reach, async (context, { principal }) => {
     const input = processIdInputSchema.safeParse(await context.req.json());
     if (!input.success) return context.json({ error: "invalid_input" }, 400);
     return Response.json(
-      await computer().value(
-        context.get("authority"),
-        "processKill",
-        input.data,
-      ),
+      await computer().value(authority(principal), "processKill", input.data),
     );
   });
-  routes.get("/terminal", async (context) => {
-    const authority = context.get("authority");
+  routes.get("/terminal", reach, async (context, { principal }) => {
+    const terminal = authority(principal);
     const url = new URL(context.req.url);
     url.pathname = "/_oyster/terminal";
     return computer().fetch(
@@ -1030,8 +1029,8 @@ export function standaloneComputerCapabilities(
         headers: {
           Upgrade: "websocket",
           [terminalGrantHeader]: JSON.stringify({
-            ...authority,
-            actions: [...authority.actions],
+            ...terminal,
+            actions: [...terminal.actions],
           }),
         },
       }),
@@ -1040,7 +1039,7 @@ export function standaloneComputerCapabilities(
   return Object.values(computerSlots).map((slot) => ({
     ...slot,
     permission: "computer.execute",
-    routes: new Hono<CapabilityEnv>().route("/", routes),
+    routes,
   }));
 }
 

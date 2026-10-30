@@ -309,8 +309,9 @@ it("bulk owner installs leave third-party shell authority pending with its full-
     ).toMatchObject({
       on: false,
       pending: true,
-      warning:
-        "The shell runs with full access to your Team and every App inside it. Only pick a shell you trust.",
+      label: "Shell",
+      description: "Full access to your Team and every App",
+      warning: "Only pick a shell you trust.",
     });
     expect(
       grantRequestFor(

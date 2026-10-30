@@ -18,7 +18,9 @@ import {
 } from "./tenancy.js";
 import { AcceptedSchema } from "@fungi.computer/shiitake/client";
 import { createShiitakeClient } from "@fungi.computer/shiitake/client";
+import { ShiitakeError } from "@fungi.computer/shiitake";
 import {
+  AgentArchiveRefused,
   AgentCreateRefused,
   type AgentControlDirectory,
 } from "@fungi.computer/shiitake/agent-control";
@@ -31,12 +33,6 @@ import type { createConversationAgents } from "@fungi.computer/shiitake-extensio
 import type { PostEnvelope } from "@fungi.computer/carrier/post";
 import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
 import { agentMail } from "./agent-mail.js";
-import {
-  createChannelConversations,
-  type ChannelConversations,
-} from "../channels/conversations.js";
-import type { ConversationBinding } from "../channels/binding.js";
-import { channelSessionDoor } from "./channel-session-door.js";
 import {
   createStandaloneMachineEnrollment,
   standaloneMachineAgentHome,
@@ -101,6 +97,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
 import { agentStoreKeeping } from "./agent-store.js";
+import { agentArchiveOwner } from "./agent-archive-owner.js";
+import { agentArchiveProjection } from "../agent-archive-projection.js";
 import { standaloneBrowserSource } from "./browser.js";
 import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
 import {
@@ -129,6 +127,21 @@ import {
 } from "../cloudflare.js";
 import { AppInstanceError } from "../index.js";
 import {
+  agentScheduleBindingArgs,
+  appAgentScheduleListInputSchema,
+  agentSchedulePageSchema,
+  agentScheduleControlReceiptSchema,
+  type AppAgentScheduleListInput,
+  type AgentSchedulePage,
+  type AgentScheduleTarget,
+  type AgentScheduleControlReceipt,
+} from "../agent-schedules.js";
+import {
+  readAgentSchedulePage,
+  controlAgentSchedule,
+  agentScheduleTargetSchema,
+} from "@fungi.computer/shiitake-extensions/schedules";
+import {
   createAgentAvatarStore,
   type AgentAvatarStore,
 } from "../agent-avatars.js";
@@ -147,23 +160,21 @@ import {
 } from "@fungi.computer/shiitake/fleet";
 import type { AppSurfaceCache } from "../mcp.js";
 import { appToolPolicySchema, type AppToolPolicy } from "../apps/index.js";
-import {
-  oysterPrincipalIsOwner,
-  oysterPrincipalId,
-  type OysterPrincipal,
-  type OysterHost,
-} from "../host.js";
+import { oysterPrincipalId, type OysterHost } from "../host.js";
+import { oysterPrincipalIsOwner } from "../authorization.js";
 import {
   defaultTenant,
   tenantIdSchema,
   tenantScope,
   type TenantScope,
   type TenantId,
+  type TenantPrincipal,
 } from "../tenant.js";
 import type { ReadonlyTenancy } from "../tenancy/index.js";
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { OysterWorkerEnv } from "../workers.js";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
+import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
 import type {
   McpServerConnection,
   UiConnection,
@@ -430,6 +441,7 @@ const toMcpServer = (stored: StoredMcpServer): AgentMcpServer => ({
 });
 
 const instructions = [
+  forageDiscoveryInstructions,
   "Attached Computers are independent env.computers.<name> modules, including their Files and execute operations; no App is needed. Discover their exact operations before calling.",
   "You are an agent on a personal Oyster: a small, self-hosted home for Apps.",
   "Your tool is execute: it runs JavaScript in an isolated sandbox. Each installed App is an env.<APP> module; dotted method names are nested properties, e.g. `return await env.BONSAI.repos.list({})`.",
@@ -449,31 +461,40 @@ export type AgentInboxRows = Readonly<{
 export abstract class StandaloneAgentBase<
   Env extends StandaloneAgentEnv = StandaloneAgentEnv,
 > extends ShiitakeDO<Env> {
+  private archiveControlOwner: ReturnType<typeof agentArchiveOwner> | undefined;
+  private archiveControl() {
+    return (this.archiveControlOwner ??= agentArchiveOwner({
+      storage: this.ctx.storage,
+      agentId: () => this.ctx.id.name,
+      agent: () => this.shiitake(),
+      scheduledExtensions: true,
+      refreshOutstanding: (agentId) =>
+        this.delegation().refreshOutstanding((target, sessionId, commandId) =>
+          this.machineClient().then((client) =>
+            client.settlement(target, sessionId, commandId, agentId),
+          ),
+        ),
+      record: async (agentId, archived, revision) => {
+        const pin = await this.policyDirectory();
+        if (pin === null) return false;
+        return this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).recordArchive(agentId, archived, revision);
+      },
+      wake: () => this.wakeRuntime(),
+      waitUntil: (task) => {
+        this.ctx.waitUntil(task);
+      },
+    }));
+  }
+
+  /** Owner-local atomic transition. The caller checks human/creator authority. */
+  setArchived(archived: boolean) {
+    return this.archiveControl().setArchived(archived);
+  }
+
   /** The deployable root's host for this Agent's pinned tenant. */
   protected abstract hostFor(scope: TenantScope): Promise<OysterHost>;
-  /**
-   * Compose Oyster's channel owner on this Agent's real store and Shiitake.
-   * A host must supply its own binding lookup after authenticating its edge;
-   * this does not install an inbound route or mint provider credentials.
-   */
-  protected channelConversations(
-    binding: (bindingId: string) => ConversationBinding | null,
-  ): ChannelConversations {
-    const owner = createChannelConversations({
-      sql: this.ctx.storage.sql,
-      transactionSync: (body) => this.ctx.storage.transactionSync(body),
-      binding,
-      door: channelSessionDoor(
-        () => this.shiitake(),
-        () => {
-          // Standalone Agents have no Hub Team grants to deliver.
-        },
-        () => owner,
-      ),
-      now: () => Date.now(),
-    });
-    return owner;
-  }
   /** Each installed Release's verified catalog surface, built once per Release for this Agent's lifetime. */
   #appSurfaces: AppSurfaceCache | undefined;
   private uiOwner: UiConnection | undefined;
@@ -648,17 +669,61 @@ export abstract class StandaloneAgentBase<
   }
 
   private controlDirectory(): AgentControlDirectory {
-    const list = async (signal: AbortSignal) => {
+    const list: AgentControlDirectory["list"] = async (signal, options) => {
       signal.throwIfAborted();
       const pin = await this.policyDirectory();
       if (pin === null) throw new Error("Agent directory is unavailable");
-      const agents = await this.env.AGENT_DIRECTORY.getByName(
-        pin.directoryName,
-      ).list();
-      if (!agents.some((agent) => agent.agentId === this.ctx.id.name))
+      const directory = this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+      const agents = await directory.list(options);
+      if (
+        this.ctx.id.name === undefined ||
+        !(await directory.has(this.ctx.id.name))
+      )
         throw new Error("Agent is outside this scope");
       signal.throwIfAborted();
       return agents;
+    };
+    const changeArchive = async (
+      targetId: string,
+      archived: boolean,
+      signal: AbortSignal,
+    ) => {
+      await list(signal);
+      const caller = this.ctx.id.name;
+      const pin = await this.policyDirectory();
+      if (caller === undefined || pin === null)
+        throw new AgentArchiveRefused(
+          "unreadable",
+          "Agent scope is unavailable",
+        );
+      if (targetId === caller)
+        throw new AgentArchiveRefused(
+          "self",
+          "An Agent cannot archive or restore itself",
+        );
+      const directory = this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+      if ((await directory.createdBy(targetId)) !== caller)
+        throw new AgentArchiveRefused(
+          "not_creator",
+          "An Agent can change only one it created",
+        );
+      const target = this.env.AGENTS.getByName(targetId);
+      const targetPin = await target.policyDirectory();
+      if (
+        targetPin?.directoryName !== pin.directoryName ||
+        targetPin.tenantId !== pin.tenantId
+      )
+        throw new AgentArchiveRefused(
+          "unreadable",
+          "Agent archive scope does not match",
+        );
+      signal.throwIfAborted();
+      const result = await target.setArchived(archived);
+      if ("error" in result)
+        throw new AgentArchiveRefused(
+          result.error,
+          result.message ?? `Agent archive refused: ${result.error}`,
+        );
     };
     return {
       list,
@@ -696,10 +761,27 @@ export abstract class StandaloneAgentBase<
         this.delegation().send(input, sessionId, signal, invocation),
       recall: (input, sessionId, signal) =>
         this.delegation().recall(input, sessionId, signal),
+      archive: (input, signal) => changeArchive(input.agentId, true, signal),
+      unarchive: (input, signal) => changeArchive(input.agentId, false, signal),
       open: async (agentId, signal) => {
         const admit = async () => {
-          if (!(await list(signal)).some((agent) => agent.agentId === agentId))
+          if (
+            !(await list(signal)).some((agent) => agent.agentId === agentId)
+          ) {
+            const pin = await this.policyDirectory();
+            if (
+              pin !== null &&
+              (await this.env.AGENT_DIRECTORY.getByName(
+                pin.directoryName,
+              ).archived(agentId))
+            )
+              throw new ShiitakeError(
+                "contract",
+                "archived",
+                "Agent is archived",
+              );
             throw new Error("Agent is outside this scope");
+          }
         };
         await admit();
         const agent = createShiitakeClient({
@@ -731,7 +813,19 @@ export abstract class StandaloneAgentBase<
           ? null
           : { scopeId: pin.directoryName, agentId };
       },
-      directory: () => this.controlDirectory(),
+      // Delegation custody and settlement still see archived identities;
+      // Agent-control discovery keeps its active-only default. New sends
+      // reach the recipient's admission door and get contract/archived.
+      directory: () => {
+        const control = this.controlDirectory();
+        return {
+          ...control,
+          list: async (signal: AbortSignal) => [
+            ...(await control.list(signal)),
+            ...(await control.list(signal, { archived: true })),
+          ],
+        };
+      },
       deliver: (mail) => this.mail().deliver(mail),
       prepare: () => Promise.resolve(),
       stageAcceptedNotice: (mail, scopeId) => {
@@ -956,6 +1050,43 @@ export abstract class StandaloneAgentBase<
       : Schema.decodeUnknownSync(policyDirectorySchema)(stored);
   }
 
+  /** Borrow the native owner only after matching its real initialization pin. */
+  private async scheduleOwner(
+    expected: typeof policyDirectorySchema.Type,
+    agentId: string,
+  ) {
+    const directory = Schema.decodeUnknownSync(policyDirectorySchema)(expected);
+    const pin = await this.policyDirectory();
+    if (
+      agentId !== this.ctx.id.name ||
+      pin?.directoryName !== directory.directoryName ||
+      pin.tenantId !== directory.tenantId
+    )
+      throw new AppInstanceError("revoked");
+    return this.shiitake();
+  }
+
+  /** One admitted Agent's bounded native schedule page; this is not a directory scan. */
+  async readSchedules(
+    directory: typeof policyDirectorySchema.Type,
+    input: AppAgentScheduleListInput,
+  ): Promise<AgentSchedulePage> {
+    const { agentId, ...page } = appAgentScheduleListInputSchema.parse(input);
+    const owner = await this.scheduleOwner(directory, agentId);
+    return readAgentSchedulePage(agentId, owner, page);
+  }
+
+  /** Manage authority returns native identity/state only, never schedule content. */
+  async controlSchedule(
+    directory: typeof policyDirectorySchema.Type,
+    input: AgentScheduleTarget,
+    action: "pause" | "delete",
+  ): Promise<AgentScheduleControlReceipt> {
+    const target = agentScheduleTargetSchema.parse(input);
+    const owner = await this.scheduleOwner(directory, target.agentId);
+    return controlAgentSchedule(owner, target, action);
+  }
+
   /** Listeners from live codemode acquisitions, told when the server list changes. */
   private readonly mcpInvalidations = new Set<() => void>();
 
@@ -1030,8 +1161,13 @@ export abstract class StandaloneAgentBase<
       meta: { schema: FungiMessageMetaSchema },
       ...this.mail().host,
       instructions: {
-        load: () =>
-          Promise.resolve({ revision: "oyster-5", text: instructions }),
+        load: async () => {
+          const { appApprovalInstructions } = await import("../mcp.js");
+          return {
+            revision: "oyster-7",
+            text: instructions + "\n" + appApprovalInstructions,
+          };
+        },
       },
       tools: {
         sources: [
@@ -1123,7 +1259,16 @@ export abstract class StandaloneAgentBase<
         grants: [...extensions.grants, homeGrant],
       },
       ...keeping,
-      hostWork: [...this.mail().host.hostWork, ...keeping.hostWork],
+      admission: {
+        assertOpen: () => {
+          this.archiveControl().assertOpen();
+        },
+      },
+      hostWork: [
+        ...this.mail().host.hostWork,
+        ...keeping.hostWork,
+        this.archiveControl().work,
+      ],
     };
   }
 
@@ -1199,6 +1344,31 @@ const counterRow = Schema.Struct({ value: Schema.Number });
 
 /** Names this Oyster's agents and remembers which Sessions the member opened. */
 export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
+  private archiveProjectionOwner:
+    ReturnType<typeof agentArchiveProjection> | undefined;
+  private archiveProjection() {
+    return (this.archiveProjectionOwner ??= agentArchiveProjection(
+      this.ctx.storage.sql,
+    ));
+  }
+
+  /** Apply the Agent DO's revisioned fact; an older repair cannot undo a newer one. */
+  recordArchive(agentId: string, archived: boolean, revision: number): boolean {
+    const projection = this.archiveProjection();
+    return this.ctx.storage.transactionSync(() => {
+      if (!this.has(agentId)) return false;
+      const result = projection.record(agentId, archived, revision);
+      if (result === "advanced") this.bump();
+      // A replay after projection but before the Agent's ack still succeeds.
+      return result !== "stale";
+    });
+  }
+
+  /** Directory's bounded-stale projection, never the Agent's flag authority. */
+  archived(agentId: string): boolean {
+    return this.archiveProjection().archived(agentId);
+  }
+
   private readonly computers: ReturnType<typeof createAgentComputers>;
   private readonly computerNames = new Map<string, string>();
   private readonly directory: ReturnType<typeof createAgentDirectory>;
@@ -1413,7 +1583,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private async computerOwner(
     agentId: string,
     tenantId: TenantId,
-    principal?: OysterPrincipal,
+    principal?: TenantPrincipal,
   ) {
     const scope = tenantScope(tenantId, this.env.OYSTER_ORIGIN);
     if (this.ctx.id.name !== scope.durableName("agents")) return null;
@@ -1504,7 +1674,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private async computerCommand(
     operation: "attach" | "detach" | "read",
     agentId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     tenantId: TenantId,
     command?: ComputerAttachmentInput,
   ): Promise<StandaloneAgentComputerReply> {
@@ -1554,7 +1724,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   /** Owner attachment commands retain the shared owner's receipts and versions. */
   attachComputer(
     command: ComputerAttachmentInput,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     tenantId: TenantId = defaultTenant,
   ) {
     return this.computerCommand(
@@ -1569,7 +1739,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   /** Detach advances the owner version and invalidates the Agent's held discovery. */
   detachComputer(
     command: ComputerAttachmentInput,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     tenantId: TenantId = defaultTenant,
   ) {
     return this.computerCommand(
@@ -1584,7 +1754,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   /** The owner HTTP read uses the same projection as direct discovery. */
   readAgentComputers(
     agentId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     tenantId: TenantId = defaultTenant,
   ) {
     return this.computerCommand("read", agentId, principal, tenantId);
@@ -1650,10 +1820,16 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     };
   }
 
-  list(): readonly AgentEntry[] {
+  list(options?: Readonly<{ archived?: boolean }>): readonly AgentEntry[] {
+    const archived = this.archiveProjection().archivedIds();
     return this.directory
       .list(this.grant())
       .toReversed()
+      .filter(({ agentId }) =>
+        options?.archived === true
+          ? archived.has(agentId)
+          : !archived.has(agentId),
+      )
       .map(({ agentId, name, createdBy }) => ({
         agentId,
         createdBy,
@@ -1672,11 +1848,19 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return this.directory.readCreator(this.grant(), agentId);
   }
 
+  /** Immutable creating Agent, distinct from the human credential owner. */
+  createdBy(agentId: string): string | null {
+    const id = agentIds.agent.parse(agentId);
+    return id.ok
+      ? (this.directory.read(this.grant(), id.value)?.createdBy ?? null)
+      : null;
+  }
+
   /** Owner-only rename; refuses a name already held by another Agent. */
   rename(
     agentId: string,
     name: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
   ):
     | AgentEntry
     | Readonly<{ error: "not_found" | "name_taken" | "not_granted" }> {
@@ -1709,7 +1893,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   setAvatar(
     agentId: string,
     avatar: Avatar,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
   ): AgentEntry | Readonly<{ error: "not_found" | "not_granted" }> {
     if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
     const id = agentIds.agent.parse(agentId);
@@ -1731,7 +1915,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   create(
     name: string,
     requestId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     actor: AgentPolicyActor,
     avatar?: Avatar,
     createdBy: string | null = null,
@@ -1878,7 +2062,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   /** Only direct human approval records an authenticated canonical grantor. */
   async approveAppToolPolicy(
     agentId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     level: AppToolPolicy["level"],
     expectedRevision: string | null,
     actor: AgentPolicyActor,
@@ -2002,7 +2186,19 @@ export function standaloneAgents(
     sessionOperations: everyOperation,
   });
   return {
-    list: async () => (await directory().list()).map(toAgent),
+    list: async (options) => (await directory().list(options)).map(toAgent),
+    setArchived: async (agentId, archived, principal) => {
+      if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+      if (!(await directory().has(agentId))) return { error: "not_found" };
+      const agent = env.AGENTS.getByName(agentId);
+      const pin = await agent.policyDirectory();
+      if (
+        pin?.directoryName !== directoryName ||
+        pin.tenantId !== (scope?.tenantId ?? defaultTenant)
+      )
+        return { error: "not_found" };
+      return agent.setArchived(archived);
+    },
     create: async (name, requestId, principal, actor, avatar) => {
       const entry = await directory().create(
         name,
@@ -2221,10 +2417,53 @@ export const agentFrameMethods = {
     },
   },
   AGENTS: {
+    schedules: {
+      decodeArgs: (raw) => agentScheduleBindingArgs.schedules.parse(raw),
+      decodeResult: Schema.decodeUnknownSync(agentSchedulePageSchema, {
+        onExcessProperty: "error",
+      }),
+      requiredOperations: () => ["schedules"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentScheduleBindingArgs.schedules.parse(raw)[0].agentId,
+      }),
+    },
+    pauseSchedule: {
+      decodeArgs: (raw) => agentScheduleBindingArgs.pauseSchedule.parse(raw),
+      decodeResult: Schema.decodeUnknownSync(
+        agentScheduleControlReceiptSchema,
+        {
+          onExcessProperty: "error",
+        },
+      ),
+      requiredOperations: () => ["pauseSchedule"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentScheduleBindingArgs.pauseSchedule.parse(raw)[0].agentId,
+      }),
+    },
+    deleteSchedule: {
+      decodeArgs: (raw) => agentScheduleBindingArgs.deleteSchedule.parse(raw),
+      decodeResult: Schema.decodeUnknownSync(
+        agentScheduleControlReceiptSchema,
+        {
+          onExcessProperty: "error",
+        },
+      ),
+      requiredOperations: () => ["deleteSchedule"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentScheduleBindingArgs.deleteSchedule.parse(raw)[0].agentId,
+      }),
+    },
     send: {
       decodeArgs: (raw) => agentBindingArgs.AGENTS.send.parse(raw),
       decodeResult: decodeAgentAccepted,
       requiredOperations: () => ["send"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentBindingArgs.AGENTS.send.parse(raw)[0].agentId,
+      }),
     },
   },
 } satisfies FrameBindingMethods<OysterJson>;
@@ -2246,6 +2485,8 @@ export async function dispatchAgentBinding(
   let result:
     | { items: readonly OysterInboxItem[]; next: null; cursor: number }
     | { visited: true }
+    | AgentSchedulePage
+    | AgentScheduleControlReceipt
     | Pick<
         Awaited<ReturnType<StandaloneAgentBase["sendFromApp"]>>,
         "status" | "commandId"
@@ -2278,12 +2519,48 @@ export async function dispatchAgentBinding(
       },
     );
     result = { status: accepted.status, commandId: accepted.commandId };
+  } else if (
+    props.binding === "AGENTS" &&
+    (method === "schedules" ||
+      method === "pauseSchedule" ||
+      method === "deleteSchedule")
+  ) {
+    const [input] = agentScheduleBindingArgs[method].parse(args);
+    if (!(await directory.has(input.agentId))) throw new Error("No such agent");
+    const home = await directory.agentHome(input.agentId);
+    if (home?.kind === "machine")
+      throw new MachineLinkRefused("actor_not_allowed");
+    if (home === null) throw new AppInstanceError("revoked");
+    frame.signal.throwIfAborted();
+    const agent = env.AGENTS.getByName(input.agentId);
+    const pin = {
+      directoryName: scope.durableName("agents"),
+      tenantId: scope.tenantId,
+    };
+    if (method === "schedules") {
+      result = await agent.readSchedules(
+        pin,
+        agentScheduleBindingArgs.schedules.parse(args)[0],
+      );
+    } else {
+      result = await agent.controlSchedule(
+        pin,
+        agentScheduleBindingArgs[method].parse(args)[0],
+        method === "pauseSchedule" ? "pause" : "delete",
+      );
+    }
   } else {
     throw new AppInstanceError("revoked");
   }
   frame.signal.throwIfAborted();
   return Schema.decodeUnknownSync(
-    Schema.Union([inboxPageSchema, inboxVisitSchema, AcceptedSchema]),
+    Schema.Union([
+      inboxPageSchema,
+      inboxVisitSchema,
+      AcceptedSchema,
+      agentSchedulePageSchema,
+      agentScheduleControlReceiptSchema,
+    ]),
     { onExcessProperty: "error" },
   )(result);
 }

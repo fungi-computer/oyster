@@ -26,7 +26,7 @@ import {
 
 /** Attested by the host, never authenticated by decoding request JSON. */
 export type HostPrincipal = Readonly<{
-  actor: HostActor | Readonly<{ kind: "visitor" }>;
+  actor: HostActor;
   role: "owner" | "member" | null;
 }>;
 const bindingNameSchema = ownerCodec(
@@ -71,7 +71,7 @@ export type GateRequest = z.output<typeof gateRequestSchema>;
 export type GateFacts = Readonly<{
   principal: HostPrincipal;
   installation: Readonly<
-    Pick<Installation, "status" | "visibility" | "instanceId" | "authority"> & {
+    Pick<Installation, "status" | "instanceId" | "authority"> & {
       artifactDigest: string;
     }
   >;
@@ -119,7 +119,6 @@ export const gateRefusalSchema = z.lazy(() =>
       "approval_required",
       "requires_not_granted",
       "invalid_input",
-      "visitor_read_only",
     ]),
   }),
 );
@@ -131,6 +130,21 @@ export type GateDecision =
       method?: AppMethodDeclaration;
     }>
   | z.output<typeof gateRefusalSchema>;
+
+/** Availability uses "any"; a selected target must match both its kind and identity. */
+function grantsResource(
+  resources: ApprovedGrant["resources"],
+  resource: ResourceRef | "any",
+): boolean {
+  return (
+    resources === "tenant-scope" ||
+    (resource === "any"
+      ? resources.length > 0
+      : resources.some(
+          (ref) => ref.kind === resource.kind && ref.id === resource.id,
+        ))
+  );
+}
 
 /** Intersect stored approvals with the current verified Release without widening resource selectors. */
 export function grantsFor(
@@ -158,12 +172,7 @@ export function grantsFor(
       ?.operations ?? [];
   if (
     !approved?.capabilityApproved ||
-    (approved.resources !== "tenant-scope" &&
-      (resource === "any"
-        ? approved.resources.length === 0
-        : !approved.resources.some(
-            (ref) => ref.kind === resource.kind && ref.id === resource.id,
-          )))
+    !grantsResource(approved.resources, resource)
   )
     return null;
   const operations = approved.operations.filter((operation) =>
@@ -177,6 +186,7 @@ export function grantsFor(
 export function approvedBindingGrants(
   installation: Pick<GateFacts["installation"], "status" | "authority">,
   declaration: AppDeclaration,
+  resource: ResourceRef | "any" = "any",
 ): InvocationGrants {
   if (installation.status !== "enabled") return [];
   const bindings: InvocationGrants[number][] = [];
@@ -193,8 +203,7 @@ export function approvedBindingGrants(
           return (
             declaration.capabilities.includes(capability) &&
             approved?.capabilityApproved &&
-            (approved.resources === "tenant-scope" ||
-              approved.resources.length > 0) &&
+            grantsResource(approved.resources, resource) &&
             approved.operations.includes(
               bindingOperationKey(binding.name, name),
             )
@@ -231,12 +240,9 @@ export function scopedBindings(
 /** Principal ceiling for invocation and metadata capture. Captures must pass this
  * to scopedBindings; its default write ceiling does not encode caller access. */
 export function appInvocationCeiling(
-  facts: Pick<GateFacts, "principal" | "access">,
+  facts: Pick<GateFacts, "access">,
 ): "read" | "write" {
-  return facts.access?.level === "read" ||
-    facts.principal.actor.kind === "visitor"
-    ? "read"
-    : "write";
+  return facts.access?.level === "read" ? "read" : "write";
 }
 
 function admittedBindings(
@@ -263,12 +269,7 @@ function admissionRefusal(
   facts: GateFacts,
 ): z.output<typeof gateRefusalSchema> | null {
   const { installation, principal } = facts;
-  const visitor = principal.actor.kind === "visitor";
-  if (
-    installation.status !== "enabled" ||
-    (visitor && installation.visibility !== "public")
-  )
-    return refusal("unavailable");
+  if (installation.status !== "enabled") return refusal("unavailable");
   if (
     facts.declaredOperations.digest !==
       installation.authority.declaredOperationsDigest ||
@@ -291,8 +292,7 @@ function methodMetadata(
   facts: GateFacts,
   name: string,
 ): AppMethodMetadataDecision {
-  const { installation, principal } = facts;
-  const visitor = principal.actor.kind === "visitor";
+  const { installation } = facts;
   if (installation.instanceId === null) return refusal("unavailable");
   if (
     !Schema.is(appApiMethodNameSchema)(name) ||
@@ -303,7 +303,6 @@ function methodMetadata(
   const method = facts.api.methods[name];
   if (method === undefined) return refusal("not_declared");
   if (method.effect === "external") return refusal("approval_required");
-  if (visitor && method.effect !== "read") return refusal("visitor_read_only");
   if (method.effect === "write" && facts.access?.level === "read")
     return refusal("level_too_low");
   return { kind: "admitted", method };
@@ -356,14 +355,12 @@ export function admits(
   const parsed = gateRequestSchema.safeParse(rawRequest);
   if (!parsed.success) return refusal("invalid_input");
   const request = parsed.data;
-  const { installation, principal } = facts;
-  const visitor = principal.actor.kind === "visitor";
+  const { installation } = facts;
   const denied = admissionRefusal(facts);
   if (denied !== null) return denied;
   switch (request.kind) {
     case "backend":
       // Opaque App requests have no verified method selector; they require write authority.
-      if (visitor) return refusal("visitor_read_only");
       if (installation.instanceId === null) return refusal("unavailable");
       if (facts.access?.level === "read") return refusal("level_too_low");
       return { kind: "admitted", grants: admittedBindings(facts) };
@@ -396,7 +393,6 @@ export function admits(
       };
     }
     case "capability": {
-      if (visitor) return refusal("visitor_read_only");
       if (
         !facts.declaration.capabilities.includes(request.capability) ||
         (request.operation !== undefined &&
@@ -421,7 +417,6 @@ export function admits(
       return { kind: "admitted", grants: [] };
     }
     case "capability-route": {
-      if (visitor) return refusal("visitor_read_only");
       if (request.effect === "write" && facts.access?.level === "read")
         return refusal("level_too_low");
       if (
@@ -444,7 +439,6 @@ export function admits(
       return { kind: "admitted", grants: [] };
     }
     case "binding": {
-      if (visitor) return refusal("visitor_read_only");
       if (installation.instanceId === null) return refusal("unavailable");
       const operation = appBackendBindingOperation(
         request.binding,

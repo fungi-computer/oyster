@@ -50,6 +50,9 @@ try {
     outputPath,
     // Computer scratch survives captured snapshot cleanup, without a global or durable Workspace store.
     packageStoreDirectory: "/var/tmp/fungi-app-package-store",
+    onOutput: (stream, bytes) => {
+      process[stream].write(bytes);
+    },
   });
   const reportUrl = process.env.TEAM_BUILD_REPORT;
   if (!reportUrl) throw new TeamCandidateBuildError("report_failed");

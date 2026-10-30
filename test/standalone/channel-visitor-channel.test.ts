@@ -11,7 +11,7 @@ import { channelIds } from "../../src/channels/ids.js";
 import { createVisitorChannel } from "../../src/channels/visitor-channel.js";
 import { createVisitorStreamSlots } from "../../src/channels/visitor-stream-slots.js";
 import { createChannelVisitors } from "../../src/channels/visitors.js";
-import { channelSessionDoor } from "../../src/standalone/channel-session-door.js";
+import { channelSessionDoor } from "./channel-session-door.fixture.js";
 
 it("keeps identity in one store, conversations in another, and projects only the bearer visitor", async () => {
   const identityDb = new DatabaseSync(":memory:");

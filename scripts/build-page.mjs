@@ -132,25 +132,6 @@ await copyFile(
   new URL("../src/build/snapshot-program-scripts.d.ts", import.meta.url),
   new URL("build/snapshot-program-scripts.d.ts", dist),
 );
-const publicHome = await build({
-  entryPoints: [
-    new URL("../src/page/public-home.tsx", import.meta.url).pathname,
-  ],
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  target: "es2022",
-  minify: true,
-  define: {
-    OYSTER_SHELL_STYLES: JSON.stringify(styles),
-  },
-  write: false,
-  legalComments: "none",
-  logLevel: "warning",
-});
-const [publicHomeOutput] = publicHome.outputFiles;
-if (publicHomeOutput === undefined)
-  throw new Error("Public home bundle produced no output");
 const consent = await build({
   entryPoints: [
     new URL("../src/page/grant-consent.tsx", import.meta.url).pathname,
@@ -170,7 +151,7 @@ if (consentOutput === undefined)
   throw new Error("Consent bundle produced no output");
 await writeFile(
   new URL("page-script.js", dist),
-  `export const pageScript = ${JSON.stringify(output.text)};\nexport const publicHomeScript = ${JSON.stringify(publicHomeOutput.text)};\nexport const grantConsentScript = ${JSON.stringify(consentOutput.text)};\nexport const fontStyles = ${JSON.stringify(fonts)};\nexport const loginFontStyles = ${JSON.stringify(loginFonts)};\nexport const shellStyles = ${JSON.stringify(styles)};\n`,
+  `export const pageScript = ${JSON.stringify(output.text)};\nexport const grantConsentScript = ${JSON.stringify(consentOutput.text)};\nexport const fontStyles = ${JSON.stringify(fonts)};\nexport const loginFontStyles = ${JSON.stringify(loginFonts)};\nexport const shellStyles = ${JSON.stringify(styles)};\n`,
 );
 await copyFile(
   new URL("../src/page-script.d.ts", import.meta.url),

@@ -43,8 +43,7 @@
       { "name": "MEDIA_OPERATION", "class_name": "MediaOperationDO" },
     ],
   },
-  // One initial tag: pre-launch history was collapsed (Levi 10-14, data wipe
-  // authorized), so a fresh Worker creates every bound class at once.
+  // Published oyster-v1 includes MachineLinkDO; keep its applied class set.
   "migrations": [
     {
       "tag": "oyster-v1",

@@ -14,7 +14,7 @@ import {
 import { OysterKeys } from "@fungi.computer/oyster/workers-git";
 import { ownerOrKeyAuth, ownerKeyAuth } from "@fungi.computer/oyster/auth";
 import { ApprovalLedger } from "@fungi.computer/approvals";
-import { Hono } from "hono";
+import { owner, routes } from "@fungi.computer/oyster/authorization";
 import type { TenantScope } from "@fungi.computer/oyster/tenant";
 export { OysterKeys };
 export { OysterBinding } from "@fungi.computer/oyster/workers";
@@ -130,15 +130,14 @@ export default {
     if (app === undefined) {
       const keys = () => keysOf(env, fixedScope);
       const auth = ownerOrKeyAuth(env.OYSTER_OWNER_KEY, "owner", keys);
-      const ownerRoutes = new Hono<OysterEnv>();
-      ownerRoutes.get("/api/proof-approvals", () =>
+      const ownerRoutes = routes<OysterEnv>();
+      ownerRoutes.get("/api/proof-approvals", owner("direct-or-app"), () =>
         env.REGISTRY.getByName("registry").fetch(
           new Request("https://native-proof.invalid/approvals"),
         ),
       );
-      // Only this local proof provisions a fixed named Agent; createOyster
-      // applies its ordinary owner-only /api admission before this route.
-      ownerRoutes.post("/api/proof-key", async () => {
+      // Only this local proof provisions a fixed named Agent, as the owner.
+      ownerRoutes.post("/api/proof-key", owner("direct-or-app"), async () => {
         const issued = await keys().issue("owner", {
           name: "contest-agent",
           grants: [...proofKeyGrants],

@@ -27,7 +27,6 @@ it("admits with host-independent installation facts and no Release record", asyn
         ...current,
         installation: {
           status: stored.status,
-          visibility: stored.visibility,
           instanceId: stored.instanceId,
           authority: stored.authority,
           artifactDigest: release.artifact.artifactDigest,
@@ -180,7 +179,6 @@ async function approvedFacts(
     principal: { actor: { kind: "member", memberId: "owner" }, role: "owner" },
     installation: {
       status: result.success.next.status,
-      visibility: result.success.next.visibility,
       instanceId: result.success.next.instanceId,
       authority: approved.success,
       artifactDigest: release.artifact.artifactDigest,
@@ -224,6 +222,90 @@ it("projects only approved declared binding operations for host freshness checks
     ),
   ).toEqual([]);
 });
+
+it("matches each Agent binding operation to its own finite resource approval", async () => {
+  const declaration: AppDeclaration = {
+    ...requirementDeclaration({}, ["agent.read", "agent.manage", "agent.send"]),
+    backend: {
+      bindings: [
+        {
+          name: "AGENTS",
+          operations: ["schedules", "pauseSchedule", "deleteSchedule", "send"],
+        },
+      ],
+    },
+  };
+  const current = await approvedFacts(declaration, []);
+  const changed = applyGrantCommand(
+    current.installation.authority,
+    {
+      kind: "change-grants",
+      changes: current.installation.authority.approvedGrants.map((grant) => ({
+        capability: grant.capability,
+        grant: {
+          operations: grant.operations,
+          resources: [
+            {
+              kind: "agent",
+              id: grant.capability === "agent.manage" ? "B" : "A",
+            },
+          ],
+        },
+      })),
+    },
+    {
+      principal: current.principal,
+      expectedVersion: current.installation.authority.authorityVersion,
+      declaration,
+      declaredOperations: current.declaredOperations,
+      now: 2000,
+    },
+  );
+  if (Result.isFailure(changed)) throw new Error(changed.failure.code);
+  const installation = { ...current.installation, authority: changed.success };
+  expect(approvedBindingGrants(installation, declaration)).toEqual([
+    {
+      binding: "AGENTS",
+      operations: ["schedules", "pauseSchedule", "deleteSchedule", "send"],
+    },
+  ]);
+  expect(
+    approvedBindingGrants(installation, declaration, {
+      kind: "agent",
+      id: "A",
+    }),
+  ).toEqual([{ binding: "AGENTS", operations: ["schedules", "send"] }]);
+  expect(
+    approvedBindingGrants(installation, declaration, {
+      kind: "agent",
+      id: "B",
+    }),
+  ).toEqual([
+    {
+      binding: "AGENTS",
+      operations: ["pauseSchedule", "deleteSchedule"],
+    },
+  ]);
+  for (const resource of [
+    { kind: "agent", id: "C" },
+    { kind: "computer", id: "A" },
+  ]) {
+    expect(approvedBindingGrants(installation, declaration, resource)).toEqual(
+      [],
+    );
+    expect(
+      admits(
+        { ...current, installation },
+        {
+          kind: "capability",
+          capability: "agent.read",
+          resource,
+        },
+      ),
+    ).toEqual({ kind: "refused", code: "not_approved" });
+  }
+});
+
 it("always refuses external methods before input or write-level admission", async () => {
   const current = await approvedFacts();
   expect(
@@ -306,16 +388,6 @@ it.each([
     }),
     name: "notes.read",
     input: { path: "/note" },
-  },
-  {
-    code: "visitor_read_only",
-    change: (f: GateFacts) => ({
-      ...f,
-      installation: { ...f.installation, visibility: "public" as const },
-      principal: { actor: { kind: "visitor" as const }, role: null },
-    }),
-    name: "notes.write",
-    input: {},
   },
   {
     code: "not_approved",
@@ -417,38 +489,6 @@ it("keeps route and backend approvals separate and preserves host resource selec
       },
     ),
   ).toEqual({ kind: "refused", code: "not_approved" });
-});
-it("admits visitors only to public read methods with their approved read bindings", async () => {
-  const current = await approvedFacts();
-  const visitor = {
-    ...current,
-    principal: { actor: { kind: "visitor" as const }, role: null },
-  };
-  expect(
-    admits(visitor, {
-      kind: "method",
-      name: "notes.read",
-      input: { path: "/note" },
-      via: "mcp",
-    }),
-  ).toEqual({ kind: "refused", code: "unavailable" });
-  expect(
-    admits(
-      {
-        ...visitor,
-        installation: { ...visitor.installation, visibility: "public" },
-      },
-      {
-        kind: "method",
-        name: "notes.read",
-        input: { path: "/note" },
-        via: "mcp",
-      },
-    ),
-  ).toMatchObject({
-    kind: "admitted",
-    grants: [{ binding: "COMPUTER", operations: ["read"] }],
-  });
 });
 it("maps unsupported declared input schemas to a typed refusal without compiler diagnostics", async () => {
   const current = await approvedFacts();
@@ -1028,15 +1068,10 @@ it("capture uses the same principal ceiling as ordinary invocation", async () =>
       grantedBy: "fixture-owner",
     },
   };
-  const visitor: GateFacts = {
-    ...current,
-    installation: { ...current.installation, visibility: "public" },
-    principal: { actor: { kind: "visitor" }, role: null },
-  };
   const writeMethod = current.api?.methods["notes.write"];
   if (writeMethod === undefined) throw new Error("Fixture method missing");
   expect(appInvocationCeiling(current)).toBe("write");
-  for (const restricted of [readLevel, visitor]) {
+  for (const restricted of [readLevel]) {
     expect(appInvocationCeiling(restricted)).toBe("read");
     expect(
       scopedBindings(captured, writeMethod, appInvocationCeiling(restricted)),
@@ -1207,38 +1242,6 @@ it("metadata and dispatch preserve refusal parity for every valid-input policy f
             approvedGrants: [],
           },
         },
-      }),
-    },
-    {
-      label: "visitor private",
-      name: "notes.read",
-      input: { path: "/note" },
-      expected: "unavailable",
-      change: (value) => ({
-        ...value,
-        principal: { actor: { kind: "visitor" }, role: null },
-      }),
-    },
-    {
-      label: "visitor read",
-      name: "notes.read",
-      input: { path: "/note" },
-      expected: "admitted",
-      change: (value) => ({
-        ...value,
-        principal: { actor: { kind: "visitor" }, role: null },
-        installation: { ...value.installation, visibility: "public" },
-      }),
-    },
-    {
-      label: "visitor write",
-      name: "notes.write",
-      input: {},
-      expected: "visitor_read_only",
-      change: (value) => ({
-        ...value,
-        principal: { actor: { kind: "visitor" }, role: null },
-        installation: { ...value.installation, visibility: "public" },
       }),
     },
     {

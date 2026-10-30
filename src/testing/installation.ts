@@ -16,7 +16,6 @@ export async function approvedInstallation(
     installationId: string;
     instanceId: Installation["instanceId"];
     descriptors?: readonly CapabilityOperationDescriptor[];
-    visibility?: Installation["visibility"];
   }>,
 ): Promise<Installation> {
   const result = applyInstallationCommand(
@@ -59,8 +58,7 @@ export async function approvedInstallation(
           grant: { operations, resources: "tenant-scope" },
         }) satisfies import("../apps/installation.js").GrantChange,
     );
-  if (changes.length === 0)
-    return { ...installed, visibility: input.visibility ?? "private" };
+  if (changes.length === 0) return installed;
   const approved = applyInstallationCommand(
     installed,
     { kind: "change-grants", changes },
@@ -75,8 +73,5 @@ export async function approvedInstallation(
     },
   );
   if (Result.isFailure(approved)) throw new Error(approved.failure.code);
-  return {
-    ...approved.success.next,
-    visibility: input.visibility ?? "private",
-  };
+  return approved.success.next;
 }

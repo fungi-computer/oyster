@@ -1,4 +1,5 @@
 import { observeDesktopGill } from "./gill-observation.js";
+import { OysterAgentBrowserHost } from "./agent-browser.js";
 import { createShellAppAccess } from "./app-access.js";
 import { createWindowLaunchTracker } from "./window-launch.js";
 import { computerTargetUrl } from "../computer-target.js";
@@ -34,7 +35,6 @@ import {
   appSandbox,
   applyOysterPageTheme,
   connectOysterApp,
-  OysterAgentBrowserHost,
   mountOysterPage,
   oysterAppCapabilities,
   oysterAppConfigSchema,

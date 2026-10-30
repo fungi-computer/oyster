@@ -7,6 +7,7 @@ import { seededAvatar } from "@fungi.computer/sprite/avatar";
 
 const owner = { actor: { kind: "member", memberId: "owner" }, role: "owner" };
 const agents = [];
+const archived = new Set();
 const forwarded = [];
 let approvalWrites = 0;
 let renameWrites = 0;
@@ -19,7 +20,20 @@ let revisionReads = 0;
 let inboxRevision = 3;
 let inboxItems = [];
 const adapter = {
-  list: async () => agents,
+  list: async (options) =>
+    agents.filter((agent) =>
+      options?.archived === true
+        ? archived.has(agent.agentId)
+        : !archived.has(agent.agentId),
+    ),
+  setArchived: async (agentId, value, principal) => {
+    assert.deepEqual(principal, owner);
+    if (!agents.some((agent) => agent.agentId === agentId))
+      return { error: "not_found" };
+    if (value) archived.add(agentId);
+    else archived.delete(agentId);
+    return { archived: value, revision: 1 };
+  },
   create: async (name, requestId, principal, actor, avatar) => {
     assert.equal(actor, "owner-direct");
     assert.deepEqual(principal, owner);
@@ -126,7 +140,7 @@ const liveKey = async (keyId) =>
         ],
       }
     : null;
-const capabilities = agentCapabilities(adapter, liveKey);
+const capabilities = agentCapabilities(adapter);
 const declared = [
   "agent.list",
   "agent.manage",
@@ -417,13 +431,13 @@ assert.equal(
 );
 const denied = await capabilityFixture({
   capabilities: declared,
-  adapters: agentCapabilities(adapter, liveKey),
+  adapters: agentCapabilities(adapter),
   admitted: false,
 });
 assert.equal((await call("/agents", {}, "owner", denied.app)).status, 403);
 const sendOnly = await capabilityFixture({
   capabilities: ["agent.send"],
-  adapters: agentCapabilities(adapter, liveKey),
+  adapters: agentCapabilities(adapter),
 });
 assert.equal(
   (
@@ -639,6 +653,40 @@ try {
   mock.timers.tick(2_000);
   mock.timers.reset();
 }
+
+const archiveRoute = (operation, who = "owner", agentId = "agent_1") =>
+  call(`/agents/${agentId}/${operation}`, { method: "POST" }, who);
+assert.equal((await archiveRoute("archive", "key")).status, 403);
+assert.equal((await archiveRoute("archive", "owner", "agent_9")).status, 404);
+assert.equal((await call("/agents?archived=maybe")).status, 400);
+assert.equal((await archiveRoute("archive")).status, 200);
+assert.equal(
+  (await (await call("/agents")).json()).some(
+    (agent) => agent.agentId === "agent_1",
+  ),
+  false,
+);
+assert.deepEqual(
+  (await (await call("/agents?archived=true", {}, "key")).json()).map(
+    (agent) => agent.agentId,
+  ),
+  ["agent_1"],
+  "a key can read only granted archived Agents",
+);
+assert.equal(
+  (await directApproval("/api/agent-policies/agent_1", { method: "GET" }))
+    .status,
+  200,
+  "owner-addressed policy remains readable while archived",
+);
+assert.equal((await archiveRoute("unarchive", "key")).status, 403);
+assert.equal((await archiveRoute("unarchive")).status, 200);
+assert.equal(
+  (await (await call("/agents")).json()).some(
+    (agent) => agent.agentId === "agent_1",
+  ),
+  true,
+);
 
 await host.removeDeclaration();
 assert.equal((await call("/agents")).status, 403);

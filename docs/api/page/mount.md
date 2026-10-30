@@ -8,33 +8,33 @@
 
 # page/mount
 
-## Classes
+## Interfaces
 
 ### OysterAgentBrowserHost
 
-One page-wide selected Session, using only its reporting App's admitted view.
+One admitted page's live windows and selected Agent Session, never a global
+catalog.
 
-#### Constructors
+#### Methods
 
-##### Constructor
+##### mount()
 
 ```ts
-new OysterAgentBrowserHost(signal): OysterAgentBrowserHost;
+mount(frame, commands): () => void;
 ```
 
-End the selected connection with the page's own lifetime.
+Borrow a Release-validated window view only for this exact frame lifetime.
 
 ###### Parameters
 
-| Parameter | Type          |
-| --------- | ------------- |
-| `signal`  | `AbortSignal` |
+| Parameter  | Type                                                    |
+| ---------- | ------------------------------------------------------- |
+| `frame`    | `HTMLIFrameElement`                                     |
+| `commands` | `Pick`\<`WhistleRuntime`, `"snapshot"` \| `"execute"`\> |
 
 ###### Returns
 
-[`OysterAgentBrowserHost`](#oysteragentbrowserhost)
-
-#### Methods
+() => `void`
 
 ##### release()
 
@@ -42,7 +42,7 @@ End the selected connection with the page's own lifetime.
 release(frame): void;
 ```
 
-A departing or deselecting mount cannot close a different active mount.
+A departing or deselecting window cannot close a different selection.
 
 ###### Parameters
 
@@ -60,7 +60,7 @@ A departing or deselecting mount cannot close a different active mount.
 dispose(): void;
 ```
 
-Release the page's current selection; later reports cannot reconnect it.
+Release this page's window registrations and selected Agent connection.
 
 ###### Returns
 
@@ -72,13 +72,11 @@ Release the page's current selection; later reports cannot reconnect it.
 report(
    frame,
    selection,
-   capabilities,
-   whistle
+   capabilities
 ): Promise<void>;
 ```
 
-Bind the reporting mount's current command view to its explicitly selected
-Session.
+Admit the selected Agent through the reporting App's existing write door.
 
 ###### Parameters
 
@@ -87,7 +85,6 @@ Session.
 | `frame`        | `HTMLIFrameElement`                                                          |
 | `selection`    | \| `Readonly`\<\{ `agentId`: `string`; `sessionId`: `string`; \}\> \| `null` |
 | `capabilities` | `CapabilityDirectory`                                                        |
-| `whistle`      | `Pick`\<`WhistleRuntime`, `"snapshot"` \| `"execute"`\>                      |
 
 ###### Returns
 

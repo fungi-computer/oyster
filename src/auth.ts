@@ -1,30 +1,12 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { parse } from "hono/utils/cookie";
-import type { OysterAuth, OysterAuthResult, OysterHost } from "./host.js";
+import type { OysterAuth, OysterAuthResult } from "./host.js";
 import { presentedGitKey } from "./git-auth.js";
 import { sha256 } from "./release.js";
 import type { OysterKeyStore } from "./keys.js";
-import { sameOriginRequest } from "./request-origin.js";
 
 /** Cookie emitted by ownerKeyAuth, for composing credential-specific adapters. */
 export const ownerKeyCookieName = "oyster_session";
-/** Host-minted opaque sessions for named keys, separate from the owner cookie. */
-export const keySessionCookieName = "oyster_key_session";
-
-/**
- * The host owns session minting, hashing/storage and expiry.
- * A session resolves only to a key id, never to owner or grant authority.
- * Hosts should use Path=/, HttpOnly, Secure and SameSite=Lax (or stricter)
- * as defense in depth; Oyster independently checks request provenance.
- * Cookie-only admission allows GET/HEAD navigation. Every other method requires
- * Origin to be present and equal the request URL's origin, and Sec-Fetch-Site
- * not to be cross-site. Missing Origin is refused.
- */
-export type OysterKeySessionResolver = Readonly<{
-  /** Resolve an opaque host session to its named key, or null when unavailable. */
-  resolve: (value: string) => Promise<Readonly<{ keyId: string }> | null>;
-}>;
 const loginFormSchema = Schema.Struct({ key: Schema.String });
 
 /** Compare two secrets through their fixed-length digests, in constant time. */
@@ -79,8 +61,15 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
       return { kind: "refused", status: 401 };
     },
     async login(request) {
+      // A body that is not a form is a malformed sign-in, not a server fault.
+      const fields = await request.formData().catch((cause: unknown) => {
+        if (cause instanceof TypeError) return null;
+        throw cause;
+      });
+      if (fields === null)
+        return new Response("Expected a sign-in form", { status: 400 });
       const form = Schema.decodeUnknownOption(loginFormSchema)(
-        Object.fromEntries(await request.formData()),
+        Object.fromEntries(fields),
       );
       if (
         Option.isNone(form) ||
@@ -130,50 +119,5 @@ export function ownerOrKeyAuth(
       Promise.resolve(
         new Response("Sign-in is not available", { status: 404 }),
       ),
-  };
-}
-
-/**
- * Add host-owned browser sessions to ownerOrKeyAuth. Explicit credentials and
- * non-401 refusals keep their ordinary result; ambient cookies cannot undo them.
- * Every cookie admission rechecks the key's liveness and canonical owner.
- */
-export function keySessionAuth(
-  auth: OysterAuth,
-  ownerId: string,
-  keys: () => NonNullable<OysterHost["keys"]>,
-  sessions: OysterKeySessionResolver,
-): OysterAuth {
-  return {
-    ...auth,
-    async authenticate(request) {
-      const result = await auth.authenticate(request);
-      if (
-        result.kind === "admitted" ||
-        result.status !== 401 ||
-        request.headers.has("Authorization")
-      )
-        return result;
-      if (
-        request.method !== "GET" &&
-        request.method !== "HEAD" &&
-        !sameOriginRequest(request)
-      )
-        return result;
-      const value = parse(
-        request.headers.get("Cookie") ?? "",
-        keySessionCookieName,
-      )[keySessionCookieName];
-      if (value === undefined || value.length === 0) return result;
-      const session = await sessions.resolve(value);
-      if (session === null) return result;
-      const key = await keys().live(session.keyId);
-      return key !== null && key.owner === ownerId
-        ? {
-            kind: "admitted",
-            principal: { actor: { kind: "team-key", keyId: key.keyId } },
-          }
-        : result;
-    },
   };
 }

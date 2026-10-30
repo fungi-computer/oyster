@@ -7,7 +7,8 @@ import {
 import { AppInstanceError } from "../index.js";
 import type { RepositoryRef } from "@fungi.computer/agar/git";
 import type { AppToolPolicy } from "../apps/index.js";
-import { keyAppAccess, type LiveOysterKey } from "../keys.js";
+import { keyAppAccess } from "../authorization.js";
+import type { LiveOysterKey } from "../keys.js";
 import type { StandaloneTenancy } from "./tenancy.js";
 import { createStandaloneWorkflowAuthorityReaders } from "./workflow-authority-readers.js";
 import {

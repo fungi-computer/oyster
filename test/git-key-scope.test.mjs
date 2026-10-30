@@ -1,20 +1,17 @@
 // A key reaches an App's Git repository only through its own grants: clone
-// needs App read, push App use. Ungranted, it is anonymous, and a private
-// repository then asks for a key.
+// needs App read, push App use. Otherwise the door asks for a key.
 /* global Request */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createOyster } from "../dist/host.js";
 
-const installation = (installationId, visibility) => ({
+const installation = (installationId) => ({
   installationId,
-  visibility,
   status: "enabled",
 });
 const installations = new Map([
-  ["notes", installation("notes", "private")],
-  ["board", installation("board", "private")],
-  ["wiki", installation("wiki", "public")],
+  ["notes", installation("notes")],
+  ["board", installation("board")],
 ]);
 const keys = {
   // App "notes" read only.
@@ -114,21 +111,18 @@ test("a key clones only the App repositories its grants name", async () => {
   const { clone, exchanges } = host();
   assert.equal((await clone("notes", "reader")).status, 200);
   assert.equal((await clone("notes", "writer")).status, 200);
-  // Board is private and outside every key's grants: the key is anonymous.
+  // Board is outside every key's grants: the door asks for a key.
   for (const who of ["reader", "writer", "enroll", "revoked"])
     assert.equal((await clone("board", who)).status, 401, who);
   assert.equal((await clone("board", "owner")).status, 200);
-  // A public repository stays readable anonymously, even to an ungranted key.
-  assert.equal((await clone("wiki", "enroll")).status, 200);
-  assert.equal((await clone("wiki", null)).status, 200);
+  // No installation admits an anonymous clone.
+  assert.equal((await clone("notes", null)).status, 401);
   assert.deepEqual(
     exchanges.map(({ installation, writer }) => [installation, writer]),
     [
       ["notes", "team-key"],
       ["notes", "team-key"],
       ["board", "member"],
-      ["wiki", null],
-      ["wiki", null],
     ],
   );
 });

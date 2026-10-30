@@ -289,16 +289,19 @@ const callBy = (
     : { kind: "call", context, method: { name: `${effect}.one`, effect } };
 };
 
-await test("a finished frame keeps the guest warm and its id never resolves again", async () => {
+await test("a finished frame stops the guest before closing authority and its id never resolves again", async () => {
   const instanceId = instanceIds.instance.generate();
   let aborts = 0;
   const closed: string[] = [];
+  const order: string[] = [];
   const gate = createInvocationGate({
     abortGuest: () => {
       aborts += 1;
+      order.push("stop");
       return Promise.resolve();
     },
     close: (frame) => {
+      order.push("close");
       closed.push(frame.frameId);
       return Promise.resolve();
     },
@@ -323,57 +326,135 @@ await test("a finished frame keeps the guest warm and its id never resolves agai
   assert.equal(first.signal.aborted, true);
   assert.notEqual(second.frameId, first.frameId);
   assert.deepEqual(closed, [first.frameId, second.frameId]);
-  assert.equal(aborts, 0);
+  assert.equal(aborts, 2);
+  assert.deepEqual(order, ["stop", "close", "stop", "close"]);
   assert.throws(() => gate.active(second.frameId), { code: "revoked" });
 });
 
-await test("verified reads share the guest; a write waits for them and runs alone", async () => {
+await test("five foreground reads share a guest, stop at drain, then admit a queued write alone", async () => {
   const instanceId = instanceIds.instance.generate();
+  let aborts = 0;
+  const closed: string[] = [];
   const gate = createInvocationGate({
-    abortGuest: () => Promise.resolve(),
-    close: () => Promise.resolve(),
+    abortGuest: () => {
+      aborts += 1;
+      return Promise.resolve();
+    },
+    close: (frame) => {
+      closed.push(frame.frameId);
+      return Promise.resolve();
+    },
   });
-  const release = Promise.withResolvers<undefined>();
+  const releases = Array.from({ length: 5 }, () =>
+    Promise.withResolvers<undefined>(),
+  );
   const entered: string[] = [];
-  const read = (memberId: string) =>
+  const reads = releases.map((release, index) =>
     gate.run(
-      sharedFacts(instanceId, callBy(memberId, "read")),
+      sharedFacts(instanceId, callBy(`reader${String(index)}`, "read")),
       {},
       async (frame) => {
-        entered.push(memberId);
-        // Each packet resolves its own frame, never a sibling's.
+        entered.push(`reader${String(index)}`);
         assert.equal(gate.active(frame.frameId), frame);
         await release.promise;
         return frame;
       },
-    );
-  const reads = [read("a"), read("b")];
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(entered, ["a", "b"]);
-  let wrote = false;
+    ),
+  );
   const write = gate.run(
-    sharedFacts(instanceId, callBy("c", "write")),
+    sharedFacts(instanceId, callBy("writer", "write")),
     {},
     () => {
-      wrote = true;
+      assert.equal(aborts, 1, "the read cohort stopped before the write");
+      assert.equal(closed.length, 5);
+      entered.push("writer");
       return Promise.resolve();
     },
   );
-  const later = read("d");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(wrote, false);
-  // The waiting write keeps later reads behind it.
-  assert.deepEqual(entered, ["a", "b"]);
-  release.resolve(undefined);
-  const [a, b] = await Promise.all(reads);
-  assert.notEqual(a?.frameId, b?.frameId);
-  await write;
-  assert.equal(wrote, true);
-  await later;
-  assert.deepEqual(entered, ["a", "b", "d"]);
+  const later = gate.run(
+    sharedFacts(instanceId, callBy("later", "read")),
+    {},
+    () => {
+      assert.equal(aborts, 2, "the writer ran alone and stopped");
+      entered.push("later");
+      return Promise.resolve();
+    },
+  );
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      [...entered],
+      ["reader0", "reader1", "reader2", "reader3", "reader4"],
+    );
+    for (const release of releases.slice(0, 4)) release.resolve(undefined);
+    const finished = await Promise.all(reads.slice(0, 4));
+    assert.equal(aborts, 0, "a sibling still owns admitted guest execution");
+    assert.equal(closed.length, 4);
+    for (const frame of finished) {
+      assert.equal(frame.signal.aborted, true);
+      assert.throws(() => gate.active(frame.frameId), { code: "revoked" });
+    }
+    releases[4]?.resolve(undefined);
+    await reads[4];
+    await Promise.all([write, later]);
+    assert.equal(aborts, 3);
+    assert.deepEqual(entered.slice(5), ["writer", "later"]);
+    assert.equal(new Set(closed).size, 7);
+  } finally {
+    for (const release of releases) release.resolve(undefined);
+    await Promise.allSettled([...reads, write, later]);
+  }
 });
 
-await test("revocation aborts the shared guest once and closes every frame on it", async () => {
+await test("an arrival during drain waits for the guest stop before entering", async () => {
+  const instanceId = instanceIds.instance.generate();
+  const stopping = Promise.withResolvers<undefined>();
+  const stopped = Promise.withResolvers<undefined>();
+  const events: string[] = [];
+  let aborts = 0;
+  const gate = createInvocationGate({
+    abortGuest: async () => {
+      aborts += 1;
+      events.push("stop-start");
+      stopping.resolve(undefined);
+      await stopped.promise;
+      events.push("stop-done");
+    },
+    close: () => {
+      events.push("close");
+      return Promise.resolve();
+    },
+  });
+  const first = gate.run(
+    sharedFacts(instanceId, callBy("first", "read")),
+    {},
+    () => Promise.resolve(),
+  );
+  await stopping.promise;
+  const next = gate.run(
+    sharedFacts(instanceId, callBy("next", "read")),
+    {},
+    () => {
+      events.push("enter-next");
+      assert.equal(aborts, 1);
+      return Promise.resolve();
+    },
+  );
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual([...events], ["stop-start"]);
+    stopped.resolve(undefined);
+    await Promise.all([first, next]);
+    assert.equal(aborts, 2);
+    assert.ok(events.indexOf("stop-done") < events.indexOf("close"));
+    assert.ok(events.indexOf("stop-done") < events.indexOf("enter-next"));
+  } finally {
+    stopped.resolve(undefined);
+    await Promise.allSettled([first, next]);
+  }
+});
+
+await test("revocation stops the admitted guest before a later read enters", async () => {
   const instanceId = instanceIds.instance.generate();
   let aborts = 0;
   const gate = createInvocationGate({
@@ -384,29 +465,199 @@ await test("revocation aborts the shared guest once and closes every frame on it
     close: () => Promise.resolve(),
   });
   const held = Promise.withResolvers<undefined>();
-  const started: Promise<void>[] = [];
-  const runs = ["a", "b"].map((memberId) => {
-    const entered = Promise.withResolvers<undefined>();
-    started.push(entered.promise);
-    return gate
-      .run(sharedFacts(instanceId, callBy(memberId, "read")), {}, async () => {
-        entered.resolve(undefined);
-        await held.promise;
-      })
-      .then(
-        () => null,
-        (cause: unknown) => cause,
-      );
-  });
-  await Promise.all(started);
+  const entered = Promise.withResolvers<undefined>();
+  const first = gate
+    .run(sharedFacts(instanceId, callBy("a", "read")), {}, async () => {
+      entered.resolve(undefined);
+      await held.promise;
+    })
+    .then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+  await entered.promise;
   await gate.revoke();
-  const failures = await Promise.all(runs);
-  for (const failure of failures)
+  const next = gate.run(
+    sharedFacts(instanceId, callBy("b", "read")),
+    {},
+    () => {
+      assert.equal(aborts, 1);
+      return Promise.resolve();
+    },
+  );
+  try {
+    const failure = await first;
     assert.ok(
       failure instanceof AppInstanceError && failure.code === "revoked",
     );
-  assert.equal(aborts, 1);
-  held.resolve(undefined);
+    await next;
+    assert.equal(aborts, 2);
+  } finally {
+    held.resolve(undefined);
+    await Promise.allSettled([first, next]);
+  }
+});
+
+await test("a read stream past the opening deadline drains before a new cohort and waiting write", async () => {
+  const instanceId = instanceIds.instance.generate();
+  let now = Date.now();
+  let aborts = 0;
+  const gate = createInvocationGate({
+    now: () => now,
+    abortGuest: () => {
+      aborts += 1;
+      return Promise.resolve();
+    },
+    close: () => Promise.resolve(),
+  });
+  const entered: string[] = [];
+  const opening = Promise.withResolvers<undefined>();
+  const sibling = Promise.withResolvers<undefined>();
+  const releaseNew = Promise.withResolvers<undefined>();
+  let abortsAtFresh = -1;
+  const first = gate.run(
+    {
+      ...sharedFacts(instanceId, callBy("opening", "read")),
+      deadlineAt: now + 10_000,
+    },
+    {},
+    async () => {
+      entered.push("opening");
+      await opening.promise;
+    },
+  );
+  const second = gate.run(
+    sharedFacts(instanceId, callBy("sibling", "read")),
+    {},
+    async () => {
+      entered.push("sibling");
+      await sibling.promise;
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  opening.resolve(undefined);
+  await first;
+  now += 10_001;
+  const fresh = gate.run(
+    sharedFacts(instanceId, callBy("fresh", "read")),
+    {},
+    async () => {
+      entered.push("fresh");
+      abortsAtFresh = aborts;
+      await releaseNew.promise;
+    },
+  );
+  const write = gate.run(
+    sharedFacts(instanceId, callBy("writer", "write")),
+    {},
+    () => {
+      entered.push("writer");
+      assert.equal(aborts, 2);
+      return Promise.resolve();
+    },
+  );
+  const stream = Array.from({ length: 5 }, (_, index) =>
+    gate.run(
+      sharedFacts(instanceId, callBy(`stream${String(index)}`, "read")),
+      {},
+      () => {
+        entered.push("stream");
+        assert.ok(entered.includes("writer"));
+        return Promise.resolve();
+      },
+    ),
+  );
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual([...entered], ["opening", "sibling"]);
+    assert.equal(aborts, 0);
+    sibling.resolve(undefined);
+    await second;
+    releaseNew.resolve(undefined);
+    await Promise.all([fresh, write, ...stream]);
+    assert.equal(abortsAtFresh, 1, "the expired opening cohort has drained");
+    assert.deepEqual(entered.slice(0, 4), [
+      "opening",
+      "sibling",
+      "fresh",
+      "writer",
+    ]);
+    assert.equal(
+      aborts,
+      4,
+      "old reads, new read, write, and read stream drain",
+    );
+  } finally {
+    opening.resolve(undefined);
+    sibling.resolve(undefined);
+    releaseNew.resolve(undefined);
+    await Promise.allSettled([first, second, fresh, write, ...stream]);
+  }
+});
+
+await test("only eight reads enter, and a queued ninth rechecks the opening deadline", async () => {
+  const instanceId = instanceIds.instance.generate();
+  let now = Date.now();
+  let aborts = 0;
+  const gate = createInvocationGate({
+    now: () => now,
+    abortGuest: () => {
+      aborts += 1;
+      return Promise.resolve();
+    },
+    close: () => Promise.resolve(),
+  });
+  const releases = Array.from({ length: 8 }, () =>
+    Promise.withResolvers<undefined>(),
+  );
+  const entered: number[] = [];
+  const reads = releases.map((release, index) => {
+    const facts = sharedFacts(
+      instanceId,
+      callBy(`reader${String(index)}`, "read"),
+    );
+    return gate.run(
+      index === 0 ? { ...facts, deadlineAt: now + 10_000 } : facts,
+      {},
+      async () => {
+        entered.push(index);
+        await release.promise;
+      },
+    );
+  });
+  const ninth = gate.run(
+    sharedFacts(instanceId, callBy("ninth", "read")),
+    {},
+    () => {
+      entered.push(8);
+      assert.equal(
+        aborts,
+        1,
+        "queued before the cap, admitted after old drain",
+      );
+      return Promise.resolve();
+    },
+  );
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(entered.length, 8);
+    now += 10_001;
+    releases[0]?.resolve(undefined);
+    await reads[0];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      entered.length,
+      8,
+      "a free read slot cannot prolong the cohort",
+    );
+    for (const release of releases) release.resolve(undefined);
+    await Promise.all([...reads, ninth]);
+    assert.deepEqual(entered, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(aborts, 2);
+  } finally {
+    for (const release of releases) release.resolve(undefined);
+    await Promise.allSettled([...reads, ninth]);
+  }
 });
 
 await test("Instance admission preserves a typed refusal after waiting for the frame permit", async () => {
@@ -562,6 +813,7 @@ await test("read polls each simulated second wait for one replay step without in
         (cause: unknown) => ({ kind: "failed" as const, cause }),
       );
     await entered.promise;
+    const abortsBeforePoll = aborts;
     now += 1000;
     let readEntered = false;
     const poll = gate.run(facts(false, step + 1), {}, () => {
@@ -571,8 +823,8 @@ await test("read polls each simulated second wait for one replay step without in
       return Promise.resolve();
     });
     try {
-      // Finished frames keep the guest; nothing aborts it.
-      assert.equal(aborts, 0);
+      // A read waits without interrupting the still-running replay.
+      assert.equal(aborts, abortsBeforePoll);
       assert.equal(readEntered, false);
       exchange.resolve(undefined);
       assert.deepEqual(await syncing, { kind: "completed" });
@@ -584,7 +836,7 @@ await test("read polls each simulated second wait for one replay step without in
     }
   }
   assert.equal(completedSteps, 3);
-  assert.equal(aborts, 0);
+  assert.equal(aborts, 6);
 });
 
 await test("a click preempts a held replay, closes its authority, then enters with fresh facts", async () => {
@@ -697,8 +949,8 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     push.resolve(undefined);
     await Promise.allSettled([syncing, next, refused]);
   }
-  // Only the preempted replay aborted the guest; the click finished warm.
-  assert.equal(aborts, 1);
+  // Both the preempted replay and the completed click stop their guest.
+  assert.equal(aborts, 2);
   assert.equal(closed, 2);
 });
 

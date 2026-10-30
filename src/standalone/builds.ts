@@ -7,16 +7,21 @@
  * makes its template the build source at the returned seed revision.
  *
  * - `POST /api/builds` starts a build of that source at one exact commit.
- * - `GET /api/builds/:jobId` reads it; a finished build carries its Release,
- *   which the owner installs or selects through the installation routes.
+ * - `GET /api/builds/:jobId` reads it; `?log` reads its combined raw output.
+ *   Both require the same owner admission. A finished build carries its
+ *   Release, which the owner installs or selects through the installation routes.
  */
-import { Hono } from "hono";
 import * as Schema from "effect/Schema";
 import {
   oysterBuildStartMessages,
   type OysterBuildStartReason,
 } from "../app-builds.js";
-import { oysterPrincipalIsOwner, type OysterEnv } from "../host.js";
+import { type OysterEnv } from "../host.js";
+import {
+  owner as ownerRoute,
+  routes as routeTable,
+  type Routes,
+} from "../authorization.js";
 import {
   appIdSchema,
   releaseSchema,
@@ -53,18 +58,14 @@ export function buildStartFailureReply(
 /** The build routes over the tenant registry that owns builds, resolved per
  * request so mounting the routes reaches no registry. */
 export function standaloneBuildRoutes(
-  registryFor: () => DurableObjectStub<StandaloneRegistry>,
-): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
-  routes.use("/api/builds/*", async (context, next) =>
-    oysterPrincipalIsOwner(context.get("principal"))
-      ? next()
-      : Response.json({ error: "Owner only" }, { status: 403 }),
-  );
-  routes.post("/api/builds", async (context) => {
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return Response.json({ error: "Owner only" }, { status: 403 });
+  registryFor: () => Pick<
+    StandaloneRegistry,
+    "startBuild" | "readBuild" | "readBuildLog"
+  >,
+): Routes<OysterEnv> {
+  const routes = routeTable<OysterEnv>();
+  const owner = ownerRoute("direct-or-app");
+  routes.post("/api/builds", owner, async (context, { principal }) => {
     let input;
     try {
       input = Schema.decodeUnknownSync(buildInput, {
@@ -87,7 +88,13 @@ export function standaloneBuildRoutes(
       return Response.json(reply.body, { status: reply.status });
     }
   });
-  routes.get("/api/builds/:jobId", async (context) => {
+  routes.get("/api/builds/:jobId", owner, async (context) => {
+    if (context.req.query("log") !== undefined) {
+      const log = await registryFor().readBuildLog(context.req.param("jobId"));
+      return log === null
+        ? Response.json({ error: "Not found" }, { status: 404 })
+        : Response.json(log);
+    }
     const build = await registryFor().readBuild(context.req.param("jobId"));
     return build === null
       ? Response.json({ error: "Not found" }, { status: 404 })

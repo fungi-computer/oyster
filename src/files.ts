@@ -6,7 +6,7 @@
  * the Oyster's workspace unchanged. Other sources (a git repository) implement
  * the same `FileSource`.
  */
-import { Hono } from "hono";
+import { computer, routes, type Routes } from "./authorization.js";
 import * as Schema from "effect/Schema";
 import {
   computerList,
@@ -122,10 +122,11 @@ export function fileCapabilities(
   ];
 }
 
-function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
-  const routes = new Hono<CapabilityEnv>();
+/** The workspace is the Computer's: a key needs `computer.use` (see `authorization.ts`). */
+function createFileRoutes(source: FileSource): Routes<CapabilityEnv> {
+  const table = routes<CapabilityEnv>();
   const pathOf = (raw: string | undefined) => normalizeFilePath(raw ?? "");
-  routes.get("/list", async (context) => {
+  table.get("/list", computer(), async (context) => {
     const path = pathOf(context.req.query("path"));
     if (path === null) return refusal(400, "Invalid path");
     const limit = Math.min(
@@ -138,7 +139,7 @@ function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
       ? refusal(404, "No such directory")
       : Response.json(listing);
   });
-  routes.get("/content", async (context) => {
+  table.get("/content", computer(), async (context) => {
     const path = pathOf(context.req.query("path"));
     if (path === null) return refusal(400, "Invalid path");
     const bytes = await source.read(path);
@@ -148,7 +149,7 @@ function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
           headers: { "Content-Type": "application/octet-stream" },
         });
   });
-  routes.put("/content", async (context) => {
+  table.put("/content", computer(), async (context) => {
     const path = pathOf(context.req.query("path"));
     if (path === null || path === "/") return refusal(400, "Invalid path");
     const length = Number(context.req.header("content-length") ?? "0");
@@ -158,7 +159,7 @@ function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
     await source.write(path, bytes);
     return new Response(null, { status: 204 });
   });
-  routes.post("/mkdir", async (context) => {
+  table.post("/mkdir", computer(), async (context) => {
     const body = Schema.decodeUnknownOption(mkdirSchema)(
       await context.req.json(),
     );
@@ -168,7 +169,7 @@ function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
     await source.mkdir(path);
     return new Response(null, { status: 204 });
   });
-  routes.post("/replace", async (context) => {
+  table.post("/replace", computer(), async (context) => {
     const body = Schema.decodeUnknownOption(replaceSchema)(
       await context.req.json(),
     );
@@ -184,5 +185,5 @@ function createFileRoutes(source: FileSource): Hono<CapabilityEnv> {
       ),
     );
   });
-  return routes;
+  return table;
 }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { Hono } from "hono";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { defaultTenant, tenantScope } from "@fungi.computer/oyster/tenant";
 
@@ -38,6 +38,7 @@ const { instanceIds } = await import("../../src/index.ts");
 const Schema = await import("effect/Schema");
 const { standaloneBuildRoutes } =
   await import("../../src/standalone/builds.ts");
+const { serveHost } = await import("../../src/authorization.ts");
 const { normalizeAppPublisherRecipe } =
   await import("../../src/build-contract.ts");
 const { createOysterAppBuilds } = await import("../../src/app-builds.ts");
@@ -242,15 +243,11 @@ test("multiple Computers create list and start retain identities across standalo
       return (await response.json()).computer.computerId;
     };
     let principal = owner;
-    const routes = new Hono()
-      .use("*", async (context, next) => {
-        context.set("principal", principal);
-        return next();
-      })
-      .route(
-        "/",
-        standaloneComputerFleetRoutes(() => registry),
-      );
+    const routes = serveHost(
+      standaloneComputerFleetRoutes(() => registry),
+      () => Promise.resolve({ kind: "admitted", principal }),
+      { liveKey: async () => null, appToolPolicy: () => null },
+    );
     const createA = {
       operation: "create",
       request: { name: "A", requestId: "A" },
@@ -1008,14 +1005,14 @@ test("repository App registration reads the committed root manifest and replays 
     await t.test(
       "the superseded raw build-source PUT is not a registration API",
       async () => {
-        const routes = new Hono();
-        routes.use("*", async (context, next) => {
-          context.set("principal", { actor: owner.actor, role: "owner" });
-          await next();
-        });
-        routes.route(
-          "/",
+        const routes = serveHost(
           standaloneBuildRoutes(() => registry),
+          () =>
+            Promise.resolve({
+              kind: "admitted",
+              principal: { actor: owner.actor, role: "owner" },
+            }),
+          { liveKey: async () => null, appToolPolicy: () => null },
         );
         const response = await routes.request(
           "/api/apps/app_committed/build-source",
@@ -1126,14 +1123,14 @@ test("build route preserves a template seed refusal instead of reporting missing
       recipe: pinned.recipe,
       buildRecipeDigest: pinned.buildRecipeDigest,
     });
-    const routes = new Hono();
-    routes.use("*", (context, next) => {
-      context.set("principal", { actor: owner.actor, role: "owner" });
-      return next();
-    });
-    routes.route(
-      "/",
+    const routes = serveHost(
       standaloneBuildRoutes(() => registry),
+      () =>
+        Promise.resolve({
+          kind: "admitted",
+          principal: { actor: owner.actor, role: "owner" },
+        }),
+      { liveKey: async () => null, appToolPolicy: () => null },
     );
     const response = await routes.request("/api/builds", {
       method: "POST",
@@ -1206,6 +1203,7 @@ test("a Workflow build starts its exact head once and failed builds never select
   const tenants = new StandaloneTenants(state(tenantsDatabase));
   const executions = [];
   const pending = [];
+  const logs = new Map();
   const env = {
     OYSTER_ORIGIN: "https://accepted-push.test",
     OYSTER_OWNER_KEY: "accepted-push-fixture-owner-key-24-characters",
@@ -1218,11 +1216,28 @@ test("a Workflow build starts its exact head once and failed builds never select
         buildBackend: async () => ({ kind: "hosted" }),
         runBuild: async (input) => {
           executions.push(input);
-          return { output: { exitCode: 1, stderr: "Fixture build failed" } };
+          return {
+            output: { exitCode: 1, stderr: "Fixture build failed" },
+            log: {
+              encoding: "base64url",
+              output: Buffer.from("Fixture build failed").toString("base64url"),
+              truncated: null,
+            },
+          };
         },
       }),
     },
-    RELEASES: {},
+    RELEASES: {
+      put: async (ref, bytes) => {
+        logs.set(ref, bytes.slice());
+      },
+      get: async (ref) => {
+        const bytes = logs.get(ref);
+        return bytes === undefined
+          ? null
+          : { arrayBuffer: async () => bytes.slice().buffer };
+      },
+    },
   };
   try {
     const shared = await standaloneTenancy(env);

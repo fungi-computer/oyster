@@ -4,6 +4,12 @@ Oyster puts a desktop of Apps on your own Cloudflare account: a git platform,
 agents, a terminal, an editor, workflows and image generation, each built from a
 git commit on your own Computer.
 
+The owner can read a build's status at `GET /api/builds/:jobId` and its combined
+stdout/stderr at `GET /api/builds/:jobId?log`. The status diagnostic stays
+within 200 characters and points to the log. The log returns base64url-encoded
+raw bytes; if output exceeds 2 MiB it retains the head and tail and reports
+`truncated.droppedBytes`. Both reads use the same owner authorization.
+
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/desktop-light.png">
   <img alt="The Tourtois desktop on Oyster with three Apps tiled: Trellis editing the Bonsai checks graph, Bonsai drawing a repository's network of agent forks, and Shed's terminal on the Computer" src="https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/desktop-dark.png">
@@ -177,6 +183,42 @@ container application, delete the Workflow, and delete the Artifacts
 repositories and namespace. Use the configured resource names and confirm each
 is gone through Cloudflare's dashboard or API. Capture teardown errors and the
 Wrangler version rather than silently adding unrelated token permissions.
+
+### Upgrading to owner-only Oyster
+
+Upgrading to 0.7.0 resets the installed Apps when the registry contains the
+pre-owner-only `visibility`, `approvedAnonymousMethods` or `anonymousApproval`
+fields. This clears all installation rows and their installation command journal
+once, renews the store incarnation, and permanently records the reset time and
+row count. It does not uninstall Apps through their storage-purging delete path.
+Agents, Sessions, files, keys, source and release data, tenancy, approval
+records and Computer state are retained.
+
+While no App is enabled, Oyster Home shows:
+
+> This update reset your installed Apps. Reinstall them with npx oyster
+> install-apps.
+
+Run `npx oyster install-apps` to reinstall. The notice disappears when an App is
+enabled; the audit fact remains. This is not a compatibility reader or a reset
+on arbitrary corruption. The separate pre-0.3 refusal below is unchanged.
+
+Same-ID App settings: kept and back after reinstall; backend SQLite: kept but
+not reachable.
+
+Each installed App's own backend database (for example saved Notes) stays in
+storage but is no longer reachable; reinstalling creates a new App Instance that
+starts empty. There is no recovery for App backend data in 0.7.0; reinstalling
+with `npx oyster install-apps` restores the Apps and their same-ID App settings,
+and Agents, Sessions, files and keys are retained.
+
+These are different stores. Backend SQLite belongs to the Instance's `app`
+facet. Host `APP_STORAGE` settings instead belong to the installation address
+plus App ID, key, scope and member membership version; the starter installer
+reuses the same installation IDs, so the same App reconnects to those settings.
+There is no automatic backend-data reattachment or change to either keying
+scheme. Files on Computers and Agent/Session data have their own retained
+owners.
 
 ### Upgrading from Oyster 0.2 or earlier
 
@@ -423,16 +465,16 @@ can host yourself.
 
 ![Oyster architecture: one Worker routes browsers, git clients and MCP agents to a registry, per-App Durable Objects, the git door and the Tourtois home, over R2, Artifacts and platform bindings](https://raw.githubusercontent.com/fungi-computer/oyster/main/docs/media/architecture.png)
 
-| Piece             | Owns                                                                                      |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| Router            | Sign-in, `/apps/<installation>/` pages, App methods, owner `/api/*` routes and `/mcp`.    |
-| `OysterRegistry`  | The installation list: which Release each installation runs, and its visibility.          |
-| R2                | Release artifacts, stored by digest.                                                      |
-| App Instance      | One Durable Object per installation: lifecycle, owner state and the backend facet.        |
-| Backend facet     | The App's own code and SQLite database, loaded through the Worker Loader.                 |
-| git door          | Smart-HTTP `clone`, `fetch` and `push`, admitted per key and forwarded to Artifacts.      |
-| Tourtois          | The trusted shell: launcher, windows, menus and settings, rendered as the top-level page. |
-| Platform bindings | Workflows, Computers, Agents and Workers AI, offered only to Apps that declare them.      |
+| Piece             | Owns                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| Router            | One declared route table (`authorization.ts`): sign-in, App pages and methods, owner routes, `/mcp`. |
+| `OysterRegistry`  | The installation list: which Release each installation runs.                                         |
+| R2                | Release artifacts, stored by digest.                                                                 |
+| App Instance      | One Durable Object per installation: lifecycle, owner state and the backend facet.                   |
+| Backend facet     | The App's own code and SQLite database, loaded through the Worker Loader.                            |
+| git door          | Smart-HTTP `clone`, `fetch` and `push`, admitted per key and forwarded to Artifacts.                 |
+| Tourtois          | The trusted shell: launcher, windows, menus and settings, rendered as the top-level page.            |
+| Platform bindings | Workflows, Computers, Agents and Workers AI, offered only to Apps that declare them.                 |
 
 The diagram source is
 [`docs/media/architecture.mmd`](https://github.com/fungi-computer/oyster/blob/main/docs/media/architecture.mmd).
@@ -467,31 +509,17 @@ the Computer. `examples/standalone/wrangler.jsonc` declares every binding it
 uses. Set the owner key as a secret (`OYSTER_OWNER_KEY`, 24+ characters) and
 deploy with `wrangler deploy`. Sign in at `/login`.
 
-Hosts may supply the optional `OYSTER_KEY_SESSIONS` binding, implementing
-`OysterKeySessionResolver` from `@fungi.computer/oyster/auth`. Its
-`resolve(value)` returns `{ keyId }` for a live host-owned session, or `null`.
-The host mints and expires opaque sessions and sets the `keySessionCookieName`
-cookie; it is not a named key's bearer secret. Hosts should use `Path=/`,
-`HttpOnly`, `Secure` and `SameSite=Lax` (or stricter) as defense in depth.
-Oyster independently checks request provenance. Cookie-only GET/HEAD navigation
-is allowed. Other methods require `Origin` to be present and equal the request
-URL's origin, and refuse `Sec-Fetch-Site: cross-site`. Missing `Origin` is
-refused, using the same strict predicate as the channel's POST routes. Oyster
-stores no browser sessions. `keySessionAuth` wraps ordinary `ownerOrKeyAuth` at
-the standalone tenancy composition root. Each cookie admission reopens the live
-key and checks its canonical owner; every authenticated door still uses that
-key's current grants. App pages refuse keys without App access, even when the
-App is public to visitors. Explicit header authentication is unchanged, and a
-failed Authorization header cannot fall back to a named-key cookie. The owner
-cookie and owner-only management API are unchanged; without the binding
-named-key cookies admit nobody.
+Oyster is owner-only. A browser signs in only with the owner key, through
+`/login` and its `SameSite=Strict` session cookie. Named keys sign in only by
+header (`Authorization`), for MCP, Git and the API; no cookie admits a named
+key. Anonymous requests reach only `/login`, `robots.txt` and digest-pinned
+shell and App UI bytes.
 
 The celld example is a limited trial, not the full Cloudflare setup above. It
-requires access to Fungi's private celld fork and Botanical source repository.
-Use `examples/standalone/wrangler.celld.jsonc` beside `worker.ts`, not the
-Cloudflare-only config. The published `0.5.0` tarball does not yet contain this
-celld example; copy it from your authorized Botanical source checkout until a
-package including it is released.
+requires access to Fungi's private celld fork. Use
+`examples/standalone/wrangler.celld.jsonc` beside `worker.ts`, not the
+Cloudflare-only config. Oyster `0.6.0` includes both files under
+`examples/standalone` in the installed package.
 
 The layers it is built from stay exported for hosts that compose their own:
 `@fungi.computer/oyster/turnstile` owns Cloudflare challenge configuration and
@@ -597,7 +625,7 @@ flowchart LR
   a named key may also be the Basic password from a git credential helper. A
   Workflow Git pass (a `wgp.` Bearer header, never in a URL) goes only to
   `host.git.workflowPass`; without that port it admits nothing. Anonymous
-  requests read only public installations and never push.
+  requests never clone or push.
 - **Git admission** reopens the live installation before every provider call: it
   must be enabled and its Release must declare `git.repository`. The tenant
   scope prefixes every repository name (`<installation>--<repo>` for the default
@@ -659,7 +687,9 @@ and the exact installation, repository and read/write scope it names. The last
 returns an `AdmittedGit`; the door forwards reads to `.read` and pushes to
 `.push`. Provider credentials stay inside the storage adapter. `createOyster`
 builds these ports from `host.auth`, `host.installations` and `host.git`, so
-most hosts set `host.git` and never call `createGitDoor` directly.
+most hosts set `host.git` and never call `createGitDoor` directly. There a named
+key signs Git in only for installations its own grants reach: a clone needs App
+read and a push needs App use; otherwise the door refuses it.
 
 A host whose Workflow run owner issues Workflow Git credentials supplies
 `workflowGitPass` in `oysterGitRoot` or `oysterWorkerGit` options. The run owner
@@ -675,11 +705,13 @@ branches are refused before the App's push policy runs.
 ### Provide App capabilities
 
 Each `OysterCapability` supplies its Agar `id` and `version`, a mount `base`,
-relative Hono `routes`, an `admits(principal, installation)` decision, and
-`methods`. Each method descriptor has `kind`, `method` (HTTP method), and `path`
-(relative route). `CapabilityMethodKind` is `json | transport | read | write`:
-JSON calls return decoded data, transports return Fetch handles, and
-reads/writes return Agar's stream handles.
+relative declared `routes` (a `routes()` table from
+`@fungi.computer/oyster/authorization`, where every route names its requirement:
+`owner`, `agent`, `computer`, `member`...), and `methods`. Each method
+descriptor has `kind`, `method` (HTTP method), and `path` (relative route).
+`CapabilityMethodKind` is `json | transport | read | write`: JSON calls return
+decoded data, transports return Fetch handles, and reads/writes return Agar's
+stream handles.
 
 Method paths may contain named parameters, such as `:agentId/sessions`. Oyster
 uses `path-to-regexp` to compile input fields into those parameters; remaining
@@ -697,10 +729,9 @@ from `@fungi.computer/oyster/files` supplies the three file contracts over the
 existing `/files/` GET, PUT and POST routes.
 
 The page offers a capability only when the installed Release declares its ID and
-`admits` allows the principal. Visitors receive none. Every route request also
-rechecks that declaration and admission using the `X-Oyster-Installation` header
-set by the page; a read grant does not authorize the write route sharing its
-file mount.
+`admits` allows the principal. Every route request also rechecks that
+declaration and admission using the `X-Oyster-Installation` header set by the
+page; a read grant does not authorize the write route sharing its file mount.
 
 Consent approves capabilities, like OAuth scopes. An App upgrade may add a
 method that uses an already-approved capability without asking again. A new
@@ -715,10 +746,9 @@ your approval.**
 The `apps.call` permission also shows the declared target Apps and methods. Its
 route approvals retain those exact pairs: adding or renaming a target method
 needs owner approval. On Oyster these page calls run as the signed-in member
-through the target App's ordinary method gate; Agents, keys and visitors cannot
-use this path. The target receives its own grants, never the caller App's
-grants. The Hub shows the same consent list but does not offer this page
-capability.
+through the target App's ordinary method gate; Agents and keys cannot use this
+path. The target receives its own grants, never the caller App's grants. The Hub
+shows the same consent list but does not offer this page capability.
 
 ### Connect an agent over MCP
 
@@ -743,8 +773,8 @@ operations are the ones every Computer advertises (`read`, `list`, `write`,
 The host supplies `computer(principal)` on its workspace: it returns the
 Computer's calls for a caller with Computer access and `null` otherwise. The
 standalone host gives an owner, key or member the same Computer grant its
-`/computer` routes use; visitors and Agents get none. The Computer accepts every
-call against that grant. `oysterComputerTools(host, principal)` from
+`/computer` routes use; Agents get none. The Computer accepts every call against
+that grant. `oysterComputerTools(host, principal)` from
 `@fungi.computer/oyster/mcp` returns this Knapsack source and its `grants`.
 
 Workers route every MCP request to the tenant's `MCP` Durable Object. Export
@@ -769,15 +799,15 @@ module's own grant is `read`. For an Agent, `access` is
 `{level, revision, grantedBy}` approval; missing it grants no tool access. For a
 named key, `access` is `{kind: "key", keyId, byInstallation}`, one
 `{level, revision, grantedBy}` per installation the key's own Ear Tag grants
-admit (`keyAppAccess`); an installation the key has no grant for is absent from
-`byInstallation` and never listed at all, not merely refused. A key's grants are
-set once, at `POST /api/keys`, and never edited: to change them the owner
-revokes the key (`POST /api/keys/revoke`) and issues a new one. A module grant
-does not approve an App operation. The gate also intersects the installation's
-explicit approvals with its verified Release; `external` methods are refused
-with `approval_required`. MCP uses this same projection. Capture again when tool
-policy, installation authority, a key's own grants or a Release changes; the
-source represents one immutable catalog snapshot.
+admit (`appToolAccess` in `authorization.ts`); an installation the key has no
+grant for is absent from `byInstallation` and never listed at all, not merely
+refused. A key's grants are set once, at `POST /api/keys`, and never edited: to
+change them the owner revokes the key (`POST /api/keys/revoke`) and issues a new
+one. A module grant does not approve an App operation. The gate also intersects
+the installation's explicit approvals with its verified Release; `external`
+methods are refused with `approval_required`. MCP uses this same projection.
+Capture again when tool policy, installation authority, a key's own grants or a
+Release changes; the source represents one immutable catalog snapshot.
 
 ### Approve an Agent's App tools
 
@@ -980,6 +1010,20 @@ that read when host settings change. Account writes remain Hub-owned.
 
 ## Core concepts
 
+### Authorization
+
+`@fungi.computer/oyster/authorization` is Oyster's one authorization owner.
+Every route is registered through `routes()` with a typed requirement
+(`publicRoute`, `door`, `owner`, `member`, `app`, `apps`, `agent`, `agents`,
+`computer`), and a table's `serve` is the only router the host builds: an
+undeclared route is not served, and a handler receives only what its requirement
+admitted. The owner reaches everything. A named key reaches exactly its Ear Tag
+grants: `apps.read`/`apps.use` per installation (including that App's Git
+repositories), `agents.use` per Agent, and `computer.use` for the Computer, its
+workspace files and media. An Agent reaches its approved App tool policy;
+nothing anonymous reaches an App. `owner("direct")` refuses App-mediated
+requests, so consent, keys and secrets never ride an App.
+
 ### Owner state and selection
 
 The host calls `apply` with the complete owner-issued state, then `fetch` or
@@ -1097,6 +1141,17 @@ digest, so separate Instances of one Release never share guest module scope.
 Guest code receives only the `bindings()` its host builds, no ambient outbound
 access, and requests carry only `Content-Type` and the host-admitted actor,
 Computer and resource headers.
+
+One Instance shares its guest between up to eight verified foreground reads.
+Writes, raw backend requests, Gills, replay and supervisor-exclusive work run
+alone; a waiting exclusive caller holds back later reads. Every completed frame
+closes its own authority, and packets naming that finished frame refuse. Guest
+work runs only while at least one frame on that Instance remains admitted: the
+last frame stops the guest, then closes its authority, then releases admission.
+Arrivals wait while that stop is in flight. Once the opening frame's deadline
+passes, new reads wait for the cohort to drain rather than prolonging the guest.
+Revocation, expiry and a verified write preempting replay still stop it at once.
+Stopping the guest does not erase the facet's durable database.
 
 ## API reference
 
@@ -1317,15 +1372,14 @@ returns typed no_backend before creating a new job or starting a machine.
 Only an admitted Workflow-node APPS call can install its matching successful
 build's recorded Release at the recorded target. Ordinary App-origin
 installation remains refused. Existing grants may be reused, but new permissions
-or anonymous exposure return needs_consent without changing the running Release.
-Registering a repository as an App (**Make this an App**) is the owner's consent
-for its merge Workflow to create that App's installation when none exists yet. A
-Workflow-created installation is private, with no grants and no anonymous
-methods. Later Workflows reuse exactly that approval and can never widen it;
-every grant still needs the owner's explicit consent. The build row records the
-outcome; status reads are read-only and no native alarm resumes installation.
-Workflow execution owns retries. This template has no review step, review
-configuration or separate consent ledger.
+return needs_consent without changing the running Release. Registering a
+repository as an App (**Make this an App**) is the owner's consent for its merge
+Workflow to create that App's installation when none exists yet. A
+Workflow-created installation has no grants. Later Workflows reuse exactly that
+approval and can never widen it; every grant still needs the owner's explicit
+consent. The build row records the outcome; status reads are read-only and no
+native alarm resumes installation. Workflow execution owns retries. This
+template has no review step, review configuration or separate consent ledger.
 
 **Breaking installation contract:** Bonsai apps.install and APPS.select require
 the successful build's jobId alongside installationId and release. The host
@@ -1437,8 +1491,9 @@ tenant from the request origin before sign-in and returns that tenant's
 or `null` to refuse an unknown origin. Oyster uses the scope for registry,
 workspace, keys, webhooks and repository names, and pins each Instance to its
 selected tenant. Canonical member roles remain distinct from owner authority.
-Public App reads remain available; unknown origins and policy refusals fail
-closed. `ownerOrKeyTenancy` is the single-tenant case.
+Anonymous requests reach only sign-in, `robots.txt` and the digest-pinned shell
+and App UI bytes; unknown origins and policy refusals fail closed.
+`ownerOrKeyTenancy` is the single-tenant case.
 
 ## Machine link protocol
 
@@ -1480,14 +1535,13 @@ The page sends an owner-only `PUT` to the same path, carrying the captured
 `storeGeneration`, `authorityVersion`, Release `artifactDigest`, and a bounded
 `{kind:"change-grants",changes:[{capability,grant}]}` command. Each grant
 contains `operations` and `resources`; `null` revokes that capability. Unnamed
-approvals retain their existing operation and resource ceilings. Agents, keys,
-visitors and App-origin requests cannot approve. A replaced store, stale
-Release/version or concurrent approval returns `409`; the page refreshes the
-facts and rebases touched edits for review. The required `InstallationStore`
-exposes its durable `generation()` and
-`compareAndPut(record, expectedVersion, expectedGeneration)`. The latter returns
-a serializable commit/refusal result across Durable Object RPC and checks both
-pins in the existing commit transaction.
+approvals retain their existing operation and resource ceilings. Agents, keys
+and App-origin requests cannot approve. A replaced store, stale Release/version
+or concurrent approval returns `409`; the page refreshes the facts and rebases
+touched edits for review. The required `InstallationStore` exposes its durable
+`generation()` and `compareAndPut(record, expectedVersion, expectedGeneration)`.
+The latter returns a serializable commit/refusal result across Durable Object
+RPC and checks both pins in the existing commit transaction.
 
 ## Breaking App send contract
 

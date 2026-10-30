@@ -387,7 +387,6 @@ const version = (record: Installation | null) =>
 /** Whether a plan only reuses, or narrows, the approval its baseline holds. */
 function reusesApproval(baseline: Installation | null, next: Installation) {
   const grants = baseline?.authority.approvedGrants ?? [];
-  const methods = baseline?.approvedAnonymousMethods ?? [];
   return (
     next.authority.approvedGrants.every((grant) =>
       grants.some(
@@ -400,14 +399,7 @@ function reusesApproval(baseline: Installation | null, next: Installation) {
       ),
     ) &&
     (next.authority.approval === null ||
-      same(next.authority.approval, baseline?.authority.approval ?? null)) &&
-    next.approvedAnonymousMethods.every((method) =>
-      methods.some(
-        (held) => held.name === method.name && held.digest === method.digest,
-      ),
-    ) &&
-    (next.anonymousApproval === null ||
-      same(next.anonymousApproval, baseline?.anonymousApproval ?? null))
+      same(next.authority.approval, baseline?.authority.approval ?? null))
   );
 }
 

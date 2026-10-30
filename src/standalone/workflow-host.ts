@@ -66,7 +66,8 @@ import {
   appEventFactSchema,
   type AppEventFact,
 } from "@fungi.computer/puffball/app-event-facts";
-import { keyAppAccess, type LiveOysterKey } from "../keys.js";
+import { keyAppAccess } from "../authorization.js";
+import type { LiveOysterKey } from "../keys.js";
 import { Validator } from "@cfworker/json-schema";
 
 // Mirrors packages/oyster/src/cloudflare.ts's MAX_APP_REPLY_BYTES. That

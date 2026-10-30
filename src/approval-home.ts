@@ -13,11 +13,12 @@ import {
 } from "@fungi.computer/approvals";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import { invokeModuleOperation } from "@fungi.computer/mycelium/remote";
-import { oysterPrincipalIsOwner, type OysterHost } from "./host.js";
+import type { OysterHost } from "./host.js";
+import { keyAppAccess, oysterPrincipalIsOwner } from "./authorization.js";
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { TenantScope } from "./tenant.js";
 import { sha256 } from "./release.js";
-import { keyAppAccess } from "./keys.js";
+import type { AppSurfaceCache } from "./mcp.js";
 
 const identity = z.string().min(1).max(256);
 const targetSchema = z.strictObject({
@@ -42,6 +43,9 @@ const intentRow = Schema.decodeUnknownSync(
 /** The registry's durable App effect home. Mycelium still owns operation/schema invocation. */
 export class OysterApprovalHome {
   readonly ledger: ApprovalLedger;
+  // The home's artifact store and capability configuration are fixed, unlike
+  // the authority read fresh from current() for every recheck and dispatch.
+  private surfaces: AppSurfaceCache | undefined;
   constructor(
     private readonly host: Readonly<{
       owner: WatchdogSqliteOwner;
@@ -234,11 +238,12 @@ export class OysterApprovalHome {
     }
     const snapshot = await oysterAppSnapshot(
       host,
-      appSurfaceCache(host),
+      (this.surfaces ??= appSurfaceCache(host)),
       principal,
       [installation],
       access,
-      target.sessionId ?? undefined,
+      target.sessionId,
+      "direct",
     );
     const module = snapshot.modules[record.module];
     const fence = snapshot.fences[record.module];

@@ -198,12 +198,12 @@ export const permissionCatalog = {
   ),
   "team.workbenchHost": entry(
     "shell",
-    "Arrange the workbench",
-    "arrange Apps on your workbench.",
+    "Shell",
+    "Full access to your Team and every App",
     "list",
     "ask",
     null,
-    "The shell runs with full access to your Team and every App inside it. Only pick a shell you trust.",
+    "Only pick a shell you trust.",
   ),
   "marketplace.browse": entry(
     "bazaar",

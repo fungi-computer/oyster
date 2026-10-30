@@ -11,8 +11,9 @@ import {
   type OysterGitRoot,
 } from "../workers-git.js";
 import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
-import { oysterPrincipalIsOwner } from "../host.js";
+import { oysterPrincipalIsOwner } from "../authorization.js";
 import { standaloneComputerControl } from "./computer-control.js";
+import { standalonePermissionResources } from "./permission-resources.js";
 import { onBoxVmIngress } from "@fungi.computer/computer";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { installationWorkerEntrypoint } from "../installation-execution.js";
@@ -49,27 +50,18 @@ import {
 } from "./machine-link.js";
 export { MachineLinkDO } from "./machine-link.js";
 import { standaloneWorkflowControl } from "./workflow-control.js";
-import {
-  standaloneWorkflowWebhookRoutes,
-  standaloneWorkflowWebhookControls,
-} from "./workflow-webhooks.js";
-import { Hono, type ErrorHandler } from "hono";
+import { standaloneWorkflowWebhookRoutes } from "./workflow-webhooks.js";
+import type { ErrorHandler } from "hono";
+import { serveDoors } from "../authorization.js";
+import { standaloneWorkerRoutes } from "./worker-routes.js";
 import { HTTPException } from "hono/http-exception";
-import { standaloneBuildRoutes } from "./builds.js";
-import {
-  standaloneComputerFleetRoutes,
-  standaloneComputerSelection,
-} from "./computer-fleet.js";
-import { standaloneAgentComputerRoutes } from "./agent-computers.js";
-import { agentDirectoryForScope } from "./agent-directory.js";
+import { standaloneOwnerRoutes } from "./owner-routes.js";
+import { standaloneComputerSelection } from "./computer-fleet.js";
 import {
   serveOysterComputerEgress,
   type OysterComputerEgressProps,
 } from "./computer-egress.js";
-import {
-  appSourceOwnerRoutes,
-  type AppSourceBindingEnv,
-} from "./app-source.js";
+import type { AppSourceBindingEnv } from "./app-source.js";
 
 export { StandaloneGraphWorkflow } from "./workflows.js";
 
@@ -142,6 +134,15 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
 
     homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
     agents: standaloneAgents,
+    permissionResources: (env, scope) =>
+      standalonePermissionResources(
+        {
+          // Acquire the registry stub only when owner inventory is requested.
+          computerFleet: (memberId, request) =>
+            tenantRegistry(env, scope).computerFleet(memberId, request),
+        },
+        standaloneAgents(env, scope),
+      ),
     workflows: standaloneWorkflowControl,
     computerControl: (env, scope) => (principal) =>
       oysterPrincipalIsOwner(principal)
@@ -156,8 +157,8 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
         keysLive,
         await selectComputer(tenantRegistry(env, scope), request),
       ),
-    capabilities: (env, workspace, keysLive) => [
-      ...standaloneComputerCapabilities(env, workspace, keysLive),
+    capabilities: (env, workspace) => [
+      ...standaloneComputerCapabilities(env, workspace),
       ...workersMedia(env, workspace),
     ],
     // A presented bearer names the library that issued it; only that
@@ -193,44 +194,7 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
     },
     // Operator source seeding and owner builds share the one owner guard.
     ownerRoutes: (env, scope) =>
-      appSourceOwnerRoutes(env, scope)
-        .route(
-          "/",
-          standaloneBuildRoutes(() => tenantRegistry(env, scope)),
-        )
-        .route(
-          "/",
-          standaloneComputerFleetRoutes(() => tenantRegistry(env, scope)),
-        )
-        .route(
-          "/",
-          standaloneAgentComputerRoutes({
-            attach: (principal, command) =>
-              agentDirectoryForScope(env, scope).attachComputer(
-                command,
-                principal,
-                scope.tenantId,
-              ),
-            detach: (principal, command) =>
-              agentDirectoryForScope(env, scope).detachComputer(
-                command,
-                principal,
-                scope.tenantId,
-              ),
-            read: (principal, agentId) =>
-              agentDirectoryForScope(env, scope).readAgentComputers(
-                agentId,
-                principal,
-                scope.tenantId,
-              ),
-          }),
-        )
-        .route(
-          "/",
-          standaloneWorkflowWebhookControls(env, () =>
-            root.hostFor(env, scope),
-          ),
-        ),
+      standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope)),
   });
   return root;
 };
@@ -341,28 +305,28 @@ export default {
     const fetchOyster = oyster.fetch;
     if (fetchOyster === undefined)
       throw new Error("Oyster fetch handler is missing");
-    return new Hono()
-      .onError(standaloneWorkerErrorHandler)
-      .all("/local/mesh/join", () =>
-        standaloneMachineLinkRoutes(env)
-          .onError(standaloneWorkerErrorHandler)
-          .fetch(request, env, context),
-      )
-      .all("/api/teams/:teamId/local/mesh/:deviceId/connect", () =>
-        standaloneMachineLinkRoutes(env)
-          .onError(standaloneWorkerErrorHandler)
-          .fetch(request, env, context),
-      )
-      .route(
-        "/",
-        standaloneWorkflowWebhookRoutes(env, async (incoming) => {
-          const admitted = await oysterRoot.admit(env, incoming);
-          return admitted === null
-            ? null
-            : oysterRoot.hostFor(env, admitted.scope);
-        }),
-      )
-      .all("*", () => fetchOyster(request, env, context))
-      .fetch(request, env, context);
+    // Doors before any tenant is selected; every other path reaches the
+    // tenant host's own declared table.
+    return serveDoors(
+      standaloneWorkerRoutes({
+        machineLink: (incoming) =>
+          serveDoors(
+            standaloneMachineLinkRoutes(env).onError(
+              standaloneWorkerErrorHandler,
+            ),
+          ).fetch(incoming, env, context),
+        workflowWebhooks: standaloneWorkflowWebhookRoutes(
+          env,
+          async (incoming) => {
+            const admitted = await oysterRoot.admit(env, incoming);
+            return admitted === null
+              ? null
+              : oysterRoot.hostFor(env, admitted.scope);
+          },
+        ),
+        // The tenant table answers the Worker's own incoming request.
+        tenant: async () => fetchOyster(request, env, context),
+      }).onError(standaloneWorkerErrorHandler),
+    ).fetch(request, env, context);
   },
 } satisfies ExportedHandler<StandaloneEnv>;

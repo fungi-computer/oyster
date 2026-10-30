@@ -270,7 +270,6 @@ try {
     fresh.authority.approvedGrants,
     current.authority.approvedGrants,
   );
-  assert.deepEqual(fresh.approvedAnonymousMethods, []);
   assert.equal(
     (
       await globalThis.fetch(

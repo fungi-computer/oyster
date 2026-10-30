@@ -12,11 +12,7 @@ import {
 } from "../tenancy/index.js";
 import { ownerKey } from "../tenancy/owner-key.js";
 import { hosts } from "../tenancy/resolve.js";
-import {
-  keySessionAuth,
-  ownerOrKeyAuth,
-  type OysterKeySessionResolver,
-} from "../auth.js";
+import { ownerOrKeyAuth } from "../auth.js";
 import type { OysterGitWorkerEnv } from "../workers-git.js";
 import { HTTPException } from "hono/http-exception";
 import {
@@ -140,8 +136,6 @@ export type StandaloneTenancyEnv = Pick<
 > &
   Readonly<{
     TENANTS: DurableObjectNamespace<StandaloneTenants>;
-    /** Optional host-owned named-key browser sessions; Oyster mints none. */
-    OYSTER_KEY_SESSIONS?: OysterKeySessionResolver;
   }>;
 
 /** A live registry-owned owner; the configured label is never its member ID. */
@@ -280,20 +274,11 @@ async function composeTenancy(
           async authenticate(request) {
             if (owner === null) return { kind: "refused", status: 403 };
             const keys = () => env.KEYS.getByName(scope.durableName("keys"));
-            const namedKeyAuth = ownerOrKeyAuth(
+            const auth = ownerOrKeyAuth(
               env.OYSTER_OWNER_KEY,
               owner.actor.memberId,
               keys,
             );
-            const auth =
-              env.OYSTER_KEY_SESSIONS === undefined
-                ? namedKeyAuth
-                : keySessionAuth(
-                    namedKeyAuth,
-                    owner.actor.memberId,
-                    keys,
-                    env.OYSTER_KEY_SESSIONS,
-                  );
             const admission = await auth.authenticate(request);
             // This entry admits only named keys; the owner key has its own entry.
             return admission.kind === "admitted" &&

@@ -25,14 +25,44 @@ The reducer takes host-minted installation/Instance identities and captured
 time. Members may manage installations; only owners approve operations. Upgrades
 intersect existing approvals with the new derived operations. They never add an
 operation. `external` App methods always return `approval_required`. Method
-inputs retain the Hub's 64 KiB bound. Public visitors can invoke read methods;
-their binding grants include only approved required read operations, and direct
-capability routes still require sign-in.
+inputs retain the Hub's 64 KiB bound. Oyster admits no anonymous caller.
 
 S2 invocation grants retain the existing `{binding, operations}` shape,
 validated with Puffball's registry. The host passes admitted grants into its
 maintained invocation frame and rechecks freshness at the effect boundary. This
-module has no host callbacks and imports no Hub, Team, billing or broker code.
+decision core has no host callbacks and imports no Hub, Team, billing or broker
+code.
+
+## Shared Permissions view
+
+Oyster's browser entry mounts `AppPermissionsView` over an `AppPermissionsPort`.
+The port reads the host's current installation, verified declaration/operation
+facts, owner-editability and resource directory. It submits only
+`planGrantChange`'s touched rows with store-generation, authority-version and
+artifact-digest pins. Authentication, the CAS transaction and live resource
+checks remain with the host.
+
+The view reuses the Hub's Caps `Display`/`ScreenCell`/`IconCheckbox` and Sigils,
+driven by `permissionScreen`, `draftOf`, `editPermissions` and `rebaseDraft`.
+The grants HTML mounts this same editor for framed Settings and shell-less
+consent. Tourtois frames that Oyster-owned page; it never imports Oyster's
+implementation package into its published App. A stale save keeps the person's
+edits against fresh facts for review; an unconfirmed write requires a fresh read
+rather than blindly repeating it. Saved resource identities missing from a
+directory remain visible and removable.
+
+`oyster/apps/permissions-port` binds the standalone view to the existing
+owner-direct `/api/installations/:id/grants` routes. The browser entry is
+separate from the pure `oyster/apps` entry so Worker consumers need no DOM UI.
+These browser entries are host implementation, not published-App dependencies.
+
+On a fresh owner-direct installation, the host may attest its configured
+built-in Shell identity. Only then does install pre-grant the verified
+`team.workbenchHost` request as an ordinary persisted approval. The installation
+name or declaration alone cannot opt in. Owner revocation uses the same
+`change-grants` command as every other capability; re-selection and directory
+reads never restore it. The next Shell entry rechecks that grant. This does not
+evict trusted-origin code that was already loaded.
 
 Retention basis: Hub `team-apps.ts` reducer and `apps/agent-call.ts` admission
 at `7384278c69104e930a03e4d584ef08a69da4d601`, plus `app-backend-scopes.ts`'s

@@ -12,16 +12,12 @@ import { AppInstanceError } from "../index.js";
 import type { FrameBindingMethods, FrameBindingProps } from "../cloudflare.js";
 import type { InvocationFrame } from "../invocation.js";
 import type { OysterBindingContext, OysterBindingResult } from "../workers.js";
-import {
-  installOrSelect,
-  verifyRelease,
-  type OysterPrincipal,
-} from "../host.js";
+import { installOrSelect, verifyRelease } from "../host.js";
 import { repositoryWorkflowSourceSchema } from "@fungi.computer/workflows-wire";
 import { installationIdSchema } from "../apps/index.js";
 import { appIdSchema, releaseSchema } from "@fungi.computer/puffball/effect";
 import { gitRepositoryNameSchema } from "@fungi.computer/puffball/git-representation";
-import type { TenantScope } from "../tenant.js";
+import type { TenantPrincipal, TenantScope } from "../tenant.js";
 import type { StandaloneComputerEnv } from "./computer.js";
 
 /** The calling tenant's registry owns its App builds. */
@@ -100,7 +96,7 @@ export const appsFrameMethods = {
 
 /** Only a live owner call reaches registration, build, status or select; a key or a
  * member without the owner role is refused before any registry or host read. */
-function callerOwner(frame: InvocationFrame): OysterPrincipal {
+function callerOwner(frame: InvocationFrame): TenantPrincipal {
   const subject = frame.facts.subject;
   if (
     subject.kind !== "call" ||

@@ -86,11 +86,10 @@ export async function computerHost(
     declaration,
     descriptors: capabilities,
   });
-  return {
-    computerId,
+  const host = {
     bootUi: () => Promise.resolve({ kind: "passed" }),
     capabilities,
-    // A null principal is an anonymous request; the host may admit it as a visitor.
+    // A null principal is an anonymous request, which the host refuses.
     auth: {
       authenticate: async () =>
         principal === null
@@ -132,4 +131,6 @@ export async function computerHost(
       }),
     },
   };
+  if (computerId != null) host.computerId = computerId;
+  return host;
 }

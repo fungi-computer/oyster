@@ -378,6 +378,56 @@ await test("standalone Agent first reply uses real native Shed runCommand", asyn
         });
       },
     );
+    await t.test(
+      "owner archive refuses new Shiitake work and restore reopens it",
+      async () => {
+        const archive = await fetch(
+          `${host.origin}/agents/${agentId}/archive`,
+          {
+            method: "POST",
+            headers,
+          },
+        );
+        assert.equal(archive.status, 200, await archive.text());
+        const visible = await fetch(`${host.origin}/agents`, { headers });
+        assert.equal(
+          (await visible.json()).some((item) => item.agentId === agentId),
+          false,
+        );
+        const hidden = await fetch(`${host.origin}/agents?archived=true`, {
+          headers,
+        });
+        assert.equal(
+          (await hidden.json()).some((item) => item.agentId === agentId),
+          true,
+        );
+        await assert.rejects(
+          client.createSession("archived-first-session"),
+          (error) =>
+            error?.boundary === "contract" && error?.cause === "archived",
+        );
+        assert.ok((await session.read()).terminals.length > 0);
+        await assert.rejects(
+          session.send("New work after archive"),
+          (error) =>
+            error?.boundary === "contract" && error?.cause === "archived",
+        );
+        assert.equal(
+          await client.createSession("first-shed-session"),
+          sessionId,
+          "the already-admitted request is a replay, not new work",
+        );
+        const restore = await fetch(
+          `${host.origin}/agents/${agentId}/unarchive`,
+          {
+            method: "POST",
+            headers,
+          },
+        );
+        assert.equal(restore.status, 200, await restore.text());
+        assert.ok(await client.createSession("restored-new-session"));
+      },
+    );
     console.log(
       JSON.stringify({
         proof: "standalone-agent-first-shed",

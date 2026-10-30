@@ -66,7 +66,7 @@ it("owner installs leave a third-party full-access shell unapproved", async () =
   ).toEqual(["computer.readFile", "computer.writeFile"]);
 });
 
-it("installing at the configured home identity does not grant shell consent", async () => {
+it("an installation identity without host attestation cannot grant itself Shell consent", async () => {
   const shellDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
     ...declaration,
     capabilities: [...declaration.capabilities, "team.workbenchHost"],
@@ -95,6 +95,41 @@ it("installing at the configured home identity does not grant shell consent", as
       (grant) => grant.capability,
     ),
   ).not.toContain("team.workbenchHost");
+});
+
+it("pre-grants the declared Shell only when the host attests its built-in installation", async () => {
+  const shellDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+    ...declaration,
+    capabilities: [...declaration.capabilities, "team.workbenchHost"],
+  });
+  const snapshot = await deriveDeclaredOperations(
+    release,
+    shellDeclaration,
+    descriptors,
+  );
+  const outcome = applyInstallationCommand(
+    null,
+    { kind: "install", release, releasePin: "pinned" },
+    {
+      by: { kind: "member", memberId: "owner" },
+      role: "owner",
+      expectedVersion: null,
+      declaration: shellDeclaration,
+      declaredOperations: snapshot,
+      now: 1000,
+      identity: { installationId: "tourtois", instanceId: null },
+      builtInShell: true,
+    },
+  );
+  if (Result.isFailure(outcome)) throw new Error(outcome.failure.code);
+  expect(outcome.success.next.authority.approvedGrants).toContainEqual({
+    capability: "team.workbenchHost",
+    capabilityApproved: true,
+    operations: snapshot.capabilities.find(
+      (row) => row.capability === "team.workbenchHost",
+    )?.operations,
+    resources: "tenant-scope",
+  });
 });
 
 it("derives approved operations from the real descriptors and registry and pins their digest", async () => {
@@ -383,7 +418,7 @@ it("refuses non-declared operations and stale version writes", async () => {
   expect(
     applyInstallationCommand(
       installation,
-      { kind: "set-visibility", visibility: "public" },
+      { kind: "set-status", status: "disabled" },
       { ...context, expectedVersion: 0 },
     ),
   ).toEqual(Result.fail({ kind: "refused", code: "stale_authority" }));

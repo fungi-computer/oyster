@@ -32,9 +32,11 @@ const { installationWorkerEntrypoint } =
 hooks.deregister();
 
 export async function homePageFixture({
+  appId = "app_desktop",
   declared = true,
   home = "desktop",
   rootData = true,
+  rootDirectory,
   opens = false,
   shellModule = false,
   approved = true,
@@ -110,7 +112,7 @@ export async function homePageFixture({
     installationId: "desktop",
     instanceId: null,
     release: {
-      appId: "app_desktop",
+      appId,
       releaseId: "rel_desktop",
       artifact: {
         artifactRef: artifact.artifactRef,
@@ -122,8 +124,6 @@ export async function homePageFixture({
         },
       },
     },
-    // Public, so an anonymous request reaches the page as the host's visitor.
-    visibility: "public",
     declaration: built.declaration,
   };
   const installed = applyInstallationCommand(
@@ -151,7 +151,7 @@ export async function homePageFixture({
     },
   );
   if (Result.isFailure(installed)) throw new Error(installed.failure.code);
-  let installation = { ...installed.success.next, visibility: "public" };
+  let installation = installed.success.next;
   const declaredOperations = await deriveDeclaredOperations(
     installation.release,
     built.declaration,
@@ -315,7 +315,7 @@ export async function homePageFixture({
               principal: { actor: { kind: "team-key", keyId: "owner" } },
             });
           default:
-            // An anonymous request; the host admits it as a visitor where public.
+            // An anonymous request; the host refuses it.
             return Promise.resolve({ kind: "refused", status: 401 });
         }
       },
@@ -340,7 +340,8 @@ export async function homePageFixture({
   if (uiCache !== undefined) host.uiCache = uiCache;
   if (rootData)
     host.workbench = {
-      directory: () => Promise.resolve({ apps: [], roles: {} }),
+      directory:
+        rootDirectory ?? (() => Promise.resolve({ apps: [], roles: {} })),
       storage: () => {
         throw new Error("No storage operation expected");
       },

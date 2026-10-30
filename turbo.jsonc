@@ -3,7 +3,9 @@
   "extends": ["//"],
   "tasks": {
     // Typed stranger consumers import this package's built public declarations.
-    "lint": { "dependsOn": ["build"] },
+    "lint": {
+      "dependsOn": ["build"],
+    },
     // The standalone host's tests install the starter Apps from their sources
     // and read their built pages, and its worker tests load the celld runtime
     // adapters.
@@ -27,6 +29,18 @@
         "$TURBO_ROOT$/apps/bonsai/tsconfig*.json",
         "$TURBO_ROOT$/apps/bonsai/{web,backend,shared}/**",
         "$TURBO_ROOT$/apps/games/{package.json,tsconfig*.json,index.html,src/**}",
+        "$TURBO_ROOT$/apps/bonsai/scripts/{seed-demo,seed-step}.mjs",
+        "$TURBO_ROOT$/apps/bonsai/demo/koi-pond/**",
+        "$TURBO_ROOT$/apps/tourtois/src/{desktop-api,desktop-layout}.ts",
+        "$TURBO_ROOT$/cutover/schemas/*.schema.json",
+        "$TURBO_ROOT$/tooling/proof-containers/proof-janitor.mjs",
+        "$TURBO_ROOT$/tooling/repository/src/artifacts/{public-closure,stranger}.ts",
+        "$TURBO_ROOT$/tooling/repository/src/core/{command-runner,fs-errors,types}.ts",
+        "$TURBO_ROOT$/tooling/repository/src/cutover/{boundary,manifest,validator}.ts",
+        "!$TURBO_ROOT$/apps/docs/release-claims/**",
+        "!**/*.{md,mdx}",
+        "!$TURBO_ROOT$/**/*.{md,mdx}",
+        "!release-claims/**",
       ],
     },
   },

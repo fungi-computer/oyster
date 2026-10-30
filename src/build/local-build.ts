@@ -887,6 +887,7 @@ function runHtmlCommand(
   cwd: string,
   env: NodeJS.ProcessEnv,
   command = "pnpm",
+  onOutput?: (stream: "stdout" | "stderr", bytes: Uint8Array) => void,
 ) {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
@@ -902,11 +903,13 @@ function runHtmlCommand(
         let stdout = "";
         let stderr = "";
         child.stdout.on("data", (chunk: Buffer) => {
+          onOutput?.("stdout", chunk);
           stdout += chunk.toString();
           if (Buffer.byteLength(stdout) > 1024 * 1024)
             reject(new Error("HTML command output exceeded its bound"));
         });
         child.stderr.on("data", (chunk: Buffer) => {
+          onOutput?.("stderr", chunk);
           stderr += chunk.toString();
           if (Buffer.byteLength(stderr) > 1024 * 1024)
             reject(new Error("HTML command diagnostics exceeded their bound"));
@@ -973,6 +976,8 @@ export type LocalBuildExecutorOptions = Readonly<{
   packageScripts?: "run";
   /** Hears how long the dependency install and the compile each took. */
   onPhase?: (phase: "install" | "build", milliseconds: number) => void;
+  /** Forward raw install/build output to the admitted Computer's job log. */
+  onOutput?: (stream: "stdout" | "stderr", bytes: Uint8Array) => void;
 }>;
 
 function rebuildViteSnapshot(
@@ -981,11 +986,11 @@ function rebuildViteSnapshot(
   options: LocalBuildExecutorOptions,
 ): Effect.Effect<BuildExecutorOutput, unknown> {
   if (recipe.kind === "source-html")
-    return rebuildNpmSnapshot(sourceSnapshotPath, recipe);
+    return rebuildNpmSnapshot(sourceSnapshotPath, recipe, options);
   return Effect.gen(function* () {
     const env = snapshotBuildEnvironment(sourceSnapshotPath);
     const run = (args: readonly string[], cwd = sourceSnapshotPath) =>
-      runHtmlCommand(args, cwd, env);
+      runHtmlCommand(args, cwd, env, "pnpm", options.onOutput);
     if ((yield* run(["--version"])).trim() !== "11.24.0") {
       return yield* Effect.fail(new Error("Publisher requires pnpm 11.24.0"));
     }
@@ -1259,6 +1264,7 @@ function readHtmlBuildOutput(
 function rebuildNpmSnapshot(
   sourceSnapshotPath: string,
   recipe: PinnedRecipe,
+  options: LocalBuildExecutorOptions,
 ): Effect.Effect<BuildExecutorOutput, unknown> {
   return Effect.gen(function* () {
     const env = snapshotBuildEnvironment(sourceSnapshotPath);
@@ -1278,6 +1284,7 @@ function rebuildNpmSnapshot(
         sourceSnapshotPath,
         env,
         "npm",
+        options.onOutput,
       )).trim() !== recipe.toolchain.npm
     )
       return yield* Effect.fail(
@@ -1288,6 +1295,7 @@ function rebuildNpmSnapshot(
       sourceSnapshotPath,
       env,
       "npm",
+      options.onOutput,
     );
     const program = join(sourceSnapshotPath, ".publisher-build.mjs");
     yield* Effect.tryPromise(async () => {
@@ -1309,6 +1317,7 @@ function rebuildNpmSnapshot(
       sourceSnapshotPath,
       env,
       "node",
+      options.onOutput,
     );
     return yield* readHtmlBuildOutput(sourceSnapshotPath, recipe);
   });
@@ -1483,6 +1492,8 @@ export function createLocalBuildExecutor(
                   ["--version"],
                   source.snapshotPath,
                   environment,
+                  "pnpm",
+                  options.onOutput,
                 )).trim() !== "11.24.0"
               )
                 return yield* Effect.fail(
@@ -1495,6 +1506,8 @@ export function createLocalBuildExecutor(
                 ),
                 source.snapshotPath,
                 environment,
+                "pnpm",
+                options.onOutput,
               );
             }
           }

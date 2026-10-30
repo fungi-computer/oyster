@@ -7,5 +7,5 @@
     "outDir": "../../dist"
   },
   "include": ["*.ts", "*.tsx"],
-  "exclude": ["main.tsx", "public-home.tsx", "grant-consent.tsx"]
+  "exclude": ["main.tsx", "grant-consent.tsx"]
 }

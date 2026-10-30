@@ -48,6 +48,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
+import type { ResourceRef } from "./apps/installation.js";
 import type { Release } from "@fungi.computer/puffball";
 import {
   BACKEND_CONSTRUCTION_FACET,
@@ -251,6 +252,8 @@ export type FrameBindingMethod<Result> = Readonly<{
   decodeResult: z.ZodType<Result>["parse"];
   /** Determine the declared operations needed for these decoded arguments. */
   requiredOperations: (args: readonly unknown[]) => readonly string[];
+  /** Select a concrete host resource after decoding, before provider dispatch. */
+  requestedResource?: (args: readonly unknown[]) => ResourceRef;
 }>;
 
 /** Method descriptors for the closed App binding vocabulary. */
@@ -440,7 +443,7 @@ export type AppInstanceLoader<FacetClass> = Readonly<{
   }>;
 }>;
 
-/** End the native App facet when live authority closes early, before the gate admits again. */
+/** Stop the shared native App facet at cohort drain or revocation. */
 export function createCloudflareInvocationGate<Host, FacetClass>(
   ctx: Pick<AppInstanceContext<FacetClass>, "facets">,
   close: (frame: InvocationFrame<Host>) => Promise<void>,

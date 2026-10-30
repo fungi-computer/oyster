@@ -86,6 +86,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
   } as const;
   const agents: OysterAgents = {
     list: () => Promise.resolve([fresh]),
+    setArchived: notInTest,
     fetch: (agentId, request) =>
       agentId === fresh.agentId ? agent.fetch(request) : Promise.resolve(null),
     policyRevision: () => Promise.resolve(null),
@@ -108,7 +109,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
   const liveKey = () => Promise.resolve(null);
   const host = await capabilityFixture({
     capabilities: ["agent.list", "agent.manage", "agent.read", "agent.send"],
-    adapters: agentCapabilities(agents, liveKey),
+    adapters: agentCapabilities(agents),
     agents,
     liveKey,
     authenticate: () => Promise.resolve({ kind: "admitted", principal: owner }),

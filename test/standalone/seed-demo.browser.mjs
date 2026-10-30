@@ -144,29 +144,6 @@ async function callBonsai(method, input, schema, credential) {
   assert.equal(response.status, 200, `${method} must succeed`);
   return schema.parse(await response.json());
 }
-const visibilityResponse = z.object({
-  visibility: z.enum(["public", "private"]),
-});
-/** The owner toggles the whole installation's anonymous visibility. */
-async function setVisibility(visibility) {
-  const response = await globalThis.fetch(
-    `${origin}/api/installations/bonsai/visibility`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ visibility }),
-    },
-  );
-  assert.equal(
-    response.status,
-    200,
-    `Visibility PUT (${visibility}) must succeed`,
-  );
-  return visibilityResponse.parse(await response.json());
-}
 /**
  * A real `git` invocation; an optional Bearer credential, never printed.
  * Always asynchronous: the local Artifacts provider answers `git`'s network
@@ -193,8 +170,7 @@ const gitUrl = (name) => `${origin}/git/bonsai/${encodeURIComponent(name)}.git`;
 // declaration includes "team.workbenchHost" (packages/oyster/src/host.ts:1280)
 // — only Tourtois declares that (apps/tourtois/package.json:120). Bonsai
 // never does, so a direct /apps/bonsai/ visit always renders the single bare
-// #oyster-app iframe (packages/oyster/src/host.ts:1321-1323), for the owner
-// and an anonymous visitor alike. Confirmed empirically: a failure screenshot
+// #oyster-app iframe (packages/oyster/src/host.ts:1321-1323). Confirmed empirically: a failure screenshot
 // from this file showed Bonsai filling the whole viewport with no window
 // chrome around it.
 const bonsaiApp = (viewer) => viewer.frameLocator("#oyster-app");
@@ -225,38 +201,51 @@ async function runProof() {
     await seedDemo({ ...options, phase: "prepare" });
     if (!process.env.BONSAI_SEED_NO_BROWSER)
       browser = await chromium.launch({ headless: true });
-    // The owner makes the installation public, so a signed-out visitor can
-    // reach the front door, then the private surface refuses them again.
-    await setVisibility("public");
+    // Oyster is owner-only: a signed-out browser lands on sign-in, and an
+    // anonymous clone or push is refused before Git is reached.
     if (browser) {
       const anonContext = await browser.newContext();
       try {
         const anonPage = await anonContext.newPage();
         await anonPage.goto(`${origin}/`);
-        await anonPage
-          .getByRole("button", { name: "Bonsai", exact: true })
-          .click();
-        const anonApp = bonsaiApp(anonPage);
-        await anonApp
-          .getByRole("link", { name: "koi-pond", exact: true })
-          .first()
-          .click();
-        await anonApp.getByRole("link", { name: /^Code/ }).first().click();
-        await anonApp
-          .getByText("README.md", { exact: true })
-          .waitFor({ timeout: 5_000 });
-        await anonApp
-          .locator(".bonsai-markdown")
-          .getByRole("heading", { name: "koi-pond", level: 1 })
-          .waitFor();
+        assert.equal(new URL(anonPage.url()).pathname, "/login");
       } finally {
         await anonContext.close();
       }
     }
     const anonWork = `${work}/anon`;
     await mkdir(anonWork, { recursive: true });
-    const publicClone = `${anonWork}/public-clone`;
-    await runGit(["clone", "-q", gitUrl("koi-pond"), publicClone]);
+    let anonCloneRefusal = null;
+    try {
+      await runGit([
+        "clone",
+        "-q",
+        gitUrl("koi-pond"),
+        `${anonWork}/anonymous-clone`,
+      ]);
+    } catch (cause) {
+      anonCloneRefusal = String(cause.stderr ?? cause.message ?? "");
+    }
+    assert.ok(anonCloneRefusal, "An anonymous clone must be refused");
+    // Without a Basic-auth challenge, an unauthenticated git CLI refuses to
+    // ask ("terminal prompts disabled") before it shows the real status; read
+    // that status directly from the ref advertisement git itself requested.
+    for (const service of ["git-upload-pack", "git-receive-pack"])
+      assert.equal(
+        (
+          await globalThis.fetch(
+            `${gitUrl("koi-pond")}/info/refs?service=${service}`,
+          )
+        ).status,
+        401,
+        `An anonymous ${service} must be refused with 401`,
+      );
+    const ownerClone = `${anonWork}/owner-clone`;
+    await runGit(
+      ["clone", "-q", gitUrl("koi-pond"), ownerClone],
+      undefined,
+      key,
+    );
     const base = await callBonsai(
       "repos.get",
       { repo: "koi-pond" },
@@ -268,67 +257,9 @@ async function runProof() {
     )?.hash;
     assert.ok(mainHead, "koi-pond must already carry a pushed base head");
     assert.equal(
-      (await runGit(["rev-parse", "HEAD"], publicClone)).trim(),
+      (await runGit(["rev-parse", "HEAD"], ownerClone)).trim(),
       mainHead,
-      "An anonymous clone's HEAD must equal the real pushed base head",
-    );
-    await writeFile(`${publicClone}/anonymous-probe.txt`, "anonymous\n");
-    await runGit(["add", "."], publicClone);
-    await runGit(
-      [
-        "-c",
-        "user.name=anon",
-        "-c",
-        "user.email=anon@example.com",
-        "commit",
-        "-qm",
-        "Anonymous probe commit",
-      ],
-      publicClone,
-    );
-    let anonPushRefusal = null;
-    try {
-      await runGit(["push", gitUrl("koi-pond"), "main"], publicClone);
-    } catch (cause) {
-      anonPushRefusal = String(cause.stderr ?? cause.message ?? "");
-    }
-    assert.ok(anonPushRefusal, "An anonymous push must be refused");
-    // Without a Basic-auth challenge header, an unauthenticated git CLI
-    // refuses to even ask ("terminal prompts disabled") before it ever shows
-    // the real status; read that status directly from the same ref
-    // advertisement request git itself made.
-    const anonPushStatus = await globalThis.fetch(
-      `${gitUrl("koi-pond")}/info/refs?service=git-receive-pack`,
-    );
-    assert.match(
-      String(anonPushStatus.status),
-      /^4(01|03)$/u,
-      "An anonymous push must be refused with 401 or 403",
-    );
-    await setVisibility("private");
-    let privateCloneRefusal = null;
-    try {
-      await runGit([
-        "clone",
-        "-q",
-        gitUrl("koi-pond"),
-        `${anonWork}/private-clone`,
-      ]);
-    } catch (cause) {
-      privateCloneRefusal = String(cause.stderr ?? cause.message ?? "");
-    }
-    assert.ok(
-      privateCloneRefusal,
-      "A clone of a private installation must be refused",
-    );
-    // Same masking as the anonymous push: read the real status directly.
-    const privateCloneStatus = await globalThis.fetch(
-      `${gitUrl("koi-pond")}/info/refs?service=git-upload-pack`,
-    );
-    assert.equal(
-      privateCloneStatus.status,
-      401,
-      "A clone of a private installation must be refused with 401",
+      "The owner clone's HEAD must equal the real pushed base head",
     );
     const capture = async (phase, changeNumber) => {
       if (!browser) return;

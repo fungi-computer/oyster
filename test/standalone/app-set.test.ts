@@ -41,12 +41,14 @@ import {
   installationSchema,
   type Installation,
 } from "../../src/apps/installation.js";
+import { appPermissionPageSchema } from "../../src/apps/permissions.js";
 import {
   installStandaloneAppSet,
   standaloneAppSet,
   type StarterAppSource,
   type StarterApp,
 } from "../../src/standalone/app-set.js";
+import { approveChosenDashboard } from "../../src/standalone/dashboard-approval.js";
 import {
   installationOperationSchema,
   type InstallationOperation,
@@ -236,7 +238,6 @@ const defaultDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
 const operations = declaredOperationsSchema.parse({
   artifactDigest,
   digest: operationsDigest,
-  anonymousMethods: [],
   capabilities: [
     {
       capability: "computer.readFile",
@@ -368,17 +369,21 @@ function starterRegistry(
     if (!current || installationId === undefined)
       return new Response(null, { status: 404 });
     if (init.method === "GET")
-      return Response.json({
-        storeGeneration: "fixture-generation",
-        installationId,
-        appId: current.appId,
-        appName: installationId,
-        artifactDigest: current.release.artifact.artifactDigest,
-        permissions: {
-          authority: current.authority,
-          declaredOperations: operations,
-        },
-      });
+      return Response.json(
+        appPermissionPageSchema.parse({
+          storeGeneration: "fixture-generation",
+          installationId,
+          appId: current.appId,
+          appName: installationId,
+          artifactDigest: current.release.artifact.artifactDigest,
+          canEdit: true,
+          resources: [],
+          permissions: {
+            authority: current.authority,
+            declaredOperations: operations,
+          },
+        }),
+      );
     const body = Schema.decodeUnknownSync(Schema.fromJsonString(approvalBody))(
       init.body ?? "",
     );
@@ -472,6 +477,65 @@ const install = (
     pollMs: 1,
     waitMs,
   });
+
+it("shares explicit fresh-dashboard consent with proof callers, never replacements or remints", async () => {
+  const registry = starterRegistry();
+  oyster(() => "succeeded", registry);
+  const operation = await installOnOyster({
+    url: "https://oyster.test",
+    key: "key",
+    installationId: "tourtois",
+    release: builtRelease("app_tourtois"),
+    pollMs: 1,
+  });
+  if (operation.state !== "succeeded")
+    throw new Error("The correlated fresh installation must complete");
+  expect(registry.approvals).toEqual([]);
+  const receipt = await approveChosenDashboard(
+    operation,
+    (method, path, body) => {
+      const request: RequestInit = {
+        method,
+        headers: {
+          Authorization: "Bearer key",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      };
+      if (body !== undefined) request.body = JSON.stringify(body);
+      return fetch(new URL(path, "https://oyster.test"), request);
+    },
+  );
+  expect(receipt?.authority.authorityVersion).toBe(
+    operation.reference.authorityVersion + 1,
+  );
+  expect(registry.approvals).toEqual([
+    {
+      storeGeneration: operation.reference.generation,
+      artifactDigest: operation.release.artifact.artifactDigest,
+      authorityVersion: operation.reference.authorityVersion,
+      command: {
+        kind: "change-grants",
+        changes: [
+          {
+            capability: "team.workbenchHost",
+            grant: { operations: [], resources: "tenant-scope" },
+          },
+        ],
+      },
+    },
+  ]);
+  const noConsentReplay = vi.fn(() => {
+    throw new Error(
+      "Replacement/remint must not even request an approval page",
+    );
+  });
+  for (const creation of ["replacement", "reminted"] as const)
+    expect(
+      await approveChosenDashboard({ ...operation, creation }, noConsentReplay),
+    ).toBeUndefined();
+  expect(noConsentReplay).not.toHaveBeenCalled();
+});
 
 it("does not treat an edge 502 as the outcome of a replacement installation", async () => {
   // The original diagnostic RED is preserved at 55419c46. This now observes
@@ -1040,18 +1104,13 @@ it.each([
             });
           if (fault === "malformed-projection") return Response.json({});
           if (fault === "changed-artifact") {
-            const record = registry.records.get("tourtois");
-            if (!record) throw new Error("Missing installed default");
+            const response = await transport(input, init);
+            const projection = appPermissionPageSchema.parse(
+              await response.json(),
+            );
             return Response.json({
-              storeGeneration: "fixture-generation",
-              installationId: "tourtois",
-              appId: record.appId,
-              appName: "tourtois",
+              ...projection,
               artifactDigest: `sha256:${"d".repeat(64)}`,
-              permissions: {
-                authority: record.authority,
-                declaredOperations: operations,
-              },
             });
           }
         } else {
@@ -1080,7 +1139,10 @@ it.each([
       }
       return transport(input, init);
     });
-    expect((await install([])).failed[0]?.installationId).toBe("tourtois");
+    const failure = (await install([])).failed[0];
+    expect(failure?.installationId).toBe("tourtois");
+    if (fault === "changed-artifact")
+      expect(failure?.reason).toBe("tourtois approval snapshot changed");
     expect(registry.records.has("tourtois")).toBe(true);
     const grantReadsAndWrites = () =>
       calls.filter((call) =>

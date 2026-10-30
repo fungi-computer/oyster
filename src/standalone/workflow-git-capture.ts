@@ -2,7 +2,8 @@ import { repositoryRefSchema } from "@fungi.computer/agar/git";
 import type { WorkflowCeilingCapturePorts } from "@fungi.computer/braid/runtime";
 import { approvedBindingGrants } from "../apps/index.js";
 import { createInstallationGitAdmission } from "../git.js";
-import { oysterPrincipalIsOwner, resolveBackend } from "../host.js";
+import { resolveBackend } from "../host.js";
+import { oysterPrincipalIsOwner } from "../authorization.js";
 import { invocationCallerContext } from "../invocation.js";
 import type { StandaloneWorkflowNodeCaptureOptions } from "./workflow-node-capture.js";
 

@@ -167,6 +167,26 @@ type OysterAgents = Readonly<{
       )[];
     }>[]
   >;
+  setArchived: Promise<
+    | Readonly<{
+        archived: boolean;
+        revision: number;
+      }>
+    | Readonly<{
+        error:
+          | "not_found"
+          | "not_granted"
+          | "self"
+          | "not_creator"
+          | "running"
+          | "pending"
+          | "unreadable"
+          | "archived";
+        message?: string;
+        archived?: boolean;
+        revision?: number;
+      }>
+  >;
   create: Promise<
     Readonly<{
       agentId: string;
@@ -301,7 +321,12 @@ type OysterAgents = Readonly<{
 }>;
 ```
 
-Where an Oyster's agents live and run.
+Where an Oyster's agents live and run. Archive is non-destructive: `list()`
+hides archived agents, and `list({ archived: true })` shows only archives.
+Archived agents keep existing reads, replays and settlements, but refuse new
+Sessions, prompts and steers with `contract/archived`. Archive refuses non-idle
+Session work or unsettled delegations; it pauses Almanac and Loop schedules and
+restores only archive-paused schedules on unarchive.
 
 ---
 
@@ -358,20 +383,16 @@ optional bearer.
 ### agentCapabilities()
 
 ```ts
-function agentCapabilities(
-  agents,
-  liveKey,
-): readonly Readonly<object & object>[];
+function agentCapabilities(agents): readonly Readonly<object & object>[];
 ```
 
 Agent adapters admitted against each App's declared capabilities.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                 |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents`  | [`OysterAgents`](#oysteragents)                                                                                                                                                                                                                                      |
-| `liveKey` | (`keyId`) => `Promise`\< \| `Readonly`\<\{ `keyId`: `string`; `owner`: `string`; `grantVersion`: `number`; `grants`: readonly `Readonly`\<\{ `capability`: [`OysterKeyCapability`](keys.md#oysterkeycapability); `targets`: `GrantTargets`; \}\>[]; \}\> \| `null`\> |
+| Parameter | Type                            |
+| --------- | ------------------------------- |
+| `agents`  | [`OysterAgents`](#oysteragents) |
 
 #### Returns
 
@@ -382,7 +403,7 @@ readonly `Readonly`\<`object` & `object`\>[]
 ### agentApprovalRoutes()
 
 ```ts
-function agentApprovalRoutes(agents): Hono<OysterEnv>;
+function agentApprovalRoutes(agents): Routes<OysterEnv>;
 ```
 
 Host-owned direct approval under the admitted owner; never an App capability.
@@ -395,14 +416,14 @@ Host-owned direct approval under the admitted owner; never an App capability.
 
 #### Returns
 
-`Hono`\<[`OysterEnv`](host.md#oysterenv)\>
+[`Routes`](authorization.md#routes)\<[`OysterEnv`](host.md#oysterenv)\>
 
 ---
 
 ### agentMcpServerRoutes()
 
 ```ts
-function agentMcpServerRoutes(agents): Hono<OysterEnv>;
+function agentMcpServerRoutes(agents): Routes<OysterEnv>;
 ```
 
 Host-owned Agent MCP server custody for the owner directly; never an App
@@ -416,4 +437,4 @@ capability. Bearer tokens go in and never come back out.
 
 #### Returns
 
-`Hono`\<[`OysterEnv`](host.md#oysterenv)\>
+[`Routes`](authorization.md#routes)\<[`OysterEnv`](host.md#oysterenv)\>

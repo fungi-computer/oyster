@@ -10,10 +10,10 @@ import {
   oysterGitRoot,
   ownerOrKeyTenancy,
   type OysterGitWorkerEnv,
-} from "@fungi.computer/oyster/workers-git";
-import type { OysterAgents } from "@fungi.computer/oyster/agents";
-import type { OysterTenancy } from "@fungi.computer/oyster/tenant";
-import { installationWorkerEntrypoint } from "@fungi.computer/oyster/workers";
+} from "../../src/workers-git.js";
+import type { OysterAgents } from "../../src/agents.js";
+import type { OysterTenancy } from "../../src/tenant.js";
+import { installationWorkerEntrypoint } from "../../src/workers.js";
 import {
   standaloneComputerCapabilities,
   standaloneWorkspace,
@@ -26,8 +26,8 @@ export {
   WorkspaceProxy,
   WorkspaceServiceProxy,
 } from "@fungi.computer/computer";
-export { OysterRegistry, OysterInstance } from "@fungi.computer/oyster/workers";
-export { OysterKeys } from "@fungi.computer/oyster/workers-git";
+export { OysterRegistry, OysterInstance } from "../../src/workers.js";
+export { OysterKeys } from "../../src/workers-git.js";
 
 type ProofEnv = OysterGitWorkerEnv & StandaloneComputerEnv;
 
@@ -76,6 +76,7 @@ const proofAgents = (): OysterAgents => ({
   policyStatus: () => Promise.resolve(null),
   appToolPolicy: () => Promise.resolve(null),
   create: notInProof,
+  setArchived: notInProof,
   rename: notInProof,
   setAvatar: notInProof,
   readModelChoice: notInProof,

@@ -65,3 +65,35 @@ export async function invokeUi(
     await runtime.close();
   }
 }
+
+/** Read the opaque, lifetime-bound keys actually advertised to this Session. */
+export async function discoverUiCommands(
+  connection: UiConnection,
+  sessionId: string,
+) {
+  const discovery = await invokeUi(connection, sessionId, "discover");
+  return z
+    .object({
+      status: z.literal("available"),
+      commands: z.array(
+        z.object({
+          command: z.object({ namespace: z.string(), id: z.string() }),
+          sourceId: z.string(),
+        }),
+      ),
+    })
+    .parse(discovery).commands;
+}
+
+/** Find a command in the Session's current discovery, not a guessed namespace. */
+export async function discoverUiCommand(
+  connection: UiConnection,
+  sessionId: string,
+  id: string,
+) {
+  const row = (await discoverUiCommands(connection, sessionId)).find(
+    (row) => row.command.id === id,
+  );
+  if (row === undefined) throw new Error(`Command ${id} was not advertised`);
+  return row.command;
+}

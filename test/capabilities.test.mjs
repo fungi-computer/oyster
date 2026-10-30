@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Hono } from "hono";
+import { agent, computer, owner, routes } from "../dist/authorization.js";
 import { capabilityFixture as fixture } from "../dist/testing/index.js";
 import { computerSlots } from "../dist/computer.js";
 
@@ -11,7 +11,7 @@ test("browser transports admit only same-origin upgrades for a current installat
       {
         ...computerSlots.terminal,
         permission: "computer.execute",
-        routes: new Hono().get("/terminal", (context) =>
+        routes: routes().get("/terminal", computer(), (context) =>
           context.json({ admitted: true }),
         ),
       },
@@ -33,7 +33,7 @@ test("browser transports admit only same-origin upgrades for a current installat
   assert.equal((await request({ Origin: "null" })).status, 403);
   assert.equal((await request({ Upgrade: "" })).status, 403);
   assert.equal((await request({}, "missing")).status, 403);
-  assert.equal((await request({ "x-who": "visitor" })).status, 401);
+  assert.equal((await request({ "x-who": "anonymous" })).status, 401);
   await host.removeDeclaration();
   assert.equal((await request()).status, 403);
 });
@@ -45,7 +45,7 @@ test("the terminal contract is admitted by the Release's execute permission", as
       {
         ...computerSlots.terminal,
         permission: "computer.execute",
-        routes: new Hono().get("/terminal", (context) =>
+        routes: routes().get("/terminal", computer(), (context) =>
           context.json({ admitted: true }),
         ),
       },
@@ -74,7 +74,7 @@ test("ANY transport templates admit real HTTP methods and still recheck the Rele
         permission: "agent.send",
         version: 1,
         base: "/agents/",
-        routes: new Hono().all("/:agentId/sessions/*", (context) =>
+        routes: routes().all("/:agentId/sessions/*", agent(), (context) =>
           context.json({
             agent: context.req.param("agentId"),
             method: context.req.method,
@@ -109,8 +109,10 @@ test("nested transport routes recheck the declaring installation", async () => {
         permission: "agent.read",
         version: 1,
         base: "/agent-door/",
-        routes: new Hono().get("/session/sessions", (context) =>
-          context.json({ sessions: [] }),
+        routes: routes().get(
+          "/session/sessions",
+          owner("direct-or-app"),
+          (context) => context.json({ sessions: [] }),
         ),
         methods: {
           open: { kind: "transport", method: "GET", path: "session" },
@@ -131,7 +133,7 @@ test("nested transport routes recheck the declaring installation", async () => {
 });
 
 test("overlapping Agent routes use an admitted capability without widening read authority", async () => {
-  const routes = new Hono().all("/:agentId/sessions", (context) =>
+  const agentRoutes = routes().all("/:agentId/sessions", agent(), (context) =>
     context.json({ ok: true }),
   );
   const host = await fixture({
@@ -142,7 +144,7 @@ test("overlapping Agent routes use an admitted capability without widening read 
         permission: "agent.manage",
         version: 1,
         base: "/agents/",
-        routes,
+        routes: agentRoutes,
         methods: {
           open: { kind: "transport", method: "ANY", path: ":agentId/sessions" },
         },
@@ -152,7 +154,7 @@ test("overlapping Agent routes use an admitted capability without widening read 
         permission: "agent.read",
         version: 1,
         base: "/agents/",
-        routes,
+        routes: agentRoutes,
         methods: {
           open: { kind: "transport", method: "GET", path: ":agentId/sessions" },
         },
@@ -227,19 +229,20 @@ test("a file read declaration cannot authorize writes on the shared files mount"
   );
 });
 
-test("pages offer a capability only when declared and admitted, and never to visitors", async () => {
+test("pages offer a capability only when declared and admitted, and never anonymously", async () => {
   const admitted = await fixture();
   assert.match(
     await (await admitted.page()).text(),
     /"capabilities":\[\{"id":"computer.list","version":1,"base":"\/probe\/","methods":\{"list":\{"kind":"json","method":"POST","path":"list"\}\}\}\]/u,
   );
-  for (const options of [
-    { declared: false },
-    { admitted: false },
-    { visitor: true },
-  ]) {
+  for (const options of [{ declared: false }, { admitted: false }]) {
     const refused = await fixture(options);
     assert.match(await (await refused.page()).text(), /"capabilities":\[\]/u);
-    assert.equal((await refused.request()).status, options.visitor ? 401 : 403);
+    assert.equal((await refused.request()).status, 403);
   }
+  const anonymous = await fixture({
+    authenticate: () => Promise.resolve({ kind: "refused", status: 401 }),
+  });
+  assert.equal((await anonymous.page()).status, 401);
+  assert.equal((await anonymous.request()).status, 401);
 });

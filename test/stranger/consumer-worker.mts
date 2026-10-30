@@ -216,11 +216,10 @@ export const eventApproval: ApprovedGrant = approvedGrantSchema.parse({
   resources: "tenant-scope",
 });
 import {
-  oysterPrincipalIsOwner,
-  oysterPrincipalIsVisitor,
   oysterPrincipalId,
   type OysterAuthResult,
 } from "@fungi.computer/oyster/host";
+import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/authorization";
 const tenantRefusal: OysterAuthResult = {
   kind: "refused",
   status: 429,
@@ -229,7 +228,6 @@ const tenantRefusal: OysterAuthResult = {
 void [
   tenantRefusal,
   oysterPrincipalIsOwner(memberPrincipal),
-  oysterPrincipalIsVisitor(agentPrincipal),
   oysterPrincipalId(keyPrincipal),
 ];
 

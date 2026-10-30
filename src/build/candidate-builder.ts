@@ -65,6 +65,8 @@ export async function buildTeamCandidate(input: {
   outputPath: string;
   /** Trusted Computer-local cache; never part of customer configuration. */
   packageStoreDirectory?: string;
+  /** Host-owned observation of raw subprocess output; never source configuration. */
+  onOutput?: (stream: "stdout" | "stderr", bytes: Uint8Array) => void;
 }): Promise<
   Readonly<{
     digest: string;
@@ -82,6 +84,9 @@ export async function buildTeamCandidate(input: {
   const onPhase = (phase: "install" | "build", milliseconds: number) => {
     phases[phase] += milliseconds;
   };
+  const onOutput = (stream: "stdout" | "stderr", bytes: Uint8Array) => {
+    input.onOutput?.(stream, bytes);
+  };
   const prepareStarted = performance.now();
   const candidate = await Effect.runPromise(
     createCapturedCandidatePreparer(config, {
@@ -91,11 +96,12 @@ export async function buildTeamCandidate(input: {
       ),
       buildExecutor: createLocalBuildExecutor(
         input.packageStoreDirectory === undefined
-          ? { packageScripts: "run", onPhase }
+          ? { packageScripts: "run", onPhase, onOutput }
           : {
               packageScripts: "run",
               packageStoreDirectory: input.packageStoreDirectory,
               onPhase,
+              onOutput,
             },
       ),
     }).prepareCandidate(parseReleaseId("rel_build")),

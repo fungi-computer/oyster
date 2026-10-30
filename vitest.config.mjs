@@ -24,6 +24,7 @@ export default defineConfig({
       "test/app-builds.test.ts",
       "test/release-cache.test.ts",
       "test/edge-verified-cache.test.ts",
+      "test/invocation-timing.test.ts",
       "test/app-build-manifest.test.ts",
       "test/install-release-cli.test.ts",
       "test/artifact-writer.test.ts",

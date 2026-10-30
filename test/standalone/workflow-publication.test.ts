@@ -64,7 +64,7 @@ import {
   type InstanceResult,
   type VerifiedRelease,
   type OysterHost,
-} from "@fungi.computer/oyster/host";
+} from "../../src/host.js";
 import type { AppMethodReply } from "@fungi.computer/agar/backend";
 import { admittedCallerFacts } from "@fungi.computer/oyster/invocation";
 import { instanceIds, type AppInstanceErrorCode } from "@fungi.computer/oyster";
@@ -107,7 +107,7 @@ async function fixture(
 ) {
   const database = new DatabaseSync(":memory:");
   const storage = fromNodeSqlite(database);
-  const generation = createInstallationStoreGeneration(storage.sql);
+  const { generation } = createInstallationStoreGeneration(storage);
   const git = realGit();
   const blobs = new Map<string, Uint8Array>();
   const artifactReads: string[] = [];

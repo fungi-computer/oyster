@@ -6,9 +6,9 @@ import { readFileSync } from "node:fs";
 import { parse } from "jsonc-parser";
 import { test } from "node:test";
 import { URL } from "node:url";
-import { capabilityFixture } from "@fungi.computer/oyster/testing";
+import { capabilityFixture } from "../../src/testing/index.ts";
 import { mediaStorage } from "./workers-media.fixture.mjs";
-import { fileCapabilities } from "@fungi.computer/oyster/files";
+import { fileCapabilities } from "../../src/files.ts";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -72,13 +72,13 @@ async function mediaFixture() {
   });
 }
 
-test("only an admitted App's owner can describe workspace media; visitors and revoked declarations cannot", async () => {
+test("only an admitted App's owner can describe workspace media; anonymous callers and revoked declarations cannot", async () => {
   const fixture = await mediaFixture();
   const describe = (who) =>
     fixture.app.request("https://oyster.test/media/describe", {
       headers: { "X-Oyster-Installation": "capability-fixture", "x-who": who },
     });
-  assert.equal((await describe("visitor")).status, 401);
+  assert.equal((await describe("anonymous")).status, 401);
   const response = await describe("owner");
   assert.equal(response.status, 200);
   const description = await response.json();
@@ -382,9 +382,9 @@ test("media preserves safe provider facts without a private marker in its respon
       kind: "failed",
       failure: {
         message:
-          "Media provider failed; nothing was charged. Start a new request.",
+          "The model couldn't complete this generation. Change the prompt or model and send again.",
         stage: "provider",
-        code: "HOST_FAILURE",
+        code: "MEDIA_PROVIDER_FAILURE",
         retryable: false,
         provider: { category: "InferenceUpstreamError", code: 3031 },
       },
@@ -491,6 +491,36 @@ test("Prints references use the captured Computer through native MEDIA and saved
       },
     },
   };
+  const browser = await capabilityFixture({
+    capabilities: ["media.generation", "computer.list", "computer.readFile"],
+    adapters: [
+      ...workersMedia(env, { computerId: "computer-media", files }),
+      ...fileCapabilities(files),
+    ],
+  });
+  const reads = t.mock.method(files, "read");
+  const foreign = await browser.app.request("/media/generate", {
+    method: "POST",
+    headers: {
+      "X-Oyster-Installation": "capability-fixture",
+      "x-who": "owner",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...generation,
+      requestId: "media_request_333333333333333333333",
+      settings: {
+        ...generation.settings,
+        references: [
+          { computerId: "computer-other", path: "/canon/style.png" },
+        ],
+      },
+    }),
+  });
+  assert.equal((await foreign.json()).kind, "failed");
+  assert.equal(reads.mock.callCount(), 0);
+  assert.equal(dispatches, 0);
+
   const instanceId = instanceIds.instance.generate();
   const caller = {
     computerId: "computer-media",
@@ -559,6 +589,20 @@ test("Prints references use the captured Computer through native MEDIA and saved
         references: [{ path: "/canon/style.png" }],
       },
     };
+    const { models } = await printsBackend.call(
+      "listModels",
+      {},
+      context,
+      caller,
+    );
+    assert.ok(Array.isArray(models));
+    assert.ok(models.length > 0);
+    for (const model of models) {
+      assert.equal(model.priceEstimate.kind, "estimate");
+      assert.equal(model.priceEstimate.basis, "provider-cost");
+      assert.equal(model.priceEstimate.settings.model, model.id);
+      assert.ok(model.priceEstimate.costMilliunits >= 0);
+    }
     const output = await printsBackend.call(
       "generateImage",
       input,
@@ -566,6 +610,7 @@ test("Prints references use the captured Computer through native MEDIA and saved
       caller,
     );
     assert.equal(output.format, "png", JSON.stringify(output));
+    assert.match(output.receipt, /charge \$/u);
     assert.equal(output.destination.computerId, "computer-media");
     assert.ok(output.destination.path.startsWith("/workspace/prints/"));
     const saved = await files.read(output.destination.path);

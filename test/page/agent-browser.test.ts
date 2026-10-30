@@ -15,6 +15,8 @@ import { Knapsack, type UiConnection } from "@fungi.computer/knapsack";
 import { z } from "zod";
 import { mountOysterPage, type OysterAppConfig } from "../../src/page/mount.js";
 import {
+  discoverUiCommand,
+  discoverUiCommands,
   fetchUiResponse,
   invokeUi,
   useNativeFetchRequest,
@@ -216,23 +218,26 @@ it.each([
         requests.filter((request) => request.method === "GET"),
       ).toHaveLength(1);
     });
-    const firstDiscovery = await invokeUi(ui, "session_stage", "discover");
-    expect(firstDiscovery).toMatchObject({
-      status: "available",
-      commands: [{ command: { namespace: "stage", id: "set-scene" } }],
-    });
-    expect(await invokeUi(ui, "session_stage", "execute")).toEqual({
+    const firstDiscovery = await discoverUiCommands(ui, "session_stage");
+    expect(firstDiscovery).toMatchObject([{ command: { id: "set-scene" } }]);
+    const firstKey = await discoverUiCommand(ui, "session_stage", "set-scene");
+    expect(await invokeUi(ui, "session_stage", "execute", firstKey)).toEqual({
       status: "handled",
       result: "scene updated",
     });
     expect(handler).toHaveBeenCalledOnce();
     remove();
     await app.commands.register(replacement, () => "scene replaced");
-    expect(await invokeUi(ui, "session_stage", "discover")).toMatchObject({
-      status: "available",
-      commands: [{ command: { namespace: "stage", id: "replace-scene" } }],
-    });
-    expect(await invokeUi(ui, "session_stage", "execute")).toEqual({
+    const replacementDiscovery = await discoverUiCommands(ui, "session_stage");
+    expect(replacementDiscovery).toMatchObject([
+      { command: { id: "replace-scene" } },
+    ]);
+    const replacementKey = await discoverUiCommand(
+      ui,
+      "session_stage",
+      "replace-scene",
+    );
+    expect(await invokeUi(ui, "session_stage", "execute", firstKey)).toEqual({
       status: "missing",
     });
     await app.ui.reportAgentSessionSelection({
@@ -250,10 +255,7 @@ it.each([
       reason: "browser_not_connected",
     });
     expect(
-      await invokeUi(ui, "session_second", "execute", {
-        namespace: "stage",
-        id: "replace-scene",
-      }),
+      await invokeUi(ui, "session_second", "execute", replacementKey),
     ).toEqual({
       status: "handled",
       result: "scene replaced",
@@ -276,7 +278,7 @@ it.each([
     });
     expect(await invokeUi(ui, "session_stage", "discover")).toMatchObject({
       status: "available",
-      commands: [{ command: { namespace: "stage", id: "replace-scene" } }],
+      commands: [{ command: replacementKey }],
     });
     if (closing === "pagehide") parent.dispatchEvent(new Event("pagehide"));
     else await host.disconnect();

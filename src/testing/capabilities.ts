@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { computer, routes as routeTable } from "../authorization.js";
 import * as Schema from "effect/Schema";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { parseArtifactRef, parseSha256Digest } from "@fungi.computer/puffball";
@@ -35,8 +35,6 @@ export type CapabilityFixtureOptions = Readonly<{
   fileSource?: FileSource;
   /** `false` clears the owner's approval after install. */
   admitted?: boolean;
-  /** Serve a public installation to an anonymous visitor. */
-  visitor?: boolean;
   authenticate?: (request: Request) => Promise<OysterAuthResult>;
   agents?: OysterAgents;
   liveKey?: (keyId: string) => Promise<LiveOysterKey | null>;
@@ -86,8 +84,10 @@ export async function capabilityFixture(
       },
     });
   }
-  const routes = new Hono<CapabilityEnv>().post("/list", (context) =>
-    context.json({ entries: [] }),
+  const routes = routeTable<CapabilityEnv>().post(
+    "/list",
+    computer(),
+    (context) => context.json({ entries: [] }),
   );
   const capabilities: readonly OysterCapability[] =
     options.adapters ??
@@ -135,8 +135,6 @@ export async function capabilityFixture(
         approval: null,
       },
     };
-  // An anonymous reader reaches only a public App, as the host's visitor.
-  if (options.visitor) installation = { ...installation, visibility: "public" };
   const readOnly = () =>
     Promise.reject(new Error("Fixture installations are read-only"));
   let base: OysterHost = {
@@ -148,7 +146,7 @@ export async function capabilityFixture(
         options.authenticate ??
         ((request) =>
           Promise.resolve(
-            options.visitor || request.headers.get("x-who") === "visitor"
+            request.headers.get("x-who") === "anonymous"
               ? { kind: "refused", status: 401 }
               : {
                   kind: "admitted",

@@ -9,12 +9,7 @@ import { publishSource, type PackOptions } from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
-import {
-  grantCommandSchema,
-  installationSchema,
-  type Installation,
-} from "../apps/installation.js";
-import { appPermissionPageSchema } from "../apps/permissions.js";
+import { approveChosenDashboard } from "./dashboard-approval.js";
 import {
   installOnOyster,
   InstallationObservationError,
@@ -262,78 +257,6 @@ export async function installStandaloneAppSet(
           };
     if (signal !== undefined) init.signal = signal;
     return fetch(new URL(path, options.url), init);
-  };
-  const approveChosenDashboard = async (
-    installed: Installation,
-    generation: string,
-  ) => {
-    const name = installed.installationId;
-    const path = `/api/installations/${encodeURIComponent(name)}/grants`;
-    const projectionResponse = await owner("GET", path);
-    if (!projectionResponse.ok)
-      throw new Error(
-        `${name} approval read failed (${String(projectionResponse.status)})`,
-      );
-    const projection = appPermissionPageSchema.parse(
-      await projectionResponse.json(),
-    );
-    const { permissions } = projection;
-    const digest = installed.release.artifact.artifactDigest;
-    if (
-      projection.storeGeneration !== generation ||
-      projection.installationId !== name ||
-      projection.artifactDigest !== digest ||
-      permissions.declaredOperations.artifactDigest !== digest ||
-      permissions.authority.authorityVersion !==
-        installed.authority.authorityVersion ||
-      permissions.authority.declaredOperationsDigest !==
-        installed.authority.declaredOperationsDigest ||
-      permissions.declaredOperations.digest !==
-        installed.authority.declaredOperationsDigest
-    )
-      throw new Error(`${name} approval snapshot changed`);
-    const shell = permissions.declaredOperations.capabilities.find(
-      (row) => row.capability === "team.workbenchHost",
-    );
-    if (shell === undefined) return;
-    const command = grantCommandSchema.parse({
-      kind: "change-grants",
-      changes: [
-        {
-          capability: shell.capability,
-          grant: { operations: shell.operations, resources: "tenant-scope" },
-        },
-      ],
-    });
-    const saved = await owner(
-      "PUT",
-      path,
-      Schema.decodeUnknownSync(Schema.Json)({
-        storeGeneration: projection.storeGeneration,
-        authorityVersion: installed.authority.authorityVersion,
-        artifactDigest: digest,
-        command,
-      }),
-    );
-    if (!saved.ok)
-      throw new Error(`${name} approval failed (${String(saved.status)})`);
-    const receipt = installationSchema.parse(await saved.json());
-    if (
-      receipt.installationId !== name ||
-      receipt.instanceId !== installed.instanceId ||
-      receipt.release.artifact.artifactDigest !== digest ||
-      receipt.authority.authorityVersion !==
-        installed.authority.authorityVersion + 1 ||
-      !receipt.authority.approvedGrants.some(
-        (grant) =>
-          grant.capability === "team.workbenchHost" &&
-          grant.resources === "tenant-scope" &&
-          shell.operations.every((operation) =>
-            grant.operations.includes(operation),
-          ),
-      )
-    )
-      throw new Error(`${name} approval incomplete`);
   };
   const idle =
     options.idle ??
@@ -601,10 +524,7 @@ export async function installStandaloneAppSet(
           if (record.status !== "enabled")
             throw new Error(`${name} fresh installation is not enabled`);
           if (next.app.dashboard === true)
-            await approveChosenDashboard(
-              record,
-              operation.reference.generation,
-            );
+            await approveChosenDashboard(operation, owner);
         }
         options.report(
           `${operation.creation === "replacement" ? "Replaced" : "Installed"} ${name} from its build ${build.jobId}`,

@@ -98,32 +98,6 @@ A page descriptor carries routing, never the authority to use a capability.
 
 ---
 
-### OysterVisitor
-
-```ts
-type OysterVisitor = Readonly<{
-  actor: Readonly<{
-    kind: "visitor";
-  }>;
-}>;
-```
-
-The anonymous reader of a public installation. The host admits it only when
-authentication refuses; it reaches that App's page and its `read` methods.
-
----
-
-### OysterPrincipal
-
-```ts
-type OysterPrincipal = TenantPrincipal | OysterVisitor;
-```
-
-Who an admitted request acts for: an authenticated tenant principal or the
-visitor.
-
----
-
 ### OysterAuthResult
 
 ```ts
@@ -181,6 +155,7 @@ type InstallationStore = InstallationReader &
   Readonly<{
     operations?: InstallationOperations;
     generation: () => Promise<string>;
+    resetAt?: () => Promise<number | null>;
     compareAndPut: (
       installation,
       expectedAuthorityVersion,
@@ -372,37 +347,21 @@ A capability adapter whose routes require live installation admission.
 
 ---
 
-### OysterVariables
-
-```ts
-type OysterVariables = TimingVariables & object;
-```
-
-What the host stamps once per request; inner routes read it with `c.get`.
-
-#### Type Declaration
-
-| Name            | Type                                   |
-| --------------- | -------------------------------------- |
-| `principal`     | [`OysterPrincipal`](#oysterprincipal)  |
-| `installation?` | [`Installation`](apps.md#installation) |
-
----
-
 ### OysterEnv
 
 ```ts
 type OysterEnv = object;
 ```
 
-Owner routes run after the host's owner guard and read `c.get("principal")`.
+The host table's Hono env; every route receives its principal from its declared
+requirement.
 
 #### Properties
 
 ##### Variables
 
 ```ts
-Variables: OysterVariables;
+Variables: TimingVariables;
 ```
 
 ---
@@ -463,6 +422,7 @@ type OysterHost = Readonly<{
    }
     | null>;
   computerControl?: (principal) => ComputerControlPort | null;
+  permissionResources?: (principal) => Promise<readonly ResourceOption[]>;
   auth: OysterAuth;
   backgroundOriginKey?: () => Promise<CryptoKey>;
   artifacts: ArtifactStore;
@@ -489,7 +449,7 @@ type OysterHost = Readonly<{
   guestLimits?: Partial<GuestLimits>;
   mcp?: OysterMcp;
   git?: OysterGitHost;
-  ownerRoutes?: Hono<OysterEnv>;
+  ownerRoutes?: Routes<OysterEnv>;
   capabilities?: readonly OysterCapability[];
   workbench?: Readonly<{
      directory: Promise<Readonly<{
@@ -508,7 +468,6 @@ type OysterHost = Readonly<{
   pageScript?: string;
   pageAssets?: () => Promise<{
      pageScript: string;
-     publicHomeScript: string;
      fontStyles: string;
      loginFontStyles: string;
      shellStyles: string;
@@ -519,6 +478,19 @@ type OysterHost = Readonly<{
 ```
 
 Everything a host supplies to run Oyster.
+
+---
+
+### OysterRouteTable
+
+```ts
+type OysterRouteTable = Readonly<{
+  declarations: () => readonly RouteDeclaration[];
+  serve: () => ServedTable<OysterEnv>;
+}>;
+```
+
+One host's declared routes and the one way to serve them.
 
 ---
 
@@ -605,13 +577,13 @@ type InstallationOperations = Readonly<{
               | "request_failed"
               | "page_error"
               | "candidate_not_mounted";
-           errorName?:   | "TypeError"
+           errorName?:   | "Error"
+              | "TypeError"
               | "RangeError"
               | "SyntaxError"
               | "AbortError"
               | "TimeoutError"
-              | "Other"
-              | "Error";
+              | "Other";
            finalUrlPath: string;
            consoleErrors: string[];
            pageErrors: string[];
@@ -660,17 +632,6 @@ type InstallationOperations = Readonly<{
               | null;
         };
         status: "enabled" | "disabled" | "deleted";
-        visibility: "private" | "public";
-        approvedAnonymousMethods: readonly Readonly<{
-           name: string;
-           digest: Sha256Digest;
-        }>[];
-        anonymousApproval:   | Readonly<{
-           by: ... | ... | ...;
-           at: number;
-           authorityVersion: number;
-         }>
-           | null;
       }
         | null;
    }
@@ -772,13 +733,13 @@ type InstallationOperations = Readonly<{
               | "request_failed"
               | "page_error"
               | "candidate_not_mounted";
-           errorName?:   | "TypeError"
+           errorName?:   | "Error"
+              | "TypeError"
               | "RangeError"
               | "SyntaxError"
               | "AbortError"
               | "TimeoutError"
-              | "Other"
-              | "Error";
+              | "Other";
            finalUrlPath: string;
            consoleErrors: string[];
            pageErrors: string[];
@@ -827,17 +788,6 @@ type InstallationOperations = Readonly<{
               | null;
         };
         status: "enabled" | "disabled" | "deleted";
-        visibility: "private" | "public";
-        approvedAnonymousMethods: readonly Readonly<{
-           name: string;
-           digest: Sha256Digest;
-        }>[];
-        anonymousApproval:   | Readonly<{
-           by: ... | ... | ...;
-           at: number;
-           authorityVersion: number;
-         }>
-           | null;
       }
         | null;
    }
@@ -932,17 +882,6 @@ type InstallationOperations = Readonly<{
               | null;
         };
         status: "enabled" | "disabled" | "deleted";
-        visibility: "private" | "public";
-        approvedAnonymousMethods: readonly Readonly<{
-           name: string;
-           digest: Sha256Digest;
-        }>[];
-        anonymousApproval:   | Readonly<{
-           by: ... | ... | ...;
-           at: number;
-           authorityVersion: number;
-         }>
-           | null;
       }
         | null;
      acceptedAt: number;
@@ -969,17 +908,6 @@ type InstallationOperations = Readonly<{
               approval: Readonly<...> | null;
            };
            status: "enabled" | "disabled" | "deleted";
-           visibility: "private" | "public";
-           approvedAnonymousMethods: readonly Readonly<{
-              name: ...;
-              digest: ...;
-           }>[];
-           anonymousApproval:   | Readonly<{
-              by: ...;
-              at: ...;
-              authorityVersion: ...;
-            }>
-              | null;
         };
         hasBackend: boolean;
         prepared: boolean;
@@ -1134,28 +1062,6 @@ type InstallationOperations = Readonly<{
               | null;
         };
         status: "enabled" | "disabled" | "deleted";
-        visibility: "private" | "public";
-        approvedAnonymousMethods: readonly Readonly<{
-           name: string;
-           digest: Sha256Digest;
-        }>[];
-        anonymousApproval:   | Readonly<{
-           by:   | {
-              kind: ...;
-              memberId: ...;
-            }
-              | {
-              kind: ...;
-              agentId: ...;
-            }
-              | {
-              kind: ...;
-              keyId: ...;
-            };
-           at: number;
-           authorityVersion: number;
-         }>
-           | null;
       }
         | null;
      acceptedAt: number;
@@ -1192,17 +1098,6 @@ type InstallationOperations = Readonly<{
                  | null;
            };
            status: "enabled" | "disabled" | "deleted";
-           visibility: "private" | "public";
-           approvedAnonymousMethods: readonly Readonly<{
-              name: string;
-              digest: Sha256Digest;
-           }>[];
-           anonymousApproval:   | Readonly<{
-              by: ... | ... | ...;
-              at: number;
-              authorityVersion: number;
-            }>
-              | null;
         };
         hasBackend: boolean;
         prepared: boolean;
@@ -1430,53 +1325,6 @@ Default bounds for an App's UI asset build.
 
 ## Functions
 
-### oysterPrincipalIsVisitor()
-
-```ts
-function oysterPrincipalIsVisitor(
-  principal,
-): principal is Readonly<{ actor: Readonly<{ kind: "visitor" }> }>;
-```
-
-Narrow an admitted principal to the anonymous public reader.
-
-#### Parameters
-
-| Parameter   | Type                                  |
-| ----------- | ------------------------------------- |
-| `principal` | [`OysterPrincipal`](#oysterprincipal) |
-
-#### Returns
-
-`principal is Readonly<{ actor: Readonly<{ kind: "visitor" }> }>`
-
----
-
-### oysterPrincipalIsOwner()
-
-```ts
-function oysterPrincipalIsOwner(
-  principal,
-): principal is Readonly<{
-  actor: { kind: "member"; memberId: string };
-  role: "owner";
-}>;
-```
-
-True only for a member admitted with the owner role.
-
-#### Parameters
-
-| Parameter   | Type                                  |
-| ----------- | ------------------------------------- |
-| `principal` | [`OysterPrincipal`](#oysterprincipal) |
-
-#### Returns
-
-`principal is Readonly<{ actor: { kind: "member"; memberId: string }; role: "owner" }>`
-
----
-
 ### oysterPrincipalId()
 
 ```ts
@@ -1521,9 +1369,9 @@ Completed selection, without re-deriving or executing outside Watchdog.
 | `host`           | [`OysterHost`](#oysterhost)                                       |
 | `installationId` | `string`                                                          |
 | `release`        | `Release`                                                         |
-| `principal`      | [`OysterPrincipal`](#oysterprincipal)                             |
+| `principal`      | [`TenantPrincipal`](tenant.md#tenantprincipal)                    |
 | `intent`         | `"install-or-select"` \| `"install-or-remint"` \| `"create-only"` |
-| `origin`         | `"workflow"` \| `"owner-direct"` \| `"app"`                       |
+| `origin`         | `"workflow"` \| `"app"` \| `"owner-direct"`                       |
 | `requestId`      | `string`                                                          |
 | `signal`         | `AbortSignal`                                                     |
 
@@ -1536,13 +1384,13 @@ Completed selection, without re-deriving or executing outside Watchdog.
 ### createOyster()
 
 ```ts
-function createOyster(host): Hono<OysterEnv>;
+function createOyster(host): ServedTable<OysterEnv>;
 ```
 
-Create the Oyster App server: a Hono app that installs App Releases, serves
-their UI, forwards their backend requests and methods to their Instances, and
-mounts the host's MCP endpoint. The host's adapters decide where state lives and
-who may sign in.
+Create the Oyster App server: a served route table that installs App Releases,
+serves their UI, forwards their backend requests and methods to their Instances,
+and mounts the host's MCP endpoint. The host's adapters decide where state lives
+and who may sign in.
 
 #### Parameters
 
@@ -1552,7 +1400,28 @@ who may sign in.
 
 #### Returns
 
-`Hono`\<[`OysterEnv`](#oysterenv)\>
+[`ServedTable`](authorization.md#servedtable)\<[`OysterEnv`](#oysterenv)\>
+
+---
+
+### oysterRouteTable()
+
+```ts
+function oysterRouteTable(host): OysterRouteTable;
+```
+
+The Oyster host's declared route table: every route names its requirement
+(`authorization.ts`), so an undeclared route is never served.
+
+#### Parameters
+
+| Parameter | Type                        |
+| --------- | --------------------------- |
+| `host`    | [`OysterHost`](#oysterhost) |
+
+#### Returns
+
+[`OysterRouteTable`](#oysterroutetable)
 
 ---
 
@@ -1799,13 +1668,16 @@ function verifyRelease(
   api:   | Readonly<{
      methods: Readonly<Record<string, Readonly<{
         description: string;
-        input: object;
-        output: object;
+        input: {
+         [key: ...]: ...;
+        };
+        output: {
+         [key: ...]: ...;
+        };
         effect: ... | ... | ...;
         requires: readonly ...;
         pending?: ... | ...;
         hidden?: ... | ...;
-        anonymous?: ... | ...;
         present?: ... | ...;
      }>>>;
      toolFamily?: Readonly<{
@@ -1999,10 +1871,10 @@ readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
 `"application/vnd.fungi.app-backend+json"`; `artifactRef`: `ArtifactRef`;
 `digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \}; \};
 `api`: \| `Readonly`\<\{ `methods`: `Readonly`\<`Record`\<`string`,
-`Readonly`\<\{ `description`: `string`; `input`: `object`; `output`: `object`;
-`effect`: ... \| ... \| ...; `requires`: readonly ...; `pending?`: ... \| ...;
-`hidden?`: ... \| ...; `anonymous?`: ... \| ...; `present?`: ... \| ...;
-\}\>\>\>; `toolFamily?`: `Readonly`\<\{ `name`: `string`; `list`: `string`;
+`Readonly`\<\{ `description`: `string`; `input`: \{ \[`key`: ...\]: ...; \};
+`output`: \{ \[`key`: ...\]: ...; \}; `effect`: ... \| ... \| ...; `requires`:
+readonly ...; `pending?`: ... \| ...; `hidden?`: ... \| ...; `present?`: ... \|
+...; \}\>\>\>; `toolFamily?`: `Readonly`\<\{ `name`: `string`; `list`: `string`;
 `call`: `string`; \}\>; `events?`: `Readonly`\<`Record`\<`string`,
 `Readonly`\<\{ `description`: ...; `payload`: ...; \}\>\>\>; \}\> \| `null`;
 `declaration`: \| `Readonly`\<\{ `api?`: `Readonly`\<\{ `methods`:

@@ -107,7 +107,7 @@ type InvocationGatePorts<Host> = Readonly<{
 }>;
 ```
 
-The host's native guest-abort and authority-close hooks.
+The host's native guest-abort and frame-authority-close hooks.
 
 #### Type Parameters
 
@@ -412,12 +412,13 @@ only its decision.
 function createInvocationGate<Host>(ports): InvocationGate<Host>;
 ```
 
-Admit frames against one guest. Verified foreground reads share it, up to eight
-at once; writes, raw backend requests, Gills and replay run alone. Every guest
-binding packet names its frame, so a finished frame's leftover timers cannot
-borrow a later frame's authority and a normal finish keeps the guest warm.
-Closing authority early (revocation, expiry, a write preempting replay) aborts
-the guest and so every frame sharing it; replay only yields to a verified write.
+One Instance shares up to eight verified foreground reads; all other work runs
+alone in first-come order. Every finish fences its frame; the last live frame
+stops the native guest before closing authority and releasing admission. Binding
+checks alone cannot stop a timer mutating the facet's own SQLite. Revocation,
+expiry and a verified write preempting replay stop every live frame. Arrivals
+wait for a stopping guest. Once the opening deadline passes, new reads queue
+exclusively so the current cohort cannot be prolonged forever.
 
 #### Type Parameters
 
@@ -444,16 +445,15 @@ function invocationCallerContext(principal, computerId): object;
 ```
 
 Project an admitted principal into App attribution; only the host chooses the
-fixed Computer context. The App caller grammar has no visitor actor, so the
-anonymous public reader is attributed as the reserved `visitor` key without a
-Computer. Host admission reads the principal, never this projection.
+fixed Computer context. Host admission reads the principal, never this
+projection.
 
 #### Parameters
 
-| Parameter    | Type                                         |
-| ------------ | -------------------------------------------- |
-| `principal`  | [`OysterPrincipal`](host.md#oysterprincipal) |
-| `computerId` | `string` \| `null`                           |
+| Parameter    | Type                                           |
+| ------------ | ---------------------------------------------- |
+| `principal`  | [`TenantPrincipal`](tenant.md#tenantprincipal) |
+| `computerId` | `string` \| `null`                             |
 
 #### Returns
 

@@ -18,6 +18,7 @@ export const agentWorkflowOperationSchema = z.enum([
   "catalog",
   "schedules",
   "armSchedule",
+  "pauseSchedule",
   "disarmSchedule",
   "eventTriggers",
   "armEventTrigger",

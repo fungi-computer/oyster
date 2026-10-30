@@ -13,7 +13,7 @@ import standalone, {
   StandaloneAgent as NativeAgent,
   type StandaloneEnv,
 } from "../../src/standalone/worker.js";
-import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/host";
+import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/authorization";
 
 // The standalone root's own Durable Object classes, as its Wrangler config
 // binds them (the root's workspace reads StandaloneRegistry.selectedComputer).

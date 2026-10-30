@@ -4,7 +4,12 @@ import {
 } from "@fungi.computer/braid/runtime";
 import type { AppMethodCallContext } from "@fungi.computer/puffball/app-method-runtime";
 import type { workflowAgentAuthority } from "../workflow-agent-authority.js";
-import { scheduleDisarmInputSchema } from "@fungi.computer/workflows-wire";
+import {
+  scheduleDisarmInputSchema,
+  schedulePauseInputSchema,
+  scheduleListInputSchema,
+  type ScheduleListInput,
+} from "@fungi.computer/workflows-wire";
 import {
   triggerArmTargetSchema,
   type TriggerArmTarget,
@@ -20,7 +25,8 @@ export type TriggerAdmission = Readonly<{
   installationAuthority: WorkflowInstallationAuthority;
 }>;
 
-export type ScheduleOperation = "armSchedule" | "disarmSchedule" | "schedules";
+export type ScheduleOperation =
+  "armSchedule" | "pauseSchedule" | "disarmSchedule" | "schedules";
 
 /** Host controls and alarm delivery compose the shared schedule owner unchanged. */
 export function createStandaloneWorkflowSchedules<Frame>(
@@ -63,15 +69,23 @@ export function createStandaloneWorkflowSchedules<Frame>(
       if (authority === null) return { error: "not_granted" };
       return schedules.disarm(authority.principal, libraryId, scheduleId);
     },
-    async list(frame: Frame) {
+    async pause(frame: Frame, raw: { scheduleId: string }) {
+      const { scheduleId } = schedulePauseInputSchema.parse(raw);
+      const { libraryId, authority } = await options.admitInvocation(
+        frame,
+        "pauseSchedule",
+      );
+      if (authority === null) return { error: "not_granted" };
+      return schedules.pause(authority.principal, libraryId, scheduleId);
+    },
+    async list(frame: Frame, raw: ScheduleListInput) {
+      const input = scheduleListInputSchema.parse(raw);
       const { libraryId, authority } = await options.admitInvocation(
         frame,
         "schedules",
       );
       if (authority === null) return { error: "not_granted" };
-      return {
-        schedules: await schedules.list(authority.principal, libraryId),
-      };
+      return schedules.list(authority.principal, libraryId, input);
     },
   };
 }

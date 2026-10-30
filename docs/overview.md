@@ -30,6 +30,13 @@
 | `@fungi.computer/oyster/git`            | `EventSink`, `createGitDoor`, `signStandardWebhook`                                                | The EVENTS binding contract, the git smart-HTTP door and Standard Webhooks signing. `GitBinding` comes from `@fungi.computer/agar/git`. |
 | `@fungi.computer/oyster/workers-git`    | `oysterGitRoot`, `createOysterGitWorker`, `ownerOrKeyTenancy`, `oysterWorkerGit`, `gitAdminRoutes` | One Git root whose `hostFor` serves HTTP, MCP and Instances, or `host.git` and key/webhook routes for your own host.                    |
 
+Standalone Oyster owners can `POST /agents/:agentId/archive` and
+`POST /agents/:agentId/unarchive`. `GET /agents` lists active Agents;
+`GET /agents?archived=true` lists only archived Agents. Archive preserves
+existing Sessions and reads but refuses new Shiitake work with
+`contract/archived`. It pauses Almanac and Loop schedules; restore resumes only
+schedules paused by archive. The generated Agent API is in `docs/api/agents.md`.
+
 The host owns admission: it decides who may apply owner state and which
 selection a request carries. Oyster owns what happens to one Instance once the
 host has that authority: owner-state replay and conflict rules, Release

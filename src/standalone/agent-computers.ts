@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import type { TenantPrincipal } from "../tenant.js";
 import { createComputerFilesPort } from "@fungi.computer/computer";
 import {
   checkComputerGrant,
@@ -23,11 +23,8 @@ import type {
   AgentComputerConnection,
   AgentComputerPorts,
 } from "../agent-computer-source.js";
-import {
-  oysterPrincipalIsOwner,
-  type OysterEnv,
-  type OysterPrincipal,
-} from "../host.js";
+import { type OysterEnv } from "../host.js";
+import { owner, routes as routeTable, type Routes } from "../authorization.js";
 import type { StandaloneAgentComputerRpc } from "./computer.js";
 
 /** The directory supplies live authority; this adapter never invents a grant. */
@@ -123,15 +120,15 @@ export type StandaloneAgentComputerReply =
 /** Principal and persisted attachment transitions belong to the directory owner. */
 export type StandaloneAgentComputerControl = Readonly<{
   attach: (
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     command: ComputerAttachmentInput,
   ) => Promise<StandaloneAgentComputerReply>;
   detach: (
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     command: ComputerAttachmentInput,
   ) => Promise<StandaloneAgentComputerReply>;
   read: (
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     agentId: string,
   ) => Promise<StandaloneAgentComputerReply>;
 }>;
@@ -139,53 +136,55 @@ export type StandaloneAgentComputerControl = Readonly<{
 /** Owner HTTP transport over the retained attachment command grammar. */
 export function standaloneAgentComputerRoutes(
   control: StandaloneAgentComputerControl,
-): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
-  routes.post("/api/agents/:agentId/computers/:operation", async (context) => {
-    context.header("Cache-Control", "no-store");
-    const principal = context.get("principal");
-    if (!oysterPrincipalIsOwner(principal))
-      return context.json({ error: "not_granted" }, 403);
-    const operation = context.req.param("operation");
-    if (!["attach", "detach", "read"].includes(operation))
-      return context.json({ error: "not_found" }, 404);
-    let body: unknown;
-    try {
-      body = await context.req.json();
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-      return context.json({ error: "invalid_input" }, 400);
-    }
-    const schema =
-      operation === "attach"
-        ? attachComputerInputSchema
-        : operation === "detach"
-          ? detachComputerInputSchema
-          : readAgentComputersInputSchema;
-    const decoded = schema.safeParse(body);
-    if (!decoded.success) return context.json({ error: "invalid_input" }, 400);
-    if (decoded.data.agentId !== context.req.param("agentId"))
-      return context.json({ error: "not_found" }, 404);
-    const result =
-      operation === "read"
-        ? await control.read(principal, decoded.data.agentId)
-        : operation === "attach"
-          ? await control.attach(
-              principal,
-              attachComputerInputSchema.parse(decoded.data),
-            )
-          : await control.detach(
-              principal,
-              detachComputerInputSchema.parse(decoded.data),
-            );
-    if (result.kind === "ok") return context.json(result.projection);
-    const status =
-      result.error === "not_granted"
-        ? 403
-        : result.error === "not_found"
-          ? 404
-          : 409;
-    return context.json({ error: result.error }, status);
-  });
+): Routes<OysterEnv> {
+  const routes = routeTable<OysterEnv>();
+  routes.post(
+    "/api/agents/:agentId/computers/:operation",
+    owner("direct-or-app"),
+    async (context, { principal }) => {
+      context.header("Cache-Control", "no-store");
+      const operation = context.req.param("operation");
+      if (!["attach", "detach", "read"].includes(operation))
+        return context.json({ error: "not_found" }, 404);
+      let body: unknown;
+      try {
+        body = await context.req.json();
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        return context.json({ error: "invalid_input" }, 400);
+      }
+      const schema =
+        operation === "attach"
+          ? attachComputerInputSchema
+          : operation === "detach"
+            ? detachComputerInputSchema
+            : readAgentComputersInputSchema;
+      const decoded = schema.safeParse(body);
+      if (!decoded.success)
+        return context.json({ error: "invalid_input" }, 400);
+      if (decoded.data.agentId !== context.req.param("agentId"))
+        return context.json({ error: "not_found" }, 404);
+      const result =
+        operation === "read"
+          ? await control.read(principal, decoded.data.agentId)
+          : operation === "attach"
+            ? await control.attach(
+                principal,
+                attachComputerInputSchema.parse(decoded.data),
+              )
+            : await control.detach(
+                principal,
+                detachComputerInputSchema.parse(decoded.data),
+              );
+      if (result.kind === "ok") return context.json(result.projection);
+      const status =
+        result.error === "not_granted"
+          ? 403
+          : result.error === "not_found"
+            ? 404
+            : 409;
+      return context.json({ error: result.error }, status);
+    },
+  );
   return routes;
 }

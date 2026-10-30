@@ -194,8 +194,9 @@ it("an approved Agent controls schedules as its grantor and retains its policy s
   );
   const arm = vi.spyOn(f.triggers, "arm");
   try {
-    await expect(f.adapter.list("protected-frame")).resolves.toEqual({
+    await expect(f.adapter.list("protected-frame", {})).resolves.toEqual({
       schedules: [],
+      nextCursor: null,
     });
     await expect(
       f.adapter.disarm("protected-frame", { scheduleId: "missing" }),
@@ -225,8 +226,9 @@ it("uses admitted member and library scope for listing and disarming", async () 
     computerId: null,
   });
   try {
-    await expect(f.adapter.list("protected-frame")).resolves.toEqual({
+    await expect(f.adapter.list("protected-frame", {})).resolves.toEqual({
       schedules: [],
+      nextCursor: null,
     });
     await expect(
       f.adapter.disarm("protected-frame", { scheduleId: "missing" }),
@@ -236,6 +238,94 @@ it("uses admitted member and library scope for listing and disarming", async () 
       { memberId: "owner", installationId: "library" },
       { memberId: "owner", installationId: "library" },
     ]);
+  } finally {
+    f.close();
+  }
+});
+
+it("the ordinary Workflow binding pages only its admitted library and admits pause as a write", async () => {
+  const f = fixture({
+    actor: { kind: "member", memberId: "owner" },
+    computerId: null,
+  });
+  try {
+    const binding = armedWorkflowTriggerSchema.parse({
+      ...target,
+      installationId: "library",
+      installationAuthority,
+      computerId: "computer",
+      armedBy: "owner",
+      armedVia: null,
+      grantorMembershipVersion: 1,
+    });
+    for (const [id, installationId] of [
+      ["a", "library"],
+      ["b", "other"],
+      ["c", "library"],
+    ] as const) {
+      f.storage.sql.exec(
+        "INSERT INTO hub_workflow_schedules(scheduleId,record) VALUES(?,?)",
+        id,
+        JSON.stringify({
+          ...binding,
+          installationId,
+          installationAuthority: {
+            ...installationAuthority,
+            selection: {
+              ...installationAuthority.selection,
+              owner: { kind: "installation", id: installationId },
+            },
+          },
+          id,
+          cron: { expression: "*/5 * * * *", timeZone: "UTC" },
+          state: "paused",
+          nextDueAt: 1791720300000,
+          lastError: null,
+          attempt: 0,
+          retryAt: null,
+        }),
+      );
+    }
+    const methods = workflowFrameMethods.WORKFLOWS;
+    expect(methods.schedules?.decodeArgs([{ limit: 1 }])).toEqual([
+      { limit: 1 },
+    ]);
+    const first = await f.adapter.list("protected-frame", { limit: 1 });
+    expect(methods.schedules?.decodeResult(first)).toEqual({
+      schedules: [
+        expect.objectContaining({ scheduleId: "a", installationId: "library" }),
+      ],
+      nextCursor: "a",
+    });
+    expect(
+      await f.adapter.list("protected-frame", { limit: 1, after: "a" }),
+    ).toEqual({
+      schedules: [
+        expect.objectContaining({ scheduleId: "c", installationId: "library" }),
+      ],
+      nextCursor: null,
+    });
+    expect(methods.pauseSchedule?.decodeArgs([{ scheduleId: "a" }])).toEqual([
+      { scheduleId: "a" },
+    ]);
+    expect(
+      methods.pauseSchedule?.decodeResult(
+        await f.adapter.pause("protected-frame", { scheduleId: "a" }),
+      ),
+    ).toEqual({ kind: "paused" });
+    expect(
+      await f.adapter.pause("protected-frame", { scheduleId: "b" }),
+    ).toEqual({ kind: "not_found" });
+    expect(f.admissions).toEqual([
+      "schedules",
+      "schedules",
+      "pauseSchedule",
+      "pauseSchedule",
+    ]);
+    expect(() => methods.schedules?.decodeArgs([{ limit: 101 }])).toThrow();
+    expect(() =>
+      methods.schedules?.decodeArgs([{ installationId: "other" }]),
+    ).toThrow();
   } finally {
     f.close();
   }

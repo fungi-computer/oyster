@@ -1,4 +1,4 @@
-/* global Request, fetch, btoa, console */
+/* global Request, URL, fetch, btoa, console */
 import assert from "node:assert/strict";
 import { TextEncoder } from "node:util";
 import { createServer } from "node:http";
@@ -38,6 +38,10 @@ function storeWith(exchange) {
 }
 import { presentedGitKey } from "../dist/git-auth.js";
 import { attemptWebhook } from "../dist/webhook-delivery.js";
+
+/** A Git door answers whole requests; resolve a path against one origin. */
+const gitFetch = (door, path, init) =>
+  door.fetch(new Request(new URL(path, "https://oyster.test"), init));
 
 const key = (authorization) =>
   presentedGitKey(
@@ -123,7 +127,6 @@ try {
   });
   const door = createGitDoor({
     authenticate: async () => memberWriter,
-    isPublic: async () => false,
     git: async () => admittedGit,
   });
   const pkt = (text) => (text.length + 4).toString(16).padStart(4, "0") + text;
@@ -150,7 +153,8 @@ try {
     ) + "0000";
   const bodies = [pushBody, resetBody, pushBody];
   for (let attempt = 0; attempt < bodies.length; attempt++) {
-    const response = await door.request(
+    const response = await gitFetch(
+      door,
       "/git/fixture/trellis.git/git-receive-pack",
       {
         method: "POST",
@@ -368,9 +372,6 @@ try {
     },
   };
   const standalone = createOyster(standaloneHost);
-  standalone.onError((cause) => {
-    throw cause;
-  });
   const accepted = await standalone.request(
     "/git/fixture/trellis.git/git-receive-pack",
     { method: "POST", body: pushBody },
@@ -558,7 +559,6 @@ console.log("oyster git auth refusals and webhook transport outcomes: ok");
   const exchanges = [];
   const nativeDoor = createGitDoor({
     authenticate: async () => (admitted ? memberWriter : null),
-    isPublic: async () => false,
     git: async (installationId) =>
       createAdmittedGit({
         installationId,
@@ -593,7 +593,7 @@ console.log("oyster git auth refusals and webhook transport outcomes: ok");
   });
   const url =
     "https://hub.example/git/bonsai/notes.git/info/refs?service=git-upload-pack";
-  const opened = await nativeDoor.request(url);
+  const opened = await gitFetch(nativeDoor, url);
   assert.equal(
     opened.status,
     200,
@@ -614,7 +614,7 @@ console.log("oyster git auth refusals and webhook transport outcomes: ok");
     },
   ]);
   admitted = false;
-  assert.equal((await nativeDoor.request(url)).status, 401);
+  assert.equal((await gitFetch(nativeDoor, url)).status, 401);
   assert.equal(exchanges.length, 1, "revoked client never reaches exchange");
 }
 
@@ -634,7 +634,6 @@ console.log("oyster git auth refusals and webhook transport outcomes: ok");
   };
   const policyDoor = createGitDoor({
     authenticate: async () => writer,
-    isPublic: async () => false,
     git: async () =>
       createAdmittedGit({
         installationId: "bonsai",
@@ -667,7 +666,8 @@ console.log("oyster git auth refusals and webhook transport outcomes: ok");
   });
   const line = `${update.before} ${update.after} ${update.ref}\0report-status\n`;
   const body = (line.length + 4).toString(16).padStart(4, "0") + line + "0000";
-  const response = await policyDoor.request(
+  const response = await gitFetch(
+    policyDoor,
     "https://hub.example/git/bonsai/canonical.git/git-receive-pack",
     { method: "POST", body },
   );

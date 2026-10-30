@@ -1,9 +1,9 @@
-/* global Response */
+/* global Response, setTimeout */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
-import { Hono } from "hono";
+import { owner, routes } from "../dist/authorization.js";
 import { createOyster } from "../dist/host.js";
 import {
   createInstallationOperations,
@@ -291,6 +291,10 @@ test("concurrent first page and asset failures share one attempt and recover on 
   });
   const page = app.request("/login");
   const asset = app.request(assetPath);
+  // Both requests pass their declared requirement before reading assets.
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  await tick();
+  await tick();
   assert.equal(attempts, 1);
   rejectLoad(new Error("fixture private loader detail"));
   for (const refused of await Promise.all([page, asset])) {
@@ -322,11 +326,6 @@ test("first host page requests serve exact digest-addressed assets and preserve 
   const expected = await Promise.all(
     [
       ["page.js", override, "text/javascript; charset=utf-8"],
-      [
-        "public-home.js",
-        sources.publicHomeScript,
-        "text/javascript; charset=utf-8",
-      ],
       [
         "grant-consent.js",
         sources.grantConsentScript,
@@ -401,8 +400,9 @@ test("the empty home names the next step: install Apps with npx oyster install-a
 });
 
 test("owner API routes stay private without blocking an admitted key's App requests", async () => {
-  const ownerRoutes = new Hono().post(
+  const ownerRoutes = routes().post(
     "/api/keys",
+    owner("direct-or-app"),
     () => new Response("created"),
   );
   const host = await computerHost(
@@ -536,7 +536,7 @@ test("owner desktop reads a declared Gill using only the host Computer", async (
   assert.equal(calls[0].facts.subject.context.actor.memberId, "fixture");
 });
 
-test("desktop Gill refuses key, visitor, foreign Computer and undeclared parameters before dispatch", async () => {
+test("desktop Gill refuses key, anonymous, foreign Computer and undeclared parameters before dispatch", async () => {
   let dispatched = 0;
   for (const [principal, params, status] of [
     [

@@ -26,6 +26,7 @@ import { admittedCallerFacts } from "../dist/invocation.js";
 import { verifyRelease } from "../dist/release.js";
 import * as Schema from "effect/Schema";
 import { withBackendConstruction } from "./boot-construction.fixture.ts";
+import { serveHost } from "../dist/authorization.js";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -978,9 +979,11 @@ test("a Worker resolves one workspace per request for its base host and capabili
   };
   const base = oysterWorkerHost(env, auth, { workspace });
   assert.equal(base.computerId, workspace.computerId);
-  const file = await base.capabilities[1].routes.request(
-    "/content?path=/proof.txt",
-  );
+  const file = await serveHost(
+    base.capabilities[1].routes,
+    () => auth.authenticate(),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  ).request("/content?path=/proof.txt");
   assert.equal(await file.text(), "native workspace");
   let resolutions = 0;
   let captured;

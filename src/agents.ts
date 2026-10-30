@@ -6,17 +6,22 @@
  * Shiitake's HTTP routes (`/sessions…`, `/acp`) and Knapsack's Session browser
  * transport (`/browser/…`), served by the adapter behind the same App grants.
  */
-import { Hono, type MiddlewareHandler } from "hono";
-import { keyAgentAccess, type LiveOysterKey } from "./keys.js";
+import type { TenantPrincipal } from "./tenant.js";
+import {
+  agent,
+  agents as agentCollection,
+  owner,
+  routes,
+  type OwnerPrincipal,
+  type Routes,
+} from "./authorization.js";
 import type { AppToolPolicy } from "./apps/tools.js";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
 import {
-  oysterPrincipalIsOwner,
   type CapabilityEnv,
   type OysterCapability,
   type OysterEnv,
-  type OysterPrincipal,
 } from "./host.js";
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
@@ -126,10 +131,43 @@ export type AgentToolPolicyStatus = Readonly<{
   revision: string;
 }>;
 
-/** Where an Oyster's agents live and run. */
+/**
+ * Where an Oyster's agents live and run. Archive is non-destructive: `list()`
+ * hides archived agents, and `list({ archived: true })` shows only archives.
+ * Archived agents keep existing reads, replays and settlements, but refuse new
+ * Sessions, prompts and steers with `contract/archived`. Archive refuses
+ * non-idle Session work or unsettled delegations; it pauses Almanac and Loop
+ * schedules and restores only archive-paused schedules on unarchive.
+ */
 export type OysterAgents = Readonly<{
-  /** Every agent, oldest first. */
-  list(): Promise<readonly OysterAgent[]>;
+  /** Active agents by default; archived agents only by explicit selection. */
+  list(
+    options?: Readonly<{ archived?: boolean }>,
+  ): Promise<readonly OysterAgent[]>;
+  /** Owner-only HTTP transition; creator Agents use their own control tool. */
+  setArchived(
+    agentId: string,
+    archived: boolean,
+    principal: TenantPrincipal,
+  ): Promise<
+    | Readonly<{ archived: boolean; revision: number }>
+    | Readonly<{
+        error:
+          | "not_found"
+          | "not_granted"
+          | "self"
+          | "not_creator"
+          | "running"
+          | "pending"
+          | "unreadable"
+          | "archived";
+        /** Safe refusal text; busy work names its command. */
+        message?: string;
+        /** A repair failure can follow an already-committed owner flag. */
+        archived?: boolean;
+        revision?: number;
+      }>
+  >;
   /**
    * Create an agent; retrying with the same `requestId` returns the same one.
    * With no `avatar` it wears its seeded default until the owner picks one.
@@ -137,7 +175,7 @@ export type OysterAgents = Readonly<{
   create(
     name: string,
     requestId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     actor: AgentPolicyActor,
     avatar?: Avatar,
   ): Promise<OysterAgent>;
@@ -145,7 +183,7 @@ export type OysterAgents = Readonly<{
   rename(
     agentId: string,
     name: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
   ): Promise<
     | OysterAgent
     | Readonly<{ error: "not_found" | "name_taken" | "not_granted" }>
@@ -154,7 +192,7 @@ export type OysterAgents = Readonly<{
   setAvatar(
     agentId: string,
     avatar: Avatar,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
   ): Promise<OysterAgent | Readonly<{ error: "not_found" | "not_granted" }>>;
   /** Owner-only, secret-free Agent default; an unknown Agent cannot be configured. */
   readModelChoice(agentId: string): Promise<AgentModelChoice | null>;
@@ -164,7 +202,7 @@ export type OysterAgents = Readonly<{
   setModelChoice(
     agentId: string,
     choice: AgentModelChoice,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
   ): Promise<
     | AgentModelChoice
     | Readonly<{ error: "not_found" | "not_granted" | AgentModelRefusal }>
@@ -180,7 +218,7 @@ export type OysterAgents = Readonly<{
   /** Replace an Agent's tool approval under its authenticated attaching human. */
   approveAppToolPolicy(
     agentId: string,
-    principal: OysterPrincipal,
+    principal: TenantPrincipal,
     level: AppToolPolicy["level"],
     expectedRevision: string | null,
     actor: AgentPolicyActor,
@@ -222,6 +260,16 @@ const visitSchema = Schema.Struct({
   sessionId: Schema.String,
 });
 const agentIdPattern = /^[a-z0-9_-]{1,64}$/u;
+/** Explicit owner-addressed settings remain reachable after list hides an archive. */
+async function knownAgent(agents: OysterAgents, agentId: string) {
+  if (!agentIdPattern.test(agentId)) return false;
+  return (
+    (await agents.list()).some((agent) => agent.agentId === agentId) ||
+    (await agents.list({ archived: true })).some(
+      (agent) => agent.agentId === agentId,
+    )
+  );
+}
 /** How often an open inbox stream re-reads the revision. */
 const inboxPollMs = 2_000;
 const maxAgentRequestBytes = 512 * 1024;
@@ -233,10 +281,8 @@ function refusal(status: number, error: string): Response {
 /** Agent adapters admitted against each App's declared capabilities. */
 export function agentCapabilities(
   agents: OysterAgents,
-  liveKey: (keyId: string) => Promise<LiveOysterKey | null>,
 ): readonly OysterCapability[] {
-  const routes = createAgentRoutes(agents, liveKey);
-  const shared = { base: "/", routes };
+  const shared = { base: "/", routes: createAgentRoutes(agents) };
   return [
     {
       ...shared,
@@ -318,228 +364,267 @@ export function agentCapabilities(
   ];
 }
 
-function createAgentRoutes(
+function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
+  return (
+    routes<CapabilityEnv>()
+      .get("/agents", agentCollection(), async (context, { reaches }) => {
+        const selected = context.req.query("archived");
+        if (
+          selected !== undefined &&
+          selected !== "true" &&
+          selected !== "false"
+        )
+          return refusal(400, "Choose a valid archive view");
+        const listed = await agents.list({ archived: selected === "true" });
+        const reached: OysterAgent[] = [];
+        for (const item of listed)
+          if (await reaches(item.agentId)) reached.push(item);
+        return Response.json(reached);
+      })
+      .post(
+        "/agents",
+        owner("direct-or-app"),
+        async (context, { principal }) => {
+          const body = Schema.decodeUnknownOption(createSchema)(
+            await context.req.json(),
+          );
+          if (body._tag === "None") return refusal(400, "Name the agent");
+          const avatar =
+            body.value.avatar === undefined
+              ? undefined
+              : agentAvatarSchema.safeParse(body.value.avatar);
+          if (avatar?.success === false)
+            return refusal(400, "Choose a valid avatar");
+          // The owner's own authenticated request creates this Agent; its App tools
+          // are approved the same way direct owner approval is, with no second path.
+          return Response.json(
+            await agents.create(
+              body.value.name,
+              body.value.requestId,
+              principal,
+              "owner-direct",
+              avatar?.data,
+            ),
+          );
+        },
+      )
+      .put(
+        "/agent-names/:agentId",
+        owner("direct-or-app"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const body = Schema.decodeUnknownOption(renameSchema)(
+            await context.req.json(),
+          );
+          if (body._tag === "None") return refusal(400, "Name the agent");
+          const result = await agents.rename(
+            agentId,
+            body.value.name,
+            principal,
+          );
+          if ("error" in result)
+            return refusal(
+              result.error === "not_found"
+                ? 404
+                : result.error === "name_taken"
+                  ? 409
+                  : 403,
+              result.error,
+            );
+          return Response.json(result);
+        },
+      )
+      .put(
+        "/agent-avatars/:agentId",
+        owner("direct-or-app"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const body = avatarInputSchema.safeParse(await context.req.json());
+          if (!body.success) return refusal(400, "Choose a valid avatar");
+          const result = await agents.setAvatar(
+            agentId,
+            body.data.avatar,
+            principal,
+          );
+          if ("error" in result)
+            return refusal(
+              result.error === "not_found" ? 404 : 403,
+              result.error,
+            );
+          return Response.json(result);
+        },
+      )
+      .get(
+        "/agent-policies/:agentId",
+        agent(),
+        async (_context, { agentId }) => {
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const status = await agents.policyStatus(agentId);
+          return status === null
+            ? refusal(404, "No such agent")
+            : Response.json(status);
+        },
+      )
+      .put(
+        "/agent-policies/:agentId",
+        owner("direct-or-app"),
+        async (context, { principal }) =>
+          approvePolicy(
+            agents,
+            principal,
+            "owner-direct",
+            context.req.param("agentId"),
+            await context.req.text(),
+          ),
+      )
+      .post(
+        "/agents/:agentId/archive",
+        owner("direct-or-app"),
+        (context, { principal }) =>
+          changeArchive(agents, context.req.param("agentId"), true, principal),
+      )
+      .post(
+        "/agents/:agentId/unarchive",
+        owner("direct-or-app"),
+        (context, { principal }) =>
+          changeArchive(agents, context.req.param("agentId"), false, principal),
+      )
+      .all("/agents/:agentId/*", agent(), async (context, { agentId }) => {
+        if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+        const incoming = context.req.raw;
+        const url = new URL(incoming.url);
+        const path = url.pathname.slice(`/agents/${agentId}`.length);
+        if (!(
+          path === "/acp" ||
+          path === "/sessions" ||
+          path.startsWith("/sessions/") ||
+          path.startsWith("/browser/")
+        ))
+          return refusal(404, "Not found");
+        const length = Number(incoming.headers.get("content-length") ?? "0");
+        if (length > maxAgentRequestBytes)
+          return refusal(413, "Request too large");
+        const target = new URL(`https://agent.internal${path}${url.search}`);
+        // A desk window's Computer routing hint is the host's to admit; the
+        // Agent's Session routes decode a closed query that refuses it.
+        target.searchParams.delete(computerTargetParam);
+        const response = await agents.fetch(
+          agentId,
+          new Request(target, incoming),
+        );
+        return response ?? refusal(404, "No such agent");
+      })
+      .get(
+        "/member/inbox",
+        agentCollection(),
+        async (_context, { authority, reaches }) => {
+          const inbox = await agents.inbox();
+          if (authority.kind === "owner")
+            return Response.json({
+              items: inbox.items,
+              next: null,
+              cursor: inbox.revision,
+            });
+          const items: (typeof inbox.items)[number][] = [];
+          for (const item of inbox.items)
+            if ("agentId" in item && (await reaches(item.agentId)))
+              items.push(item);
+          return Response.json({
+            items,
+            next: null,
+            // The global revision changes for ungranted Agents too. Key feeds have
+            // no scoped event stream, so expose neither that revision nor its events.
+            cursor: 0,
+          });
+        },
+      )
+      .get("/member/inbox/notices", owner("direct-or-app"), () =>
+        Response.json({ items: [], next: null }),
+      )
+      .post(
+        "/member/inbox/visits",
+        agent(
+          async (facts) => (await facts.body(visitSchema))?.agentId ?? null,
+        ),
+        async (context, { agentId }) => {
+          const body = Schema.decodeUnknownOption(visitSchema)(
+            await context.req.json(),
+          );
+          if (body._tag === "None") return refusal(400, "Invalid visit");
+          return (await agents.visit(agentId, body.value.sessionId))
+            ? new Response(null, { status: 204 })
+            : refusal(404, "No such Session");
+        },
+      )
+      // The feed is small (one person's agents), so a change is announced as a
+      // `reset` and the client re-reads the whole inbox. The unscoped revision
+      // also changes for other Agents, so only the owner reads it.
+      .get("/member/inbox/events", owner("direct-or-app"), (context) => {
+        const after = Number(context.req.query("after") ?? "0");
+        const signal = context.req.raw.signal;
+        const encoder = new TextEncoder();
+        let revision = after;
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(encoder.encode(": open\n\n"));
+            while (!signal.aborted) {
+              const current = await agents.revision();
+              if (current !== revision) {
+                revision = current;
+                controller.enqueue(
+                  encoder.encode("event: reset\ndata: {}\n\n"),
+                );
+              } else controller.enqueue(encoder.encode(": keep-alive\n\n"));
+              await new Promise((resolve) => setTimeout(resolve, inboxPollMs));
+            }
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-store",
+          },
+        });
+      })
+  );
+}
+
+/** Owner-only archive transition; creator Agents use their own control tool. */
+async function changeArchive(
   agents: OysterAgents,
-  liveKey: (keyId: string) => Promise<LiveOysterKey | null>,
-): Hono<CapabilityEnv> {
-  const routes = new Hono<CapabilityEnv>();
-  // Every Agent and Session lookup shares this live principal-scoped door.
-  const access = async (principal: OysterPrincipal, agentId: string) => {
-    if (oysterPrincipalIsOwner(principal)) return true;
-    if (principal.actor.kind !== "team-key") return false;
-    const key = await liveKey(principal.actor.keyId);
-    return key !== null && keyAgentAccess(key, agentId);
-  };
-  routes.use("/agents/:agentId/*", async (context, next) => {
-    if (!(await access(context.env.principal, context.req.param("agentId"))))
-      return refusal(403, "Agent access denied");
-    await next();
-    return undefined;
-  });
-  routes.use("/agent-policies/:agentId", async (context, next) => {
-    if (!(await access(context.env.principal, context.req.param("agentId"))))
-      return refusal(403, "Agent access denied");
-    await next();
-    return undefined;
-  });
-  routes.get("/agents", async (context) => {
-    const listed = await agents.list();
-    const actor = context.env.principal.actor;
-    if (oysterPrincipalIsOwner(context.env.principal))
-      return Response.json(listed);
-    if (actor.kind !== "team-key") return Response.json([]);
-    const key = await liveKey(actor.keyId);
-    return Response.json(
-      key === null
-        ? []
-        : listed.filter((agent) => keyAgentAccess(key, agent.agentId)),
-    );
-  });
-  routes.post("/agents", async (context) => {
-    const { principal } = context.env;
-    if (!oysterPrincipalIsOwner(principal))
-      return refusal(403, "Only the owner creates agents");
-    const body = Schema.decodeUnknownOption(createSchema)(
-      await context.req.json(),
-    );
-    if (body._tag === "None") return refusal(400, "Name the agent");
-    const avatar =
-      body.value.avatar === undefined
-        ? undefined
-        : agentAvatarSchema.safeParse(body.value.avatar);
-    if (avatar?.success === false) return refusal(400, "Choose a valid avatar");
-    // The owner's own authenticated request creates this Agent; its App tools
-    // are approved the same way direct owner approval is, with no second path.
-    return Response.json(
-      await agents.create(
-        body.value.name,
-        body.value.requestId,
-        principal,
-        "owner-direct",
-        avatar?.data,
-      ),
-    );
-  });
-  routes.put("/agent-names/:agentId", async (context) => {
-    const { principal } = context.env;
-    if (!oysterPrincipalIsOwner(principal))
-      return refusal(403, "Only the owner renames agents");
-    const agentId = context.req.param("agentId");
-    if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-    const body = Schema.decodeUnknownOption(renameSchema)(
-      await context.req.json(),
-    );
-    if (body._tag === "None") return refusal(400, "Name the agent");
-    const result = await agents.rename(agentId, body.value.name, principal);
-    if ("error" in result)
-      return refusal(
+  agentId: string,
+  archived: boolean,
+  principal: OwnerPrincipal,
+): Promise<Response> {
+  if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+  const result = await agents.setArchived(agentId, archived, principal);
+  if ("error" in result)
+    return Response.json(result, {
+      status:
         result.error === "not_found"
           ? 404
-          : result.error === "name_taken"
-            ? 409
-            : 403,
-        result.error,
-      );
-    return Response.json(result);
-  });
-  routes.put("/agent-avatars/:agentId", async (context) => {
-    const { principal } = context.env;
-    if (!oysterPrincipalIsOwner(principal))
-      return refusal(403, "Only the owner changes avatars");
-    const agentId = context.req.param("agentId");
-    if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-    const body = avatarInputSchema.safeParse(await context.req.json());
-    if (!body.success) return refusal(400, "Choose a valid avatar");
-    const result = await agents.setAvatar(agentId, body.data.avatar, principal);
-    if ("error" in result)
-      return refusal(result.error === "not_found" ? 404 : 403, result.error);
-    return Response.json(result);
-  });
-  routes.get("/agent-policies/:agentId", async (context) => {
-    const agentId = context.req.param("agentId");
-    if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-    const status = await agents.policyStatus(agentId);
-    return status === null
-      ? refusal(404, "No such agent")
-      : Response.json(status);
-  });
-  routes.put("/agent-policies/:agentId", async (context) =>
-    approvePolicy(
-      agents,
-      context.env.principal,
-      "owner-direct",
-      context.req.param("agentId"),
-      await context.req.text(),
-    ),
-  );
-  routes.all("/agents/:agentId/*", async (context) => {
-    const agentId = context.req.param("agentId");
-    if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-    const incoming = context.req.raw;
-    const url = new URL(incoming.url);
-    const path = url.pathname.slice(`/agents/${agentId}`.length);
-    if (!(
-      path === "/acp" ||
-      path === "/sessions" ||
-      path.startsWith("/sessions/") ||
-      path.startsWith("/browser/")
-    ))
-      return refusal(404, "Not found");
-    const length = Number(incoming.headers.get("content-length") ?? "0");
-    if (length > maxAgentRequestBytes) return refusal(413, "Request too large");
-    const target = new URL(`https://agent.internal${path}${url.search}`);
-    // A desk window's Computer routing hint is the host's to admit; the
-    // Agent's Session routes decode a closed query that refuses it.
-    target.searchParams.delete(computerTargetParam);
-    const response = await agents.fetch(agentId, new Request(target, incoming));
-    return response ?? refusal(404, "No such agent");
-  });
-
-  routes.get("/member/inbox", async (context) => {
-    const inbox = await agents.inbox();
-    const principal = context.env.principal;
-    if (oysterPrincipalIsOwner(principal))
-      return Response.json({
-        items: inbox.items,
-        next: null,
-        cursor: inbox.revision,
-      });
-    if (principal.actor.kind !== "team-key")
-      return refusal(403, "Agent access denied");
-    const key = await liveKey(principal.actor.keyId);
-    return Response.json({
-      items:
-        key === null
-          ? []
-          : inbox.items.filter(
-              (item) => "agentId" in item && keyAgentAccess(key, item.agentId),
-            ),
-      next: null,
-      // The global revision changes for ungranted Agents too. Key feeds have
-      // no scoped event stream, so expose neither that revision nor its events.
-      cursor: 0,
+          : result.error === "not_granted"
+            ? 403
+            : result.archived !== undefined
+              ? 503
+              : 409,
     });
-  });
-  routes.get("/member/inbox/notices", (context) =>
-    oysterPrincipalIsOwner(context.env.principal)
-      ? Response.json({ items: [], next: null })
-      : refusal(403, "Agent access denied"),
-  );
-  routes.post("/member/inbox/visits", async (context) => {
-    const body = Schema.decodeUnknownOption(visitSchema)(
-      await context.req.json(),
-    );
-    if (body._tag === "None") return refusal(400, "Invalid visit");
-    if (!(await access(context.env.principal, body.value.agentId)))
-      return refusal(403, "Agent access denied");
-    return (await agents.visit(body.value.agentId, body.value.sessionId))
-      ? new Response(null, { status: 204 })
-      : refusal(404, "No such Session");
-  });
-  // The feed is small (one person's agents), so a change is announced as a
-  // `reset` and the client re-reads the whole inbox.
-  routes.get("/member/inbox/events", (context) => {
-    // The unscoped revision also changes for other Agents. Do not expose it
-    // until a principal-scoped revision exists.
-    if (!oysterPrincipalIsOwner(context.env.principal))
-      return refusal(403, "Agent access denied");
-    const after = Number(context.req.query("after") ?? "0");
-    const signal = context.req.raw.signal;
-    const encoder = new TextEncoder();
-    let revision = after;
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        controller.enqueue(encoder.encode(": open\n\n"));
-        while (!signal.aborted) {
-          const current = await agents.revision();
-          if (current !== revision) {
-            revision = current;
-            controller.enqueue(encoder.encode("event: reset\ndata: {}\n\n"));
-          } else controller.enqueue(encoder.encode(": keep-alive\n\n"));
-          await new Promise((resolve) => setTimeout(resolve, inboxPollMs));
-        }
-        controller.close();
-      },
-    });
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-store",
-      },
-    });
-  });
-  return routes;
+  return Response.json(result);
 }
 
 async function approvePolicy(
   agents: OysterAgents,
-  principal: OysterPrincipal,
+  principal: OwnerPrincipal,
   actor: AgentPolicyActor,
   agentId: string,
   body: string,
 ): Promise<Response> {
-  if (!oysterPrincipalIsOwner(principal))
-    return refusal(403, "Only the owner approves Agent tools");
   const input = Schema.decodeUnknownOption(
     Schema.fromJsonString(
       Schema.Struct({
@@ -550,10 +635,7 @@ async function approvePolicy(
     { onExcessProperty: "error" },
   )(body);
   if (input._tag === "None") return refusal(400, "Choose read or write tools");
-  if (
-    !agentIdPattern.test(agentId) ||
-    !(await agents.list()).some((agent) => agent.agentId === agentId)
-  )
+  if (!(await knownAgent(agents, agentId)))
     return refusal(404, "No such agent");
   const result = await agents.approveAppToolPolicy(
     agentId,
@@ -573,14 +655,9 @@ async function approvePolicy(
 }
 
 /** Host-owned direct approval under the admitted owner; never an App capability. */
-export function agentApprovalRoutes(agents: OysterAgents): Hono<OysterEnv> {
-  return new Hono<OysterEnv>()
-    .get("/api/agent-models/:agentId", async (context) => {
-      if (
-        context.req.raw.headers.has("X-Oyster-Installation") ||
-        !oysterPrincipalIsOwner(context.get("principal"))
-      )
-        return refusal(403, "Owner only");
+export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
+  return routes<OysterEnv>()
+    .get("/api/agent-models/:agentId", owner("direct"), async (context) => {
       const agentId = context.req.param("agentId");
       if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
       const choice = await agents.readModelChoice(agentId);
@@ -588,56 +665,48 @@ export function agentApprovalRoutes(agents: OysterAgents): Hono<OysterEnv> {
         ? refusal(404, "No such agent")
         : Response.json(choice);
     })
-    .put("/api/agent-models/:agentId", async (context) => {
-      if (
-        context.req.raw.headers.has("X-Oyster-Installation") ||
-        !oysterPrincipalIsOwner(context.get("principal"))
-      )
-        return refusal(403, "Owner only");
+    .put(
+      "/api/agent-models/:agentId",
+      owner("direct"),
+      async (context, { principal }) => {
+        const agentId = context.req.param("agentId");
+        if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+        const input = agents.decodeModelChoice(await context.req.text());
+        if (input === null) return refusal(400, "Invalid model choice");
+        const choice = await agents.setModelChoice(agentId, input, principal);
+        if ("error" in choice && choice.error === "invalid_model_choice")
+          return refusal(400, "Invalid model choice");
+        return "error" in choice
+          ? refusal(
+              choice.error === "not_found"
+                ? 404
+                : choice.error === "not_granted"
+                  ? 403
+                  : 409,
+              choice.error,
+            )
+          : Response.json(choice);
+      },
+    )
+    .get("/api/agent-policies/:agentId", owner("direct"), async (context) => {
       const agentId = context.req.param("agentId");
-      if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-      const input = agents.decodeModelChoice(await context.req.text());
-      if (input === null) return refusal(400, "Invalid model choice");
-      const choice = await agents.setModelChoice(
-        agentId,
-        input,
-        context.get("principal"),
-      );
-      if ("error" in choice && choice.error === "invalid_model_choice")
-        return refusal(400, "Invalid model choice");
-      return "error" in choice
-        ? refusal(
-            choice.error === "not_found"
-              ? 404
-              : choice.error === "not_granted"
-                ? 403
-                : 409,
-            choice.error,
-          )
-        : Response.json(choice);
-    })
-    .get("/api/agent-policies/:agentId", async (context) => {
-      if (context.req.raw.headers.has("X-Oyster-Installation"))
-        return refusal(403, "Owner direct only");
-      if (!oysterPrincipalIsOwner(context.get("principal")))
-        return refusal(403, "Owner only");
-      const agentId = context.req.param("agentId");
-      if (!(await agents.list()).some((agent) => agent.agentId === agentId))
+      if (!(await knownAgent(agents, agentId)))
         return refusal(404, "No such agent");
       return Response.json({
         expectedRevision: await agents.policyRevision(agentId),
       });
     })
-    .put("/api/agent-policies/:agentId", async (context) =>
-      context.req.raw.headers.has("X-Oyster-Installation")
-        ? refusal(403, "Missing admitted Agent installation")
-        : approvePolicy(
-            agents,
-            context.get("principal"),
-            "owner-direct",
-            context.req.param("agentId"),
-            await context.req.text(),
-          ),
+    .put(
+      "/api/agent-policies/:agentId",
+      owner("direct"),
+      async (context, { principal }) =>
+        approvePolicy(
+          agents,
+          principal,
+          "owner-direct",
+          context.req.param("agentId"),
+          await context.req.text(),
+        ),
     );
 }
 
@@ -648,68 +717,64 @@ const mcpRefusalStatus = { not_found: 404, duplicate_name: 409, limit: 409 };
  * Host-owned Agent MCP server custody for the owner directly; never an App
  * capability. Bearer tokens go in and never come back out.
  */
-export function agentMcpServerRoutes(agents: OysterAgents): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
-  const ownerOnly: MiddlewareHandler<OysterEnv> = async (context, next) => {
-    if (context.req.raw.headers.has("X-Oyster-Installation"))
-      return refusal(403, "Owner direct only");
-    if (!oysterPrincipalIsOwner(context.get("principal")))
-      return refusal(403, "Only the owner connects MCP servers");
-    await next();
-    return undefined;
-  };
-  routes.use("/api/agent-mcp-servers", ownerOnly);
-  routes.use("/api/agent-mcp-servers/*", ownerOnly);
-  // One owner read for the settings panel: every Agent with its servers.
-  routes.get("/api/agent-mcp-servers", async () => {
-    const listed = await agents.list();
-    const rows = await Promise.all(
-      listed.map(async (agent) => ({
-        agentId: agent.agentId,
-        name: agent.name,
-        servers: (await agents.mcpServers(agent.agentId)) ?? [],
-      })),
-    );
-    return Response.json({ agents: rows });
-  });
-  routes.post("/api/agent-mcp-servers/:agentId", async (context) => {
-    if (!agentIdPattern.test(context.req.param("agentId")))
-      return refusal(404, "No such agent");
-    const length = Number(context.req.header("content-length") ?? "0");
-    if (length > 16 * 1024) return refusal(413, "Request too large");
-    const input = Schema.decodeUnknownOption(
-      Schema.fromJsonString(agentMcpServerInputSchema),
-      { onExcessProperty: "error" },
-    )(await context.req.text());
-    if (input._tag === "None")
-      return refusal(
-        400,
-        "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
-      );
-    const added = await agents.addMcpServer(
-      context.req.param("agentId"),
-      input.value,
-    );
-    return "error" in added
-      ? refusal(mcpRefusalStatus[added.error], added.error)
-      : Response.json(added, { status: 201 });
-  });
-  routes.delete(
-    "/api/agent-mcp-servers/:agentId/:serverId",
-    async (context) => {
-      const serverId = context.req.param("serverId");
-      if (
-        !agentIdPattern.test(context.req.param("agentId")) ||
-        !serverIdPattern.test(serverId)
+export function agentMcpServerRoutes(agents: OysterAgents): Routes<OysterEnv> {
+  return (
+    routes<OysterEnv>()
+      // One owner read for the settings panel: every Agent with its servers.
+      .get("/api/agent-mcp-servers", owner("direct"), async () => {
+        const listed = await agents.list();
+        const rows = await Promise.all(
+          listed.map(async (item) => ({
+            agentId: item.agentId,
+            name: item.name,
+            servers: (await agents.mcpServers(item.agentId)) ?? [],
+          })),
+        );
+        return Response.json({ agents: rows });
+      })
+      .post(
+        "/api/agent-mcp-servers/:agentId",
+        owner("direct"),
+        async (context) => {
+          if (!agentIdPattern.test(context.req.param("agentId")))
+            return refusal(404, "No such agent");
+          const length = Number(context.req.header("content-length") ?? "0");
+          if (length > 16 * 1024) return refusal(413, "Request too large");
+          const input = Schema.decodeUnknownOption(
+            Schema.fromJsonString(agentMcpServerInputSchema),
+            { onExcessProperty: "error" },
+          )(await context.req.text());
+          if (input._tag === "None")
+            return refusal(
+              400,
+              "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
+            );
+          const added = await agents.addMcpServer(
+            context.req.param("agentId"),
+            input.value,
+          );
+          return "error" in added
+            ? refusal(mcpRefusalStatus[added.error], added.error)
+            : Response.json(added, { status: 201 });
+        },
       )
-        return refusal(404, "No such server");
-      return (await agents.removeMcpServer(
-        context.req.param("agentId"),
-        serverId,
-      ))
-        ? new Response(null, { status: 204 })
-        : refusal(404, "No such server");
-    },
+      .delete(
+        "/api/agent-mcp-servers/:agentId/:serverId",
+        owner("direct"),
+        async (context) => {
+          const serverId = context.req.param("serverId");
+          if (
+            !agentIdPattern.test(context.req.param("agentId")) ||
+            !serverIdPattern.test(serverId)
+          )
+            return refusal(404, "No such server");
+          return (await agents.removeMcpServer(
+            context.req.param("agentId"),
+            serverId,
+          ))
+            ? new Response(null, { status: 204 })
+            : refusal(404, "No such server");
+        },
+      )
   );
-  return routes;
 }

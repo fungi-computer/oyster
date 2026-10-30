@@ -4,7 +4,6 @@ import {
   type AppDeclaration,
 } from "@fungi.computer/puffball/app";
 import { sha256 } from "../release.js";
-import canonicalJson from "fast-json-stable-stringify";
 import {
   declaredOperationsSchema,
   type CapabilityOperationDescriptor,
@@ -108,15 +107,6 @@ export async function deriveDeclaredOperations(
       operations: [...operations].sort(),
     }));
   const artifactDigest = release.artifact.artifactDigest;
-  const anonymousMethods = await Promise.all(
-    Object.entries(declaration.api?.methods ?? {})
-      .filter(([, method]) => method.anonymous === true)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(async ([name, method]) => ({
-        name,
-        digest: await sha256(new TextEncoder().encode(canonicalJson(method))),
-      })),
-  );
   const digest = await sha256(
     new TextEncoder().encode(
       JSON.stringify({
@@ -124,7 +114,6 @@ export async function deriveDeclaredOperations(
         capabilities: rows,
         routes,
         bindings,
-        anonymousMethods,
       }),
     ),
   );
@@ -132,6 +121,5 @@ export async function deriveDeclaredOperations(
     artifactDigest,
     digest,
     capabilities: rows,
-    anonymousMethods,
   });
 }

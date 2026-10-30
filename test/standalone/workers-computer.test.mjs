@@ -30,7 +30,17 @@ const { createFrameBindingWire } =
   await import("@fungi.computer/oyster/testing");
 const bindingWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
 const { approvedInstallation } = await import("@fungi.computer/oyster/testing");
-const { createAppBuild } = await import("@fungi.computer/puffball/app");
+const { createAppBuild, appBackendBindingOperation } =
+  await import("@fungi.computer/puffball/app");
+const { applyInstallationCommand, deriveDeclaredOperations } =
+  await import("@fungi.computer/oyster/apps");
+const Result = await import("effect/Result");
+const { bindAgentExtension, bindSessionExtension } =
+  await import("@fungi.computer/shiitake/client");
+const { almanacContract } =
+  await import("@fungi.computer/shiitake-extensions/almanac");
+const { loopContract } =
+  await import("@fungi.computer/shiitake-extensions/loop");
 const { backendMediaType } = await import("@fungi.computer/puffball/backend");
 const {
   standaloneWorkspace,
@@ -38,6 +48,7 @@ const {
   ComputerDO,
   computerInvocation,
 } = await import("../../src/standalone/computer.ts");
+const { serveCapability } = await import("../../src/authorization.ts");
 const { StandaloneInstance, StandaloneAgent } =
   await import("../../src/standalone/worker.ts");
 const {
@@ -305,17 +316,22 @@ async function instanceBinding(
   };
   const declaration = {
     capabilities: [
-      "computer.list",
-      "computer.readFile",
-      "computer.writeFile",
-      "computer.execute",
-      ...agentBindings.flatMap(({ name }) =>
-        name === "INBOX"
-          ? ["agent.read"]
-          : name === "WORKFLOWS"
-            ? ["workflow.run"]
-            : ["agent.send"],
-      ),
+      ...new Set([
+        "computer.list",
+        "computer.readFile",
+        "computer.writeFile",
+        "computer.execute",
+        ...agentBindings.flatMap(({ name, operations }) =>
+          operations.flatMap((operation) => {
+            const registered = appBackendBindingOperation(name, operation);
+            assert.ok(
+              registered,
+              "The ordinary binding registry owns operations",
+            );
+            return registered.requires;
+          }),
+        ),
+      ]),
     ],
     handlers: [],
     roles: [],
@@ -344,6 +360,41 @@ async function instanceBinding(
     release,
     declaration,
   });
+  // The actual owner command produces finite Agent selections; no frame grants
+  // or DeclaredOperations snapshots are reconstructed by this fixture.
+  const changeAgentResources = async (resources) => {
+    const changed = applyInstallationCommand(
+      installation,
+      {
+        kind: "change-grants",
+        changes: installation.authority.approvedGrants
+          .filter(({ capability }) =>
+            ["agent.read", "agent.manage", "agent.send"].includes(capability),
+          )
+          .map(({ capability, operations }) => ({
+            capability,
+            grant: resources === null ? null : { operations, resources },
+          })),
+      },
+      {
+        by: { kind: "member", memberId: "fixture-owner" },
+        role: "owner",
+        expectedVersion: installation.authority.authorityVersion,
+        declaration,
+        declaredOperations: await deriveDeclaredOperations(
+          release,
+          declaration,
+          [],
+        ),
+        now: Date.now(),
+        identity: installation,
+      },
+    );
+    if (Result.isFailure(changed)) throw new Error(changed.failure.code);
+    installation = changed.success.next;
+  };
+  if (host.agentResources !== undefined)
+    await changeAgentResources(host.agentResources);
   const selected = {
     instanceId,
     appId: release.appId,
@@ -357,6 +408,7 @@ async function instanceBinding(
   let perform;
   let facet;
   let instance;
+  let registryReads = 0;
   const bindings = {
     ...env,
     OYSTER_ORIGIN: "https://oyster.invalid",
@@ -372,11 +424,14 @@ async function instanceBinding(
       getByName: () => ({
         ownsComputer: (computerId) => computerId === env.OYSTER_COMPUTER_ID,
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
-        get: async () => ({
-          ...installation,
-          status: (await registry.getByName("registry").get("computer-proof"))
-            .status,
-        }),
+        get: async () => {
+          registryReads += 1;
+          return {
+            ...installation,
+            status: (await registry.getByName("registry").get("computer-proof"))
+              .status,
+          };
+        },
       }),
     },
     INSTANCES: {
@@ -587,6 +642,8 @@ async function instanceBinding(
     selection: selected,
     releaseDigest: root.digest,
     installation,
+    registryReads: () => registryReads,
+    changeAgentResources,
     close: () => instance.revoke(installationId),
     /** The host commits the new owner state before delivering its activation. */
     disable: async () => {
@@ -908,11 +965,10 @@ test("owner and key routes use the same fixed Computer as workspace files, ignor
       ),
       "native files",
     );
-    const routes = standaloneComputerCapabilities(
-      env,
-      workspace,
-      keysLiveOf(env),
-    )[0].routes;
+    const routes = serveCapability(
+      standaloneComputerCapabilities(env, workspace)[0].routes,
+      { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+    );
     const response = await routes.request(
       "/processes?computerId=guest-selected",
       {},
@@ -944,11 +1000,13 @@ test("owner and key process starts preserve the client requestId and reject miss
     { actor: { kind: "team-key", keyId: "caller" } },
   ]) {
     const { env, calls } = fixture();
-    const routes = standaloneComputerCapabilities(
-      env,
-      standaloneWorkspace(env, keysLiveOf(env)),
-      keysLiveOf(env),
-    )[0].routes;
+    const routes = serveCapability(
+      standaloneComputerCapabilities(
+        env,
+        standaloneWorkspace(env, keysLiveOf(env)),
+      )[0].routes,
+      { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+    );
     const start = (input) =>
       routes.request(
         "/processes/start",
@@ -1014,11 +1072,13 @@ test("Shed's start -> list -> kill sequence round-trips over the standalone HTTP
     role: "owner",
   };
   const { env } = fixture();
-  const routes = standaloneComputerCapabilities(
-    env,
-    standaloneWorkspace(env, keysLiveOf(env)),
-    keysLiveOf(env),
-  )[0].routes;
+  const routes = serveCapability(
+    standaloneComputerCapabilities(
+      env,
+      standaloneWorkspace(env, keysLiveOf(env)),
+    )[0].routes,
+    { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+  );
   const start = await routes.request(
     "/processes/start",
     {
@@ -1098,10 +1158,10 @@ test("Expose, Unexpose and Stop accept exactly the page's wire bodies and refuse
       OYSTER_COMPUTER_ID: "workspace",
       COMPUTER: { getByName: () => computer },
     };
-    const routes = standaloneComputerCapabilities(
-      env,
-      standaloneWorkspace(env),
-    )[0].routes;
+    const routes = serveCapability(
+      standaloneComputerCapabilities(env, standaloneWorkspace(env))[0].routes,
+      { liveKey: async () => null, appToolPolicy: () => null },
+    );
     const post = (path, body) =>
       routes.request(
         path,
@@ -1156,18 +1216,20 @@ test("a canonical owner principal can request the frozen installation port previ
   );
   env.OYSTER_ORIGIN = "https://oyster.shiit.app";
   env.OYSTER_PREVIEW_ORIGIN = "https://oyster-contest.levi-fe0.workers.dev";
-  const routes = standaloneComputerCapabilities(
-    env,
-    standaloneWorkspace(env, keysLiveOf(env)),
-    keysLiveOf(env),
-  )[0].routes;
+  const routes = serveCapability(
+    standaloneComputerCapabilities(
+      env,
+      standaloneWorkspace(env, keysLiveOf(env)),
+    )[0].routes,
+    { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+  );
   const ports = (principal) =>
     routes.request("/ports", {}, { principal, installation });
   // Port previews stay owner-only even for an admitted key.
   const key = await ports({ actor: { kind: "team-key", keyId: "caller" } });
   assert.equal(key.status, 403);
   assert.deepEqual(await key.json(), {
-    error: "Owner preview access required",
+    error: "Owner only",
   });
   assert.deepEqual(calls, []);
   const response = await ports({
@@ -1187,11 +1249,13 @@ test("a canonical owner principal can request the frozen installation port previ
 
 test("an admitted Agent cannot use Computer routes", async () => {
   const { env, calls } = fixture();
-  const routes = standaloneComputerCapabilities(
-    env,
-    standaloneWorkspace(env, keysLiveOf(env)),
-    keysLiveOf(env),
-  )[0].routes;
+  const routes = serveCapability(
+    standaloneComputerCapabilities(
+      env,
+      standaloneWorkspace(env, keysLiveOf(env)),
+    )[0].routes,
+    { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+  );
   const agent = admitted({ actor: { kind: "agent", agentId: "caller" } });
   assert.equal((await routes.request("/processes", {}, agent)).status, 403);
   assert.equal(
@@ -1231,11 +1295,13 @@ test("native port conflicts become safe frame and HTTP conflict replies", async 
     await binding.processStart({ command: "serve", port: 3000 }),
     { error: "conflict" },
   );
-  const routes = standaloneComputerCapabilities(
-    env,
-    standaloneWorkspace(env, keysLiveOf(env)),
-    keysLiveOf(env),
-  )[0].routes;
+  const routes = serveCapability(
+    standaloneComputerCapabilities(
+      env,
+      standaloneWorkspace(env, keysLiveOf(env)),
+    )[0].routes,
+    { liveKey: keysLiveOf(env), appToolPolicy: () => null },
+  );
   const response = await routes.request(
     "/processes/start",
     {
@@ -1828,10 +1894,10 @@ test("the Computer owner issues port previews to the live canonical owner member
   // The owner route presents the same decision: 200 for the live owner, a
   // typed 403 (never an uncaught 500) for an owner-role principal that is not.
   env.COMPUTER = { getByName: () => computer };
-  const routes = standaloneComputerCapabilities(
-    env,
-    standaloneWorkspace(env),
-  )[0].routes;
+  const routes = serveCapability(
+    standaloneComputerCapabilities(env, standaloneWorkspace(env))[0].routes,
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
   const portsRoute = (memberId) =>
     routes.request(
       "/ports",
@@ -2205,6 +2271,505 @@ test("App send retries the same intent after an UNKNOWN reply with one real Agen
   assert.equal(receipt.commandId, lostReceipt.commandId);
 });
 
+/** A real standalone Agent kernel and directory; only Worker transport is supplied. */
+async function nativeScheduleAgent(t) {
+  const database = new DatabaseSync(":memory:");
+  const agentDatabase = new DatabaseSync(":memory:");
+  const tasks = [];
+  const { env } = fixture();
+  const scope = scopeOf({ OYSTER_ORIGIN: "https://oyster.invalid" });
+  const pin = {
+    directoryName: scope.durableName("agents"),
+    tenantId: scope.tenantId,
+  };
+  const directory = new AgentDirectory(
+    { id: { name: pin.directoryName }, storage: fromNodeSqlite(database) },
+    { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
+  );
+  const principal = {
+    actor: { kind: "member", memberId: "owner" },
+    role: "owner",
+  };
+  const a = directory.create("A", "create-A", principal, "owner-direct");
+  const b = directory.create("B", "create-B", principal, "owner-direct");
+  const calls = { addressed: 0, reads: 0, controls: 0, sends: 0, opened: 0 };
+  const model = fauxModel([
+    fauxAssistantMessage("Retained native history"),
+    fauxAssistantMessage("Replacement native work"),
+  ]);
+  class ScheduleAgent extends StandaloneAgent {
+    modelSource() {
+      return {
+        acquire: async () => ({
+          model: model.model,
+          stream: model.stream,
+          release: () => Promise.resolve(),
+        }),
+      };
+    }
+    async shiitakeOptions() {
+      calls.opened += 1;
+      return { ...(await super.shiitakeOptions()), tools: [] };
+    }
+    client() {
+      return this.shiitake();
+    }
+    close() {
+      return this.closeShiitake();
+    }
+    readSchedules(...args) {
+      calls.reads += 1;
+      return super.readSchedules(...args);
+    }
+    controlSchedule(...args) {
+      calls.controls += 1;
+      return super.controlSchedule(...args);
+    }
+    sendFromApp(...args) {
+      calls.sends += 1;
+      return super.sendFromApp(...args);
+    }
+  }
+  const values = new Map();
+  env.AGENT_DIRECTORY = {
+    getByName: (name) => {
+      assert.equal(name, pin.directoryName);
+      return directory;
+    },
+  };
+  const agent = new ScheduleAgent(
+    {
+      id: { name: a.agentId },
+      storage: {
+        ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
+        get: async (key) => values.get(key),
+        put: async (key, value) => {
+          values.set(key, value);
+        },
+      },
+      waitUntil: (task) => tasks.push(task),
+    },
+    env,
+  );
+  env.AGENTS = {
+    getByName: (agentId) => {
+      calls.addressed += 1;
+      assert.equal(agentId, a.agentId);
+      return agent;
+    },
+  };
+  t.after(async () => {
+    await agent.close();
+    for (const task of tasks) await task;
+    agentDatabase.close();
+    database.close();
+  });
+  return { env, agent, a, b, pin, calls, tasks };
+}
+
+test("standalone native schedules retain bounded keys, exact receipts and Session history", async (t) => {
+  const { agent, a, pin, tasks } = await nativeScheduleAgent(t);
+  await agent.usePolicyDirectory(pin);
+  const client = await agent.client();
+  const sessionId = await client.createSession("retained-schedule-session");
+  const almanac = bindAgentExtension(client, almanacContract);
+  const loop = bindSessionExtension(client.session(sessionId), loopContract);
+  for (const requestId of ["c", "a", "b"])
+    await almanac.call("createOneShot", {
+      requestId,
+      sessionId,
+      prompt: "Private Almanac instruction",
+      dueAt: Date.now() + 3_600_000,
+    });
+  const started = await loop.call("startFixedInterval", {
+    requestId: "first-loop",
+    prompt: "Private Loop instruction",
+    expression: "0 * * * *",
+    timeZone: "UTC",
+  });
+  const first = await agent.readSchedules(pin, {
+    agentId: a.agentId,
+    limit: 2,
+  });
+  assert.deepEqual(
+    first.items.map((row) => row.schedule.id),
+    ["a", "b"],
+  );
+  assert.deepEqual(first.next, {
+    agentId: a.agentId,
+    kind: "almanac",
+    after: "b",
+  });
+  const second = await agent.readSchedules(pin, {
+    agentId: a.agentId,
+    limit: 2,
+    after: first.next,
+  });
+  assert.equal(second.items.length, 2);
+  assert.equal(second.items[0].schedule.id, "c");
+  assert.partialDeepStrictEqual(second.items[1], {
+    agentId: a.agentId,
+    kind: "loop",
+    schedule: {
+      sessionId,
+      loopId: started.loop.loopId,
+      prompt: "Private Loop instruction",
+    },
+  });
+  assert.deepEqual(second.next, {
+    agentId: a.agentId,
+    kind: "loop",
+    after: sessionId,
+  });
+  assert.deepEqual(
+    await agent.readSchedules(pin, {
+      agentId: a.agentId,
+      limit: 2,
+      after: second.next,
+    }),
+    { items: [], next: null },
+  );
+  await assert.rejects(
+    agent.readSchedules(pin, { agentId: a.agentId, limit: 65 }),
+  );
+  await assert.rejects(
+    agent.readSchedules(pin, {
+      agentId: a.agentId,
+      after: { agentId: "foreign", kind: "loop" },
+    }),
+    /another Agent/u,
+  );
+
+  for (const task of tasks) await task;
+  const history = await client.session(sessionId).read();
+  assert.ok(history.messages.length > 0);
+  assert.ok(
+    history.terminals.some(
+      (row) =>
+        row.commandId === started.accepted.commandId &&
+        row.outcome === "completed",
+    ),
+  );
+  const targets = [
+    { agentId: a.agentId, kind: "almanac", scheduleId: "a" },
+    {
+      agentId: a.agentId,
+      kind: "loop",
+      sessionId,
+      loopId: started.loop.loopId,
+    },
+  ];
+  for (const target of targets) {
+    assert.deepEqual(await agent.controlSchedule(pin, target, "pause"), {
+      ...target,
+      state: "paused",
+    });
+    assert.deepEqual(await agent.controlSchedule(pin, target, "delete"), {
+      ...target,
+      state: "cancelled",
+    });
+  }
+  const retained = await client.session(sessionId).read();
+  assert.deepEqual(retained.messages, history.messages);
+  assert.deepEqual(retained.terminals, history.terminals);
+  const replacement = await loop.call("startFixedInterval", {
+    requestId: "replacement",
+    prompt: "Replacement instruction",
+    expression: "0 * * * *",
+    timeZone: "UTC",
+  });
+  for (const action of ["pause", "delete"])
+    await assert.rejects(agent.controlSchedule(pin, targets[1], action), {
+      boundary: "store",
+      cause: "conflict",
+    });
+  await assert.rejects(
+    agent.controlSchedule(
+      pin,
+      {
+        agentId: a.agentId,
+        kind: "almanac",
+        scheduleId: "missing",
+      },
+      "pause",
+    ),
+  );
+  assert.deepEqual(
+    await agent.controlSchedule(
+      pin,
+      {
+        ...targets[1],
+        loopId: replacement.loop.loopId,
+      },
+      "pause",
+    ),
+    {
+      ...targets[1],
+      loopId: replacement.loop.loopId,
+      state: "paused",
+    },
+  );
+});
+
+test("standalone schedule initialization refuses before opening the native owner", async (t) => {
+  const { agent, a, b, pin, calls } = await nativeScheduleAgent(t);
+  const input = { agentId: a.agentId };
+  const target = { ...input, kind: "almanac", scheduleId: "once" };
+  for (const invoke of [
+    () => agent.readSchedules(pin, input),
+    () => agent.controlSchedule(pin, target, "pause"),
+    () => agent.controlSchedule(pin, target, "delete"),
+  ])
+    await assert.rejects(invoke(), { code: "revoked" });
+  assert.equal(
+    calls.opened,
+    0,
+    "an existing directory row is not initialization",
+  );
+  await agent.usePolicyDirectory(pin);
+  for (const expected of [
+    { ...pin, directoryName: "another-directory" },
+    { ...pin, tenantId: "another-tenant" },
+  ]) {
+    await assert.rejects(agent.readSchedules(expected, input), {
+      code: "revoked",
+    });
+    await assert.rejects(agent.controlSchedule(expected, target, "pause"), {
+      code: "revoked",
+    });
+    await assert.rejects(agent.controlSchedule(expected, target, "delete"), {
+      code: "revoked",
+    });
+  }
+  await assert.rejects(agent.readSchedules(pin, { agentId: b.agentId }), {
+    code: "revoked",
+  });
+  assert.equal(calls.opened, 0);
+  assert.deepEqual(await agent.readSchedules(pin, input), {
+    items: [],
+    next: null,
+  });
+  assert.equal(calls.opened, 1);
+});
+
+test("standalone AGENTS packets match finite selected Agents with one live Registry read", async (t) => {
+  const { env, agent, a, b, pin, calls } = await nativeScheduleAgent(t);
+  await agent.usePolicyDirectory(pin);
+  const client = await agent.client();
+  const almanac = bindAgentExtension(client, almanacContract);
+  await almanac.call("createOneShot", {
+    requestId: "once",
+    sessionId: "garden",
+    prompt: "Private native prompt",
+    dueAt: Date.now() + 3_600_000,
+  });
+  const methods = ["schedules", "pauseSchedule", "deleteSchedule", "send"];
+  const proof = await instanceBinding(
+    t,
+    env,
+    ["ports"],
+    "schedule-proof",
+    [{ name: "AGENTS", operations: methods }],
+    undefined,
+    undefined,
+    false,
+    { agentResources: [{ kind: "agent", id: a.agentId }] },
+  );
+  const result = await proof.run(async (_computer, { AGENTS }) => {
+    const packet = async (invoke) => {
+      const before = proof.registryReads();
+      try {
+        return await invoke();
+      } finally {
+        assert.equal(proof.registryReads() - before, 1);
+      }
+    };
+    const target = { agentId: a.agentId, kind: "almanac", scheduleId: "once" };
+    const inputFor = (method, agentId) =>
+      method === "schedules"
+        ? { agentId }
+        : method === "send"
+          ? {
+              agentId,
+              sessionId: "garden",
+              requestId: "finite-send",
+              text: "An independently admitted send",
+              delivery: "followUp",
+            }
+          : { ...target, agentId };
+    const dispatches = () => calls.reads + calls.controls + calls.sends;
+    for (const method of methods) {
+      const before = dispatches();
+      await assert.rejects(
+        packet(() => AGENTS[method](inputFor(method, b.agentId))),
+        { code: "binding_not_granted" },
+      );
+      assert.equal(dispatches(), before);
+      assert.equal(
+        calls.addressed,
+        0,
+        "finite selection refuses before AGENTS addressing",
+      );
+    }
+    for (const invalid of [
+      { agentId: a.agentId, limit: 65 },
+      {
+        agentId: a.agentId,
+        after: {
+          agentId: a.agentId,
+          kind: "almanac",
+          after: "not/a/native/key",
+        },
+      },
+    ])
+      await assert.rejects(packet(() => AGENTS.schedules(invalid)));
+    assert.equal(
+      dispatches(),
+      0,
+      "invalid serialized inputs never reach the owner",
+    );
+    assert.equal(calls.addressed, 0);
+    const page = await packet(() =>
+      AGENTS.schedules({ agentId: a.agentId, limit: 1 }),
+    );
+    assert.partialDeepStrictEqual(page, {
+      items: [
+        {
+          kind: "almanac",
+          schedule: { id: "once", prompt: "Private native prompt" },
+        },
+      ],
+      next: { agentId: a.agentId, kind: "almanac", after: "once" },
+    });
+    assert.deepEqual(await packet(() => AGENTS.pauseSchedule(target)), {
+      ...target,
+      state: "paused",
+    });
+    assert.deepEqual(await packet(() => AGENTS.deleteSchedule(target)), {
+      ...target,
+      state: "cancelled",
+    });
+    assert.equal(
+      (await packet(() => AGENTS.send(inputFor("send", a.agentId)))).status,
+      "accepted",
+    );
+    const beforeRevocation = dispatches();
+    const addressedBeforeRevocation = calls.addressed;
+    await proof.changeAgentResources(null);
+    for (const method of methods)
+      await assert.rejects(
+        packet(() => AGENTS[method](inputFor(method, a.agentId))),
+        { code: "revoked" },
+      );
+    assert.equal(dispatches(), beforeRevocation);
+    assert.equal(calls.addressed, addressedBeforeRevocation);
+    return { refused: true };
+  });
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.deepEqual(await result.json(), { refused: true });
+});
+
+test("standalone AGENTS initialization failure addresses the owner but opens no native runtime", async (t) => {
+  const { env, agent, a, pin, calls } = await nativeScheduleAgent(t);
+  const methods = ["schedules", "pauseSchedule", "deleteSchedule"];
+  const proof = await instanceBinding(
+    t,
+    env,
+    ["ports"],
+    "schedule-init-proof",
+    [{ name: "AGENTS", operations: methods }],
+  );
+  const result = await proof.run(async (_computer, { AGENTS }) => {
+    const target = { agentId: a.agentId, kind: "almanac", scheduleId: "once" };
+    for (const method of methods) {
+      const before = proof.registryReads();
+      await assert.rejects(
+        AGENTS[method](
+          method === "schedules" ? { agentId: a.agentId } : target,
+        ),
+        { code: "revoked" },
+      );
+      assert.equal(proof.registryReads() - before, 1);
+    }
+    assert.equal(calls.addressed, 3, "initialization is an owner-side fence");
+    assert.equal(calls.opened, 0, "no schedule extension was opened");
+    await agent.usePolicyDirectory(pin);
+    const before = proof.registryReads();
+    assert.deepEqual(await AGENTS.schedules({ agentId: a.agentId }), {
+      items: [],
+      next: null,
+    });
+    assert.equal(proof.registryReads() - before, 1);
+    assert.equal(calls.opened, 1);
+    return { initialized: true };
+  });
+  assert.equal(result.status, 200, await result.clone().text());
+});
+
+for (const operation of ["schedules", "pauseSchedule", "deleteSchedule"]) {
+  test(`standalone ${operation} does not acquire the other schedule authority`, async (t) => {
+    const { env, agent, a, pin, calls } = await nativeScheduleAgent(t);
+    await agent.usePolicyDirectory(pin);
+    const client = await agent.client();
+    await bindAgentExtension(client, almanacContract).call("createOneShot", {
+      requestId: "once",
+      sessionId: "garden",
+      prompt: "Not a manage receipt",
+      dueAt: Date.now() + 3_600_000,
+    });
+    const proof = await instanceBinding(
+      t,
+      env,
+      ["ports"],
+      "schedule-authority-proof",
+      [{ name: "AGENTS", operations: [operation] }],
+    );
+    const result = await proof.run(async (_computer, { AGENTS }) => {
+      const target = {
+        agentId: a.agentId,
+        kind: "almanac",
+        scheduleId: "once",
+      };
+      const input = operation === "schedules" ? { agentId: a.agentId } : target;
+      const before = proof.registryReads();
+      const accepted = await AGENTS[operation](input);
+      assert.equal(proof.registryReads() - before, 1);
+      const denied =
+        operation === "schedules"
+          ? ["pauseSchedule", "deleteSchedule", "send"]
+          : ["schedules", "send"];
+      const dispatches = calls.reads + calls.controls + calls.sends;
+      for (const method of denied) {
+        const args =
+          method === "schedules"
+            ? { agentId: a.agentId }
+            : method === "send"
+              ? {
+                  agentId: a.agentId,
+                  sessionId: "garden",
+                  requestId: "not-granted",
+                  text: "Must not send",
+                  delivery: "followUp",
+                }
+              : target;
+        const before = proof.registryReads();
+        await assert.rejects(AGENTS[method](args), {
+          code: "binding_not_granted",
+        });
+        assert.equal(proof.registryReads() - before, 1);
+      }
+      assert.equal(calls.reads + calls.controls + calls.sends, dispatches);
+      if (operation !== "schedules")
+        assert.deepEqual(accepted, {
+          ...target,
+          state: operation === "pauseSchedule" ? "paused" : "cancelled",
+        });
+      return { admitted: true };
+    });
+    assert.equal(result.status, 200, await result.clone().text());
+  });
+}
+
 test("cached Agent bindings admit only the current frame before fleet effects", async (t) => {
   const database = new DatabaseSync(":memory:");
   t.after(() => database.close());
@@ -2532,7 +3097,6 @@ test("MCP Computer tools carry the HTTP routes' caller grant; visitors and Agent
     },
   };
   const workspace = standaloneWorkspace(env, keysLiveOf(env));
-  assert.equal(await workspace.computer({ actor: { kind: "visitor" } }), null);
   assert.equal(
     await workspace.computer({
       actor: { kind: "agent", agentId: "agent-one" },

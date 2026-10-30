@@ -31,7 +31,6 @@ import {
 import { AppInstanceError, selectionOf } from "./index.js";
 import { ownerOrKeyAuth } from "./auth.js";
 import { causeClass } from "./cause-class.js";
-import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import * as Schema from "effect/Schema";
 import { defineIdFamily } from "@fungi.computer/cairn";
@@ -90,7 +89,6 @@ export type {
 } from "./event-recipients.js";
 import {
   createOyster,
-  oysterPrincipalIsOwner,
   type OysterAuth,
   type OysterAuthResult,
   type OysterCapability,
@@ -98,6 +96,12 @@ import {
   type OysterGitHost,
   type OysterHost,
 } from "./host.js";
+import {
+  oysterPrincipalIsOwner,
+  owner as ownerRoute,
+  routes as routeTable,
+  type Routes,
+} from "./authorization.js";
 import type { GitWriter } from "@fungi.computer/agar/git";
 
 import {
@@ -1097,42 +1101,35 @@ const subscribeSchema = Schema.Struct({
   secret: Schema.optional(Schema.String.check(Schema.isMinLength(16))),
 });
 const keyNamePattern = /^[a-z0-9][a-z0-9-]{0,39}$/u;
-/** `invocation.ts:486` uses `team-key:visitor` for anonymous readers; a key can never claim that name. */
-const reservedKeyName = "visitor";
 const keysWire = keyWire(oysterKeyVocabulary);
 
 /** Owner routes for keys and webhooks; `createOyster` mounts them owner-only. */
 export function gitAdminRoutes(
   env: OysterGitEnv,
   scope: TenantScope,
-): Hono<OysterEnv> {
-  const routes = new Hono<OysterEnv>();
+): Routes<OysterEnv> {
+  const routes = routeTable<OysterEnv>();
   const keys = () => env.KEYS.getByName(scope.durableName("keys"));
-  routes.get("/api/keys", async (context) => {
-    const owner = context.get("principal");
-    if (!oysterPrincipalIsOwner(owner))
-      return Response.json({ error: "Owner only" }, { status: 403 });
-    const listed = await keys().list(owner.actor.memberId);
+  // Key and webhook custody is the owner's own, never through an App.
+  const owner = ownerRoute("direct");
+  routes.get("/api/keys", owner, async (_context, { principal }) => {
+    const listed = await keys().list(principal.actor.memberId);
     if (listed.kind === "error")
       return Response.json({ error: listed.error.code }, { status: 500 });
     return Response.json({ keys: listed.value.map(keysWire.toSummary) });
   });
-  routes.post("/api/keys", async (context) => {
+  routes.post("/api/keys", owner, async (context, { principal }) => {
     const body = keysWire.issue.safeParse(await context.req.json());
     if (!body.success)
       return Response.json({ error: "Invalid key" }, { status: 400 });
     // Named identities and rate policy belong to this host, not the wire grammar.
     if (
       !keyNamePattern.test(body.data.name) ||
-      body.data.name === reservedKeyName ||
       body.data.keyId !== undefined ||
       body.data.rateLimit !== undefined
     )
       return Response.json({ error: "Invalid key name" }, { status: 400 });
-    const owner = context.get("principal");
-    if (!oysterPrincipalIsOwner(owner))
-      return Response.json({ error: "Owner only" }, { status: 403 });
-    const issued = await keys().issue(owner.actor.memberId, {
+    const issued = await keys().issue(principal.actor.memberId, {
       name: body.data.name,
       grants: body.data.grants,
       expiresAt: body.data.expiresAt,
@@ -1150,15 +1147,12 @@ export function gitAdminRoutes(
       { status: 201 },
     );
   });
-  routes.post("/api/keys/revoke", async (context) => {
+  routes.post("/api/keys/revoke", owner, async (context, { principal }) => {
     const body = keysWire.revoke.safeParse(await context.req.json());
     if (!body.success)
       return Response.json({ error: "Invalid request" }, { status: 400 });
-    const owner = context.get("principal");
-    if (!oysterPrincipalIsOwner(owner))
-      return Response.json({ error: "Owner only" }, { status: 403 });
     const revoked = await keys().revoke(
-      owner.actor.memberId,
+      principal.actor.memberId,
       body.data.requestId,
       body.data.keyId,
     );
@@ -1169,7 +1163,7 @@ export function gitAdminRoutes(
       );
     return Response.json({ key: keysWire.toSummary(revoked.value) });
   });
-  routes.post("/api/webhooks", async (context) => {
+  routes.post("/api/webhooks", owner, async (context) => {
     const body = Schema.decodeUnknownOption(subscribeSchema)(
       await context.req.json(),
     );
@@ -1183,21 +1177,21 @@ export function gitAdminRoutes(
       { status: 201 },
     );
   });
-  routes.get("/api/webhooks", async () =>
+  routes.get("/api/webhooks", owner, async () =>
     Response.json(
       await env.WEBHOOKS.getByName(
         scope.durableName("webhooks"),
       ).subscriptions(),
     ),
   );
-  routes.get("/api/webhooks/:id/deliveries", async (context) =>
+  routes.get("/api/webhooks/:id/deliveries", owner, async (context) =>
     Response.json(
       await env.WEBHOOKS.getByName(scope.durableName("webhooks")).deliveries(
         context.req.param("id"),
       ),
     ),
   );
-  routes.delete("/api/webhooks/:id", async (context) =>
+  routes.delete("/api/webhooks/:id", owner, async (context) =>
     (await env.WEBHOOKS.getByName(scope.durableName("webhooks")).unsubscribe(
       context.req.param("id"),
     ))
@@ -1237,6 +1231,11 @@ export abstract class OysterGitInstance<
  * `oysterGitRoot(options).hostFor`.
  */
 export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
+  /** Picker facts through this host's existing, owner-admitted directories. */
+  permissionResources?: (
+    env: Env,
+    scope: TenantScope,
+  ) => NonNullable<OysterHost["permissionResources"]>;
   /** Host-owned fleet control, admitted on every invocation by its durable owner. */
   computerControl?: (
     env: Env,
@@ -1273,7 +1272,6 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
   capabilities?: (
     env: Env,
     workspace: OysterWorkspace,
-    keysLive: OysterKeysLivePort,
   ) => readonly OysterCapability[];
   /** Admit a presented Workflow Git credential for one repository and scope;
    * omit when this host issues no Workflow Git credentials. */
@@ -1291,7 +1289,7 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
     target: GitDoorTarget,
   ) => Promise<Extract<GitWriter, { kind: "actor" }> | null>;
   /** Further owner-only routes this host serves, after the owner guard. */
-  ownerRoutes?: (env: Env, scope: TenantScope) => Hono<OysterEnv>;
+  ownerRoutes?: (env: Env, scope: TenantScope) => Routes<OysterEnv>;
 }>;
 
 /** A tenant's whole Git host: the App server, `host.git` and the owner routes. */
@@ -1711,8 +1709,8 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   const base = oysterWorkerHost(env, auth, policyOptions);
   const capabilities = [
     ...(base.capabilities ?? []),
-    ...(agents === undefined ? [] : agentCapabilities(agents, keysLive)),
-    ...(options.capabilities?.(env, workspace, keysLive) ?? []),
+    ...(agents === undefined ? [] : agentCapabilities(agents)),
+    ...(options.capabilities?.(env, workspace) ?? []),
   ];
   let gitOptions: OysterWorkerGitOptions<Env> = { scope };
   if (options.workflowGitPass !== undefined)
@@ -1720,13 +1718,12 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   if (options.buildGitPass !== undefined)
     gitOptions = { ...gitOptions, buildGitPass: options.buildGitPass };
   const git = oysterWorkerGit(env, gitOptions);
-  const ownerRoutes = gitAdminRoutes(env, scope);
-  const hostOwnerRoutes = options.ownerRoutes?.(env, scope);
-  if (hostOwnerRoutes !== undefined) ownerRoutes.route("/", hostOwnerRoutes);
-  if (agents !== undefined) {
-    ownerRoutes.route("/", agentApprovalRoutes(agents));
-    ownerRoutes.route("/", agentMcpServerRoutes(agents));
-  }
+  const ownerRoutes = oysterGitOwnerRoutes(
+    env,
+    scope,
+    options.ownerRoutes?.(env, scope),
+    agents,
+  );
   let host: OysterGitWorkerHost = {
     ...base,
     capabilities,
@@ -1742,7 +1739,32 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
     host = { ...host, computerControl: options.computerControl(env, scope) };
   if (options.homeInstallationId !== undefined)
     host = { ...host, homeInstallationId: options.homeInstallationId(env) };
+  if (options.permissionResources !== undefined)
+    host = {
+      ...host,
+      permissionResources: options.permissionResources(env, scope),
+    };
   return host;
+}
+
+/**
+ * A Git host's whole owner table: keys and webhooks, the root's own owner
+ * routes, and Agent approval and MCP server custody. The host and the
+ * authorization law both compose it here.
+ */
+export function oysterGitOwnerRoutes(
+  env: OysterGitEnv,
+  scope: TenantScope,
+  hostOwnerRoutes: Routes<OysterEnv> | undefined,
+  agents: OysterAgents | undefined,
+): Routes<OysterEnv> {
+  const ownerRoutes = gitAdminRoutes(env, scope);
+  if (hostOwnerRoutes !== undefined) ownerRoutes.include(hostOwnerRoutes);
+  if (agents !== undefined) {
+    ownerRoutes.include(agentApprovalRoutes(agents));
+    ownerRoutes.include(agentMcpServerRoutes(agents));
+  }
+  return ownerRoutes;
 }
 
 /**

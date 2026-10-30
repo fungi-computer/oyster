@@ -10,13 +10,14 @@ import {
 import { deriveDeclaredOperations } from "../dist/apps/index.js";
 import { verifyRelease } from "../dist/release.js";
 // The MCP catalog: installed Apps' methods become `env.<APP>` operations that
-// run through the Instance path, and visitors see only public read methods.
+// run through the Instance path.
 /* global TextEncoder, TextDecoder, AbortController, console, URL */
 import assert from "node:assert/strict";
 import { test, after } from "node:test";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { Mycelium } from "@fungi.computer/mycelium";
+import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
 import { directSandbox } from "@fungi.computer/mycelium/testing";
 import { instanceIds } from "../dist/index.js";
 import {
@@ -25,7 +26,7 @@ import {
   oysterMcpCatalogLoad,
 } from "../dist/mcp.js";
 import { sha256 } from "../dist/release.js";
-import { keyAppAccess } from "../dist/keys.js";
+import { keyAppAccess } from "../dist/authorization.js";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { fromNodeSqlite } from "@fungi.computer/ear-tag/keys/node";
@@ -173,16 +174,13 @@ const declaredOperations = await deriveDeclaredOperations(
   declaration,
   [],
 );
-const installation = (installationId, visibility) => ({
+const installation = (installationId) => ({
   installationId,
   instanceId: instanceIds.instance.generate(),
   release,
   status: "enabled",
-  visibility,
   appId: release.appId,
   releasePin: "pinned",
-  approvedAnonymousMethods: [],
-  anonymousApproval: null,
   authority: {
     authorityVersion: 1,
     declaredOperationsDigest: declaredOperations.digest,
@@ -195,10 +193,7 @@ const installation = (installationId, visibility) => ({
   },
 });
 const calls = [];
-const installed = [
-  installation("notes", "public"),
-  installation("diary", "private"),
-];
+const installed = [installation("notes"), installation("diary")];
 const host = {
   backgroundOriginKey: () => backgroundOriginKey("fixture-mcp-background-key"),
   artifacts: {
@@ -306,6 +301,41 @@ async function run(
   }
 }
 
+test("App discovery describes the declaration and states approval results once in host instructions", async () => {
+  const waitForApproval =
+    "On pending_approval, tell the person it is waiting for their approval; do not retry.";
+  const owner = { actor: { kind: "member", memberId: "owner" }, role: "owner" };
+  const snapshot = await oysterMcpCatalogLoad(approvalHost(host))(owner);
+  assert.ok(snapshot.instructions.includes(forageDiscoveryInstructions));
+  assert.equal(
+    snapshot.instructions.match(/type AppApprovalResult/gu)?.length,
+    1,
+  );
+  assert.equal(snapshot.instructions.split(waitForApproval).length - 1, 1);
+  assert.ok(
+    snapshot.instructions.includes(
+      '  | { kind: "refused"; reason: string; denialNote?: string };\n' +
+        waitForApproval,
+    ),
+  );
+  assert.match(
+    snapshot.instructions,
+    /kind: "pending_approval"; recordId: string/u,
+  );
+  assert.match(
+    snapshot.instructions,
+    /kind: "refused"; reason: string; denialNote\?: string/u,
+  );
+  const { catalog } = await run(owner, async () => null, null);
+  const detail = catalog.describe({ path: "NOTES.saveNote" });
+  assert.equal(detail.description, "Save the note\nEffect: write.");
+  assert.match(
+    detail.types,
+    /NOTES\$saveNote_Output = Record<string, unknown>/u,
+  );
+  assert.doesNotMatch(detail.types, /pending_approval|refused/u);
+});
+
 test("Agent tool acquisition carries the trusted Session separately from App arguments", async () => {
   const subjects = [];
   const instances = {
@@ -352,11 +382,10 @@ test("Agent tool acquisition carries the trusted Session separately from App arg
   }
 });
 
-test("owner, key and visitor tool listings omit hidden declared methods", async () => {
+test("owner and key tool listings omit hidden declared methods", async () => {
   for (const principal of [
     { actor: { kind: "member", memberId: "owner" }, role: "owner" },
     { actor: { kind: "team-key", keyId: "agent-key" } },
-    { actor: { kind: "visitor" } },
   ]) {
     const { catalog } = await run(principal, () => Promise.resolve(null));
     assert.throws(
@@ -405,7 +434,7 @@ test("the owner reaches discoverable App methods as env.<APP>", async () => {
 });
 
 test("a captured tool policy changes snapshot identity independently of module grants", async () => {
-  const rows = [installation("notes", "private")];
+  const rows = [installation("notes")];
   const capturedHost = {
     ...host,
     installations: installationStore({ list: async () => rows }),
@@ -505,7 +534,7 @@ test("a member's captured App method refuses changed installation authority afte
     }),
   ]) {
     calls.length = 0;
-    let current = installation("notes", "private");
+    let current = installation("notes");
     const source = await oysterAppMethods(
       approvalHost({
         ...host,
@@ -558,23 +587,6 @@ test("a member's captured App method refuses changed installation authority afte
   }
 });
 
-test("a visitor sees only public read methods", async () => {
-  calls.length = 0;
-  const { results } = await run(
-    { actor: { kind: "visitor" } },
-    (bindings) =>
-      Promise.resolve([
-        Object.keys(bindings)
-          .filter((alias) => alias !== "forage")
-          .sort(),
-        Object.keys(bindings.NOTES ?? {}).sort(),
-      ]),
-    null,
-  );
-  assert.deepEqual(results, [[["NOTES"], ["readNote"]]]);
-  assert.equal(calls.length, 0);
-});
-
 test("a module write grant cannot substitute for the host's Agent/key tool policy", async () => {
   calls.length = 0;
   const { results } = await run(
@@ -594,7 +606,7 @@ test("a module write grant cannot substitute for the host's Agent/key tool polic
 });
 
 test("MCP snapshots grant exactly their modules and change with installation authority", async () => {
-  let rows = [installation("notes", "private")];
+  let rows = [installation("notes")];
   const load = oysterMcpCatalogLoad(
     approvalHost({
       ...host,
@@ -616,7 +628,6 @@ test("MCP snapshots grant exactly their modules and change with installation aut
   let previous = acquired.snapshot.version;
   await acquired.release();
   for (const update of [
-    (current) => ({ ...current, visibility: "public" }),
     (current) => ({
       ...current,
       authority: {
@@ -655,7 +666,7 @@ test("the MCP loader exposes dotted App methods as nested operations under one c
   };
   const dotted = await put(json(build));
   const row = {
-    ...installation("bonsai", "private"),
+    ...installation("bonsai"),
     release: {
       ...release,
       artifact: {
@@ -875,6 +886,7 @@ test("the MCP catalog adds the host's Computer for a caller with Computer access
   });
   assert.equal(withComputer.sources.length, 2);
   assert.match(withComputer.instructions, /env\.computers\.workspace/u);
+  assert.ok(withComputer.instructions.includes(forageDiscoveryInstructions));
 
   const context = {
     signal: new AbortController().signal,
@@ -1005,7 +1017,7 @@ const toolOutput = {
 /** One installed App declaring the same `{name:"flows", list, call}` tool
  * family shape the real Trellis App declares, for a fake Instance to
  * answer. Each test supplies its own `instances.get` behavior. */
-async function flowsRow(installationId, visibility = "private") {
+async function flowsRow(installationId) {
   const backend = await put(
     json({
       runtime: { kind: "durable-facet", stateSchema: 1 },
@@ -1078,11 +1090,8 @@ async function flowsRow(installationId, visibility = "private") {
     instanceId: instanceIds.instance.generate(),
     release,
     status: "enabled",
-    visibility,
     appId: release.appId,
     releasePin: "pinned",
-    approvedAnonymousMethods: [],
-    anonymousApproval: null,
     authority: {
       authorityVersion: 1,
       declaredOperationsDigest: declaredOperations.digest,
@@ -1160,14 +1169,6 @@ test("a published Workflow's tool family tool forwards the App's own call data v
     },
   };
   const owner = { actor: { kind: "member", memberId: "owner" }, role: "owner" };
-  const visitorRow = { ...row, visibility: "public" };
-  const visitorHost = {
-    ...flowsHost,
-    installations: installationStore({
-      list: async () => [visitorRow],
-      get: async () => visitorRow,
-    }),
-  };
 
   // Absent before publish: the App's own signed listing says "unindexed".
   {
@@ -1187,29 +1188,6 @@ test("a published Workflow's tool family tool forwards the App's own call data v
   }
 
   published = true;
-
-  // Absent for a caller without Workflows access: a visitor never sees a
-  // non-read method, exactly as for any other App's ordinary methods, so a
-  // write-effect tool family tool is refused the same way without even
-  // reaching the App's listing method.
-  {
-    const source = await oysterAppMethods(
-      approvalHost(visitorHost),
-      { actor: { kind: "visitor" } },
-      null,
-      appSurfaceCache(host),
-    );
-    const { catalog } = await run(
-      { actor: { kind: "visitor" } },
-      () => Promise.resolve(null),
-      null,
-      { source },
-    );
-    assert.throws(
-      () => catalog.describe({ path: "FLOWS.flows.storyboard" }),
-      /Unknown target/u,
-    );
-  }
 
   // Listed and described, with the published Workflow's own input schema,
   // once the App's listing reports it ready; then callable through the exact
@@ -1593,7 +1571,7 @@ test("an ordinary closed refusal from a tool family's listing stays quiet, unlik
   );
 });
 
-test("one `oysterAppMethods` call lists a tool family's App exactly once, even when a session re-derives its modules", async () => {
+test("each App acquisition lists a tool family once, never during grants discovery", async () => {
   const row = await flowsRow("flows");
   let listCalls = 0;
   const flowsHost = {
@@ -1621,20 +1599,25 @@ test("one `oysterAppMethods` call lists a tool family's App exactly once, even w
     null,
     appSurfaceCache(host),
   );
-  assert.equal(listCalls, 1, "the eager grants/version pass lists once");
+  assert.equal(listCalls, 0, "grants discovery does not call an App");
   const acquired = await source.acquire({
     signal: new AbortController().signal,
     session: { sessionId: "session-one" },
     invalidate: () => assert.fail("Unexpected invalidation"),
   });
   try {
-    assert.equal(
-      listCalls,
-      1,
-      "a session-scoped re-derivation reuses this call's cached listing",
-    );
+    assert.equal(listCalls, 1, "the session's single capture lists once");
   } finally {
     await acquired.release();
+  }
+  const next = await source.acquire({
+    signal: new AbortController().signal,
+    invalidate: () => assert.fail("Unexpected invalidation"),
+  });
+  try {
+    assert.equal(listCalls, 2, "another acquisition gets a fresh listing");
+  } finally {
+    await next.release();
   }
 });
 
@@ -1827,7 +1810,7 @@ test("generation belongs to the store incarnation, not a catalog read or row rev
   const store = installationStore({ list: () => Promise.resolve(rows) });
   const first = await store.generation();
   assert.ok(first.length > 0);
-  rows = [installation("notes", "private")];
+  rows = [installation("notes")];
   await store.list();
   assert.equal(await store.generation(), first);
   const replacement = installationStore({ list: () => Promise.resolve(rows) });
@@ -1836,7 +1819,7 @@ test("generation belongs to the store incarnation, not a catalog read or row rev
 
 test("two writes in one host execution remain distinct and replay by the same ordinal without redispatch", async () => {
   calls.length = 0;
-  const selected = installation("notes", "private");
+  const selected = installation("notes");
   const source = await oysterAppMethods(
     approvalHost({
       ...host,

@@ -1,4 +1,5 @@
-import type { OysterHost, OysterPrincipal } from "./host.js";
+import type { TenantPrincipal } from "./tenant.js";
+import type { OysterHost } from "./host.js";
 import type { VerifiedRelease } from "./release.js";
 import type { Installation } from "./apps/installation.js";
 import { approvedBindingGrants, type InvocationGrants } from "./apps/gate.js";
@@ -230,9 +231,9 @@ export async function admitBackgroundFrame(
   frame.host.origin = decision.kind;
   return decision;
 }
-/** The host's native guest-abort and authority-close hooks. */
+/** The host's native guest-abort and frame-authority-close hooks. */
 export type InvocationGatePorts<Host> = Readonly<{
-  /** Stop the guest when live authority closes early (revocation, expiry). */
+  /** Stop the shared guest at cohort drain or revocation, before the last close. */
   abortGuest: () => Promise<void>;
   /** Release the host resources belonging to this completed or revoked frame. */
   close: (frame: InvocationFrame<Host>) => Promise<void>;
@@ -241,7 +242,7 @@ export type InvocationGatePorts<Host> = Readonly<{
 }>;
 /** One invocation owner shared by Hub shards and standalone Instances. */
 export type InvocationGate<Host> = Readonly<{
-  /** Run work within one immutable frame and close its authority afterward. */
+  /** Run one immutable frame; verified foreground reads may share until drain. */
   run: <A>(
     facts: InvocationFacts,
     host: Host,
@@ -257,8 +258,6 @@ export type InvocationGate<Host> = Readonly<{
   /** Serialize supervisor metadata/erasure without opening guest authority. */
   exclusive: <A>(work: () => Promise<A>) => Promise<A>;
 }>;
-/** Foreground reads one Instance runs at once; every other frame runs alone. */
-const concurrentReadFrames = 8;
 const frameIds = defineIdFamily({
   family: "app-invocation-frame",
   version: 1,
@@ -297,27 +296,33 @@ function immutableFacts(facts: InvocationFacts): InvocationFacts {
   return Object.freeze(facts);
 }
 
+const concurrentReadFrames = 8;
+
 /**
  * First-come permits over one guest: a waiting exclusive frame holds back
  * every frame queued after it, so a stream of reads never starves a write.
  */
 function orderedPermits(total: number) {
   let available = total;
-  const waiting: { permits: number; enter: () => void }[] = [];
+  const waiting: {
+    requested: () => number;
+    enter: (permits: number) => void;
+  }[] = [];
   const admit = () => {
-    for (
-      let next = waiting[0];
-      next !== undefined && next.permits <= available;
-      next = waiting[0]
-    ) {
+    for (let next = waiting[0]; next !== undefined; next = waiting[0]) {
+      const count = next.requested();
+      if (count > available) break;
       waiting.shift();
-      available -= next.permits;
-      next.enter();
+      available -= count;
+      next.enter(count);
     }
   };
-  return async <A>(permits: number, work: () => Promise<A>): Promise<A> => {
-    await new Promise<void>((enter) => {
-      waiting.push({ permits, enter });
+  return async <A>(
+    requested: () => number,
+    work: () => Promise<A>,
+  ): Promise<A> => {
+    const permits = await new Promise<number>((enter) => {
+      waiting.push({ requested, enter });
       admit();
     });
     try {
@@ -333,7 +338,7 @@ function orderedPermits(total: number) {
   };
 }
 
-/** A foreground call to a verified read method; only these share the guest. */
+/** Only foreground reads declared by the verified API may share the guest. */
 function concurrentRead(facts: InvocationFacts): boolean {
   return (
     facts.subject.kind === "call" &&
@@ -343,18 +348,51 @@ function concurrentRead(facts: InvocationFacts): boolean {
 }
 
 /**
- * Admit frames against one guest. Verified foreground reads share it, up to
- * eight at once; writes, raw backend requests, Gills and replay run alone. Every guest binding packet names its frame, so a finished
- * frame's leftover timers cannot borrow a later frame's authority and a
- * normal finish keeps the guest warm. Closing authority early (revocation,
- * expiry, a write preempting replay) aborts the guest and so every frame
- * sharing it; replay only yields to a verified write.
+ * One Instance shares up to eight verified foreground reads; all other work
+ * runs alone in first-come order. Every finish fences its frame; the last live
+ * frame stops the native guest before closing authority and releasing admission.
+ * Binding checks alone cannot stop a timer mutating the facet's own SQLite.
+ * Revocation, expiry and a verified write preempting replay stop every live frame.
+ * Arrivals wait for a stopping guest. Once the opening deadline passes, new
+ * reads queue exclusively so the current cohort cannot be prolonged forever.
  */
 export function createInvocationGate<Host>(
   ports: InvocationGatePorts<Host>,
 ): InvocationGate<Host> {
-  const withPermits = orderedPermits(concurrentReadFrames);
+  const permits = orderedPermits(concurrentReadFrames);
   const now = ports.now ?? Date.now;
+  let stopping: Promise<void> | undefined;
+  let cohortDeadlineAt: number | undefined;
+  const withPermits = <A>(read: boolean, work: () => Promise<A>): Promise<A> =>
+    permits(
+      () =>
+        read && (cohortDeadlineAt === undefined || now() < cohortDeadlineAt)
+          ? 1
+          : concurrentReadFrames,
+      async () => {
+        while (stopping !== undefined) await stopping;
+        return work();
+      },
+    );
+  const stopGuest = (): Promise<void> => {
+    if (stopping !== undefined) return stopping;
+    let aborted: Promise<void>;
+    try {
+      aborted = ports.abortGuest();
+    } catch (cause) {
+      aborted = Promise.reject(
+        cause instanceof Error
+          ? cause
+          : new Error("App guest stop failed", { cause }),
+      );
+    }
+    const stopped = aborted.finally(() => {
+      cohortDeadlineAt = undefined;
+      stopping = undefined;
+    });
+    stopping = stopped;
+    return stopped;
+  };
   let foregroundWaiting = 0;
   type LiveFrame = {
     frame: InvocationFrame<Host>;
@@ -364,9 +402,12 @@ export function createInvocationGate<Host>(
   const live = new Map<string, LiveFrame>();
   const finish = (state: LiveFrame, reason: Error): Promise<void> => {
     if (state.closing) return state.closing;
-    live.delete(state.frame.frameId);
     state.controller.abort(reason);
-    state.closing = ports.close(state.frame);
+    live.delete(state.frame.frameId);
+    state.closing =
+      live.size === 0
+        ? stopGuest().finally(() => ports.close(state.frame))
+        : ports.close(state.frame);
     return state.closing;
   };
   // The guest is shared: aborting it ends every live frame's guest work, and
@@ -377,7 +418,7 @@ export function createInvocationGate<Host>(
       live.delete(state.frame.frameId);
       state.controller.abort(reason);
     }
-    const guest = ports.abortGuest();
+    const guest = stopGuest();
     for (const state of states)
       state.closing ??= guest.finally(() => ports.close(state.frame));
     return Promise.all([guest, ...states.map((state) => state.closing)]).then(
@@ -416,75 +457,73 @@ export function createInvocationGate<Host>(
         )
       )
         await abortAll(new AppInstanceError("revoked"));
-      return await withPermits(
-        concurrentRead(facts) ? 1 : concurrentReadFrames,
-        async () => {
-          if (
-            facts.subject.kind === "call" &&
-            facts.subject.replay !== undefined &&
-            foregroundWaiting > 0
-          )
-            throw new AppInstanceError("revoked");
-          if (queuedForeground) {
-            foregroundWaiting -= 1;
-            queuedForeground = false;
-          }
-          const { deadlineAt } = facts;
-          if (deadlineAt <= now()) throw new AppInstanceError("expired");
-          const frameId = frameIds.frame.generate();
-          const controller = new AbortController();
-          const frame = Object.freeze({
-            frameId,
-            facts,
-            host,
-            signal: controller.signal,
-          });
-          const state: LiveFrame = { frame, controller };
-          live.set(frameId, state);
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          let stop: () => void = () => undefined;
-          const revoked = new Promise<never>((_resolve, reject) => {
-            const onAbort = () => {
-              const reason: unknown = controller.signal.reason;
-              reject(
-                reason instanceof Error
-                  ? reason
-                  : new AppInstanceError("revoked"),
-              );
-            };
-            controller.signal.addEventListener("abort", onAbort, {
-              once: true,
-            });
-            stop = () => {
-              controller.signal.removeEventListener("abort", onAbort);
-            };
-            timer = setTimeout(
-              () => {
-                // An expired frame's guest may still be running. Each frame's own
-                // run awaits its close, so a failure reaches that caller.
-                void Promise.allSettled([
-                  abortAll(new AppInstanceError("expired")),
-                ]);
-              },
-              Math.max(0, deadlineAt - now()),
+      return await withPermits(concurrentRead(facts), async () => {
+        if (
+          facts.subject.kind === "call" &&
+          facts.subject.replay !== undefined &&
+          foregroundWaiting > 0
+        )
+          throw new AppInstanceError("revoked");
+        if (queuedForeground) {
+          foregroundWaiting -= 1;
+          queuedForeground = false;
+        }
+        const { deadlineAt } = facts;
+        if (deadlineAt <= now()) throw new AppInstanceError("expired");
+        const frameId = frameIds.frame.generate();
+        const controller = new AbortController();
+        const frame = Object.freeze({
+          frameId,
+          facts,
+          host,
+          signal: controller.signal,
+        });
+        const state: LiveFrame = { frame, controller };
+        cohortDeadlineAt ??= deadlineAt;
+        live.set(frameId, state);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let stop: () => void = () => undefined;
+        const revoked = new Promise<never>((_resolve, reject) => {
+          const onAbort = () => {
+            const reason: unknown = controller.signal.reason;
+            reject(
+              reason instanceof Error
+                ? reason
+                : new AppInstanceError("revoked"),
             );
+          };
+          controller.signal.addEventListener("abort", onAbort, {
+            once: true,
           });
-          try {
-            return await Promise.race([work(frame), revoked]);
-          } finally {
-            clearTimeout(timer);
-            stop();
-            await finish(state, new AppInstanceError("revoked"));
-          }
-        },
-      );
+          stop = () => {
+            controller.signal.removeEventListener("abort", onAbort);
+          };
+          timer = setTimeout(
+            () => {
+              // An expired frame's guest may still be running. Each frame's own
+              // run awaits its close, so a failure reaches that caller.
+              void Promise.allSettled([
+                abortAll(new AppInstanceError("expired")),
+              ]);
+            },
+            Math.max(0, deadlineAt - now()),
+          );
+        });
+        try {
+          return await Promise.race([work(frame), revoked]);
+        } finally {
+          clearTimeout(timer);
+          stop();
+          await finish(state, new AppInstanceError("revoked"));
+        }
+      });
     } finally {
       if (queuedForeground) foregroundWaiting -= 1;
     }
   };
   return {
     run,
-    exclusive: (work) => withPermits(concurrentReadFrames, work),
+    exclusive: (work) => withPermits(false, work),
     active: (frameId) => {
       const state = live.get(frameId);
       if (
@@ -519,17 +558,14 @@ export type InvocationDeadline = Readonly<{
 }>;
 /**
  * Project an admitted principal into App attribution; only the host chooses
- * the fixed Computer context. The App caller grammar has no visitor actor, so
- * the anonymous public reader is attributed as the reserved `visitor` key
- * without a Computer. Host admission reads the principal, never this projection.
+ * the fixed Computer context. Host admission reads the principal, never this
+ * projection.
  */
 export function invocationCallerContext(
-  principal: OysterPrincipal,
+  principal: TenantPrincipal,
   computerId: string | null,
 ): AppMethodCallContext {
   const { actor } = principal;
-  if (actor.kind === "visitor")
-    return { computerId: null, actor: { kind: "team-key", keyId: "visitor" } };
   if (!("role" in principal)) return { computerId, actor };
   return principal.soleMember === true
     ? { computerId, actor, role: principal.role, soleMember: true }

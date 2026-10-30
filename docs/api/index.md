@@ -448,13 +448,13 @@ const uiBootCheckOutcomeSchema: ZodDiscriminatedUnion<[ZodObject<{
         candidate_not_mounted: "candidate_not_mounted";
      }>;
      errorName: ZodOptional<ZodEnum<{
+        Error: "Error";
         TypeError: "TypeError";
         RangeError: "RangeError";
         SyntaxError: "SyntaxError";
         AbortError: "AbortError";
         TimeoutError: "TimeoutError";
         Other: "Other";
-        Error: "Error";
      }>>;
      finalUrlPath: ZodString;
      consoleErrors: ZodArray<ZodPipe<ZodPipe<ZodString, ZodTransform<..., ...>>, ZodString>>;

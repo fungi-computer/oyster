@@ -16,6 +16,7 @@ export function registryInstallations(
       { tenantId: scope.tenantId, origin: scope.origin },
     ),
     generation: async () => registry().generation(),
+    resetAt: async () => registry().installationResetAt(),
     list: async () => registry().list(),
     get: async (id) => registry().get(id),
     compareAndPut: async (

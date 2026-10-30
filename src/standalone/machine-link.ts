@@ -14,11 +14,7 @@ import {
   type MachineLinkTargetFacts,
   type MachineAgentHome,
 } from "../machine-link/index.js";
-import {
-  keyAllowsMachineEnroll,
-  type LiveOysterKey,
-  type OysterKeyStore,
-} from "../keys.js";
+import { type LiveOysterKey, type OysterKeyStore } from "../keys.js";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   agentIds,
@@ -26,9 +22,14 @@ import {
   type AgentGrant,
 } from "@fungi.computer/shiitake/fleet";
 import { DurableObject } from "cloudflare:workers";
-import { Hono } from "hono";
+import type { BlankEnv } from "hono/types";
+import {
+  allowsMachineEnrollment,
+  door,
+  routes,
+  type Routes,
+} from "../authorization.js";
 import { bodyLimit } from "hono/body-limit";
-import { validator } from "hono/validator";
 import {
   machineEnrollmentSchema,
   machineLinkName,
@@ -218,19 +219,23 @@ export function standaloneMachineJoinRoutes(options: {
     keyId: string,
     input: MachineEnrollment,
   ): Promise<StandaloneMachineJoinResult>;
-}) {
+}): Routes<BlankEnv> {
   const { scope } = options;
   const teamId = scope.durableName("agents");
-  return new Hono().post(
+  return routes().post(
     "/local/mesh/join",
-    bodyLimit({ maxSize: 512 * 1024 }),
-    validator("json", (value, context) => {
-      const parsed = machineEnrollmentSchema.safeParse(value);
-      return parsed.success
-        ? parsed.data
-        : context.json({ error: "invalid_enrollment" }, 400);
-    }),
+    door("an oyk key whose only grant is machine.enroll, verified here"),
     async (context) => {
+      let body: unknown;
+      try {
+        body = await context.req.json();
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        return context.json({ error: "invalid_enrollment" }, 400);
+      }
+      const enrollment = machineEnrollmentSchema.safeParse(body);
+      if (!enrollment.success)
+        return context.json({ error: "invalid_enrollment" }, 400);
       if (new URL(context.req.url).origin !== scope.origin)
         return context.body(null, 403);
       const ownerId = await options.ownerId();
@@ -241,12 +246,9 @@ export function standaloneMachineJoinRoutes(options: {
       const verified = await keys.verify(presented.value);
       if (verified.kind !== "ok") return context.body(null, 401);
       const live = await keys.live(verified.value.keyId);
-      if (live?.owner !== ownerId || !keyAllowsMachineEnroll(live))
+      if (live?.owner !== ownerId || !allowsMachineEnrollment(live))
         return context.body(null, 403);
-      const joined = await options.enroll(
-        live.keyId,
-        context.req.valid("json"),
-      );
+      const joined = await options.enroll(live.keyId, enrollment.data);
       // Domain refusals cross RPC as data, not an instanceof claim about a
       // platform-reconstructed Error.
       if (joined.kind === "refused") {
@@ -261,11 +263,14 @@ export function standaloneMachineJoinRoutes(options: {
         200,
       );
     },
+    { middleware: [bodyLimit({ maxSize: 512 * 1024 })] },
   );
 }
 
 /** Only join accepts an oyk credential; every subsequent dial uses Seam. */
-export function standaloneMachineLinkRoutes(env: StandaloneMachineLinkEnv) {
+export function standaloneMachineLinkRoutes(
+  env: StandaloneMachineLinkEnv,
+): Routes<BlankEnv> {
   const scope = scopeFor(env);
   const teamId = scope.durableName("agents");
   return standaloneMachineJoinRoutes({
@@ -274,23 +279,27 @@ export function standaloneMachineLinkRoutes(env: StandaloneMachineLinkEnv) {
     keys: () => env.KEYS.getByName(scope.durableName("keys")),
     enroll: (keyId, input) =>
       env.AGENT_DIRECTORY.getByName(teamId).enrollMachine(keyId, input),
-  }).get("/api/teams/:teamId/local/mesh/:deviceId/connect", async (context) => {
-    const id = {
-      teamId: context.req.param("teamId"),
-      deviceId: context.req.param("deviceId"),
-    };
-    if (
-      new URL(context.req.url).origin !== scope.origin ||
-      id.teamId !== teamId ||
-      !(await standaloneMachineLinkAuthority(env).admitDevice(id)).live
-    )
-      return context.body(null, 403);
-    // F1: never address an unknown scope/device, even for a refused dial.
-    // The shared link independently rereads admission and verifies Seam.
-    return env.MACHINE_LINK.getByName(machineLinkName(id)).fetch(
-      context.req.raw,
-    );
-  });
+  }).get(
+    "/api/teams/:teamId/local/mesh/:deviceId/connect",
+    door("a live enrolled device; its link verifies Seam on every dial"),
+    async (context) => {
+      const id = {
+        teamId: context.req.param("teamId"),
+        deviceId: context.req.param("deviceId"),
+      };
+      if (
+        new URL(context.req.url).origin !== scope.origin ||
+        id.teamId !== teamId ||
+        !(await standaloneMachineLinkAuthority(env).admitDevice(id)).live
+      )
+        return context.body(null, 403);
+      // F1: never address an unknown scope/device, even for a refused dial.
+      // The shared link independently rereads admission and verifies Seam.
+      return env.MACHINE_LINK.getByName(machineLinkName(id)).fetch(
+        context.req.raw,
+      );
+    },
+  );
 }
 
 const erasedKey = "machine-link:erased";
@@ -540,7 +549,7 @@ export function createStandaloneMachineEnrollment(options: {
       if (
         memberId === null ||
         key?.owner !== memberId ||
-        !keyAllowsMachineEnroll(key)
+        !allowsMachineEnrollment(key)
       )
         throw new MachineLinkRefused("actor_not_allowed");
       // This wrapper is per call: concurrent joins never share a mutable key
@@ -587,7 +596,7 @@ export function createStandaloneMachineEnrollment(options: {
         authorizeMember: async (member) => {
           await configured.authorizeMember(member);
           const current = await options.liveKey(keyId);
-          if (current?.owner !== member || !keyAllowsMachineEnroll(current))
+          if (current?.owner !== member || !allowsMachineEnrollment(current))
             throw new MachineLinkRefused("actor_not_allowed");
         },
       }).enroll(

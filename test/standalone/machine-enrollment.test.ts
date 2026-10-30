@@ -29,6 +29,7 @@ import {
   type StandaloneMachineJoinResult,
 } from "../../src/standalone/machine-link.js";
 import { defaultTenant, tenantScope } from "../../src/tenant.js";
+import { serveDoors } from "../../src/authorization.js";
 
 async function input(requestId: string) {
   const pair = await crypto.subtle.generateKey("Ed25519", true, [
@@ -98,36 +99,39 @@ function fixture() {
     },
   });
   const calls = { directoryEnrollments: 0 };
-  const http = standaloneMachineJoinRoutes({
-    scope: tenantScope(defaultTenant, "https://oyster.test"),
-    ownerId: () => Promise.resolve(authority.memberId),
-    keys: () => ({ verify: keys.verify, live: liveKey }),
-    // The directory RPC's typed outcome over the real SQLite enrollment owner.
-    // This module fixture does not claim a native Durable Object RPC proof.
-    enroll: async (keyId, value): Promise<StandaloneMachineJoinResult> => {
-      calls.directoryEnrollments += 1;
-      try {
-        return {
-          kind: "enrolled",
-          value: await enrollment.enrollWithKey(keyId, value),
-        };
-      } catch (cause) {
-        if (cause instanceof MachineEnrollmentRefused)
+  const http = serveDoors(
+    standaloneMachineJoinRoutes({
+      scope: tenantScope(defaultTenant, "https://oyster.test"),
+      ownerId: () => Promise.resolve(authority.memberId),
+      keys: () => ({ verify: keys.verify, live: liveKey }),
+      // The directory RPC's typed outcome over the real SQLite enrollment owner.
+      // This module fixture does not claim a native Durable Object RPC proof.
+      enroll: async (keyId, value): Promise<StandaloneMachineJoinResult> => {
+        calls.directoryEnrollments += 1;
+        try {
           return {
-            kind: "refused",
-            error:
-              cause.reason === "request_conflict" || cause.reason === "capacity"
-                ? cause.reason
-                : "not_allowed",
+            kind: "enrolled",
+            value: await enrollment.enrollWithKey(keyId, value),
           };
-        if (cause instanceof MachineLinkRefused)
-          return { kind: "refused", error: "not_allowed" };
-        if (cause instanceof DOMException && cause.name === "DataError")
-          return { kind: "refused", error: "invalid_enrollment" };
-        throw cause;
-      }
-    },
-  });
+        } catch (cause) {
+          if (cause instanceof MachineEnrollmentRefused)
+            return {
+              kind: "refused",
+              error:
+                cause.reason === "request_conflict" ||
+                cause.reason === "capacity"
+                  ? cause.reason
+                  : "not_allowed",
+            };
+          if (cause instanceof MachineLinkRefused)
+            return { kind: "refused", error: "not_allowed" };
+          if (cause instanceof DOMException && cause.name === "DataError")
+            return { kind: "refused", error: "invalid_enrollment" };
+          throw cause;
+        }
+      },
+    }),
+  );
   return {
     owner,
     keys,

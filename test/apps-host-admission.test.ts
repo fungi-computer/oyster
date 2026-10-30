@@ -14,7 +14,7 @@ import { executeInstallation } from "../src/installation-execution.js";
 import { observeInstallation } from "../src/installation-client.js";
 import { defaultTenant } from "../src/tenant.js";
 import * as hostModule from "@fungi.computer/oyster/host";
-import { deliverBackground } from "../dist/internal/delivery.js";
+import { deliverBackground } from "../src/internal/delivery.js";
 import {
   backgroundWakeSchema,
   backgroundOriginKey,
@@ -39,18 +39,13 @@ import {
 } from "../src/host.js";
 import type { TenantPrincipal } from "@fungi.computer/oyster/tenant";
 import { parseRelease, sha256 } from "@fungi.computer/oyster/host";
-import { fileCapabilities } from "@fungi.computer/oyster/files";
+import { fileCapabilities } from "../src/files.js";
 import { installationSchema } from "../src/apps/installation.js";
 import { appPermissionsWireSchema } from "../src/apps/permissions.js";
 import type { AppToolPolicy } from "../src/apps/tools.js";
 import type { InvocationFacts } from "../src/invocation.js";
-import {
-  keySessionAuth,
-  keySessionCookieName,
-  ownerKeyCookieName,
-  ownerOrKeyAuth,
-} from "../src/auth.js";
-import type { LiveOysterKey } from "../src/keys.js";
+import { ownerKeyCookieName, ownerOrKeyAuth } from "../src/auth.js";
+import { createBuildJobLog } from "../src/build/job-log.js";
 import { parse } from "hono/utils/cookie";
 
 const databases: DatabaseSync[] = [];
@@ -232,7 +227,7 @@ async function fixture(
   const refusals: InvocationFacts[] = [];
   let resolutionCalls = 0;
   const host: OysterHost = {
-    homeInstallationId: "tourtois",
+    homeInstallationId: "configured-home",
     bootUi: () => Promise.resolve({ kind: "passed" as const }),
     appToolPolicy: () => {
       toolPolicyCalls += 1;
@@ -616,6 +611,39 @@ async function fixture(
   };
 }
 
+it("reserves build-log artifact refs from owner uploads without blocking opaque App refs", async () => {
+  const { app, host } = await fixture();
+  const logRef = parseArtifactRef(`artifact:build-log-build_${"a".repeat(32)}`);
+  const log = createBuildJobLog();
+  log.append(new TextEncoder().encode("actual build output\n"));
+  const stored = new TextEncoder().encode(JSON.stringify(log.finish()));
+  await host.artifacts.put(logRef, stored);
+
+  const upload = async (ref: string, bytes: Uint8Array) =>
+    app.request(
+      `/api/artifacts/${encodeURIComponent(ref)}?digest=${encodeURIComponent(await sha256(bytes))}`,
+      { method: "PUT", body: bytes },
+    );
+  const fabricated = new TextEncoder().encode(
+    JSON.stringify({
+      encoding: "base64url",
+      output: "ZmFicmljYXRlZA",
+      truncated: null,
+    }),
+  );
+  const refused = await upload(logRef, fabricated);
+  expect(refused.status).toBe(409);
+  expect(await refused.json()).toEqual({
+    error: "build_job_log_ref_reserved",
+  });
+  expect(await host.artifacts.get(logRef)).toEqual(stored);
+
+  const uiRef = parseArtifactRef("artifact:ui");
+  const ui = new TextEncoder().encode("<h1>App UI</h1>");
+  expect((await upload(uiRef, ui)).status).toBe(204);
+  expect(await host.artifacts.get(uiRef)).toEqual(ui);
+});
+
 it("records the owner's explicit operation approval at the installation HTTP boundary", async () => {
   const { install } = await fixture();
   const record = await install();
@@ -635,7 +663,7 @@ it("records the owner's explicit operation approval at the installation HTTP bou
   });
 });
 
-it("never grants shell access from the install destination, but accepts ordinary pinned owner approval", async () => {
+it("ordinary destinations, including the Tourtois name, require pinned owner approval", async () => {
   const { app, release, records, install, completePost } = await fixture(
     false,
     false,
@@ -834,18 +862,17 @@ it("refuses external and unapproved required methods before Instance dispatch", 
   expect(calls).toHaveLength(1);
 });
 
-it("admits a visitor's public read without asking the Agent and key tool policy", async () => {
+it("refuses an anonymous read before any dispatch or tool policy", async () => {
   const f = await fixture(true);
-  const record = await f.install();
-  f.records.set("notes", { ...record, visibility: "public" });
+  await f.install();
   f.setPrincipal(null);
   const response = await f.app.request("/apps/notes/methods/read", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
-  expect(response.status).toBe(200);
-  expect(f.calls).toHaveLength(1);
+  expect(response.status).toBe(401);
+  expect(f.calls).toHaveLength(0);
   expect(f.toolPolicyCalls()).toBe(0);
 });
 
@@ -853,71 +880,28 @@ const toolPrincipals: { name: string; principal: TenantPrincipal }[] = [
   { name: "key", principal: { actor: { kind: "team-key", keyId: "key" } } },
   { name: "Agent", principal: { actor: { kind: "agent", agentId: "agent" } } },
 ];
-it("a named-key browser cookie opens only its granted private App, without changing the owner cookie or API boundary", async () => {
+it("only the owner cookie opens a browser page; a named-key session cookie admits nobody", async () => {
   const f = await fixture();
   await f.install("notes");
-  await f.install("other");
   const ownerKey = "fixture-cookie-owner-key-24-characters"; //gitleaks:allow
-  let current: LiveOysterKey | null = {
-    keyId: "browser-key",
-    owner: "owner",
-    grantVersion: 1,
-    grants: [
-      {
-        capability: "apps.read",
-        targets: { kind: "selected", ids: ["notes"] },
-      },
-    ],
-  };
   const keys = {
-    live: (keyId: string) =>
-      Promise.resolve(keyId === "browser-key" ? current : null),
+    live: () => Promise.reject(new Error("No key lookup expected")),
     verify: () => Promise.reject(new Error("No bearer secret expected")),
   };
   const app = createOyster({
     ...f.host,
     keys,
-    auth: keySessionAuth(
-      ownerOrKeyAuth(ownerKey, "owner", () => keys),
-      "owner",
-      () => keys,
-      {
-        resolve: (value) =>
-          Promise.resolve(
-            value === "opaque-browser-session"
-              ? { keyId: "browser-key" }
-              : null,
-          ),
-      },
-    ),
+    auth: ownerOrKeyAuth(ownerKey, "owner", () => keys),
   });
-  const browser = {
-    Cookie: `${keySessionCookieName}=opaque-browser-session`,
-    Accept: "text/html",
-  };
-  const page = await app.request("/apps/notes/", { headers: browser });
-  expect(page.status).toBe(200);
-  expect(page.headers.get("Content-Type")).toContain("text/html");
-  expect((await app.request("/apps/other/", { headers: browser })).status).toBe(
-    403,
-  );
-  const other = f.records.get("other");
-  if (other === undefined) throw new Error("Expected the other installation");
-  f.records.set("other", { ...other, visibility: "public" });
-  expect((await app.request("/apps/other/")).status).toBe(200);
-  expect((await app.request("/apps/other/", { headers: browser })).status).toBe(
-    403,
-  );
-  const home = await (await app.request("/", { headers: browser })).text();
-  expect(home).toContain('href="/apps/notes/"');
-  expect(home).not.toContain('href="/apps/other/"');
+  const keySession = { Cookie: "oyster_key_session=opaque-browser-session" };
   expect(
-    (await app.request("/api/installations", { headers: browser })).status,
-  ).toBe(403);
-  const unknown = await app.request("/apps/notes/", {
-    headers: { Cookie: `${keySessionCookieName}=not-a-session` },
+    (await app.request("/apps/notes/", { headers: keySession })).status,
+  ).toBe(401);
+  const page = await app.request("/apps/notes/", {
+    headers: { ...keySession, Accept: "text/html" },
   });
-  expect(unknown.status).toBe(401);
+  expect(page.status).toBe(302);
+  expect(page.headers.get("Location")).toBe("/login");
 
   const login = await app.request("/login", {
     method: "POST",
@@ -929,28 +913,20 @@ it("a named-key browser cookie opens only its granted private App, without chang
   ];
   expect(ownerValue).toMatch(/^sha256:[a-f0-9]{64}$/u);
   if (ownerValue === undefined) throw new Error("Expected the owner cookie");
-  const ownerBrowser = {
-    Cookie: `${ownerKeyCookieName}=${ownerValue}; ${browser.Cookie}`,
-  };
+  const ownerBrowser = { Cookie: `${ownerKeyCookieName}=${ownerValue}` };
   expect(
-    (await app.request("/apps/other/", { headers: ownerBrowser })).status,
+    (await app.request("/apps/notes/", { headers: ownerBrowser })).status,
   ).toBe(200);
   expect(
     (await app.request("/api/installations", { headers: ownerBrowser })).status,
   ).toBe(200);
-  current = null;
-  expect(
-    (await app.request("/apps/notes/", { headers: { Cookie: browser.Cookie } }))
-      .status,
-  ).toBe(401);
 });
 
 it.each(toolPrincipals)(
   "uses attested $name tool policy instead of inferred write authority over HTTP",
   async ({ principal }) => {
     const f = await fixture(true);
-    const record = await f.install();
-    f.records.set("notes", { ...record, visibility: "public" });
+    await f.install();
     f.setPrincipal(principal);
     const call = (name: string) =>
       f.app.request(`/apps/notes/methods/${name}`, {
@@ -1299,23 +1275,6 @@ it("refuses malformed approval commands and unknown installations", async () => 
     ).status,
   ).toBe(404);
 });
-it("rejects anonymous approval through the capability-only grants route", async () => {
-  const { app, install, records } = await fixture();
-  const current = await install();
-  const body = JSON.stringify({
-    storeGeneration: "fixture-generation",
-    authorityVersion: current.authority.authorityVersion,
-    artifactDigest: current.release.artifact.artifactDigest,
-    command: { kind: "approve-anonymous", methods: [] },
-  });
-  const response = await app.request("/api/installations/notes/grants", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
-  expect(response.status).toBe(400);
-  expect(records.get("notes")).toEqual(current);
-});
 it("cannot approve a capability outside the verified Release declaration", async () => {
   const { app, install, records } = await fixture();
   const initial = await install();
@@ -1657,7 +1616,7 @@ it("refuses a non-owner member's install, typed", async () => {
   });
   expect(response.status).toBe(403);
   expect(await response.json()).toEqual({
-    error: "Only the owner manages this Oyster",
+    error: "Owner only",
   });
   expect(records.get("notes")).toBeUndefined();
 });

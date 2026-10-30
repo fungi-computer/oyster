@@ -101,7 +101,7 @@ const call = (path, init = {}, who = "owner") =>
       },
     }),
   );
-assert.equal((await call("/files/list?path=/", {}, "visitor")).status, 401);
+assert.equal((await call("/files/list?path=/", {}, "anonymous")).status, 401);
 assert.equal((await call("/files/list?path=/../x")).status, 400);
 assert.equal(
   await (await call("/files/content?path=/notes/a.md")).text(),

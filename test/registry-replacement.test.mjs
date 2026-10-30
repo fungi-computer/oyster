@@ -17,9 +17,19 @@ import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { TextEncoder } from "node:util";
+import process from "node:process";
+import { buildAppApi } from "@fungi.computer/agar/backend-declaration";
+import { appBackend as notesBackend } from "../examples/notes-app/backend/methods.ts";
+import { installApps } from "../dist/standalone/install-apps-cli.js";
+import {
+  installStandaloneAppSet,
+  standaloneAppSet,
+} from "../dist/standalone/app-set.js";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
+import { memoryHost } from "@fungi.computer/shiitake/testing";
+import { createAgentDirectory } from "@fungi.computer/shiitake/fleet";
 import { ApprovalLedger } from "@fungi.computer/approvals";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { backendMediaType } from "@fungi.computer/puffball/backend";
@@ -30,7 +40,10 @@ import { OysterApprovalHome } from "../dist/approval-home.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 import { withBackendConstruction } from "./boot-construction.fixture.ts";
 import { BootGateError } from "../dist/boot-gate.js";
-import { observeInstallation } from "../dist/installation-client.js";
+import {
+  installOnOyster,
+  observeInstallation,
+} from "../dist/installation-client.js";
 import { InstallationObservationError, installRelease } from "../dist/pack.js";
 import {
   installationCommandIds,
@@ -58,7 +71,7 @@ const {
 } = await import("../dist/workers.js");
 hooks.deregister();
 
-function fixture(t, artifacts, guest, failedConstructions = 0) {
+function fixture(t, artifacts, guest, failedConstructions = 0, backendFor) {
   const pending = [];
   const databases = [];
   const instances = new Map();
@@ -167,12 +180,36 @@ function fixture(t, artifacts, guest, failedConstructions = 0) {
         pending.push(result);
         return result;
       },
-      facets: construction.facets,
+      facets: {
+        ...construction.facets,
+        get(facet, prepare) {
+          if (facet !== "app" || backendFor === undefined)
+            return construction.facets.get(facet, prepare);
+          prepare();
+          // The platform's live facet belongs to this named Instance, not
+          // the registry or a shared guest object. The caller owns its SQLite.
+          const backend = backendFor(name);
+          return {
+            invoke: async (method, args) => ({
+              kind: "ok",
+              value: await backend[method](...args),
+            }),
+            http: async () => {
+              throw new Error("This fixture exercises declared methods");
+            },
+          };
+        },
+        delete(facet) {
+          if (facet === "app" && backendFor !== undefined)
+            backendFor(name).delete();
+          construction.facets.delete(facet);
+        },
+      },
     };
     contexts.set(name, ctx);
     return ctx;
   }
-  const registry = new OysterRegistry(context("registry"), env);
+  let registry = new OysterRegistry(context("registry"), env);
   env.REGISTRY = { getByName: () => registry };
   const admissions = new Map();
   const dispatch = registry.installationOperation.bind(registry);
@@ -267,7 +304,13 @@ function fixture(t, artifacts, guest, failedConstructions = 0) {
       assert.deepEqual(load.limits, { cpuMs: 1000, subRequests: 50 });
   });
   return {
-    registry,
+    get registry() {
+      return registry;
+    },
+    restart() {
+      registry = new OysterRegistry(contexts.get("registry"), env);
+      return registry;
+    },
     env,
     contexts,
     databases,
@@ -1223,7 +1266,7 @@ test("a durable approval rejects a competing update with the same expected versi
   );
   assert.deepEqual(
     await registry.compareAndPut(
-      { ...first, visibility: "public" },
+      { ...first, status: "disabled" },
       installed.authority.authorityVersion,
       await registry.generation(),
     ),
@@ -1299,41 +1342,591 @@ test("an approval losing during Release resolution refuses before revoking an In
   assert.deepEqual(registry.get(previous.installationId), winner);
 });
 
-for (const variant of [
-  "missing capability approval",
-  "e3dc row missing anonymous approval fields",
+for (const marker of [
+  { visibility: "private" },
+  { approvedAnonymousMethods: [] },
+  { anonymousApproval: null },
 ]) {
-  test(`a stored installation row that fails the current contract is a hard decode failure (${variant})`, async (t) => {
+  test(`pre-owner-only installations reset once at boot (${Object.keys(marker)[0]}) and the install-apps client recovers without losing Agents or Sessions`, async (t) => {
     const host = await computerHost();
-    const { registry, databases, app, env } = fixture(t, host.artifacts);
+    const f = fixture(t, host.artifacts, {
+      fetch: async () => globalThis.Response.json({ accepted: true }),
+    });
+    const { databases, app, env } = f;
+    const db = databases[0];
+    const owner = f.contexts.get("registry").storage;
+    // Exercise real foreign owners in the same SQLite database: even a
+    // registry-wide wipe cannot accidentally pass the survival assertions.
+    const directory = createAgentDirectory(owner.sql);
+    const grant = {
+      agents: "all",
+      actions: ["create", "read", "manage"],
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: "fixture" },
+    };
+    const created = owner.transactionSync(() =>
+      directory.create(grant, {
+        name: "Retained Agent",
+        requestId: "reset-survival-agent",
+        configuration: "none",
+      }),
+    ).agent;
+    const agent = await memoryHost({ owner, script: ["Retained answer"] });
+    t.after(() => agent.close());
+    const session = agent.agent.session("reset-survival-session");
+    await session.send("Keep this Session", {
+      requestId: "reset-survival-turn",
+    });
+    const snapshot = await agent.settle("reset-survival-session");
+    assert.equal(snapshot.messages.length, 2);
     const installed = await host.installations.get("context-probe");
     assert.notEqual(installed, null);
-    const corrupt = { ...installed };
-    if (variant === "e3dc row missing anonymous approval fields") {
-      delete corrupt.approvedAnonymousMethods;
-      delete corrupt.anonymousApproval;
-    } else {
-      corrupt.authority.approvedGrants = [
+    db.prepare("INSERT INTO installations VALUES(?,?)").run(
+      installed.installationId,
+      JSON.stringify(installed),
+    );
+    const headers = {
+      Authorization: `Bearer ${env.OYSTER_OWNER_KEY}`,
+      "Content-Type": "application/json",
+    };
+    // Retain a real accepted command, then represent its pre-owner-only
+    // baseline exactly as that version would have serialized it.
+    const accepted = await app.request("/api/installations", {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Idempotency-Key": installationCommandIds.request.generate(),
+      },
+      body: JSON.stringify({
+        installationId: installed.installationId,
+        release: installed.release,
+      }),
+    });
+    assert.equal(accepted.status, 202, await accepted.clone().text());
+    const old = { ...installed, ...marker };
+    const command = db
+      .prepare("SELECT request_id, command FROM installation_commands")
+      .get();
+    const stored = JSON.parse(command.command);
+    stored.baseline = old;
+    db.prepare(
+      "UPDATE installation_commands SET command=? WHERE request_id=?",
+    ).run(JSON.stringify(stored), command.request_id);
+    db.prepare("UPDATE installations SET record=?").run(JSON.stringify(old));
+    // A reset replaces the installation store, not just the offending row.
+    db.prepare("INSERT INTO installations VALUES(?,?)").run(
+      "current-app",
+      JSON.stringify({ ...installed, installationId: "current-app" }),
+    );
+    const generation = f.registry.generation();
+    db.exec(
+      "DROP TABLE installation_store; CREATE TABLE installation_store (id INTEGER PRIMARY KEY CHECK(id=1), generation TEXT NOT NULL) STRICT",
+    );
+    db.prepare("INSERT INTO installation_store VALUES(1,?)").run(generation);
+    const jobs = db.prepare("SELECT * FROM watchdog_jobs").all();
+    f.restart();
+    const notice =
+      "This update reset your installed Apps. Reinstall them with npx oyster install-apps.";
+    const home = await app.request("/", { headers });
+    assert.equal(home.status, 200, await home.clone().text());
+    assert.equal((await home.text()).split(notice).length - 1, 1);
+    const list = await app.request("/api/installations", { headers });
+    assert.equal(list.status, 200);
+    assert.deepEqual(await list.json(), []);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM installations").get().n,
+      0,
+    );
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM installation_commands").get().n,
+      0,
+    );
+    const audit = { ...db.prepare("SELECT * FROM installation_store").get() };
+    assert.notEqual(audit.generation, generation);
+    assert.ok(audit.reset_at > 0);
+    assert.equal(audit.reset_rows, 2);
+    assert.deepEqual(db.prepare("SELECT * FROM watchdog_jobs").all(), jobs);
+    assert.deepEqual(directory.read(grant, created.agentId), created);
+    assert.deepEqual(await session.read(), snapshot);
+    const second = await app.request("/", { headers });
+    assert.equal(second.status, 200);
+    assert.equal((await second.text()).split(notice).length - 1, 1);
+    f.restart();
+    assert.deepEqual(
+      { ...db.prepare("SELECT * FROM installation_store").get() },
+      audit,
+    );
+    await f.registry.alarm(); // Existing orphan handling settles the old wake.
+    assert.deepEqual(f.registry.list(), []);
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+      const response = await app.request(new globalThis.Request(input, init));
+      if (init?.method === "POST") await f.registry.alarm();
+      return response;
+    });
+    // This is the same maintained installation client used by install-apps,
+    // through real HTTP admission, execution and authoritative observation.
+    const reinstalled = await installOnOyster({
+      url: env.OYSTER_ORIGIN,
+      key: env.OYSTER_OWNER_KEY,
+      installationId: installed.installationId,
+      release: installed.release,
+      signal: new globalThis.AbortController().signal,
+    });
+    assert.equal(reinstalled.state, "succeeded");
+    assert.equal(f.registry.get(installed.installationId)?.status, "enabled");
+    assert.doesNotMatch(
+      await (await app.request("/", { headers })).text(),
+      /This update reset/,
+    );
+    f.restart();
+    assert.deepEqual(
+      { ...db.prepare("SELECT * FROM installation_store").get() },
+      audit,
+    );
+    assert.equal(f.registry.list().length, 1);
+    assert.deepEqual(directory.read(grant, created.agentId), created);
+    assert.deepEqual(await session.read(), snapshot);
+  });
+}
+
+test("install-apps immediately recovers all seven Apps after reset: Agents and Sessions survive, APP_STORAGE reattaches, backend SQLite is kept but unreachable", async (t) => {
+  const host = await computerHost(undefined, undefined, {
+    api: buildAppApi(notesBackend),
+    storage: [{ key: "saved", scopes: ["team", "member"], maxBytes: 1024 }],
+  });
+  const base = await host.installations.get("context-probe");
+  const releases = new Map(
+    standaloneAppSet.map(({ appId }) => [
+      appId,
+      { ...base.release, appId, releaseId: `rel_${appId.slice(4)}reset` },
+    ]),
+  );
+  // The retained Notes backend is an ordinary App with its own SQLite.
+  // Model the platform's separate live `app` facet under each named Instance;
+  // never put backend data in the registry or a shared guest singleton.
+  const facets = new Map();
+  const f = fixture(t, host.artifacts, undefined, 0, (instanceId) => {
+    if (!facets.has(instanceId)) {
+      const db = new DatabaseSync(":memory:");
+      const ctx = { storage: fromNodeSqlite(db) };
+      const backend = Object.fromEntries(
+        ["readNote", "saveNote"].map((method) => [
+          method,
+          (input, caller) => notesBackend.call(method, input, { ctx }, caller),
+        ]),
+      );
+      backend.delete = () => {
+        db.close();
+        facets.delete(instanceId);
+      };
+      facets.set(instanceId, backend);
+      t.after(() => {
+        if (db.isOpen) db.close();
+      });
+    }
+    return facets.get(instanceId);
+  });
+  const physicalRead = (instanceId) =>
+    facets
+      .get(instanceId)
+      .readNote(
+        {},
+        { computerId: null, actor: { kind: "member", memberId: "owner" } },
+      );
+  const headers = {
+    Authorization: `Bearer ${f.env.OYSTER_OWNER_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const call = async (id, method, input = {}) => {
+    const response = await f.app.request(`/apps/${id}/methods/${method}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  const owner = f.contexts.get("registry").storage;
+  const directory = createAgentDirectory(owner.sql);
+  const grant = {
+    agents: "all",
+    actions: ["create", "read", "manage"],
+    expiresAt: Date.now() + 60_000,
+    provenance: { actor: "fixture" },
+  };
+  const created = owner.transactionSync(() =>
+    directory.create(grant, {
+      name: "Installer-surviving Agent",
+      requestId: "installer-survival-agent",
+      configuration: "none",
+    }),
+  ).agent;
+  const agent = await memoryHost({ owner, script: ["Still here"] });
+  t.after(() => agent.close());
+  const session = agent.agent.session("installer-survival-session");
+  await session.send("Keep this conversation", {
+    requestId: "installer-survival-turn",
+  });
+  const snapshot = await agent.settle("installer-survival-session");
+  assert.equal(snapshot.messages.length, 2);
+  const previous = new Map();
+  const settings = new Map();
+  for (const { installationId, appId } of standaloneAppSet) {
+    const outcome = await f.post(
+      { installationId, release: releases.get(appId) },
+      headers,
+    );
+    assert.equal(outcome.state, "succeeded");
+    previous.set(installationId, f.registry.get(installationId));
+    assert.deepEqual(
+      await call(installationId, "saveNote", {
+        text: `Owned by ${installationId}`,
+      }),
+      { saved: true },
+    );
+    for (const scope of ["team", "member"]) {
+      const written = await f.registry.storageWrite(installationId, "owner", {
+        key: "saved",
+        scope,
+        basedOn: null,
+        value: `${installationId} ${scope} settings`,
+      });
+      assert.equal(written.kind, "accepted");
+    }
+    settings.set(
+      installationId,
+      await f.registry.storageRead(installationId, "owner", "saved"),
+    );
+  }
+  const db = f.databases[0];
+  const savedRows = db.prepare("SELECT * FROM hub_app_storage").all();
+  assert.equal(savedRows.length, 14);
+  db.exec(
+    "UPDATE installations SET record=json_set(record, '$.visibility', 'private')",
+  );
+  const generation = f.registry.generation();
+  f.restart();
+  assert.notEqual(f.registry.generation(), generation);
+  assert.deepEqual(f.registry.list(), []);
+  assert.deepEqual(
+    db.prepare("SELECT * FROM hub_app_storage").all(),
+    savedRows,
+  );
+  assert.deepEqual(directory.read(grant, created.agentId), created);
+  assert.deepEqual(await session.read(), snapshot);
+  const home = await f.app.request("/", { headers });
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /This update reset your installed Apps/);
+  for (const { installationId } of standaloneAppSet) {
+    assert.equal(
+      (
+        await f.app.request(`/apps/${installationId}/methods/readNote`, {
+          method: "POST",
+          headers,
+          body: "{}",
+        })
+      ).status,
+      404,
+    );
+    assert.deepEqual(
+      await physicalRead(previous.get(installationId).instanceId),
+      { text: `Owned by ${installationId}` },
+    );
+  }
+
+  const builds = new Map();
+  const published = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const request = new globalThis.Request(input, init);
+    const url = new URL(request.url);
+    // Source publication and the external Computer are fixture boundaries.
+    // Installation admission, execution, status and dashboard approval below
+    // always reach the real host; no installation result is manufactured.
+    if (url.pathname === "/api/builds" && request.method === "POST") {
+      const { appId } = await request.json();
+      assert.ok(releases.has(appId));
+      const jobId = `reset-build-${builds.size}`;
+      builds.set(jobId, appId);
+      return globalThis.Response.json(
+        { jobId, status: "running", detail: null, release: null },
+        { status: 202 },
+      );
+    }
+    if (url.pathname.startsWith("/api/builds/")) {
+      const jobId = url.pathname.slice("/api/builds/".length);
+      assert.ok(builds.has(jobId));
+      return globalThis.Response.json({
+        jobId,
+        status: "succeeded",
+        detail: null,
+        release: releases.get(builds.get(jobId)),
+      });
+    }
+    const response = await f.app.request(request);
+    if (url.pathname === "/api/installations" && request.method === "POST")
+      await f.registry.alarm();
+    return response;
+  });
+  const output = [];
+  const stdout = t.mock.method(process.stdout, "write", (chunk) => {
+    output.push(String(chunk));
+    return true;
+  });
+  const priorUrl = process.env.OYSTER_URL;
+  const priorKey = process.env.OYSTER_OWNER_KEY;
+  const priorExit = process.exitCode;
+  process.env.OYSTER_URL = f.env.OYSTER_ORIGIN;
+  process.env.OYSTER_OWNER_KEY = f.env.OYSTER_OWNER_KEY;
+  try {
+    // The CLI's actual parser/source lookup/orchestrator, not a hand-built
+    // install or a replacement installer. Only its maintained publisher port
+    // and external Computer responses use fixture producers.
+    await installApps(
+      [
+        "--from",
+        fileURLToPath(new URL("../../../", import.meta.url)),
+        "--concurrency",
+        "1",
+      ],
+      (options) =>
+        installStandaloneAppSet({
+          ...options,
+          publish: async (app, located) => {
+            published.push(app.installationId);
+            return globalThis.Response.json({
+              kind: "recorded",
+              receipt: {
+                seedRevision: located.sourceRevision,
+                sourceRevision: located.sourceRevision,
+              },
+            });
+          },
+        }),
+    );
+  } finally {
+    stdout.mock.restore();
+    if (priorUrl === undefined) delete process.env.OYSTER_URL;
+    else process.env.OYSTER_URL = priorUrl;
+    if (priorKey === undefined) delete process.env.OYSTER_OWNER_KEY;
+    else process.env.OYSTER_OWNER_KEY = priorKey;
+  }
+  assert.equal(process.exitCode, priorExit);
+  assert.match(output.join(""), /Installed 7 Apps; failed 0/);
+  assert.deepEqual(published, [
+    "tourtois",
+    "bonsai",
+    "shed",
+    "inkcap",
+    "trellis",
+    "prints",
+    "grove",
+  ]);
+  assert.equal(builds.size, 7);
+  assert.equal(f.registry.list().length, 7);
+  for (const { installationId, appId } of standaloneAppSet) {
+    const current = f.registry.get(installationId);
+    assert.equal(current.status, "enabled");
+    assert.equal(current.release.appId, appId);
+    assert.equal(
+      current.installationId,
+      previous.get(installationId).installationId,
+    );
+    assert.notEqual(
+      current.instanceId,
+      previous.get(installationId).instanceId,
+    );
+    assert.deepEqual(
+      await f.registry.storageRead(installationId, "owner", "saved"),
+      settings.get(installationId),
+    );
+    assert.deepEqual(await call(installationId, "readNote"), { text: null });
+    assert.deepEqual(
+      await physicalRead(previous.get(installationId).instanceId),
+      { text: `Owned by ${installationId}` },
+    );
+  }
+  assert.equal(facets.size, 14);
+  // App ID alone is not the host storage identity: a second installation of
+  // the exact same Release must not read the original installation's settings.
+  const anotherAddress = await f.post(
+    { installationId: "prints-copy", release: releases.get("app_prints") },
+    headers,
+  );
+  assert.equal(anotherAddress.state, "succeeded");
+  assert.deepEqual(
+    await f.registry.storageRead("prints-copy", "owner", "saved"),
+    {
+      kind: "accepted",
+      value: {
+        value: null,
+        source: "none",
+        team: null,
+        member: null,
+        canWriteTeam: true,
+      },
+    },
+  );
+  assert.deepEqual(
+    await f.registry.storageRead("prints", "owner", "saved"),
+    settings.get("prints"),
+  );
+  assert.deepEqual(
+    db.prepare("SELECT * FROM hub_app_storage").all(),
+    savedRows,
+  );
+  assert.deepEqual(directory.read(grant, created.agentId), created);
+  assert.deepEqual(await session.read(), snapshot);
+  assert.doesNotMatch(
+    await (await f.app.request("/", { headers })).text(),
+    /This update reset/,
+  );
+});
+
+test("a failed reset audit write rolls back installations, command history and incarnation together", async (t) => {
+  const host = await computerHost();
+  const f = fixture(t, host.artifacts, {
+    fetch: async () => globalThis.Response.json({ accepted: true }),
+  });
+  const installed = await host.installations.get("context-probe");
+  await f.post(
+    { installationId: installed.installationId, release: installed.release },
+    {
+      Authorization: `Bearer ${f.env.OYSTER_OWNER_KEY}`,
+      "Content-Type": "application/json",
+    },
+  );
+  const db = f.databases[0];
+  const row = f.registry.get(installed.installationId);
+  db.prepare("UPDATE installations SET record=?").run(
+    JSON.stringify({ ...row, visibility: "private" }),
+  );
+  const dump = () => ({
+    installations: db.prepare("SELECT * FROM installations").all(),
+    commands: db.prepare("SELECT * FROM installation_commands").all(),
+    store: db.prepare("SELECT * FROM installation_store").all(),
+    jobs: db.prepare("SELECT * FROM watchdog_jobs").all(),
+  });
+  const before = dump();
+  assert.equal(before.commands.length, 1);
+  const sql = f.contexts.get("registry").storage.sql;
+  const exec = sql.exec.bind(sql);
+  const fault = t.mock.method(sql, "exec", (statement, ...bindings) => {
+    if (statement.startsWith("UPDATE installation_store SET reset_at="))
+      throw new Error("fixture reset audit write failed");
+    return exec(statement, ...bindings);
+  });
+  assert.throws(() => f.restart(), /fixture reset audit write failed/);
+  assert.deepEqual(dump(), before);
+  fault.mock.restore();
+  f.restart();
+  assert.deepEqual(f.registry.list(), []);
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM installation_commands").get().n,
+    0,
+  );
+  assert.equal(
+    db.prepare("SELECT reset_rows FROM installation_store").get().reset_rows,
+    1,
+  );
+});
+
+test("the reset re-probes inside its transaction and preserves a concurrently replaced current row", async (t) => {
+  const host = await computerHost();
+  const f = fixture(t, host.artifacts);
+  const installed = await host.installations.get("context-probe");
+  const db = f.databases[0];
+  db.prepare("INSERT INTO installations VALUES(?,?)").run(
+    installed.installationId,
+    JSON.stringify({ ...installed, visibility: "private" }),
+  );
+  const generation = f.registry.generation();
+  const storage = f.contexts.get("registry").storage;
+  const transaction = storage.transactionSync.bind(storage);
+  const interleave = t.mock.method(storage, "transactionSync", (body) => {
+    interleave.mock.restore();
+    db.prepare("UPDATE installations SET record=?").run(
+      JSON.stringify(installed),
+    );
+    return transaction(body);
+  });
+  f.restart();
+  assert.deepEqual(f.registry.get(installed.installationId), installed);
+  assert.equal(f.registry.generation(), generation);
+  assert.equal(
+    db.prepare("SELECT reset_at FROM installation_store").get().reset_at,
+    null,
+  );
+});
+
+test("the persisted reset fact prevents a second wipe when an old-shaped backup reappears", async (t) => {
+  const host = await computerHost();
+  const f = fixture(t, host.artifacts);
+  const installed = await host.installations.get("context-probe");
+  const db = f.databases[0];
+  const old = JSON.stringify({ ...installed, anonymousApproval: null });
+  db.prepare("INSERT INTO installations VALUES(?,?)").run(
+    installed.installationId,
+    old,
+  );
+  f.restart();
+  assert.deepEqual(f.registry.list(), []);
+  const audit = { ...db.prepare("SELECT * FROM installation_store").get() };
+  db.prepare("INSERT INTO installations VALUES(?,?)").run(
+    installed.installationId,
+    old,
+  );
+  db.prepare("INSERT INTO installations VALUES(?,?)").run(
+    "current-app",
+    JSON.stringify({ ...installed, installationId: "current-app" }),
+  );
+  f.restart();
+  assert.deepEqual(
+    { ...db.prepare("SELECT * FROM installation_store").get() },
+    audit,
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM installations").get().n,
+    2,
+  );
+  assert.throws(() => f.registry.list());
+});
+
+test("a current-format installation with missing capability approval still hard-fails without resetting anything", async (t) => {
+  const host = await computerHost();
+  const { registry, databases, app, env, restart } = fixture(t, host.artifacts);
+  const installed = await host.installations.get("context-probe");
+  const corrupt = {
+    ...installed,
+    authority: {
+      ...installed.authority,
+      approvedGrants: [
         {
           capability: "git.repository",
           operations: ["binding:GIT:read"],
           resources: "tenant-scope",
         },
-      ];
-    }
-    databases[0]
-      .prepare("INSERT INTO installations VALUES(?,?)")
-      .run(installed.installationId, JSON.stringify(corrupt));
-    // An undecodable row is corruption, never a silently tolerated shape.
-    assert.throws(() => registry.get(installed.installationId));
-    assert.throws(() => registry.list());
-    const headers = { Authorization: `Bearer ${env.OYSTER_OWNER_KEY}` };
-    const home = await app.request("/", { headers });
-    assert.equal(home.status, 500);
-    const list = await app.request("/api/installations", { headers });
-    assert.equal(list.status, 500);
-  });
-}
+      ],
+    },
+  };
+  databases[0]
+    .prepare("INSERT INTO installations VALUES(?,?)")
+    .run(installed.installationId, JSON.stringify(corrupt));
+  const generation = registry.generation();
+  restart();
+  // An undecodable row is corruption, never a silently tolerated shape.
+  assert.throws(() => registry.get(installed.installationId));
+  assert.throws(() => registry.list());
+  const headers = { Authorization: `Bearer ${env.OYSTER_OWNER_KEY}` };
+  const home = await app.request("/", { headers });
+  assert.equal(home.status, 500);
+  const list = await app.request("/api/installations", { headers });
+  assert.equal(list.status, 500);
+  assert.equal(registry.generation(), generation);
+  assert.equal(
+    databases[0].prepare("SELECT COUNT(*) AS n FROM installations").get().n,
+    1,
+  );
+});
 
 test("store identity survives registry restart and rejects an old save in a replacement store with identical installation pins", async (t) => {
   const selected = await computerHost(

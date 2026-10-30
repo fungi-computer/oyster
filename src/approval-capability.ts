@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { member, routes as routesFor } from "./authorization.js";
 import { bodyLimit } from "hono/body-limit";
 import { causeClass } from "./cause-class.js";
 import * as Schema from "effect/Schema";
@@ -12,67 +12,80 @@ import {
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { CapabilityEnv, OysterCapability } from "./host.js";
 
-/** Ordinary capability routes; the outer App gate supplies identity and consent. */
+/** Ordinary capability routes; the outer App gate supplies consent, and only members answer. */
 export function approvalCapability(
   control: (actor: HostActor) => Approvals,
 ): OysterCapability {
-  const routes = new Hono<CapabilityEnv>();
-  routes.use("*", bodyLimit({ maxSize: 4096 }));
-  routes.use("*", async (context, next) => {
-    if (context.env.principal.actor.kind !== "member")
-      return context.json({ kind: "refused", reason: "not-eligible" }, 403);
-    await next();
-    return undefined;
-  });
-  routes.onError((cause, context) => {
-    if (cause instanceof SyntaxError || cause instanceof Schema.SchemaError)
-      return context.json({ error: "Invalid approval request" }, 400);
-    console.warn("Native approval control failed", {
-      causeClass: causeClass(cause),
-    });
-    return context.json({ error: "Approval home unavailable" }, 503);
-  });
   const strict = { onExcessProperty: "error" } as const;
-  routes.post("/list", async (c) =>
-    c.json(
-      await control(c.env.principal.actor).list(
-        Schema.decodeUnknownSync(
-          ApprovalListInputSchema,
-          strict,
-        )(await c.req.json()),
-      ),
-    ),
+  const eligible = member(() =>
+    Response.json({ kind: "refused", reason: "not-eligible" }, { status: 403 }),
   );
-  routes.post("/get", async (c) =>
-    c.json(
-      await control(c.env.principal.actor).get(
-        Schema.decodeUnknownSync(
-          ApprovalGetInputSchema,
-          strict,
-        )(await c.req.json()),
-      ),
-    ),
-  );
-  routes.post("/answer", async (c) =>
-    c.json(
-      await control(c.env.principal.actor).answer(
-        Schema.decodeUnknownSync(
-          ApprovalAnswerInputSchema,
-          strict,
-        )(await c.req.json()),
-      ),
-    ),
-  );
-  routes.post("/set-auto-approve", async (c) =>
-    c.json(
-      await control(c.env.principal.actor).setAutoApprove(
-        Schema.decodeUnknownSync(
-          AutoApproveInputSchema,
-          strict,
-        )(await c.req.json()),
-      ),
-    ),
-  );
+  const options = { middleware: [bodyLimit({ maxSize: 4096 })] };
+  const routes = routesFor<CapabilityEnv>()
+    .post(
+      "/list",
+      eligible,
+      async (c, { principal }) =>
+        c.json(
+          await control(principal.actor).list(
+            Schema.decodeUnknownSync(
+              ApprovalListInputSchema,
+              strict,
+            )(await c.req.json()),
+          ),
+        ),
+      options,
+    )
+    .post(
+      "/get",
+      eligible,
+      async (c, { principal }) =>
+        c.json(
+          await control(principal.actor).get(
+            Schema.decodeUnknownSync(
+              ApprovalGetInputSchema,
+              strict,
+            )(await c.req.json()),
+          ),
+        ),
+      options,
+    )
+    .post(
+      "/answer",
+      eligible,
+      async (c, { principal }) =>
+        c.json(
+          await control(principal.actor).answer(
+            Schema.decodeUnknownSync(
+              ApprovalAnswerInputSchema,
+              strict,
+            )(await c.req.json()),
+          ),
+        ),
+      options,
+    )
+    .post(
+      "/set-auto-approve",
+      eligible,
+      async (c, { principal }) =>
+        c.json(
+          await control(principal.actor).setAutoApprove(
+            Schema.decodeUnknownSync(
+              AutoApproveInputSchema,
+              strict,
+            )(await c.req.json()),
+          ),
+        ),
+      options,
+    )
+    .onError((cause, context) => {
+      if (cause instanceof SyntaxError || cause instanceof Schema.SchemaError)
+        return context.json({ error: "Invalid approval request" }, 400);
+      console.warn("Native approval control failed", {
+        causeClass: causeClass(cause),
+      });
+      return context.json({ error: "Approval home unavailable" }, 503);
+    });
   return {
     id: "approvals",
     version: 1,

@@ -28,7 +28,7 @@ import {
   standaloneWorkflowWebhookRoutes,
   standaloneWorkflowWebhookControls,
 } from "../../src/standalone/workflow-webhooks.ts";
-import { Hono } from "hono";
+import { serveDoors, serveHost } from "../../src/authorization.ts";
 import { createWorkflowIndexes } from "../../../../apps/trellis/backend/indexes.ts";
 
 const hooks = registerHooks({
@@ -532,8 +532,10 @@ test("standalone webhook routing addresses only an existing library, forwards to
       },
     },
   };
-  const routes = standaloneWorkflowWebhookRoutes(env, async (request) =>
-    new URL(request.url).origin === "https://owner.test" ? host : null,
+  const routes = serveDoors(
+    standaloneWorkflowWebhookRoutes(env, async (request) =>
+      new URL(request.url).origin === "https://owner.test" ? host : null,
+    ),
   );
   for (const [origin, library] of [
     ["https://owner.test", "missing"],
@@ -555,15 +557,11 @@ test("standalone webhook routing addresses only an existing library, forwards to
   assert.equal(response.status, 403);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(await response.json(), { error: "refused" });
-  const controls = new Hono()
-    .use("*", async (context, next) => {
-      context.set("principal", ownerPrincipal);
-      await next();
-    })
-    .route(
-      "/",
-      standaloneWorkflowWebhookControls(env, () => Promise.resolve(host)),
-    );
+  const controls = serveHost(
+    standaloneWorkflowWebhookControls(env, () => Promise.resolve(host)),
+    () => Promise.resolve({ kind: "admitted", principal: ownerPrincipal }),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
   const control = await controls.request(
     "https://owner.test/api/installations/trellis/workflows/webhooks",
     { method: "POST", body: JSON.stringify({ operation: "list" }) },
@@ -577,25 +575,21 @@ async function webhookControlRouteFixture(t) {
   const { runs, host, ownerPrincipal } = await libraryFixture(t);
   const addresses = [];
   const control = t.mock.method(runs, "webhookControl");
-  const routes = new Hono()
-    .use("*", async (context, next) => {
-      context.set("principal", ownerPrincipal);
-      await next();
-    })
-    .route(
-      "/",
-      standaloneWorkflowWebhookControls(
-        {
-          WORKFLOW_RUNS: {
-            getByName(id) {
-              addresses.push(id);
-              return runs;
-            },
+  const routes = serveHost(
+    standaloneWorkflowWebhookControls(
+      {
+        WORKFLOW_RUNS: {
+          getByName(id) {
+            addresses.push(id);
+            return runs;
           },
         },
-        () => Promise.resolve(host),
-      ),
-    );
+      },
+      () => Promise.resolve(host),
+    ),
+    () => Promise.resolve({ kind: "admitted", principal: ownerPrincipal }),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
   return {
     addresses,
     control,
@@ -819,12 +813,15 @@ test("Agent Workflow schedule and App-event controls require the exact current a
     grantedBy: library.ownerId,
   };
   const facts = library.agentFacts("agent_one", "session_one", library.ownerId);
-  assert.deepEqual(await library.runs.schedules(facts), { schedules: [] });
+  assert.deepEqual(await library.runs.schedules(facts, {}), {
+    schedules: [],
+    nextCursor: null,
+  });
   assert.deepEqual(await library.runs.eventTriggers(facts), {
     eventTriggers: [],
   });
   policy = { ...policy, revision: "agent_one:2" };
-  await assert.rejects(library.runs.schedules(facts));
+  await assert.rejects(library.runs.schedules(facts, {}));
   await assert.rejects(library.runs.eventTriggers(facts));
 });
 

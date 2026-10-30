@@ -172,7 +172,6 @@ export async function deliverBackground(
           case "not_declared":
           case "approval_required":
           case "invalid_input":
-          case "visitor_read_only":
             return { kind: "refused", code: "denied" };
         }
       }

@@ -1,9 +1,6 @@
 /** The bundled App page script; the host serves it at a content-hashed path. */
 export declare const pageScript: string;
 
-/** The bundled public read-only launcher served at a content-hashed path. */
-export declare const publicHomeScript: string;
-
 /** Shared host fonts, served once as a digest-pinned stylesheet. */
 export declare const fontStyles: string;
 

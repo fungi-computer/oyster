@@ -387,45 +387,29 @@ for (const phase of ["verification", "activation"]) {
   });
 }
 
-for (const [writer, request] of [
-  ["Release selection", (race) => race.select(race.current().release)],
-  [
-    "a visibility change",
-    (race) =>
-      race.app.request(
-        `/api/installations/${id}/visibility`,
-        race.json("PUT", {
-          visibility:
-            race.current().visibility === "public" ? "private" : "public",
-        }),
-      ),
-  ],
-]) {
-  test(`${writer} awaiting activation cannot undo an owner revocation`, async (t) => {
-    const race = await raceHost(t);
-    assert.equal((await race.setGrants("declared")).status, 200);
-    assert.notDeepEqual(race.current().authority.approvedGrants, []);
-    // Selection commits through the owner after preparation. Visibility is an
-    // immediate owner mutation. Both must lose to the later revocation; the
-    // post-commit delayed-reply window is exercised separately below.
-    const gate =
-      writer === "Release selection" ? race.holdPreparation() : race.hold();
-    const pending = request(race);
-    await gate.entered.promise;
-    assert.equal((await race.setGrants("none")).status, 200);
-    const revoked = race.current();
-    gate.release.resolve();
-    const response = await pending;
-    assert.deepEqual(
-      {
-        status: response.status,
-        body: await response.json(),
-        stored: race.current(),
-      },
-      { status: 409, body: { error: "stale_authority" }, stored: revoked },
-    );
-  });
-}
+test("Release selection awaiting activation cannot undo an owner revocation", async (t) => {
+  const race = await raceHost(t);
+  assert.equal((await race.setGrants("declared")).status, 200);
+  assert.notDeepEqual(race.current().authority.approvedGrants, []);
+  // Selection commits through the owner after preparation and must lose to
+  // the later revocation; the post-commit delayed-reply window is exercised
+  // separately below.
+  const gate = race.holdPreparation();
+  const pending = race.select(race.current().release);
+  await gate.entered.promise;
+  assert.equal((await race.setGrants("none")).status, 200);
+  const revoked = race.current();
+  gate.release.resolve();
+  const response = await pending;
+  assert.deepEqual(
+    {
+      status: response.status,
+      body: await response.json(),
+      stored: race.current(),
+    },
+    { status: 409, body: { error: "stale_authority" }, stored: revoked },
+  );
+});
 
 test("concurrent installs of one new name commit only once", async (t) => {
   const race = await raceHost(t);

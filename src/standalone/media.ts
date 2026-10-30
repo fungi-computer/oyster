@@ -8,9 +8,12 @@ import type { FrameBindingMethods, FrameBindingProps } from "../cloudflare.js";
 import type { InvocationFrame } from "../invocation.js";
 import type { OysterBindingResult } from "../workers.js";
 import { readMediaFailure } from "@fungi.computer/darkroom/browser";
-import { appMediaGenerationResultSchema } from "@fungi.computer/darkroom/app-media-contracts";
+import {
+  appMediaGenerationResultSchema,
+  mediaModelsSchema,
+} from "@fungi.computer/darkroom/app-media-contracts";
 import { mediaSlot } from "../media.js";
-import { Hono } from "hono";
+import { computer, routes as routeTable } from "../authorization.js";
 import * as Schema from "effect/Schema";
 import { pendingSchema } from "@fungi.computer/agar/backend-definition";
 import {
@@ -20,6 +23,7 @@ import {
 } from "@fungi.computer/agar/media-json";
 import {
   createMediaService,
+  estimateMediaModel,
   mediaPendingSchema,
   mediaResultSchema,
   type MediaServiceHost,
@@ -63,13 +67,12 @@ export function workersMedia(
   workspace: Readonly<{ computerId: string; files: FileSource }>,
 ): readonly OysterCapability[] {
   const { computerId } = workspace;
-  const routes = new Hono<CapabilityEnv>();
+  // Media reads and writes the Computer's workspace: a key needs `computer.use`.
+  const routes = routeTable<CapabilityEnv>();
   const service = (principal: TenantPrincipal) =>
     standaloneMediaService(env, oysterPrincipalId(principal), workspace);
-  routes.get("/describe", async (context) => {
-    const response = await service(context.env.principal).request(
-      "http://media/models",
-    );
+  routes.get("/describe", computer(), async (context, { principal }) => {
+    const response = await service(principal).request("http://media/models");
     return context.json(
       Schema.decodeUnknownSync(mediaGenerationDescriptionSchema)({
         computerId,
@@ -78,7 +81,7 @@ export function workersMedia(
       }),
     );
   });
-  routes.post("/generate", async (context) => {
+  routes.post("/generate", computer(), async (context, { principal }) => {
     const input = Schema.decodeUnknownOption(
       Schema.fromJsonString(mediaGenerationJsonRequestSchema),
       { onExcessProperty: "error" },
@@ -87,8 +90,8 @@ export function workersMedia(
     const path = normalizeFilePath(input.value.destination.path);
     if (path === null || path === "/") return context.json(invalidRequest());
     const references = input.value.settings.references?.map((reference) => ({
-      ...reference,
       computerId,
+      ...reference,
       path: normalizeFilePath(reference.path),
     }));
     if (
@@ -97,21 +100,18 @@ export function workersMedia(
       )
     )
       return context.json(invalidRequest());
-    const response = await service(context.env.principal).request(
-      "http://media/generate",
-      {
-        method: "POST",
-        signal: context.req.raw.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Request-Id": input.value.requestId,
-        },
-        body: JSON.stringify({
-          path,
-          settings: { ...input.value.settings, references },
-        }),
+    const response = await service(principal).request("http://media/generate", {
+      method: "POST",
+      signal: context.req.raw.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-Id": input.value.requestId,
       },
-    );
+      body: JSON.stringify({
+        path,
+        settings: { ...input.value.settings, references },
+      }),
+    });
     if (!response.ok) {
       const failure = await readMediaFailure(response);
       const projected =
@@ -154,7 +154,7 @@ export function workersMedia(
       },
     });
   });
-  routes.post("/cancel-attempt", async (context) => {
+  routes.post("/cancel-attempt", computer(), async (context) => {
     const reference = Schema.decodeUnknownOption(
       Schema.fromJsonString(mediaGenerationReferenceSchema),
       { onExcessProperty: "error" },
@@ -221,7 +221,7 @@ function standaloneMediaService(
       ? destination
       : {
           ...destination,
-          readReference: async (reference) => {
+          readReference: async (reference, model) => {
             if (reference.computerId !== computerId)
               throw new MediaSettingsError(
                 "reference Computer is not selected",
@@ -236,7 +236,7 @@ function standaloneMediaService(
                 "reference image is unavailable or exceeds the byte limit",
               );
             return {
-              ...(await fit(bytes)),
+              ...(await fit(bytes, model)),
               filename: reference.path.split("/").at(-1) ?? "reference",
             };
           },
@@ -318,8 +318,15 @@ export async function dispatchMediaBinding(
     input.operation === "generate" ? input.input.libraryPath : undefined,
   );
   let response: Response;
-  if (input.operation === "models") response = await service.request("/models");
-  else {
+  if (input.operation === "models") {
+    const catalog = await service.request("/models");
+    response = Response.json(
+      mediaModelsSchema.parse(await catalog.json()).map((model) => ({
+        ...model,
+        priceEstimate: estimateMediaModel(model),
+      })),
+    );
+  } else {
     const body = mediaBindingRequest(input.input, workspace.computerId);
     const generated = await service.request("/generate", {
       method: "POST",

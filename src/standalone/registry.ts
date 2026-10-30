@@ -570,6 +570,10 @@ export abstract class StandaloneRegistry
     return (await this.#appBuilds()).read(jobId);
   }
 
+  async readBuildLog(jobId: string) {
+    return (await this.#appBuilds()).readLog(jobId);
+  }
+
   /** A job ID alone never grants another installation access to its status. */
   async readInstallationBuild(
     installationId: string,

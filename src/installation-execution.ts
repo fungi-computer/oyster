@@ -68,23 +68,15 @@ export async function executeInstallation(
       declaration,
       host.capabilities ?? [],
     );
-    // A Workflow reuses the owner's approval; any capability or anonymous
-    // method its baseline has not approved waits for the owner.
+    // A Workflow reuses the owner's approval; any capability its baseline
+    // has not approved waits for the owner.
     if (
       command.admission.origin === "workflow" &&
-      (pendingCapabilities(
+      pendingCapabilities(
         baseline?.authority ?? { approvedGrants: [] },
         declaration,
         declaredOperations,
-      ).length > 0 ||
-        declaredOperations.anonymousMethods.some(
-          (method) =>
-            !(baseline?.approvedAnonymousMethods ?? []).some(
-              (approved) =>
-                approved.name === method.name &&
-                approved.digest === method.digest,
-            ),
-        ))
+      ).length > 0
     )
       return refused(409, "needs_consent");
     const reduced = applyInstallationCommand(
@@ -111,6 +103,14 @@ export async function executeInstallation(
           installationId: command.installationId,
           instanceId: command.instanceId,
         },
+        // Only a fresh owner-direct Tourtois install in the configured home
+        // slot receives the ordinary persisted Shell grant. App/workflow
+        // requests cannot opt in; selection only intersects existing grants.
+        builtInShell:
+          baseline === null &&
+          command.admission.origin === "owner-direct" &&
+          verified.release.appId === "app_tourtois" &&
+          command.installationId === host.homeInstallationId,
       },
     );
     if (Result.isFailure(reduced)) return refused(409, reduced.failure.code);

@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import {
   appCapabilityIdSchema,
-  appApiMethodNameSchema,
   type AppDeclaration,
   type HostActor,
 } from "@fungi.computer/puffball/app";
@@ -158,6 +157,8 @@ export type GrantContext = Readonly<{
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
   now: number;
+  /** Host-attested configured built-in Shell; never a manifest or command field. */
+  builtInShell?: boolean;
 }>;
 export type GrantRefusal = Readonly<{
   kind: "refused";
@@ -189,7 +190,6 @@ export function applyGrantCommand(
     return refuse("stale_authority");
   if (
     context.principal.role === null ||
-    context.principal.actor.kind === "visitor" ||
     (command.kind === "change-grants" && context.principal.role !== "owner")
   )
     return refuse("not_owner");
@@ -207,7 +207,9 @@ export function applyGrantCommand(
           ? context.declaration.capabilities
               .filter(
                 (capability) =>
-                  permissionCatalog[capability].consent === "install",
+                  permissionCatalog[capability].consent === "install" ||
+                  (capability === "team.workbenchHost" &&
+                    context.builtInShell === true),
               )
               .map((capability): ApprovedGrant => ({
                 capability,
@@ -280,30 +282,11 @@ export function applyGrantCommand(
     approval,
   });
 }
-const anonymousMethodsSchema = z
-  .array(
-    z
-      .strictObject({
-        name: ownerCodec(appApiMethodNameSchema),
-        digest: ownerCodec(sha256DigestSchema),
-      })
-      .readonly(),
-  )
-  .refine(
-    (methods) =>
-      methods.every((method, index) => {
-        const previous = methods[index - 1];
-        return previous === undefined || previous.name < method.name;
-      }),
-    "Anonymous method identities must have unique, sorted names",
-  )
-  .readonly();
 /** Immutable operation facts derived from descriptor methods and the binding registry. */
 export const declaredOperationsSchema = z.lazy(() =>
   z.strictObject({
     artifactDigest: ownerCodec(sha256DigestSchema),
     digest: ownerCodec(sha256DigestSchema),
-    anonymousMethods: anonymousMethodsSchema,
     capabilities: z
       .array(
         z
@@ -335,23 +318,11 @@ export const installationSchema = z
     releasePin: z.enum(["pinned", "floating"]),
     authority: appAuthoritySchema,
     status: z.enum(["enabled", "disabled", "deleted"]),
-    visibility: z.enum(["private", "public"]),
-    approvedAnonymousMethods: anonymousMethodsSchema,
-    anonymousApproval: approvalSchema.nullable(),
   })
   .refine(
     (installation) => installation.appId === installation.release.appId,
     "Release must belong to the installation's App",
-  )
-  .refine((installation) => {
-    const approval = installation.anonymousApproval;
-    return approval === null
-      ? installation.approvedAnonymousMethods.length === 0
-      : installation.status !== "deleted" &&
-          installation.approvedAnonymousMethods.length > 0 &&
-          approval.by.kind === "member" &&
-          approval.authorityVersion <= installation.authority.authorityVersion;
-  }, "Anonymous authority requires a retained human approval receipt");
+  );
 export type Installation = Readonly<z.output<typeof installationSchema>>;
 const releaseFields = {
   release: ownerCodec(releaseSchema),
@@ -370,16 +341,8 @@ export const installationCommandSchema = z.lazy(() =>
       status: installationSchema.shape.status,
     }),
     z.strictObject({
-      kind: z.literal("set-visibility"),
-      visibility: installationSchema.shape.visibility,
-    }),
-    z.strictObject({
       kind: z.literal("change-grants"),
       changes: grantChangesSchema,
-    }),
-    z.strictObject({
-      kind: z.literal("approve-anonymous"),
-      methods: anonymousMethodsSchema,
     }),
   ]),
 );
@@ -393,8 +356,8 @@ export type InstallationContext = Readonly<{
   declaredOperations: DeclaredOperations;
   now: number;
   identity: Pick<Installation, "installationId" | "instanceId">;
-  /** Trusted interactive consent; never copied from a command or inferred from a key's owner role. */
-  anonymousConsent?: Readonly<{ memberId: string }>;
+  /** Operator-selected built-in Shell, attested by the executing host, not the App. */
+  builtInShell?: boolean;
 }>;
 /** Closed refusals: failed commands produce no installation update. */
 export const installationRefusalSchema = z.lazy(() =>
@@ -448,19 +411,6 @@ export function applyInstallationCommand(
   }
   if (command.kind === "change-grants" && context.role !== "owner")
     return refuse("not_owner");
-  const anonymousConsent =
-    context.by.kind === "member" &&
-    context.anonymousConsent?.memberId === context.by.memberId;
-  if (command.kind === "approve-anonymous") {
-    const narrows = command.methods.every((method) =>
-      current?.approvedAnonymousMethods.some(
-        (approved) =>
-          approved.name === method.name && approved.digest === method.digest,
-      ),
-    );
-    if (context.role !== "owner" || (!narrows && !anonymousConsent))
-      return refuse("not_owner");
-  }
   const release =
     command.kind === "install" || command.kind === "select-release"
       ? command.release
@@ -483,7 +433,7 @@ export function applyInstallationCommand(
       ? { kind: command.kind }
       : command.kind === "change-grants"
         ? command
-        : command.kind === "set-status" && command.status === "deleted"
+        : command.status === "deleted"
           ? { kind: "delete" }
           : null;
   const authority =
@@ -506,44 +456,9 @@ export function applyInstallationCommand(
           declaration: context.declaration,
           declaredOperations: context.declaredOperations,
           now: context.now,
+          builtInShell: context.builtInShell === true,
         });
   if (Result.isFailure(authority)) return refuse(authority.failure.code);
-  let anonymousMethods = current?.approvedAnonymousMethods ?? [];
-  let anonymousApproval = current?.anonymousApproval ?? null;
-  if (command.kind === "approve-anonymous") {
-    if (
-      command.methods.some(
-        (method) =>
-          !context.declaredOperations.anonymousMethods.some(
-            (declared) =>
-              declared.name === method.name &&
-              declared.digest === method.digest,
-          ),
-      )
-    )
-      return refuse("not_declared");
-    anonymousMethods = command.methods;
-    if (command.methods.length === 0) anonymousApproval = null;
-    else if (anonymousConsent)
-      anonymousApproval = {
-        by: context.by,
-        at: context.now,
-        authorityVersion: version,
-      };
-  }
-  if (command.kind === "select-release") {
-    anonymousMethods = anonymousMethods.filter((method) =>
-      context.declaredOperations.anonymousMethods.some(
-        (declared) =>
-          declared.name === method.name && declared.digest === method.digest,
-      ),
-    );
-    if (anonymousMethods.length === 0) anonymousApproval = null;
-  }
-  if (command.kind === "set-status" && command.status === "deleted") {
-    anonymousMethods = [];
-    anonymousApproval = null;
-  }
   const next = installationSchema.safeParse({
     installationId: current?.installationId ?? context.identity.installationId,
     instanceId:
@@ -558,13 +473,7 @@ export function applyInstallationCommand(
       command.kind === "set-status"
         ? command.status
         : (current?.status ?? "enabled"),
-    visibility:
-      command.kind === "set-visibility"
-        ? command.visibility
-        : (current?.visibility ?? "private"),
     authority: authority.success,
-    approvedAnonymousMethods: anonymousMethods,
-    anonymousApproval,
   });
   return next.success
     ? Result.succeed({ next: next.data, authorityChanged: true })
