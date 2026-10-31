@@ -250,7 +250,15 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
             catch (cause) { output.textContent = JSON.stringify({ error: cause.message }); }
           };
           document.body.append(button);
-        }`,
+        }
+        const fullscreen = document.createElement("button");
+        fullscreen.textContent = "Fullscreen";
+        fullscreen.onclick = () => {
+          void document.documentElement.requestFullscreen().catch((cause) => {
+            output.textContent = JSON.stringify({ error: cause.message });
+          });
+        };
+        document.body.append(fullscreen);`,
       resolveDir: new globalThis.URL("..", import.meta.url).pathname,
     },
     bundle: true,
@@ -300,6 +308,29 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
     assert.equal(documentResponse?.status(), 200);
     const frame = page.frameLocator("#oyster-app");
     const output = frame.locator("output");
+    assert.equal(
+      await page
+        .locator("#oyster-app")
+        .evaluate((element) => element.allowFullscreen),
+      true,
+    );
+    await frame
+      .getByRole("button", { name: "Fullscreen", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        globalThis.document.fullscreenElement ===
+        globalThis.document.querySelector("#oyster-app"),
+    );
+    assert.equal(
+      await frame.locator("body").evaluate(() => globalThis.origin),
+      "null",
+      "the fullscreen App retains its opaque origin under the real document CSP",
+    );
+    await page.evaluate(() => globalThis.document.exitFullscreen());
+    await page.waitForFunction(
+      () => globalThis.document.fullscreenElement === null,
+    );
     const downloads = [];
     page.on("download", (download) => downloads.push(download));
     await frame.getByRole("button", { name: "Save", exact: true }).click();

@@ -580,6 +580,12 @@ export abstract class StandaloneWorkflowRunsBase<
       input,
     );
   }
+  async resumeSchedule(facts: InvocationFacts, input: { scheduleId: string }) {
+    return (await this.library(facts, "resumeSchedule")).schedules.resume(
+      facts,
+      input,
+    );
+  }
   async schedules(facts: InvocationFacts, input: ScheduleListInput) {
     return (await this.library(facts, "schedules")).schedules.list(
       facts,

@@ -963,7 +963,13 @@ function snapshotBuildEnvironment(
   return env;
 }
 
-/** How one build executor is composed; never part of a recipe or request. */
+/**
+ * How one build executor is composed; never part of a recipe or request.
+ * Build-log stdout/stderr are interleaved in arrival order and unlabelled.
+ * The job log is credential-bearing by design; it must never flow to
+ * diagnostics, Releases, agent surfaces, or support bundles without a
+ * recorded decision.
+ */
 export type LocalBuildExecutorOptions = Readonly<{
   packageStoreDirectory?: string;
   /** Host-hydrated metadata; supplied only for a cache-only pnpm install. */

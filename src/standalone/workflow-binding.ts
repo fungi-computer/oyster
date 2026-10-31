@@ -21,6 +21,8 @@ import {
   scheduleDisarmInputSchema,
   schedulePauseInputSchema,
   schedulePauseReplySchema,
+  scheduleResumeInputSchema,
+  scheduleResumeReplySchema,
   scheduleListInputSchema,
   schedulesReplySchema,
   triggerDisarmReplySchema,
@@ -65,6 +67,7 @@ export type WorkflowRunCalls = Pick<
   | "answerReview"
   | "armSchedule"
   | "pauseSchedule"
+  | "resumeSchedule"
   | "disarmSchedule"
   | "schedules"
   | "armEventTrigger"
@@ -101,6 +104,8 @@ const workflowArgs = {
     z.tuple([scheduleDisarmInputSchema]).parse(args),
   pauseSchedule: (args: unknown) =>
     z.tuple([schedulePauseInputSchema]).parse(args),
+  resumeSchedule: (args: unknown) =>
+    z.tuple([scheduleResumeInputSchema]).parse(args),
   schedules: (args: unknown) => z.tuple([scheduleListInputSchema]).parse(args),
   armEventTrigger: (args: unknown) =>
     z.tuple([triggerArmTargetSchema]).parse(args),
@@ -119,6 +124,7 @@ const workflowResults = {
   armSchedule: scheduleArmReplySchema,
   disarmSchedule: triggerDisarmReplySchema,
   pauseSchedule: schedulePauseReplySchema,
+  resumeSchedule: scheduleResumeReplySchema,
   schedules: schedulesReplySchema,
   armEventTrigger: eventArmReplySchema,
   disarmEventTrigger: triggerDisarmReplySchema,
@@ -133,6 +139,7 @@ const workflowMethod = z.enum([
   "answerReview",
   "armSchedule",
   "pauseSchedule",
+  "resumeSchedule",
   "disarmSchedule",
   "schedules",
   "armEventTrigger",
@@ -324,6 +331,11 @@ export async function dispatchWorkflowBinding(
     case "pauseSchedule": {
       const [input] = workflowArgs.pauseSchedule(args);
       result = await runs.pauseSchedule(frame.facts, input);
+      break;
+    }
+    case "resumeSchedule": {
+      const [input] = workflowArgs.resumeSchedule(args);
+      result = await runs.resumeSchedule(frame.facts, input);
       break;
     }
     case "schedules": {

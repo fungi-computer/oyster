@@ -1,4 +1,8 @@
 import {
+  connectGuest,
+  expectPublicDownload,
+} from "./computer-egress-guest.fixture.mjs";
+import {
   nativeWorkflowRoot,
   nativeAppClient,
 } from "./workflow-native.fixture.mjs";
@@ -20,20 +24,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { URL, fileURLToPath } from "node:url";
 
-import { setTimeout as delay } from "node:timers/promises";
-
 import * as z from "zod";
 
-import {
-  Client,
-  StreamableHTTPClientTransport,
-} from "@modelcontextprotocol/client";
-
 import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
-import {
-  computerProcessSchema,
-  processListOutputSchema,
-} from "@fungi.computer/computer-contract";
 import { teamComputerSchema } from "@fungi.computer/nacre/workbench";
 import { appBackend } from "../../../../apps/bonsai/backend/methods.ts";
 import packageMetadata from "../../../../apps/bonsai/package.json" with { type: "json" };
@@ -75,7 +68,6 @@ const jsonAuth = {
 };
 const settingUrl = (computerId) =>
   `${origin}/api/computers/${encodeURIComponent(computerId)}/internet-access`;
-let runs = 0;
 
 async function createComputer(name) {
   const response = await globalThis.fetch(`${origin}/api/computers`, {
@@ -97,112 +89,6 @@ async function internetAccess(computerId, enabled) {
   assert.equal(response.status, 200, await response.clone().text());
   return z.strictObject({ enabled: z.boolean() }).parse(await response.json())
     .enabled;
-}
-
-/** The owner selects the Computer before acquiring a fresh MCP catalog. */
-async function connectGuest(computerId) {
-  const selected = await globalThis.fetch(`${origin}/api/computers/selected`, {
-    method: "PUT",
-    headers: jsonAuth,
-    body: JSON.stringify({ computerId }),
-  });
-  assert.equal(selected.status, 200, await selected.clone().text());
-  assert.equal(
-    teamComputerSchema.parse(await selected.json()).computerId,
-    computerId,
-  );
-  const client = new Client(
-    { name: "Oyster Computer egress proof", version: "1" },
-    { capabilities: { elicitation: { form: {} } } },
-  );
-  client.setRequestHandler("elicitation/create", () => ({
-    action: "accept",
-    content: { approve: true },
-  }));
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`${origin}/mcp`),
-    { requestInit: { headers: auth } },
-  );
-  await client.connect(transport);
-  const execute = async (code) => {
-    const result = await client.callTool(
-      { name: "execute", arguments: { code } },
-      { timeout: 240_000 },
-    );
-    assert.notEqual(
-      result.isError,
-      true,
-      redact(JSON.stringify(result.content)),
-    );
-    const [part] = z
-      .tuple([z.object({ type: z.literal("text"), text: z.string() })])
-      .parse(result.content);
-    return JSON.parse(part.text);
-  };
-  // A process uses the container backend, not the Worker's builtin shell.
-  const guest = async (command) => {
-    const started = Date.now();
-    runs += 1;
-    const out = `/workspace/egress-proof-${String(runs)}.txt`;
-    log(`step: ${computerId} guest process ${redact(command)}`);
-    const process = computerProcessSchema.parse(
-      await execute(
-        `return await env.computers.workspace.start_process(${JSON.stringify({
-          command: `{ ${command}; } > ${out} 2>&1; echo "exit=$?" >> ${out}`,
-          cwd: "/workspace",
-        })})`,
-      ),
-    );
-    for (;;) {
-      assert.ok(Date.now() - started < 180_000, "Guest process did not exit");
-      const listed = processListOutputSchema.parse(
-        await execute(
-          "return await env.computers.workspace.list_processes({})",
-        ),
-      );
-      const current = listed.processes.find(({ id }) => id === process.id);
-      if (current !== undefined && current.state !== "running") break;
-      await delay(1_000);
-    }
-    for (;;) {
-      assert.ok(Date.now() - started < 180_000, "Guest output never synced");
-      const text = z
-        .string()
-        .parse(
-          await execute(
-            `return (await env.computers.workspace.read(${JSON.stringify({ path: out })})).content`,
-          ),
-        );
-      if (/exit=\d/u.test(text)) return { text, ms: Date.now() - started };
-      await delay(1_000);
-    }
-  };
-  return {
-    guest,
-    async close() {
-      await transport.terminateSession();
-      await client.close();
-    },
-  };
-}
-
-async function expectPublicDownload(computerId, status) {
-  const connection = await connectGuest(computerId);
-  try {
-    const result = await connection.guest(
-      [
-        "status=$(curl -sS -o /tmp/egress-package.tgz -w '%{http_code}' https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz)",
-        'printf "status=%s\\n" "$status"',
-        `if [ "$status" = 200 ]; then tar -xOf /tmp/egress-package.tgz package/package.json | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).version"; fi`,
-      ].join(" && "),
-    );
-    assert.match(result.text, new RegExp(`status=${status}`, "u"));
-    assert.match(result.text, /exit=0/u);
-    if (status === 200) assert.match(result.text, /7\.0\.0/u);
-    log(`PASS ${computerId} public package download: ${status}`);
-  } finally {
-    await connection.close();
-  }
 }
 
 const timings = {};
@@ -261,7 +147,7 @@ try {
   assert.equal(await internetAccess(computerA), false);
   assert.equal(await internetAccess(computerB), true);
 
-  const connection = await connectGuest(computerA);
+  const connection = await connectGuest(nativeHost, computerA);
   const { guest } = connection;
   try {
     const remote = `https://${tenantHost}/git/bonsai/pond.git`;
@@ -299,20 +185,20 @@ try {
     "The gateway recorded the admitted Oyster Git lane",
   );
 
-  await expectPublicDownload(computerA, 403);
-  await expectPublicDownload(computerB, 200);
+  await expectPublicDownload(nativeHost, computerA, 403);
+  await expectPublicDownload(nativeHost, computerB, 200);
   assert.equal(await internetAccess(computerA, true), true);
   assert.equal(await internetAccess(computerB, false), false);
-  await expectPublicDownload(computerA, 200);
-  await expectPublicDownload(computerB, 403);
+  await expectPublicDownload(nativeHost, computerA, 200);
+  await expectPublicDownload(nativeHost, computerB, 403);
   assert.equal(await internetAccess(computerA, false), false);
   assert.equal(await internetAccess(computerB, true), true);
 
   await nativeHost.restart();
   assert.equal(await internetAccess(computerA), false);
   assert.equal(await internetAccess(computerB), true);
-  await expectPublicDownload(computerA, 403);
-  await expectPublicDownload(computerB, 200);
+  await expectPublicDownload(nativeHost, computerA, 403);
+  await expectPublicDownload(nativeHost, computerB, 200);
   log("PASS per-Computer settings and actual egress survive Worker restart");
 
   // The operator override changes only this proof's disposable local config.
@@ -322,7 +208,7 @@ try {
   await writeFile(configPath, JSON.stringify(config));
   await nativeHost.restart();
   assert.equal(await internetAccess(computerB), true);
-  await expectPublicDownload(computerB, 403);
+  await expectPublicDownload(nativeHost, computerB, 403);
   log("PASS global off overrides a persisted Computer-on setting");
   log(
     `PASS computer egress native proof (${nativeHost.runtime}) ${JSON.stringify(timings)}`,

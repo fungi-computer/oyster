@@ -29,6 +29,8 @@ import {
 import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
 import { sha256 } from "@fungi.computer/oyster/host";
 import { installOnOyster } from "../../dist/installation-client.js";
+import { installationOperationSchema } from "../../dist/installation-operations.js";
+import { approveChosenDashboard } from "../../dist/standalone/dashboard-approval.js";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import {
   workbenchDirectorySchema,
@@ -123,6 +125,39 @@ const origin = `http://127.0.0.1:${port}`;
 // requests to the Worker at that origin, as TLS termination does in production.
 const tenantHost = "oyster.test";
 const headers = { Authorization: `Bearer ${key}` };
+/** A fixture owner explicitly chooses and approves its freshly installed shell. */
+async function installChosenShell(installationId, directory) {
+  let requestId;
+  const installed = await installRelease({
+    url: origin,
+    key,
+    installationId,
+    directory,
+    onAdmitted: (operation) => {
+      requestId = operation.requestId;
+    },
+  });
+  assert.equal(installed.status, 201, await installed.text());
+  assert.ok(requestId, "the installer must report its correlated admission");
+  const status = await globalThis.fetch(
+    `${origin}/api/installations/${encodeURIComponent(installationId)}/status?requestId=${encodeURIComponent(requestId)}`,
+    { headers },
+  );
+  assert.equal(status.status, 200);
+  const operation = installationOperationSchema.parse(await status.json());
+  assert.equal(operation.state, "succeeded");
+  await approveChosenDashboard(operation, (method, path, body) =>
+    globalThis.fetch(new URL(path, origin), {
+      method,
+      headers: {
+        ...headers,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+  );
+}
 let worker;
 let stopped;
 let output = "";
@@ -299,12 +334,14 @@ async function assertFramesInWindows(page) {
       inWindow:
         frame.closest(".tourtois-app-pane .tourtois-pane-body") !== null,
       sandbox: frame.getAttribute("sandbox"),
+      fullscreen: frame.allowFullscreen,
     })),
   );
   assert.ok(homes.length > 0, "An App frame must be mounted");
   for (const home of homes) {
     assert.equal(home.inWindow, true, "App frames live inside their windows");
     assert.equal(home.sandbox, appFrameSandbox);
+    assert.equal(home.fullscreen, true, "App windows delegate fullscreen");
   }
 }
 
@@ -397,7 +434,7 @@ const starterContent = {
     ).toBeVisible();
     await expect(statusOf(page, "Inkcap")).toContainText(/\d+ open files?/u);
   },
-  Workflows: async (_page, app) => {
+  Trellis: async (_page, app) => {
     // A connected client renders the workspace, which settles on the loaded
     // library: its first-workflow prompt or an open editor (workspace.tsx).
     await expect(
@@ -412,7 +449,7 @@ const starterContent = {
         .or(app.locator("main.wf-editor")),
     ).toBeVisible();
     await expect(
-      app.getByText("Open Workflows from your Team to edit and run workflows."),
+      app.getByText("Open Trellis from your Team to edit and run workflows."),
     ).toHaveCount(0);
   },
   Prints: async (_page, app) => {
@@ -856,8 +893,8 @@ async function packShellFork() {
   const file = `${clone}/apps/tourtois/src/shell.tsx`;
   const source = await readFile(file, "utf8");
   const marked = source.replace(
-    "const reactRoot = createRoot(root);",
-    'root.dataset.shellFork = "proof";\n  const reactRoot = createRoot(root);',
+    "export const mountShell: MountShell = (root, shell) => {",
+    'export const mountShell: MountShell = (root, shell) => {\n  root.dataset.shellFork = "proof";',
   );
   assert.notEqual(marked, source, "The fork must change the shell's code");
   await writeFile(file, marked);
@@ -937,13 +974,7 @@ try {
     // Nothing was compiled or packed on this machine.
     await assert.rejects(access(`${root}.botanical/app-set`));
   } else {
-    const installed = await installRelease({
-      url: origin,
-      key,
-      installationId: "tourtois",
-      directory: releaseDirectory,
-    });
-    assert.equal(installed.status, 201, await installed.text());
+    await installChosenShell("tourtois", releaseDirectory);
     await installChild("proof", "Proof App");
     await installChild("second", "Second App");
     if (gillProof) {
@@ -1140,7 +1171,7 @@ try {
       .click();
     await desktop.getByRole("menuitem", { name: /System Settings/ }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByRole("dialog")).toContainText("App desktop");
+    await expect(page.getByRole("dialog")).toContainText("App permissions");
     // Connectors and Keys are standalone ports; Hub's Team sections are not.
     for (const label of ["Members", "Billing", "Selling"])
       await expect(
@@ -1167,16 +1198,17 @@ try {
       if (width === 390)
         await page
           .getByRole("combobox", { name: "Settings category" })
-          .selectOption({ label: "App desktop" });
+          .selectOption({ label: "App permissions" });
       else
         await page
           .getByRole("navigation", { name: "Settings categories" })
-          .getByRole("button", { name: "App desktop", exact: true })
+          .getByRole("button", { name: "App permissions", exact: true })
           .click();
       await page
         .getByLabel("Apps to review")
         .getByRole("button", { name: "Proof App", exact: true })
         .click();
+      await page.getByRole("tab", { name: "Desktop", exact: true }).click();
       const add = page.getByRole("button", {
         name: "Add to desktop",
         exact: true,
@@ -1265,13 +1297,7 @@ try {
     // The owner picks a forked shell Release as home: that Release's own
     // module, from this host, mounts top-level in place of the default.
     const fork = await packShellFork();
-    const installed = await installRelease({
-      url: origin,
-      key,
-      installationId: "tourtois-fork",
-      directory: fork.directory,
-    });
-    assert.equal(installed.status, 201, await installed.text());
+    await installChosenShell("tourtois-fork", fork.directory);
     await stop();
     await start("tourtois-fork");
     const page = await browser.newPage({

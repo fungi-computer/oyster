@@ -566,8 +566,8 @@ async function admitInstallation(
   origin: "owner-direct" | "workflow" | "app",
   requestId: string = installationCommandIds.request.generate(),
 ): Promise<Response | InstallationOperation> {
-  // App-mediated installation needs installFree/designated-marketplace
-  // authority. A member's owner role is not that delegated App authority.
+  // App-mediated installation has no owner-confirmation flow here, so refuse
+  // it. A member's owner role is not delegated App install authority.
   if (origin !== "owner-direct" && origin !== "workflow")
     return refusal(403, "install_authority_unavailable");
   if (!oysterPrincipalIsOwner(principal)) return refusal(403, "Owner only");
@@ -1661,7 +1661,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     return new Response(
       config.workbench
         ? `${head}<style>html,body,#oyster-shell{margin:0;height:100%}body{font-family:var(--font-sans)}</style><div id="oyster-shell"></div>${tail}`
-        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" src="${escapeHtml(config.uiUrl)}" title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
+        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" allowfullscreen src="${escapeHtml(config.uiUrl)}" title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",

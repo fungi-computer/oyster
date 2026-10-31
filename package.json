@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -344,7 +344,7 @@
     "test:app-fork": "node --import tsx test/standalone/app-fork.native.mjs",
     "test:landed-push": "node --import tsx test/standalone/landed-push.native.mjs",
     "test:computer-egress": "node --import tsx test/standalone/computer-egress.native.mjs",
-    "test:computer-egress-browser": "bash ../../.agents/skills/orchestrate-multi-lane-work/scripts/run-proof.sh node --import tsx test/standalone/computer-egress.browser.mjs",
+    "test:computer-egress-browser": "bash ../../tooling/proof-runner/run-proof.sh node --import tsx test/standalone/computer-egress.browser.mjs",
     "test:nightly": "pnpm run test:computer-egress && pnpm run test:computer-egress-browser",
     "test:loader-workflows": "node --import tsx test/standalone/loader-workflows.native.mjs",
     "test:workflows": "node --import tsx test/standalone/workflows.native.mjs",

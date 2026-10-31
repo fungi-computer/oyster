@@ -7,6 +7,7 @@ import type { workflowAgentAuthority } from "../workflow-agent-authority.js";
 import {
   scheduleDisarmInputSchema,
   schedulePauseInputSchema,
+  scheduleResumeInputSchema,
   scheduleListInputSchema,
   type ScheduleListInput,
 } from "@fungi.computer/workflows-wire";
@@ -26,7 +27,11 @@ export type TriggerAdmission = Readonly<{
 }>;
 
 export type ScheduleOperation =
-  "armSchedule" | "pauseSchedule" | "disarmSchedule" | "schedules";
+  | "armSchedule"
+  | "pauseSchedule"
+  | "resumeSchedule"
+  | "disarmSchedule"
+  | "schedules";
 
 /** Host controls and alarm delivery compose the shared schedule owner unchanged. */
 export function createStandaloneWorkflowSchedules<Frame>(
@@ -77,6 +82,15 @@ export function createStandaloneWorkflowSchedules<Frame>(
       );
       if (authority === null) return { error: "not_granted" };
       return schedules.pause(authority.principal, libraryId, scheduleId);
+    },
+    async resume(frame: Frame, raw: { scheduleId: string }) {
+      const { scheduleId } = scheduleResumeInputSchema.parse(raw);
+      const { libraryId, authority } = await options.admitInvocation(
+        frame,
+        "resumeSchedule",
+      );
+      if (authority === null) return { error: "not_granted" };
+      return schedules.resume(authority.principal, libraryId, scheduleId);
     },
     async list(frame: Frame, raw: ScheduleListInput) {
       const input = scheduleListInputSchema.parse(raw);

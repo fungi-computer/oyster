@@ -1372,14 +1372,15 @@ returns typed no_backend before creating a new job or starting a machine.
 Only an admitted Workflow-node APPS call can install its matching successful
 build's recorded Release at the recorded target. Ordinary App-origin
 installation remains refused. Existing grants may be reused, but new permissions
-return needs_consent without changing the running Release. Registering a
-repository as an App (**Make this an App**) is the owner's consent for its merge
-Workflow to create that App's installation when none exists yet. A
-Workflow-created installation has no grants. Later Workflows reuse exactly that
-approval and can never widen it; every grant still needs the owner's explicit
-consent. The build row records the outcome; status reads are read-only and no
-native alarm resumes installation. Workflow execution owns retries. This
-template has no review step, review configuration or separate consent ledger.
+return needs_consent without changing the running Release. A fresh installation
+also returns needs_consent, even when it requests no permissions: the owner must
+select the built Release directly to confirm the install. Registering a
+repository as an App (**Make this an App**) does not confirm its installation.
+Later Workflows can update the owner-confirmed installation within its existing
+grants, never widen them. The build row records the outcome; status reads are
+read-only and no native alarm resumes installation. Workflow execution owns
+retries. This template has no review step, review configuration or separate
+consent ledger.
 
 **Breaking installation contract:** Bonsai apps.install and APPS.select require
 the successful build's jobId alongside installationId and release. The host

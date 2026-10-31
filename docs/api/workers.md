@@ -241,13 +241,13 @@ approvalGet(
         | null;
      reason:   | "pending"
         | "expired"
-        | "not-granted"
         | "not-found"
         | "not-eligible"
         | "already-answered"
         | "stale-revision"
         | "declined"
         | "fenced"
+        | "not-granted"
         | "read-only"
         | "in-flight"
         | "outcome-unknown"
@@ -287,8 +287,8 @@ Read one member-scoped view; the native home resolves membership again.
 \| `"applied"` \| `"requested"` \| `"approved"` \| `"claimed"` \|
 `"outcome_unknown"`; `by`: \| \{ `kind`: `"human"`; `memberId`: `string`; \} \|
 \{ `kind`: `"policy"`; \} \| `null`; `reason`: \| `"pending"` \| `"expired"` \|
-`"not-granted"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
-`"stale-revision"` \| `"declined"` \| `"fenced"` \| `"read-only"` \|
+`"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
+\| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
 `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"` \| `null`;
 `denialNote?`: `string`; `requestedAt`: `number`; `expiresAt`: `number`;
 `updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`: `boolean`;
@@ -342,13 +342,13 @@ approvalAnswer(
            | null;
         reason:   | "pending"
            | "expired"
-           | "not-granted"
            | "not-found"
            | "not-eligible"
            | "already-answered"
            | "stale-revision"
            | "declined"
            | "fenced"
+           | "not-granted"
            | "read-only"
            | "in-flight"
            | "outcome-unknown"
@@ -368,13 +368,13 @@ approvalAnswer(
   kind: "refused";
   reason:   | "pending"
      | "expired"
-     | "not-granted"
      | "not-found"
      | "not-eligible"
      | "already-answered"
      | "stale-revision"
      | "declined"
      | "fenced"
+     | "not-granted"
      | "read-only"
      | "in-flight"
      | "outcome-unknown"
@@ -409,15 +409,15 @@ Persist an eligible answer and attempt its native decision work once.
 \| `"pending"` \| `"expired"` \| `"denied"` \| `"applied"` \| `"requested"` \|
 `"approved"` \| `"claimed"` \| `"outcome_unknown"`; `by`: \| \{ `kind`:
 `"human"`; `memberId`: `string`; \} \| \{ `kind`: `"policy"`; \} \| `null`;
-`reason`: \| `"pending"` \| `"expired"` \| `"not-granted"` \| `"not-found"` \|
-`"not-eligible"` \| `"already-answered"` \| `"stale-revision"` \| `"declined"`
-\| `"fenced"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
+`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
+`"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
 `"identity-conflict"` \| `null`; `denialNote?`: `string`; `requestedAt`:
 `number`; `expiresAt`: `number`; `updatedAt`: `number`; `revision`: `number`;
 \}; `canAnswer`: `boolean`; `canSetAutoApprove`: `boolean`; \}; \}\> \|
 `Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \| `"expired"` \|
-`"not-granted"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
-`"stale-revision"` \| `"declined"` \| `"fenced"` \| `"read-only"` \|
+`"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
+\| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
 `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`; `denialNote?`:
 `string`; \}\>\>
 
@@ -433,13 +433,13 @@ approvalSetAutoApprove(
   kind: "refused";
   reason:   | "pending"
      | "expired"
-     | "not-granted"
      | "not-found"
      | "not-eligible"
      | "already-answered"
      | "stale-revision"
      | "declined"
      | "fenced"
+     | "not-granted"
      | "read-only"
      | "in-flight"
      | "outcome-unknown"
@@ -481,8 +481,8 @@ it.
 ###### Returns
 
 `Promise`\< \| `Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \|
-`"expired"` \| `"not-granted"` \| `"not-found"` \| `"not-eligible"` \|
-`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
+`"expired"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
+`"stale-revision"` \| `"declined"` \| `"fenced"` \| `"not-granted"` \|
 `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`;
 `denialNote?`: `string`; \}\> \| `Readonly`\<\{ `kind`: `"updated"`; `rule`: \{
 `scope`: \{ `agentId`: `string` \| `null`; \}; `family`: \{ `module`: `string`

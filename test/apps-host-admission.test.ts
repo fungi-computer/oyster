@@ -1737,11 +1737,19 @@ it("Workflow first install with permission requirements needs consent without cr
   expect(f.records.size).toBe(0);
 });
 
-it("Workflow first install without permission requirements creates the installation without grants", async () => {
+it("Workflow first install without permission requirements needs consent without creating an installation", async () => {
   const f = await fixture();
   const candidate = await f.upgradedRelease(false, []);
   const response = await f.workflowSelect(candidate);
-  expect(response.status).toBe(201);
-  expect(f.records.get("notes")?.release).toEqual(candidate);
-  expect(f.records.get("notes")?.authority.approvedGrants).toEqual([]);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: "needs_consent" });
+  expect(f.records.size).toBe(0);
+});
+
+it("owner-direct first install without permission requirements creates the installation without grants", async () => {
+  const f = await fixture();
+  const candidate = await f.upgradedRelease(false, []);
+  const installed = await f.install("notes", candidate);
+  expect(installed.release).toEqual(candidate);
+  expect(installed.authority.approvedGrants).toEqual([]);
 });

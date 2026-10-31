@@ -584,9 +584,10 @@ type LocalBuildExecutorOptions = Readonly<{
 }>;
 ```
 
-How one build executor is composed; never part of a recipe or request.
-Build-log stdout/stderr are interleaved in arrival order and unlabelled.
-The job log is credential-bearing by design; it must never flow to diagnostics, Releases, agent surfaces, or support bundles without a recorded decision.
+How one build executor is composed; never part of a recipe or request. Build-log
+stdout/stderr are interleaved in arrival order and unlabelled. The job log is
+credential-bearing by design; it must never flow to diagnostics, Releases, agent
+surfaces, or support bundles without a recorded decision.
 
 ---
 

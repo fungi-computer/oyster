@@ -316,11 +316,24 @@ it("the ordinary Workflow binding pages only its admitted library and admits pau
     expect(
       await f.adapter.pause("protected-frame", { scheduleId: "b" }),
     ).toEqual({ kind: "not_found" });
+    expect(methods.resumeSchedule?.decodeArgs([{ scheduleId: "a" }])).toEqual([
+      { scheduleId: "a" },
+    ]);
+    expect(
+      methods.resumeSchedule?.decodeResult(
+        await f.adapter.resume("protected-frame", { scheduleId: "a" }),
+      ),
+    ).toEqual({ kind: "resumed" });
+    expect(
+      await f.adapter.resume("protected-frame", { scheduleId: "b" }),
+    ).toEqual({ kind: "not_found" });
     expect(f.admissions).toEqual([
       "schedules",
       "schedules",
       "pauseSchedule",
       "pauseSchedule",
+      "resumeSchedule",
+      "resumeSchedule",
     ]);
     expect(() => methods.schedules?.decodeArgs([{ limit: 101 }])).toThrow();
     expect(() =>

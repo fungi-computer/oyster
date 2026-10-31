@@ -139,8 +139,8 @@ import {
 import {
   readAgentSchedulePage,
   controlAgentSchedule,
-  agentScheduleTargetSchema,
-} from "@fungi.computer/shiitake-extensions/schedules";
+} from "@fungi.computer/shiitake-extensions/schedules/client";
+import { agentScheduleTargetSchema } from "@fungi.computer/shiitake-extensions/schedules";
 import {
   createAgentAvatarStore,
   type AgentAvatarStore,
@@ -1080,7 +1080,7 @@ export abstract class StandaloneAgentBase<
   async controlSchedule(
     directory: typeof policyDirectorySchema.Type,
     input: AgentScheduleTarget,
-    action: "pause" | "delete",
+    action: "pause" | "resume" | "delete",
   ): Promise<AgentScheduleControlReceipt> {
     const target = agentScheduleTargetSchema.parse(input);
     const owner = await this.scheduleOwner(directory, target.agentId);
@@ -2442,6 +2442,20 @@ export const agentFrameMethods = {
         id: agentScheduleBindingArgs.pauseSchedule.parse(raw)[0].agentId,
       }),
     },
+    resumeSchedule: {
+      decodeArgs: (raw) => agentScheduleBindingArgs.resumeSchedule.parse(raw),
+      decodeResult: Schema.decodeUnknownSync(
+        agentScheduleControlReceiptSchema,
+        {
+          onExcessProperty: "error",
+        },
+      ),
+      requiredOperations: () => ["resumeSchedule"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentScheduleBindingArgs.resumeSchedule.parse(raw)[0].agentId,
+      }),
+    },
     deleteSchedule: {
       decodeArgs: (raw) => agentScheduleBindingArgs.deleteSchedule.parse(raw),
       decodeResult: Schema.decodeUnknownSync(
@@ -2523,6 +2537,7 @@ export async function dispatchAgentBinding(
     props.binding === "AGENTS" &&
     (method === "schedules" ||
       method === "pauseSchedule" ||
+      method === "resumeSchedule" ||
       method === "deleteSchedule")
   ) {
     const [input] = agentScheduleBindingArgs[method].parse(args);
@@ -2546,7 +2561,11 @@ export async function dispatchAgentBinding(
       result = await agent.controlSchedule(
         pin,
         agentScheduleBindingArgs[method].parse(args)[0],
-        method === "pauseSchedule" ? "pause" : "delete",
+        method === "pauseSchedule"
+          ? "pause"
+          : method === "resumeSchedule"
+            ? "resume"
+            : "delete",
       );
     }
   } else {

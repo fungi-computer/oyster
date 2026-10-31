@@ -1,5 +1,48 @@
 # @fungi.computer/oyster
 
+## 0.8.0
+
+### Minor Changes
+
+- Changes since 0.7.0:
+
+  - fix(apps): align installation consent with canonical owner authority
+  - feat(schedules): resume paused schedules through native owners
+  - feat(prints): play videos and permit App fullscreen
+  - fix(apps): require owner confirmation for every installation
+  - feat(trellis): finish connection-bound schedules consumer
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/braid@0.4.0
+  - @fungi.computer/caps@0.6.0
+  - @fungi.computer/computer@0.4.1
+  - @fungi.computer/darkroom@0.4.1
+  - @fungi.computer/nacre@0.1.2
+  - @fungi.computer/puffball@0.4.0
+  - @fungi.computer/shiitake-extensions@0.6.0
+  - @fungi.computer/shiitake@0.8.0
+  - @fungi.computer/sigils@0.2.1
+  - @fungi.computer/veil@0.3.0
+  - @fungi.computer/workflows-wire@0.4.0
+  - @fungi.computer/agar@0.6.1
+  - @fungi.computer/forage@0.2.2
+  - @fungi.computer/mycelium@0.3.1
+  - @fungi.computer/zookeeper@0.0.7
+  - @fungi.computer/knapsack@0.4.2
+  - @fungi.computer/computer-contract@0.0.7
+
 ## 0.7.0
 
 ### Minor Changes

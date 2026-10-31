@@ -324,6 +324,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
         mount: async (options) => {
           const frame = document.createElement("iframe");
           frame.sandbox.value = appSandbox;
+          // A frame permission, not a relaxation of the App's sandbox.
+          frame.allowFullscreen = true;
           frame.src = childConfig.uiUrl;
           frame.title = options.title ?? childConfig.appId;
           // The window's slot is the frame's only home: the shell sizes it

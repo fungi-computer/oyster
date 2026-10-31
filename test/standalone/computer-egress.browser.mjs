@@ -1,5 +1,5 @@
 // Actual standalone owner HTTP, installed Tourtois and persisted Computer state.
-// Guest-network enforcement is qualified by computer-egress.native.mjs.
+// A failed owner save must leave the same Computer refused to the real guest.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { error, log } from "node:console";
@@ -11,6 +11,7 @@ import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
 import { teamComputerSchema } from "@fungi.computer/nacre/workbench";
 import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
+import { expectPublicDownload } from "./computer-egress-guest.fixture.mjs";
 import {
   nativeAppClient,
   nativeWorkflowRoot,
@@ -114,7 +115,7 @@ try {
 
   browser = await chromium.launch();
   for (const width of [1440, 390]) {
-    await internetAccess(a, true);
+    await internetAccess(a, false);
     await internetAccess(b, true);
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     page.setDefaultTimeout(10_000);
@@ -131,10 +132,10 @@ try {
     const toggleB = page.getByRole("switch", {
       name: "Internet access for Egress B",
     });
-    await expect(toggleA).toBeChecked();
+    await expect(toggleA).not.toBeChecked();
     await expect(toggleB).toBeChecked();
 
-    // One explicit server refusal; the following save uses the real owner API.
+    // The owner cannot enable this refused Computer; the guest must still be refused.
     await page.route(
       `${host.origin}${settingPath(a)}`,
       (route) =>
@@ -150,26 +151,29 @@ try {
       .getByRole("alert")
       .filter({ hasText: "Could not save Internet access for Egress A." })
       .waitFor();
-    await expect(toggleA).toBeChecked();
-    await expect(toggleA).toBeEnabled();
-    assert.equal(await internetAccess(a), true);
-    await toggleA.click();
     await expect(toggleA).not.toBeChecked();
     await expect(toggleA).toBeEnabled();
     assert.equal(await internetAccess(a), false);
+    await expectPublicDownload(host, a, 403);
+    await toggleA.click();
+    await expect(toggleA).toBeChecked();
+    await expect(toggleA).toBeEnabled();
+    assert.equal(await internetAccess(a), true);
     assert.equal(await internetAccess(b), true);
     await expect(toggleB).toBeChecked();
 
     await host.restart();
     await page.reload();
     await openComputers(page, width);
-    await expect(toggleA).not.toBeChecked();
+    await expect(toggleA).toBeChecked();
     await expect(toggleB).toBeChecked();
-    assert.equal(await internetAccess(a), false);
+    assert.equal(await internetAccess(a), true);
     assert.equal(await internetAccess(b), true);
     assert.deepEqual(errors, []);
     await page.close();
-    log(`PASS Oyster Computers ${width}: rollback, A/B save/readback, restart`);
+    log(
+      `PASS Oyster Computers ${width}: failed enable -> guest 403, A/B save/readback, restart`,
+    );
   }
 } catch (cause) {
   error(host.output());

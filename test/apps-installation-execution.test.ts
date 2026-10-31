@@ -845,7 +845,7 @@ async function workflowInstall(
   return response;
 }
 
-it("completes a Workflow install that needs no new approval through the owner", async () => {
+it("requests owner confirmation for a fresh Workflow install even without capability grants", async () => {
   const state = await fixture();
   try {
     state.prepareGate.resolve(undefined);
@@ -855,11 +855,13 @@ it("completes a Workflow install that needs no new approval through the owner", 
       state.release,
       "workflow-fresh",
     );
-    expect(installed.status).toBe(201);
-    expect(state.rows.get("notes")?.release).toEqual(state.release);
+    expect(installed.status).toBe(409);
+    expect(await installed.json()).toEqual({ error: "needs_consent" });
+    expect(state.rows.has("notes")).toBe(false);
     expect(
       await state.operations.read("workflow-fresh", "notes"),
-    ).toMatchObject({ state: "succeeded", creation: "fresh" });
+    ).toMatchObject({ state: "refused", code: "needs_consent" });
+    expect(state.boots()).toBe(0);
   } finally {
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
@@ -923,18 +925,26 @@ it("settles a fresh Workflow install that the owner would have to approve as nee
   }
 }, 15_000);
 
-// Registering a repository as an App is the owner's consent for its merge
-// Workflow to create that App's installation. It never widens authority.
-it("keeps a Workflow-created installation with no grants, and later Workflows cannot widen it", async () => {
+// Owner confirmation creates the installation. Later Workflow updates can
+// reuse that approval but never install another App or widen its grants.
+it("reuses an owner-confirmed installation without widening it in later Workflows", async () => {
   const state = await fixture();
   try {
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
-    const created = await workflowInstall(
-      state,
+    const response = installOrSelect(
+      state.host,
+      "notes",
       state.release,
+      state.principal,
+      "install-or-select",
+      "owner-direct",
       "workflow-create",
     );
+    while ((await state.operations.load("workflow-create")) === null)
+      await scheduler.yield();
+    await state.runtime.tick();
+    const created = await response;
     expect(created.status).toBe(201);
     const fresh = state.rows.get("notes");
     if (fresh === undefined) throw new Error("Installation missing");

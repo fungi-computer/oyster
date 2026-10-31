@@ -49,6 +49,10 @@ export async function executeInstallation(
     principal.role !== "owner"
   )
     return refused(403, "install_authority_unavailable");
+  // A Workflow can publish a build and update an approved installation, but
+  // creating an installation always needs the owner's direct confirmation.
+  if (command.admission.origin !== "owner-direct" && command.baseline === null)
+    return refused(409, "needs_consent");
   if ((await host.installations.generation()) !== command.generation)
     return refused(409, "stale_authority");
   let verified;

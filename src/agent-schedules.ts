@@ -31,6 +31,8 @@ export const agentScheduleBindingArgs = {
   schedules: z.tuple([appAgentScheduleListInputSchema]),
   /** Pause the exact listed schedule, retaining future resume and accepted work. */
   pauseSchedule: z.tuple([agentScheduleTargetSchema]),
+  /** Resume the exact listed schedule through its native owner. */
+  resumeSchedule: z.tuple([agentScheduleTargetSchema]),
   /** Cancel future occurrences of the exact identity without erasing history. */
   deleteSchedule: z.tuple([agentScheduleTargetSchema]),
 };
