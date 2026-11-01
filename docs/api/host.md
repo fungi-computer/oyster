@@ -343,7 +343,7 @@ Bindings: CapabilityAdmission;
 type OysterCapability = Readonly<CapabilityDescriptor & object>;
 ```
 
-A capability adapter whose routes require live installation admission.
+An App capability adapter, with an optional narrow owner-direct table.
 
 ---
 

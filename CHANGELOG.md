@@ -1,5 +1,28 @@
 # @fungi.computer/oyster
 
+## 0.8.2
+
+### Patch Changes
+
+- Changes since 0.8.1:
+
+  - fix(agents): admit narrow owner archive authority
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.6.1
+  - @fungi.computer/shiitake@0.9.0
+  - @fungi.computer/sigils@0.3.0
+  - @fungi.computer/knapsack@0.4.3
+  - @fungi.computer/mycelium@0.3.2
+  - @fungi.computer/zookeeper@0.0.8
+  - @fungi.computer/caps@0.6.0
+  - @fungi.computer/computer@0.4.2
+  - @fungi.computer/computer-contract@0.0.8
+  - @fungi.computer/braid@0.4.1
+  - @fungi.computer/workflows-wire@0.4.1
+
 ## 0.8.1
 
 ### Patch Changes

@@ -345,7 +345,7 @@ export type CapabilityAdmission = Readonly<{
 /** Capability routes read the host's admission from `c.env`; they never authenticate. */
 export type CapabilityEnv = { Bindings: CapabilityAdmission };
 
-/** A capability adapter whose routes require live installation admission. */
+/** An App capability adapter, with an optional narrow owner-direct table. */
 export type OysterCapability = Readonly<
   CapabilityDescriptor & {
     /** The permission declared by an App Release to use this contract. */
@@ -353,6 +353,9 @@ export type OysterCapability = Readonly<
     /** Declared routes relative to the descriptor's base path; each names
      * its own requirement beyond the App holding this capability. */
     routes: Routes<CapabilityEnv>;
+    /** An explicit owner-only capability table, available without an App
+     * installation. It must not include the App's broader transport routes. */
+    ownerDirect?: Routes<OysterEnv>;
   }
 >;
 
@@ -1086,6 +1089,21 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     const installationId =
       context.req.header("X-Oyster-Installation") ??
       (browserTransport ? url.searchParams.get("oysterInstallation") : null);
+    // A direct owner capability is a separate, narrow table. Never lend an
+    // owner's role to the ordinary App table or skip an App's installation gate.
+    if (installationId === null) {
+      const direct = candidates.find(
+        ({ capability }) => capability.ownerDirect,
+      );
+      if (direct?.capability.ownerDirect !== undefined) {
+        url.pathname = "/" + url.pathname.slice(direct.capability.base.length);
+        return serveHost(
+          direct.capability.ownerDirect,
+          () => Promise.resolve({ kind: "admitted", principal }),
+          ports,
+        ).fetch(new Request(url, context.req.raw));
+      }
+    }
     const installation =
       installationId === null
         ? null

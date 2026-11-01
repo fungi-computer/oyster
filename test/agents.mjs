@@ -118,6 +118,12 @@ const principalOf = (who) => {
   switch (who) {
     case "owner":
       return { actor: { kind: "member", memberId: "owner" }, role: "owner" };
+    case "member":
+      return { actor: { kind: "member", memberId: "other" }, role: "member" };
+    case "agent":
+      return {
+        actor: { kind: "agent", agentId: "agent_1", sessionId: "main" },
+      };
     case "key":
       return { actor: { kind: "team-key", keyId: "key" } };
     default:
@@ -693,4 +699,77 @@ assert.equal((await call("/agents")).status, 403);
 assert.equal((await call("/agents/agent_1/sessions")).status, 403);
 assert.equal((await rename("Nope")).status, 403);
 assert.equal((await call("/agent-policies/agent_1")).status, 403);
+// Owner-direct calls are a narrow capability, not the App capability table.
+// No installation header, even after all App declarations were removed.
+const direct = (path, who = "owner", init = { method: "POST" }) =>
+  host.app.request(path, {
+    ...init,
+    headers: { "x-who": who, "Content-Type": "application/json" },
+  });
+assert.deepEqual(
+  capabilities.flatMap(
+    (capability) => capability.ownerDirect?.declarations() ?? [],
+  ),
+  ["/agents", "/agents/:agentId/archive", "/agents/:agentId/unarchive"].map(
+    (path) => ({
+      methods: ["POST"],
+      path,
+      requirement: { kind: "owner", via: "direct" },
+    }),
+  ),
+);
+for (const who of ["key", "member", "agent", "anonymous"]) {
+  for (const operation of ["archive", "unarchive"]) {
+    const response = await direct("/agents/agent_1/" + operation, who);
+    assert.equal(response.status, who === "anonymous" ? 401 : 403, who);
+    assert.equal(
+      archived.has("agent_1"),
+      false,
+      "denial never mutates the Agent",
+    );
+  }
+  assert.equal(
+    (
+      await direct("/agents", who, {
+        method: "POST",
+        body: JSON.stringify({ name: "Denied", requestId: "denied" }),
+      })
+    ).status,
+    who === "anonymous" ? 401 : 403,
+  );
+}
+assert.equal((await direct("/agents/agent_1/archive")).status, 200);
+assert.equal(archived.has("agent_1"), true);
+assert.equal((await direct("/agents/agent_1/unarchive")).status, 200);
+assert.equal(archived.has("agent_1"), false);
+assert.equal((await direct("/agents/agent_9/archive")).status, 404);
+assert.equal(
+  (
+    await direct("/agents", "owner", {
+      method: "POST",
+      body: JSON.stringify({ name: "Direct", requestId: "owner-direct" }),
+    })
+  ).status,
+  200,
+);
+assert.equal(
+  (await direct("/agents/agent_1/sessions")).status,
+  404,
+  "direct owner archive authority does not grant the Session transport",
+);
+assert.equal(
+  (await call("/agents/agent_1/archive", { method: "POST" })).status,
+  403,
+  "App-mediated calls still need their declared capability",
+);
+assert.equal(
+  (
+    await host.app.request("/agents/agent_1/archive", {
+      method: "POST",
+      headers: { "x-who": "owner", "X-Oyster-Installation": "missing" },
+    })
+  ).status,
+  403,
+  "an invalid installation is never treated as owner-direct",
+);
 console.log("oyster declared agent capabilities: ok");

@@ -6,6 +6,7 @@
  * Shiitake's HTTP routes (`/sessions…`, `/acp`) and Knapsack's Session browser
  * transport (`/browser/…`), served by the adapter behind the same App grants.
  */
+import type { Env } from "hono";
 import type { TenantPrincipal } from "./tenant.js";
 import {
   agent,
@@ -294,6 +295,7 @@ export function agentCapabilities(
     {
       ...shared,
       id: "agent.manage",
+      ownerDirect: ownerAgentRoutes<OysterEnv>(agents, "direct"),
       permission: "agent.manage",
       version: agentManage.version,
       methods: {
@@ -364,9 +366,47 @@ export function agentCapabilities(
   ];
 }
 
+/** The owner capability: create, archive and restore, never Session transport. */
+function ownerAgentRoutes<E extends Env>(
+  agents: OysterAgents,
+  via: "direct" | "direct-or-app",
+): Routes<E> {
+  return routes<E>()
+    .post("/agents", owner(via), async (context, { principal }) => {
+      const body = Schema.decodeUnknownOption(createSchema)(
+        await context.req.json(),
+      );
+      if (body._tag === "None") return refusal(400, "Name the agent");
+      const avatar =
+        body.value.avatar === undefined
+          ? undefined
+          : agentAvatarSchema.safeParse(body.value.avatar);
+      if (avatar?.success === false)
+        return refusal(400, "Choose a valid avatar");
+      // The owner's own authenticated request creates this Agent; its App tools
+      // are approved the same way direct owner approval is, with no second path.
+      return Response.json(
+        await agents.create(
+          body.value.name,
+          body.value.requestId,
+          principal,
+          "owner-direct",
+          avatar?.data,
+        ),
+      );
+    })
+    .post("/agents/:agentId/archive", owner(via), (context, { principal }) =>
+      changeArchive(agents, context.req.param("agentId"), true, principal),
+    )
+    .post("/agents/:agentId/unarchive", owner(via), (context, { principal }) =>
+      changeArchive(agents, context.req.param("agentId"), false, principal),
+    );
+}
+
 function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
   return (
     routes<CapabilityEnv>()
+      .include(ownerAgentRoutes<CapabilityEnv>(agents, "direct-or-app"))
       .get("/agents", agentCollection(), async (context, { reaches }) => {
         const selected = context.req.query("archived");
         if (
@@ -381,33 +421,6 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
           if (await reaches(item.agentId)) reached.push(item);
         return Response.json(reached);
       })
-      .post(
-        "/agents",
-        owner("direct-or-app"),
-        async (context, { principal }) => {
-          const body = Schema.decodeUnknownOption(createSchema)(
-            await context.req.json(),
-          );
-          if (body._tag === "None") return refusal(400, "Name the agent");
-          const avatar =
-            body.value.avatar === undefined
-              ? undefined
-              : agentAvatarSchema.safeParse(body.value.avatar);
-          if (avatar?.success === false)
-            return refusal(400, "Choose a valid avatar");
-          // The owner's own authenticated request creates this Agent; its App tools
-          // are approved the same way direct owner approval is, with no second path.
-          return Response.json(
-            await agents.create(
-              body.value.name,
-              body.value.requestId,
-              principal,
-              "owner-direct",
-              avatar?.data,
-            ),
-          );
-        },
-      )
       .put(
         "/agent-names/:agentId",
         owner("direct-or-app"),
@@ -481,18 +494,6 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
             context.req.param("agentId"),
             await context.req.text(),
           ),
-      )
-      .post(
-        "/agents/:agentId/archive",
-        owner("direct-or-app"),
-        (context, { principal }) =>
-          changeArchive(agents, context.req.param("agentId"), true, principal),
-      )
-      .post(
-        "/agents/:agentId/unarchive",
-        owner("direct-or-app"),
-        (context, { principal }) =>
-          changeArchive(agents, context.req.param("agentId"), false, principal),
       )
       .all("/agents/:agentId/*", agent(), async (context, { agentId }) => {
         if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");

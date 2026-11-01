@@ -404,6 +404,59 @@ test("standalone owner attaches fleet and configured Computers without an App, r
     },
   );
   await t.test(
+    "the direct owner archives a sub-agent-created Agent after its creator is archived",
+    async () => {
+      const parent = directory.create(
+        "Archive parent",
+        "archive-parent",
+        owner,
+        "owner-direct",
+      );
+      const child = directory.create(
+        "Archive child",
+        "archive-child",
+        owner,
+        "owner-direct",
+        undefined,
+        parent.agentId,
+      );
+      const pin = {
+        directoryName: tenantScope(
+          defaultTenant,
+          env.OYSTER_ORIGIN,
+        ).durableName("agents"),
+        tenantId: defaultTenant,
+      };
+      for (const entry of [parent, child])
+        await env.AGENTS.getByName(entry.agentId).usePolicyDirectory(pin);
+      assert.equal(await directory.createdBy(child.agentId), parent.agentId);
+      for (const entry of [parent, child]) {
+        const response = await incoming(
+          "/agents/" + entry.agentId + "/archive",
+          {},
+        );
+        assert.equal(response.status, 200, await response.clone().text());
+        assert.equal((await response.json()).archived, true);
+      }
+      assert.ok(
+        !(await directory.list()).some(
+          ({ agentId }) => agentId === child.agentId,
+        ),
+      );
+      assert.ok(
+        (await directory.list({ archived: true })).some(
+          ({ agentId }) => agentId === child.agentId,
+        ),
+      );
+      const restored = await incoming(
+        "/agents/" + child.agentId + "/unarchive",
+        {},
+      );
+      assert.equal(restored.status, 200, await restored.clone().text());
+      assert.equal((await restored.json()).archived, false);
+    },
+  );
+  await t.test(
     "owner model controls persist independent Agent choices and refuse unsupported custody",
     async () => {
       const sibling = directory.create(
@@ -1081,6 +1134,44 @@ test("App send preserves installation attribution for a hosted target", async ()
   assert.deepEqual(sent, [
     ["app", "main", { requestId: "send", text: "Hello", delivery: "followUp" }],
   ]);
+});
+
+test("owner archive authority never crosses an Oyster tenant pin", async () => {
+  const owner = { actor: { kind: "member", memberId: "owner" }, role: "owner" };
+  let transitions = 0;
+  let pin = { directoryName: "foreign-directory", tenantId: defaultTenant };
+  const adapter = standaloneAgents({
+    AGENT_DIRECTORY: { getByName: () => ({ has: async () => true }) },
+    AGENTS: {
+      getByName: () => ({
+        policyDirectory: async () => pin,
+        setArchived: async (archived) => {
+          transitions += 1;
+          return { archived, revision: transitions };
+        },
+      }),
+    },
+  });
+  assert.deepEqual(await adapter.setArchived("target", true, owner), {
+    error: "not_found",
+  });
+  pin = { directoryName: "agents", tenantId: "foreign-tenant" };
+  assert.deepEqual(await adapter.setArchived("target", true, owner), {
+    error: "not_found",
+  });
+  pin = { directoryName: "agents", tenantId: defaultTenant };
+  for (const principal of [
+    { actor: { kind: "member", memberId: "other" }, role: "member" },
+    { actor: { kind: "team-key", keyId: "owner-key" } },
+  ])
+    assert.deepEqual(await adapter.setArchived("target", true, principal), {
+      error: "not_granted",
+    });
+  assert.equal(transitions, 0);
+  assert.deepEqual(await adapter.setArchived("target", true, owner), {
+    archived: true,
+    revision: 1,
+  });
 });
 
 test("root hosted fetch rechecks the current home before each dispatch", async () => {
