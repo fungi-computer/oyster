@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/sigils@0.2.2
+  - @fungi.computer/caps@0.6.0
+
 ## 0.8.0
 
 ### Minor Changes
