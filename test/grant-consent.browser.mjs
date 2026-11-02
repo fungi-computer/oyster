@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { mkdir } from "node:fs/promises";
 import { URL } from "node:url";
 import { chromium } from "playwright";
+import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import { createOyster } from "../dist/host.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 import { homePageFixture } from "./home-page.fixture.mjs";
@@ -35,7 +36,9 @@ async function shellPage(t, approved, shellCode) {
       };
     `,
   });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   t.after(() => browser.close());
   const page = await browser.newPage();
   const imports = [];
@@ -219,7 +222,9 @@ test("a tombstoned approved shell is not imported or mounted on its next load", 
 });
 
 test("owner consent submits explicit Release-bound approvals through the installation gate", async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   const output = new globalThis.URL(
     "../../../.botanical/permissions/grant-consent/",
     import.meta.url,
@@ -378,7 +383,9 @@ test("owner consent submits explicit Release-bound approvals through the install
 
 test("a Permissions tab open across delete and reinstall cannot save onto the new installation", async (t) => {
   const app = await homePageFixture({ approved: false });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   t.after(() => browser.close());
   const context = await browser.newContext();
   await context.route("http://localhost/**", async (route) => {

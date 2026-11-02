@@ -113,6 +113,12 @@ it.each([
     const frame = document.createElement("iframe");
     frame.id = "oyster-app";
     document.body.append(configElement, frame);
+    // JSDOM runs no App document; connectApp below plays the App inside the
+    // frame's current Window, so the host's navigation must not replace it.
+    Object.defineProperty(frame, "src", {
+      configurable: true,
+      set: () => undefined,
+    });
     const child = frame.contentWindow;
     if (child === null) throw new Error("The test App frame is missing");
     const parent = window;

@@ -17,6 +17,7 @@ import {
 } from "./apps/installation.js";
 import { instanceIds, instanceIdSchema } from "./instance-id.js";
 import { tenantIdSchema, tenantScope } from "./tenant.js";
+import { failureDiagnostic } from "./cause-class.js";
 import type { InstallationCommit } from "./host.js";
 import {
   uiBootCheckOutcomeSchema,
@@ -184,6 +185,16 @@ export type InstallationOperations = Readonly<{
     requestId: string,
     installationId: string,
   ): Promise<InstallationOperation | null>;
+  /**
+   * The operation once it leaves pending, or its current state when it is
+   * still pending (or not yet admitted) after at most `waitMs`. The owner
+   * answers the moment it settles the command; there is no caller poll.
+   */
+  awaitSettled(
+    requestId: string,
+    installationId: string,
+    waitMs: number,
+  ): Promise<InstallationOperation | null>;
   /** Only pending recovery is executable; terminal history returns null. */
   load(requestId: string): Promise<RetainedInstallationCommand | null>;
   /** Record the executor's one reduced installation for this command. */
@@ -199,6 +210,18 @@ export type InstallationOperations = Readonly<{
   ): Promise<InstallationCommit>;
 }>;
 
+/**
+ * One owner wait's bound, under ordinary HTTP idle timeouts; an observer that
+ * needs longer simply waits again.
+ */
+export const maxSettlementWaitMs = 25_000;
+/** The status door's optional `waitMs` query: whole milliseconds, bounded. */
+export const installationWaitQuerySchema = z
+  .string()
+  .regex(/^\d{1,5}$/u)
+  .transform(Number)
+  .pipe(z.number().int().max(maxSettlementWaitMs))
+  .optional();
 const installationOperationRequestSchema = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("admit"),
@@ -210,6 +233,13 @@ const installationOperationRequestSchema = z.discriminatedUnion("action", [
     scope: scopeSchema,
     requestId: installationRequestIdSchema,
     installationId: installationIdSchema,
+  }),
+  z.strictObject({
+    action: z.literal("await"),
+    scope: scopeSchema,
+    requestId: installationRequestIdSchema,
+    installationId: installationIdSchema,
+    waitMs: z.number().int().min(0).max(maxSettlementWaitMs),
   }),
   z.strictObject({
     action: z.literal("load"),
@@ -306,6 +336,18 @@ export function installationOperationsPort(
         scope,
         requestId,
         installationId,
+      });
+      if (reply.kind !== "operation")
+        throw new InstallationOperationError("unavailable");
+      return reply.operation;
+    },
+    async awaitSettled(requestId, installationId, waitMs) {
+      const reply = await call({
+        action: "await",
+        scope,
+        requestId,
+        installationId,
+        waitMs,
       });
       if (reply.kind !== "operation")
         throw new InstallationOperationError("unavailable");
@@ -557,6 +599,17 @@ export async function createInstallationOperations(
       ? null
       : readStored(installationOutcomeSchema, encoded);
   };
+  // Callers waiting for one command to leave pending (or to be admitted). The
+  // settlement is projected inside Watchdog's transaction, so waiters are woken
+  // only after the tick that ran it has returned, and re-read committed state.
+  const waiters = new Map<string, Set<() => void>>();
+  const settledInTick = new Set<string>();
+  const wake = (requestId: string) => {
+    const waiting = waiters.get(requestId);
+    if (waiting === undefined) return;
+    waiters.delete(requestId);
+    for (const resume of waiting) resume();
+  };
   const watchdog = await Watchdog.make({
     owner,
     isAlive: () => Promise.resolve(false),
@@ -573,16 +626,25 @@ export async function createInstallationOperations(
           ports.generation() === command.generation &&
           same(ports.get(command.installationId), proposed.installation)) ||
         (proposed?.state === "refused" && settled.outcome === "failed");
+      const stopped =
+        settled.outcome === "interrupted" || settled.outcome === "cancelled";
+      // The commit marks the plan prepared in this owner before its
+      // compare-and-put, and a settled command can never commit later. An
+      // unprepared plan whose target is not the current row therefore proves
+      // this request changed nothing: the previous release is still selected.
+      const neverCommitted =
+        !stopped &&
+        command.plan?.prepared !== true &&
+        (command.plan === null ||
+          !same(ports.get(command.installationId), command.plan.installation));
       const result: InstallationOutcome = definitive
         ? proposed
-        : {
-            state: "unconfirmed",
-            outcome:
-              settled.outcome === "interrupted" ||
-              settled.outcome === "cancelled"
-                ? settled.outcome
-                : "outcome_unknown",
-          };
+        : neverCommitted
+          ? { state: "refused", status: 503, code: "installation_not_applied" }
+          : {
+              state: "unconfirmed",
+              outcome: stopped ? settled.outcome : "outcome_unknown",
+            };
       const operation = terminalOperationSchema.parse(
         result.state === "succeeded"
           ? {
@@ -613,6 +675,7 @@ export async function createInstallationOperations(
         "UPDATE installation_commands SET provisional_outcome=NULL WHERE request_id=?",
         payload,
       );
+      settledInTick.add(payload);
     },
     execute: async (job): Promise<WatchdogExecutionDecision> => {
       const command = load(installationRequestIdSchema.parse(job.payload));
@@ -620,9 +683,18 @@ export async function createInstallationOperations(
         return { kind: "outcome_unknown" };
       // Persist the wake handoff before awaiting work in another execution context.
       await ports.scheduleWake(Date.now());
-      const result = installationOutcomeSchema.parse(
-        await ports.execute(command),
-      );
+      let executed: InstallationOutcome;
+      try {
+        executed = await ports.execute(command);
+      } catch (cause) {
+        // Watchdog keeps only a closed failure reason; keep the cause here.
+        console.error("Installation execution failed", {
+          requestId: command.admission.requestId,
+          ...failureDiagnostic(cause),
+        });
+        throw cause;
+      }
+      const result = installationOutcomeSchema.parse(executed);
       const latest = load(command.admission.requestId);
       if (latest === null || !("admission" in latest))
         throw new InstallationOperationError("stale_authority");
@@ -660,6 +732,22 @@ export async function createInstallationOperations(
       throw new InstallationOperationError("stale_authority");
     return command;
   };
+  /** The caller's operation, when it names this installation in its scope. */
+  const observed = (
+    request: Readonly<{
+      scope: RetainedInstallationCommand["scope"];
+      requestId: string;
+      installationId: string;
+    }>,
+  ): InstallationOperation | null => {
+    const command = load(request.requestId);
+    return command !== null &&
+      same(command.scope, request.scope) &&
+      (command.operation.installationId === request.installationId ||
+        command.operation.requestedInstallationId === request.installationId)
+      ? operationOf(command)
+      : null;
+  };
   const dispatch = async (
     raw: InstallationOperationRequest,
   ): Promise<InstallationOperationReply> => {
@@ -674,7 +762,7 @@ export async function createInstallationOperations(
       // An orphan wake is harmless; an accepted row with no wake is not.
       // No external await separates this persisted wake from atomic admission.
       await ports.scheduleWake(Date.now());
-      return owner.transactionSync(() => {
+      const admitted = owner.transactionSync(() => {
         const prior = load(request.input.requestId);
         if (prior !== null) {
           if (
@@ -740,27 +828,42 @@ export async function createInstallationOperations(
         });
         return { kind: "operation", operation } as const;
       });
+      // A waiter whose admission acknowledgement was lost learns of it now.
+      wake(request.input.requestId);
+      return admitted;
     }
-    if (request.action === "read" || request.action === "load") {
+    if (request.action === "load") {
       const command = load(request.requestId);
-      const admitted =
-        command !== null && same(command.scope, request.scope) ? command : null;
-      return request.action === "load"
-        ? {
-            kind: "command",
-            command:
-              admitted !== null && "admission" in admitted ? admitted : null,
-          }
-        : {
-            kind: "operation",
-            operation:
-              admitted !== null &&
-              (admitted.operation.installationId === request.installationId ||
-                admitted.operation.requestedInstallationId ===
-                  request.installationId)
-                ? operationOf(admitted)
-                : null,
-          };
+      return {
+        kind: "command",
+        command:
+          command !== null &&
+          same(command.scope, request.scope) &&
+          "admission" in command
+            ? command
+            : null,
+      };
+    }
+    if (request.action === "read")
+      return { kind: "operation", operation: observed(request) };
+    if (request.action === "await") {
+      const current = observed(request);
+      if (current !== null && current.state !== "pending")
+        return { kind: "operation", operation: current };
+      await new Promise<void>((resolve) => {
+        const waiting = waiters.get(request.requestId) ?? new Set();
+        const resume = () => {
+          clearTimeout(timer);
+          waiting.delete(resume);
+          if (waiting.size === 0 && waiters.get(request.requestId) === waiting)
+            waiters.delete(request.requestId);
+          resolve();
+        };
+        const timer = setTimeout(resume, request.waitMs);
+        waiting.add(resume);
+        waiters.set(request.requestId, waiting);
+      });
+      return { kind: "operation", operation: observed(request) };
     }
     const command = requireCommand(request.requestId, request.scope);
     if (request.action === "plan") {
@@ -843,6 +946,10 @@ export async function createInstallationOperations(
       try {
         return await watchdog.tick();
       } finally {
+        // After the tick, never inside its transaction. A rolled-back
+        // settlement wakes a waiter that re-reads pending and waits again.
+        for (const requestId of settledInTick) wake(requestId);
+        settledInTick.clear();
         if (await watchdog.hasPendingWork())
           await ports.scheduleWake(Date.now());
         else {

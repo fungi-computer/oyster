@@ -154,6 +154,13 @@ export const permissionCatalog = {
     "generateMedia",
     "install",
   ),
+  "media.share": entry(
+    "generation",
+    "Share prints",
+    "turn on a public link for one generated image or video at a time.",
+    "prints",
+    "install",
+  ),
   "games:servers": entry(
     "other",
     "Use game servers",

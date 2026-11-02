@@ -10,6 +10,8 @@ import {
   InstallationOperationError,
   installationCommandIds,
   installationRequestIdSchema,
+  installationWaitQuerySchema,
+  maxSettlementWaitMs,
   type InstallationOperations,
   type InstallationOperation,
 } from "./installation-operations.js";
@@ -626,7 +628,12 @@ export async function installOrSelect(
       await observeInstallation({
         requestId,
         initial: admitted,
-        read: () => operations.read(requestId, installationId),
+        read: () =>
+          operations.awaitSettled(
+            requestId,
+            installationId,
+            maxSettlementWaitMs,
+          ),
         signal,
       }),
     );
@@ -1365,14 +1372,24 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       );
       if (!key.success)
         return refusal(400, "Invalid installation request identity");
+      const wait = installationWaitQuerySchema.safeParse(
+        context.req.query("waitMs"),
+      );
+      if (!wait.success) return refusal(400, "Invalid installation wait");
       const operations = host.installations.operations;
       if (operations === undefined)
         return refusal(503, "Installation commands unavailable");
       try {
-        const operation = await operations.read(
-          key.data,
-          context.req.param("installationId"),
-        );
+        const installationId = context.req.param("installationId");
+        // With waitMs, the owner answers when it settles the command.
+        const operation =
+          wait.data === undefined
+            ? await operations.read(key.data, installationId)
+            : await operations.awaitSettled(
+                key.data,
+                installationId,
+                wait.data,
+              );
         return operation === null
           ? refusal(404, "Installation request not found")
           : Response.json(operation);
@@ -1679,7 +1696,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     return new Response(
       config.workbench
         ? `${head}<style>html,body,#oyster-shell{margin:0;height:100%}body{font-family:var(--font-sans)}</style><div id="oyster-shell"></div>${tail}`
-        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" allowfullscreen src="${escapeHtml(config.uiUrl)}" title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
+        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" allowfullscreen title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",

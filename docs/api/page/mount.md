@@ -330,7 +330,12 @@ Desktop chrome (menus, palette, status) belongs to the trusted shell.
 function connectOysterApp(options): Promise<AppHost>;
 ```
 
-Connect a child or home App using the same admitted Oyster slot handles.
+Connect a child or home App using the same admitted Oyster slot handles. The
+host navigates the App's frame (`config.uiUrl`) only once it listens for the
+App's ready signal, so slow capability resolution on a cold Oyster can never
+outlast that signal. Opening is bounded: the capabilities and the document get
+the shared cold-document budget, and the handshake after the document loads gets
+the App's own ready window.
 
 #### Parameters
 

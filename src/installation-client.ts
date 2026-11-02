@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { addAbortListener } from "node:events";
 import type { Release } from "@fungi.computer/puffball";
 import * as Schema from "effect/Schema";
@@ -7,6 +6,7 @@ import { instanceRefusalBody } from "./instance-refusal.js";
 import {
   installationOperationSchema,
   installationCommandIds,
+  maxSettlementWaitMs,
   type InstallationOperation,
 } from "./installation-operations.js";
 
@@ -48,18 +48,18 @@ export class InstallationObservationError extends Error {
   }
 }
 
-const idle = (ms: number, signal: AbortSignal) =>
-  sleep(ms, undefined, { signal });
-
-/** Observe one retained command, over either HTTP or the host's decoded port. */
+/**
+ * Observe one retained command, over either HTTP or the host's decoded port.
+ * Each `read` is the owner's settlement wait: it answers as soon as the owner
+ * settles (or admits) the command, or with the still-pending state after the
+ * owner's bounded wait, so this loop never sleeps between reads.
+ */
 export async function observeInstallation(
   input: Readonly<{
     requestId: string;
     initial: InstallationOperation | null;
     read(): Promise<InstallationOperation | null>;
     signal: AbortSignal;
-    pollMs?: number;
-    idle?: (ms: number, signal: AbortSignal) => Promise<void>;
   }>,
 ): Promise<InstallationCompletion> {
   try {
@@ -90,8 +90,6 @@ export async function observeInstallation(
         listener?.[Symbol.dispose]();
       }
       input.signal.throwIfAborted();
-      if (operation === null || operation.state === "pending")
-        await (input.idle ?? idle)(input.pollMs ?? 5_000, input.signal);
     }
     return operation;
   } catch (cause) {
@@ -134,8 +132,6 @@ export async function installOnOyster(
     key: string;
     installationId: string;
     release: Release;
-    pollMs?: number;
-    idle?: (ms: number, signal: AbortSignal) => Promise<void>;
     /** Once, after the owner supplies a correlated record, even after a lost ack. */
     onAdmitted?: (operation: InstallationOperation) => void;
   }> &
@@ -205,25 +201,27 @@ export async function installOnOyster(
       input.url,
     );
     statusUrl.searchParams.set("requestId", requestId);
-    let observation: Parameters<typeof observeInstallation>[0] = {
+    const settlementUrl = new URL(statusUrl);
+    settlementUrl.searchParams.set("waitMs", String(maxSettlementWaitMs));
+    // Without an acknowledgement, read once at once so the caller learns of
+    // its admission promptly; every later read is the owner's settlement wait.
+    let readOnce = false;
+    return await observeInstallation({
       requestId,
       initial: operation,
       signal,
       read: async () => {
+        const url = admitted || readOnce ? settlementUrl : statusUrl;
+        readOnce = true;
         // Like decoded RPC reads, transport errors reach the observer with
         // their original cause; they are not an authoritative pending read.
-        const observed = await fetch(statusUrl, { headers, signal });
+        // A 404 is the owner's answer: not admitted (yet).
+        const observed = await fetch(url, { headers, signal });
         if (observed.status === 200) return decode(observed);
-        if (observed.status !== 404 && observed.status < 500)
-          throw new InstallationObservationError(requestId);
-        return null;
+        if (observed.status === 404) return null;
+        throw new InstallationObservationError(requestId);
       },
-    };
-    if (input.pollMs !== undefined)
-      observation = { ...observation, pollMs: input.pollMs };
-    if (input.idle !== undefined)
-      observation = { ...observation, idle: input.idle };
-    return await observeInstallation(observation);
+    });
   } catch (cause) {
     if (cause instanceof InstallationObservationError) throw cause;
     throw new InstallationObservationError(requestId, { cause });

@@ -16,10 +16,7 @@ raw bytes; if output exceeds 2 MiB it retains the head and tail and reports
 </picture>
 
 Deploy one Worker, run `npx oyster install-apps`, and your Oyster builds seven
-Apps on its own Computer and opens on the Tourtois desktop. A live Oyster runs
-at <https://oyster.shiit.app/>, and
-[CONTEST.md](https://github.com/fungi-computer/oyster/blob/main/CONTEST.md) is
-the five-minute tour of it.
+Apps on its own Computer and opens on the Tourtois desktop.
 
 ## What you get
 
@@ -184,6 +181,24 @@ repositories and namespace. Use the configured resource names and confirm each
 is gone through Cloudflare's dashboard or API. Capture teardown errors and the
 Wrangler version rather than silently adding unrelated token permissions.
 
+### Upgrading Oyster
+
+Oyster's version is not Fungi's: Fungi 0.9.0 ships Oyster 0.8.2 with
+`@fungi.computer/computer` 0.4.2. Find the versions for each Fungi release on
+the
+[Open source page](https://docs.fungi.computer/reference/packages/#package-versions-in-each-fungi-release),
+then run the upgrade in your Oyster project with the same pnpm and store that
+installed it:
+
+```sh
+pnpm add @fungi.computer/oyster@0.8.2 @fungi.computer/computer@0.4.2
+```
+
+Redeploy with the same `npx wrangler deploy` command you deployed with, then run
+`npx oyster install-apps`. If pnpm stops with `ERR_PNPM_UNEXPECTED_STORE`, rerun
+the `pnpm add` with `--store-dir` set to the store the error says the project is
+linked from.
+
 ### Upgrading to owner-only Oyster
 
 Upgrading to 0.7.0 resets the installed Apps when the registry contains the
@@ -309,15 +324,6 @@ Any MCP client can call every installed App with a key. For Claude Code:
 claude mcp add --transport http oyster "$OYSTER_URL/mcp" \
   --header "Authorization: Bearer <the agent's key>"
 ```
-
-### What the live demo runs
-
-<https://oyster.shiit.app/> runs this same host with the same seven Apps. Its
-`koi-pond` repository is a small canvas game three coding agents built together,
-each in its own fork with its own key, with Bonsai drawing a lane per agent as
-they pushed and merged.
-[CONTEST.md](https://github.com/fungi-computer/oyster/blob/main/CONTEST.md)
-tours it.
 
 ## Part of Fungi
 
@@ -643,8 +649,8 @@ flowchart LR
   selected Instance's `onGitPush` when the Release declares
   `receives: ["git.push"]` and `git.repository`. The App emits typed events
   through `env.EVENTS`: Oyster delivers them as signed Standard Webhooks, and a
-  host with Cloudflare Workflows (the Hub, or the live demo's root) starts the
-  Workflow triggers armed on that event.
+  host with Cloudflare Workflows (the Hub, or a standalone host's root) starts
+  the Workflow triggers armed on that event.
 
 Agent approval stays owner-direct in both compositions: the approval routes are
 owner routes, refuse App-origin requests, and are never an `OysterCapability` an
@@ -1178,8 +1184,6 @@ them. The rest live in the
   `wrangler dev` (workerd) and `celld dev`.
 - `test/core.mjs` exercises replay, state transitions and owner fences in plain
   Node.
-- <https://oyster.shiit.app/> runs that same host with Fungi's seven starter
-  Apps.
 
 ### Drive one Instance in memory
 

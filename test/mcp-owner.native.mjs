@@ -172,7 +172,10 @@ try {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: "native-other-principal" }),
+      body: JSON.stringify({
+        name: "native-other-principal",
+        grants: [{ capability: "apps.read", targets: { kind: "all" } }],
+      }),
     },
   );
   assert.equal(createdKey.status, 201);

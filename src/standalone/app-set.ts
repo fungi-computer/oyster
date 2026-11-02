@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { olderOysterStoreCode } from "../older-oyster-store.js";
+import { installationNotAppliedMessage } from "../instance-refusal.js";
 import { publishSource, type PackOptions } from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
@@ -491,21 +492,21 @@ export async function installStandaloneAppSet(
         if (release.appId !== next.app.appId)
           throw new Error(`${name} build belongs to another App`);
         const installStarted = performance.now();
-        let installation: Parameters<typeof installOnOyster>[0] = {
+        const operation = await installOnOyster({
           url: options.url,
           key: options.key,
           release,
           installationId: name,
           signal: AbortSignal.timeout(options.waitMs ?? appBuildWaitMs),
-          idle,
-        };
-        if (options.pollMs !== undefined)
-          installation = { ...installation, pollMs: options.pollMs };
-        const operation = await installOnOyster(installation);
+        });
         if (operation.state === "unconfirmed")
           throw new InstallationObservationError(operation.requestId);
         if (operation.state === "refused")
-          throw new Error(`${name} installation refused (${operation.code})`);
+          throw new Error(
+            operation.code === "installation_not_applied"
+              ? `${name}: ${installationNotAppliedMessage}`
+              : `${name} installation refused (${operation.code})`,
+          );
         const record = operation.installation;
         if (record === null)
           throw new Error(

@@ -326,7 +326,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
           frame.sandbox.value = appSandbox;
           // A frame permission, not a relaxation of the App's sandbox.
           frame.allowFullscreen = true;
-          frame.src = childConfig.uiUrl;
+          // connectOysterApp navigates the frame once it hears the App.
           frame.title = options.title ?? childConfig.appId;
           // The window's slot is the frame's only home: the shell sizes it
           // there, and it moves, clips and stacks with that window.

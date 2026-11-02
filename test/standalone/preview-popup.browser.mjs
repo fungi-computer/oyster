@@ -11,6 +11,10 @@ import * as console from "node:console";
 import { URL } from "node:url";
 const { Response, Request, Headers } = globalThis;
 import { chromium } from "playwright";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
 import * as z from "zod";
 import * as Result from "effect/Result";
 import { createAppBuild } from "@fungi.computer/puffball/app";
@@ -365,12 +369,16 @@ assert.equal(
 );
 env.OYSTER_ORIGIN = canonicalOrigin;
 env.OYSTER_PREVIEW_ORIGIN = previewOrigin;
-const browser = await chromium.launch({
-  args: [
-    "--host-resolver-rules=MAP oyster.shiit.app 127.0.0.1,MAP oyster-contest.levi-fe0.workers.dev 127.0.0.1",
-    "--no-proxy-server",
-  ],
-});
+const browser = await launchIsolatedChromium(
+  chromium,
+  portsOf(canonicalOrigin),
+  {
+    args: [
+      "--host-resolver-rules=MAP oyster.shiit.app 127.0.0.1,MAP oyster-contest.levi-fe0.workers.dev 127.0.0.1",
+      "--no-proxy-server",
+    ],
+  },
+);
 try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({

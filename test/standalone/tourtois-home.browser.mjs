@@ -39,6 +39,10 @@ import {
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
 import { labComputer } from "./lab-computer.fixture.mjs";
 import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -1042,7 +1046,7 @@ try {
       assert.equal(row.availability, "available");
     }
   }
-  browser = await chromium.launch();
+  browser = await launchIsolatedChromium(chromium, portsOf(origin));
   for (const width of [1440, 390]) {
     const page = await browser.newPage({
       viewport: { width, height: width === 390 ? 844 : 900 },

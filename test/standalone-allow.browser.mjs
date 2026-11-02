@@ -6,6 +6,7 @@ import { Buffer } from "node:buffer";
 import { error } from "node:console";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import { createOyster } from "../src/host.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 
@@ -148,7 +149,9 @@ for (const width of [1440, 390]) {
           },
         },
       });
-      const browser = await chromium.launch({ headless: true });
+      const browser = await launchIsolatedChromium(chromium, [], {
+        headless: true,
+      });
       try {
         const page = await browser.newPage({
           viewport: { width, height: 900 },

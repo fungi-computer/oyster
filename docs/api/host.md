@@ -811,6 +811,163 @@ type InstallationOperations = Readonly<{
      state: "pending";
    }
     | null>;
+  awaitSettled: Promise<
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "refused";
+     status: number;
+     code: string;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "unconfirmed";
+     outcome: "cancelled" | "outcome_unknown" | "interrupted";
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "succeeded";
+     reference: {
+        generation: string;
+        instanceId: InstanceId;
+        authorityVersion: number;
+        status: "enabled" | "disabled" | "deleted";
+     };
+     creation: "fresh" | "replacement" | "reminted";
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "Error"
+              | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      }
+        | null;
+     installation:   | {
+        installationId: string;
+        instanceId: InstanceId | null;
+        appId: AppId;
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
+           }>;
+        };
+        releasePin: "pinned" | "floating";
+        authority: {
+           authorityVersion: number;
+           declaredOperationsDigest: Sha256Digest;
+           approvedGrants: readonly Readonly<{
+              capability: ...;
+              capabilityApproved: ...;
+              operations: ...;
+              resources: ...;
+           }>[];
+           approval:   | Readonly<{
+              by: ...;
+              at: ...;
+              authorityVersion: ...;
+            }>
+              | null;
+        };
+        status: "enabled" | "disabled" | "deleted";
+      }
+        | null;
+   }
+     | {
+     requestId: string;
+     requestedInstallationId: string;
+     installationId: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     state: "pending";
+   }
+    | null>;
   load: Promise<
      | {
      admission: {

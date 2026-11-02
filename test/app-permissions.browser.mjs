@@ -6,6 +6,7 @@ import process from "node:process";
 import { test } from "node:test";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import tourtoisManifest from "../../../apps/tourtois/package.json" with { type: "json" };
 import { homePageFixture } from "./home-page.fixture.mjs";
 
@@ -69,7 +70,9 @@ async function appPermissionsProof(t, control = {}) {
       import.meta.url,
     ).pathname;
   await mkdir(output, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   t.after(() => browser.close());
   for (const width of [1400, 390]) {
     for (const theme of ["mocha", "latte"]) {

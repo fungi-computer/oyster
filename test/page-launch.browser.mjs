@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { test } from "node:test";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import { Hono } from "hono";
 import {
   createAppBuild,
@@ -129,7 +130,9 @@ test("Oyster assets compile their own WASM while remote fetch and JavaScript eva
   assert.ok(csp.includes("frame-src 'none';"));
   assert.ok(csp.includes("form-action 'none';"));
   assert.ok(csp.includes("sandbox allow-scripts"));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   try {
     const page = await browser.newPage();
     const escapedRequests = [];
@@ -173,7 +176,9 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
     platform: "browser",
     write: false,
   });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   try {
     for (const [computerId, principal, expected] of [
       [
@@ -269,7 +274,7 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
   const app = await wasmAssetHost(guest.outputFiles[0].text);
   // Full Chromium supplies native clipboard permissions; headless-shell denies
   // even a direct trusted-page copy without an artificial permission grant.
-  const browser = await chromium.launch({
+  const browser = await launchIsolatedChromium(chromium, [], {
     headless: true,
     channel: "chromium",
   });

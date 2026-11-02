@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { scheduler } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { setTimeout as delay, scheduler } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
@@ -55,6 +55,7 @@ async function fixture(
   refuseApply = false,
   unexpected?:
     | "prepare"
+    | "prepare-once"
     | "apply"
     | "backend-construction"
     | "stale-after-apply"
@@ -149,6 +150,7 @@ async function fixture(
   let snapshot: Instance | null = null;
   let boots = 0;
   let aborts = 0;
+  let prepares = 0;
   const preparing = Promise.withResolvers<undefined>();
   const prepareGate = Promise.withResolvers<undefined>();
   const applying = Promise.withResolvers<undefined>();
@@ -203,10 +205,8 @@ async function fixture(
   const operations = installationOperationsPort(
     async (request) => {
       const reply = await runtime.dispatch(request);
-      if (
-        request.action === "admit" &&
-        request.input.requestId === "executor-select"
-      )
+      if (request.action !== "admit") return reply;
+      if (request.input.requestId === "executor-select")
         selecting.resolve(undefined);
       return reply;
     },
@@ -281,14 +281,17 @@ async function fixture(
     },
     instances: {
       get: (id) => ({
-        prepare: (state) =>
-          unexpected === "prepare"
+        prepare: (state) => {
+          prepares++;
+          return unexpected === "prepare" ||
+            (unexpected === "prepare-once" && prepares === 1)
             ? Promise.resolve<InstanceResult<UiBootCheckOutcome | null>>({
                 ok: false,
                 code: "failed",
                 causeClass: "AbortError",
               })
-            : result(core(id).prepare(state)),
+            : result(core(id).prepare(state));
+        },
         apply: async (state) =>
           unexpected === "apply"
             ? Promise.resolve<InstanceResult<Instance>>({
@@ -360,6 +363,7 @@ async function fixture(
     snapshot: () => snapshot,
     boots: () => boots,
     aborts: () => aborts,
+    prepares: () => prepares,
     reads: () => reads,
     replay: async () => {
       const row = rows.get("notes");
@@ -533,39 +537,77 @@ it("keeps backend construction blocking before recording the UI outcome", async 
   }
 });
 
-it.each(["prepare", "apply"] as const)(
-  "keeps the actual generic %s InstanceResult unconfirmed",
-  async (phase) => {
-    const state = await fixture(false, phase);
-    try {
-      const admitted = await state.app.request("/api/installations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": "executor-proof",
-        },
-        body: JSON.stringify({
-          installationId: "notes",
-          release: state.release,
-        }),
-      });
-      expect(admitted.status).toBe(202);
-      state.prepareGate.resolve(undefined);
-      state.applyGate.resolve(undefined);
-      await state.runtime.tick();
-      expect(await state.read()).toMatchObject({
-        state: "unconfirmed",
-        outcome: "outcome_unknown",
-      });
-      expect(state.rows.has("notes")).toBe(phase === "apply");
-      expect(state.snapshot()).toBeNull();
-    } finally {
-      state.prepareGate.resolve(undefined);
-      state.applyGate.resolve(undefined);
-      state.database.close();
-    }
-  },
-);
+const admitNotes = (state: Awaited<ReturnType<typeof fixture>>) =>
+  state.app.request("/api/installations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "executor-proof",
+    },
+    body: JSON.stringify({ installationId: "notes", release: state.release }),
+  });
+
+it("retries a generic preparation failure on a cold Instance and settles the first request", async () => {
+  const state = await fixture(false, "prepare-once");
+  try {
+    state.prepareGate.resolve(undefined);
+    state.applyGate.resolve(undefined);
+    expect((await admitNotes(state)).status).toBe(202);
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "succeeded",
+      creation: "fresh",
+    });
+    expect(state.prepares()).toBe(2);
+    expect(state.rows.get("notes")?.release).toEqual(state.release);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("settles persistent preparation failure as not applied: nothing was committed", async () => {
+  const state = await fixture(false, "prepare");
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
+  try {
+    expect((await admitNotes(state)).status).toBe(202);
+    state.prepareGate.resolve(undefined);
+    state.applyGate.resolve(undefined);
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "refused",
+      status: 503,
+      code: "installation_not_applied",
+    });
+    expect(state.prepares()).toBe(3);
+    expect(state.rows.has("notes")).toBe(false);
+    expect(state.snapshot()).toBeNull();
+    expect(logged).toHaveBeenCalledWith(
+      "Installation preparation failed",
+      expect.objectContaining({ attempt: 3, causeClass: "AbortError" }),
+    );
+  } finally {
+    logged.mockRestore();
+    state.database.close();
+  }
+});
+
+it("keeps a generic apply InstanceResult after commit unconfirmed", async () => {
+  const state = await fixture(false, "apply");
+  try {
+    expect((await admitNotes(state)).status).toBe(202);
+    state.prepareGate.resolve(undefined);
+    state.applyGate.resolve(undefined);
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "unconfirmed",
+      outcome: "outcome_unknown",
+    });
+    expect(state.rows.has("notes")).toBe(true);
+    expect(state.snapshot()).toBeNull();
+  } finally {
+    state.database.close();
+  }
+});
 
 it("PUT selection admits the same completion contract and keeps the exact existing authority lineage", async () => {
   const state = await fixture();
@@ -603,6 +645,13 @@ it("PUT selection admits the same completion contract and keeps the exact existi
     expect(completed).toBe(false);
     expect(state.rows.get("notes")).toEqual(original);
     await state.runtime.tick();
+    // The owner's settlement answers the held PUT; no observer poll elapses.
+    expect(
+      await Promise.race([
+        selecting.then(() => "answered"),
+        delay(1_000).then(() => "still waiting"),
+      ]),
+    ).toBe("answered");
     const selected = await selecting;
     expect(selected.status).toBe(200);
     expect(await selected.json()).toEqual(state.rows.get("notes"));
@@ -622,7 +671,7 @@ it("PUT selection admits the same completion contract and keeps the exact existi
     state.applyGate.resolve(undefined);
     state.database.close();
   }
-}, 15_000);
+});
 
 it.each([false, true])(
   "does not convert supersession after exact application into a fabricated domain refusal (native stale reply=%s)",
@@ -824,11 +873,12 @@ it("cancels an observer blocked on a decoded RPC reply without failing or cancel
   }
 });
 
-/** Admit through the real host entry with Workflow origin, then run the owner. */
+/** Admit through the real host entry, then run the owner that answers it. */
 async function workflowInstall(
   state: Awaited<ReturnType<typeof fixture>>,
   release: Awaited<ReturnType<typeof fixture>>["release"],
   requestId: string,
+  origin: "owner-direct" | "workflow" = "workflow",
 ) {
   const response = installOrSelect(
     state.host,
@@ -836,7 +886,7 @@ async function workflowInstall(
     release,
     state.principal,
     "install-or-select",
-    "workflow",
+    origin,
     requestId,
   );
   while ((await state.operations.load(requestId)) === null)
@@ -867,7 +917,7 @@ it("requests owner confirmation for a fresh Workflow install even without capabi
     state.applyGate.resolve(undefined);
     state.database.close();
   }
-}, 15_000);
+});
 
 it("settles a Workflow upgrade that declares a new capability as needs_consent and keeps the running Release", async () => {
   const state = await fixture();
@@ -904,7 +954,7 @@ it("settles a Workflow upgrade that declares a new capability as needs_consent a
     state.applyGate.resolve(undefined);
     state.database.close();
   }
-}, 15_000);
+});
 
 it("settles a fresh Workflow install that the owner would have to approve as needs_consent, not unconfirmed", async () => {
   const state = await fixture();
@@ -923,7 +973,7 @@ it("settles a fresh Workflow install that the owner would have to approve as nee
   } finally {
     state.database.close();
   }
-}, 15_000);
+});
 
 // Owner confirmation creates the installation. Later Workflow updates can
 // reuse that approval but never install another App or widen its grants.
@@ -932,19 +982,12 @@ it("reuses an owner-confirmed installation without widening it in later Workflow
   try {
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
-    const response = installOrSelect(
-      state.host,
-      "notes",
+    const created = await workflowInstall(
+      state,
       state.release,
-      state.principal,
-      "install-or-select",
-      "owner-direct",
       "workflow-create",
+      "owner-direct",
     );
-    while ((await state.operations.load("workflow-create")) === null)
-      await scheduler.yield();
-    await state.runtime.tick();
-    const created = await response;
     expect(created.status).toBe(201);
     const fresh = state.rows.get("notes");
     if (fresh === undefined) throw new Error("Installation missing");
@@ -973,4 +1016,4 @@ it("reuses an owner-confirmed installation without widening it in later Workflow
     state.applyGate.resolve(undefined);
     state.database.close();
   }
-}, 30_000);
+});

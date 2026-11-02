@@ -33,6 +33,10 @@ import { appBackend as shedBackend } from "../../../../apps/shed/backend/methods
 import shedMetadata from "../../../../apps/shed/package.json" with { type: "json" };
 import { appBackend as chatBackend } from "../../../../apps/grove/backend/methods.ts";
 import chatMetadata from "../../../../apps/grove/package.json" with { type: "json" };
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
 const workflowsDeclaration = buildAppDeclaration(
   workflowsBackend,
   workflowsMetadata.fungi.app,
@@ -168,7 +172,10 @@ async function answerInRunView(runId, workflowId, approved, reviewedValue) {
       server: { host: "127.0.0.1", port: 0 },
     });
     await reviewServer.listen();
-    reviewBrowser = await chromium.launch();
+    reviewBrowser = await launchIsolatedChromium(chromium, [
+      reviewServer.httpServer.address().port,
+      ...portsOf(origin),
+    ]);
   }
   const width = approved ? 1440 : 390;
   const page = await reviewBrowser.newPage({
@@ -864,6 +871,7 @@ try {
         installationId: "trellis",
         workflowId: "scheduled",
         triggerId: "clock",
+        cron: { expression: "*/5 * * * *", timeZone: "UTC" },
         nextDueAt: 0,
         state: "active",
         lastError: null,
@@ -1447,17 +1455,13 @@ try {
       assert.equal(response.status, 200);
       return response.json();
     };
-    assert.equal(
-      (await homeConfiguration()).workbench,
-      false,
-      "installing the shell is not owner consent to its trusted host access",
-    );
-    await approve("tourtois");
+    // The operator's fresh owner-direct home install receives its declared
+    // Shell grant (the built-in standalone Shell approval in the Tourtois ADR).
     const approvedHome = await homeConfiguration();
     assert.equal(
       approvedHome.workbench,
       true,
-      "the owner approved the trusted home shell",
+      "the fresh home install carries the built-in Shell grant",
     );
     assert.ok(
       approvedHome.shellModuleUrl,
@@ -1466,7 +1470,7 @@ try {
   });
   if (!reviewBrowser) {
     const { chromium } = await import("playwright");
-    reviewBrowser = await chromium.launch();
+    reviewBrowser = await launchIsolatedChromium(chromium, portsOf(origin));
   }
   const { expect: expectUi } = await import("playwright/test");
   const uiPage = await reviewBrowser.newPage({

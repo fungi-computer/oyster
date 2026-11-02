@@ -1155,3 +1155,38 @@ it("refuses a replay that changes the retained install origin", async () => {
     state.database.close();
   }
 });
+
+it.each(["threw", "unconfirmed"] as const)(
+  "settles an executor that %s before the commit as not applied",
+  async (exit) => {
+    const lost = new TypeError("Loopback executor disconnected");
+    const state = fixture(async (command, port) => {
+      await plan(command, port);
+      if (exit === "threw") throw lost;
+      return { state: "unconfirmed", outcome: "outcome_unknown" };
+    });
+    const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
+    try {
+      const { runtime, port } = await state.make();
+      await port.admit(admission);
+      await runtime.tick();
+      expect(await port.read(admission.requestId, "notes")).toMatchObject({
+        state: "refused",
+        status: 503,
+        code: "installation_not_applied",
+      });
+      expect(state.rows.has("notes")).toBe(false);
+      if (exit === "threw")
+        expect(logged).toHaveBeenCalledWith(
+          "Installation execution failed",
+          expect.objectContaining({
+            causeClass: "TypeError",
+            message: "Loopback executor disconnected",
+          }),
+        );
+    } finally {
+      logged.mockRestore();
+      state.database.close();
+    }
+  },
+);

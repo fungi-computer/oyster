@@ -10,6 +10,7 @@ import {
 import { deriveDeclaredOperations } from "./apps/operations.js";
 import { pendingCapabilities } from "./apps/permissions.js";
 import { BootGateError } from "./boot-gate.js";
+import { failureDiagnostic } from "./cause-class.js";
 import { guestLimits } from "./guest-policy.js";
 import { instanceSchema, selectionOf } from "./index.js";
 import { ReleaseError, verifyRelease } from "./release.js";
@@ -21,7 +22,7 @@ import {
   type RetainedInstallationCommand,
   type InstallationOutcome,
 } from "./installation-operations.js";
-import type { OysterHost } from "./host.js";
+import type { InstanceResult, OysterHost } from "./host.js";
 import { instanceRefusalStatus } from "./instance-refusal.js";
 
 const refused = (status: number, code: string): InstallationOutcome => ({
@@ -33,6 +34,30 @@ const unconfirmed: InstallationOutcome = {
   state: "unconfirmed",
   outcome: "outcome_unknown",
 };
+
+/**
+ * Delays before each further preparation attempt. A cold Instance (first
+ * backend construction, a Durable Object reset or an overloaded isolate) can
+ * fail its first generic preparation and pass the next one.
+ */
+const preparationRetryDelaysMs = [500, 2_000] as const;
+
+/** Retry only generic preparation failures; typed refusals are final. */
+async function prepareWithRetry<T>(
+  prepare: () => Promise<InstanceResult<T>>,
+): Promise<InstanceResult<T>> {
+  for (let attempt = 1; ; attempt++) {
+    const prepared = await prepare();
+    if (prepared.ok || prepared.code !== "failed") return prepared;
+    console.error("Installation preparation failed", {
+      attempt,
+      causeClass: prepared.causeClass,
+    });
+    const wait = preparationRetryDelaysMs[attempt - 1];
+    if (wait === undefined) return prepared;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+}
 
 /** Ordinary Worker-side verification and lifecycle I/O for one retained intent. */
 export async function executeInstallation(
@@ -60,9 +85,12 @@ export async function executeInstallation(
     // Default verification reads UI/artifact bytes HERE, never inside REGISTRY.
     verified = await verifyRelease(host.artifacts, command.admission.release);
   } catch (cause) {
-    return cause instanceof ReleaseError
-      ? refused(422, cause.code)
-      : unconfirmed;
+    if (cause instanceof ReleaseError) return refused(422, cause.code);
+    console.error("Installation release verification failed", {
+      requestId: command.admission.requestId,
+      ...failureDiagnostic(cause),
+    });
+    return unconfirmed;
   }
   if (command.plan === null) {
     const declaration = verified.declaration ?? emptyAppDeclaration;
@@ -161,15 +189,22 @@ export async function executeInstallation(
       try {
         uiCheck = await host.bootUi(verified.release);
       } catch (cause) {
-        return cause instanceof BootGateError
-          ? refused(422, cause.code)
-          : unconfirmed;
+        if (cause instanceof BootGateError) return refused(422, cause.code);
+        console.error("Installation UI boot check failed", {
+          requestId: command.admission.requestId,
+          ...failureDiagnostic(cause),
+        });
+        return unconfirmed;
       }
     } else {
-      const prepared = await instance.prepare(state, next.release);
+      const prepared = await prepareWithRetry(() =>
+        instance.prepare(state, next.release),
+      );
       if (!prepared.ok)
+        // Preparation never changes the active runtime and runs before the
+        // commit, so a generic failure here leaves the previous release live.
         return prepared.code === "failed"
-          ? unconfirmed
+          ? refused(503, "installation_not_applied")
           : refused(instanceRefusalStatus(prepared.code), prepared.code);
       uiCheck = prepared.value;
     }

@@ -14,6 +14,7 @@ import { installRelease } from "../dist/pack.js";
 import { build } from "esbuild";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { parseRelease, sha256 } from "../dist/host.js";
+import { grantDeclaredAppCapabilities } from "./standalone/owner-grants.fixture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
@@ -201,6 +202,11 @@ try {
   assert.equal(installed.status, 201, await installed.clone().text());
   const installation = await installed.json();
   assert.equal(installation.status, "enabled");
+  await grantDeclaredAppCapabilities({
+    origin,
+    installationId: "notes",
+    headers: auth,
+  });
 
   const call = async (name) => {
     const response = await fetch(`${origin}/apps/notes/methods/${name}`, {

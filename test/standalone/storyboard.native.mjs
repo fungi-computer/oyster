@@ -188,7 +188,7 @@ try {
   // and reusing that exact name as the generated facet class's exportName
   // collides with it, causing every call to crash with a TypeError deep in
   // backend_execution (confirmed by bisecting against this exact change;
-  // workflows.native.mjs and workflow-provider.native.mjs already use
+  // workflows.native.mjs already uses
   // "BonsaiApp" for the same install).
   await installFirstParty("bonsai", bonsaiDeclaration);
   await install(

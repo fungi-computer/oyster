@@ -300,6 +300,7 @@ export function agentCapabilities(
       version: agentManage.version,
       methods: {
         create: { kind: "json", method: "POST", path: "agents" },
+        computers: { kind: "json", method: "GET", path: "agent-computers" },
         open: { kind: "transport", method: "ANY", path: "agents/:agentId" },
       },
     },
@@ -407,6 +408,10 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
   return (
     routes<CapabilityEnv>()
       .include(ownerAgentRoutes<CapabilityEnv>(agents, "direct-or-app"))
+      // Standalone Agents choose no Computer at creation; the owner attaches one.
+      .get("/agent-computers", owner("direct-or-app"), () =>
+        Response.json(null),
+      )
       .get("/agents", agentCollection(), async (context, { reaches }) => {
         const selected = context.req.query("archived");
         if (

@@ -1,4 +1,5 @@
 import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
+import { grantDeclaredAppCapabilities } from "./owner-grants.fixture.mjs";
 // The production standalone Oyster + real Bonsai release; local real Git provider.
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
@@ -27,8 +28,11 @@ import {
   repoSummary,
 } from "../../../../apps/bonsai/shared/contract.ts";
 import { repositoryDeletion } from "../../../../apps/bonsai/shared/repository-deletion.ts";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
 
-const proof = z.enum(["seed", "mcp"]).parse(process.env.BONSAI_PROOF ?? "seed");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../../", import.meta.url));
 await mkdir(`${root}.botanical`, { recursive: true });
@@ -49,10 +53,6 @@ const origin = `http://127.0.0.1:${port}`;
 // requests to the Worker at that origin, as TLS termination does in production.
 const tenantHost = "oyster.test";
 const tenantOrigin = `https://${tenantHost}`;
-execFileSync("pnpm", ["run", "build"], {
-  cwd: root,
-  stdio: ["ignore", "pipe", "pipe"],
-});
 const revision = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: repository,
   encoding: "utf8",
@@ -197,10 +197,17 @@ async function runProof() {
       installationId: "bonsai",
     });
     assert.equal(installed.status, 201, "Local Bonsai installation failed");
+    await grantDeclaredAppCapabilities({
+      origin,
+      installationId: "bonsai",
+      headers: { Authorization: `Bearer ${key}` },
+    });
     const options = { origin, work: `${work}/seed`, ownerKeyFile: keyFile };
     await seedDemo({ ...options, phase: "prepare" });
     if (!process.env.BONSAI_SEED_NO_BROWSER)
-      browser = await chromium.launch({ headless: true });
+      browser = await launchIsolatedChromium(chromium, portsOf(origin), {
+        headless: true,
+      });
     // Oyster is owner-only: a signed-out browser lands on sign-in, and an
     // anonymous clone or push is refused before Git is reached.
     if (browser) {
@@ -353,7 +360,7 @@ async function runProof() {
           await page.close();
         }
     };
-    if (proof === "seed") await capture("before");
+    await capture("before");
     const agentKeys = {};
     for (const name of ["morel", "chanterelle", "enoki"]) {
       const response = await globalThis.fetch(`${origin}/api/keys`, {
@@ -385,13 +392,6 @@ async function runProof() {
         browser,
         shots,
       });
-    }
-    if (proof === "mcp") {
-      assert.ok(browser, "MCP App proof requires a browser");
-      log(
-        `PASS shipping Bonsai MCP: named Agent read, declined write unchanged, approved fork, real App UI at 1440/390. Shots: ${shots}/mcp`,
-      );
-      return { ok: true };
     }
     const agentKeysFile = `${work}/agent-keys.json`;
     await writeFile(agentKeysFile, JSON.stringify(agentKeys), { mode: 0o600 });

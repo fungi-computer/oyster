@@ -16,6 +16,7 @@ import { createAppBuild } from "@fungi.computer/puffball/app";
 import { installRelease } from "../dist/pack.js";
 import { parseRelease, sha256 } from "../dist/host.js";
 import { artifactsProvider } from "./artifacts-provider.fixture.mjs";
+import { grantDeclaredAppCapabilities } from "./standalone/owner-grants.fixture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceRevision = `git:${execFileSync("git", ["rev-parse", "HEAD"], {
@@ -215,6 +216,11 @@ try {
     installationId: "proof",
   });
   assert.equal(installed.status, 201, await installed.clone().text());
+  await grantDeclaredAppCapabilities({
+    origin,
+    installationId: "proof",
+    headers: { Authorization: owner },
+  });
   provider.create("proof--pond");
   const remote = `${origin}/git/proof/pond.git`;
 

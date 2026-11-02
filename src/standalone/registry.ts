@@ -240,6 +240,16 @@ export abstract class StandaloneRegistry
           ),
         };
       }
+      case "read-keep-awake":
+      case "set-keep-awake": {
+        if (this.#computers.read(input.computerId) === null) return null;
+        const computer = this.#env.COMPUTER.getByName(input.computerId);
+        return {
+          enabled: await computer.keepAwake(
+            input.operation === "set-keep-awake" ? input.enabled : undefined,
+          ),
+        };
+      }
       case "select": {
         const computer = this.#computers.read(input.computerId);
         if (computer === null) return null;

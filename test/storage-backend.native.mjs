@@ -14,6 +14,7 @@ import { installRelease } from "../dist/pack.js";
 import { build } from "esbuild";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { parseRelease, sha256 } from "../dist/host.js";
+import { grantDeclaredAppCapabilities } from "./standalone/owner-grants.fixture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
@@ -205,6 +206,11 @@ try {
   assert.equal(installed.status, 201, await installed.clone().text());
   const installation = await installed.json();
   assert.equal(installation.status, "enabled");
+  await grantDeclaredAppCapabilities({
+    origin,
+    installationId: "notes",
+    headers: auth,
+  });
 
   const call = async (name, input, fixture, agentId) => {
     const headers = { ...auth, "Content-Type": "application/json" };
@@ -234,16 +240,32 @@ try {
   assert.equal(initial.kind, "accepted");
   assert.equal(initial.value.source, "none");
   assert.equal(initial.value.canWriteTeam, true);
-  for (const actor of ["member", "agent", "key"])
-    for (const [name, input] of [
-      ["read", {}],
-      ["write", { basedOn: null, value: { layout: "not-owner" } }],
-      ["reset", { basedOn: null }],
-    ])
+  const nonOwnerCalls = [
+    ["read", {}],
+    ["write", { basedOn: null, value: { layout: "not-owner" } }],
+    ["reset", { basedOn: null }],
+  ];
+  for (const actor of ["member", "agent"])
+    for (const [name, input] of nonOwnerCalls)
       assert.deepEqual(await call(name, input, actor), {
         kind: "rejected",
         code: "owner_required",
       });
+  // A key's App access is its live Ear Tag grants; this fixture key has none,
+  // so the App gate refuses it before the storage owner law is reached.
+  for (const [name, input] of nonOwnerCalls) {
+    const refused = await fetch(`${origin}/apps/notes/methods/${name}`, {
+      method: "POST",
+      headers: {
+        ...auth,
+        "Content-Type": "application/json",
+        "X-Storage-Fixture": "key",
+      },
+      body: JSON.stringify(input),
+    });
+    assert.equal(refused.status, 403);
+    assert.deepEqual(await refused.json(), { error: "not_approved" });
+  }
   assert.equal((await call("read", {})).value.source, "none");
   const seeded = await fetch(`${origin}/__storage_fixture/agents`, {
     headers: auth,
@@ -312,7 +334,9 @@ try {
   assert.deepEqual(catalog.apps[0].gills, [
     { id: "inbox", title: "Inbox", desktop: { sizes: ["S", "M"] } },
   ]);
-  assert.deepEqual(catalog.roles, {});
+  assert.deepEqual(catalog.roles, {
+    inbox: { surfaceId: null, chosen: false },
+  });
   const watchAbort = new AbortController();
   const watch = await fetch(
     `${origin}/api/workbench/storage/notes/events?key=desktop`,

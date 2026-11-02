@@ -13,6 +13,10 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import { parseArgs } from "node:util";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { z } from "zod";
@@ -265,7 +269,7 @@ try {
   }
 
   // The App UI reads the same state written by the MCP Agent.
-  const mcpBrowser = await chromium.launch();
+  const mcpBrowser = await launchIsolatedChromium(chromium, portsOf(origin));
   try {
     const page = await mcpBrowser.newPage();
     await page.goto(`${origin}/login`);
@@ -335,7 +339,7 @@ try {
   assert.equal((await fetch(`${origin}/ui/notes/rel_other/`)).status, 404);
 
   // 8. A person signs in and uses the App in a browser.
-  const browser = await chromium.launch();
+  const browser = await launchIsolatedChromium(chromium, portsOf(origin));
   try {
     const page = await browser.newPage();
     const capture = async (view) => {
@@ -370,7 +374,7 @@ try {
     // App menus, the command chord and status items belong to the picked
     // shell (Tourtois), not the plain host page. Their proofs live with that
     // shell: apps/tourtois test/focused-app-menus.test.tsx and
-    // test/shell-keys.test.tsx, and bonsai test:tourtois-home on a real Oyster.
+    // test/shell-keys.test.tsx, and the Oyster capture:tourtois-home review on a real Oyster.
     assert.equal(
       await page.getByRole("button", { name: "File", exact: true }).count(),
       0,

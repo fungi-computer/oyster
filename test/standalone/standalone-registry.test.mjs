@@ -197,6 +197,7 @@ test("multiple Computers create list and start retain identities across standalo
   const tenants = new StandaloneTenants(state(tenantsDatabase));
   const started = [];
   const internetAccess = new Map();
+  const keepAwake = new Map();
   const settingsCalls = [];
   const env = {
     OYSTER_ORIGIN: "https://fleet.test",
@@ -210,6 +211,11 @@ test("multiple Computers create list and start retain identities across standalo
           settingsCalls.push({ computerId, enabled });
           if (enabled !== undefined) internetAccess.set(computerId, enabled);
           return internetAccess.get(computerId) ?? true;
+        },
+        keepAwake: async (enabled) => {
+          settingsCalls.push({ computerId, enabled, setting: "keep-awake" });
+          if (enabled !== undefined) keepAwake.set(computerId, enabled);
+          return keepAwake.get(computerId) ?? false;
         },
         initializeFleetBackings: async (backings) => {
           assert.deepEqual(backings, [{ kind: "platform-container" }]);
@@ -287,7 +293,29 @@ test("multiple Computers create list and start retain identities across standalo
       await (await routes.request(internetPath(b.computerId))).json(),
       { enabled: true },
     );
+    const keepAwakePath = (computerId) =>
+      `/api/computers/${computerId}/keep-awake`;
+    const setKeepAwake = (computerId, enabled) =>
+      routes.request(keepAwakePath(computerId), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+    assert.deepEqual(
+      await (await routes.request(keepAwakePath(b.computerId))).json(),
+      { enabled: false },
+    );
+    assert.deepEqual(await (await setKeepAwake(b.computerId, true)).json(), {
+      enabled: true,
+    });
+    assert.deepEqual(
+      await (await routes.request(keepAwakePath(a.computerId))).json(),
+      { enabled: false },
+      "Keep awake belongs to the named Computer only",
+    );
     const beforeUnknown = settingsCalls.length;
+    assert.equal((await setKeepAwake("foreign", true)).status, 404);
+    assert.equal((await setKeepAwake(b.computerId, "true")).status, 400);
     assert.equal((await setInternetAccess("foreign", false)).status, 404);
     assert.equal((await setInternetAccess(a.computerId, "false")).status, 400);
     assert.equal(settingsCalls.length, beforeUnknown);
@@ -335,6 +363,21 @@ test("multiple Computers create list and start retain identities across standalo
         computerId: a.computerId,
       }),
       { enabled: false },
+    );
+    assert.deepEqual(
+      await reopened.computerFleet(owner.actor.memberId, {
+        operation: "read-keep-awake",
+        computerId: b.computerId,
+      }),
+      { enabled: true },
+    );
+    assert.deepEqual(
+      await reopened.computerFleet("foreign-owner", {
+        operation: "set-keep-awake",
+        computerId: b.computerId,
+        enabled: false,
+      }),
+      { error: "owner_required" },
     );
     assert.deepEqual(
       await reopened.computerFleet("foreign-owner", {
@@ -1513,8 +1556,12 @@ for (const expected of ["installed", "needs_consent"]) {
             new OysterInstallationExecutor({ props }, executorEnv),
         };
         const scope = { tenantId: shared.tenantId, origin: env.OYSTER_ORIGIN };
-        /** Run the owner's alarm once the retained command is admitted. */
-        const settle = async (requestId, running) => {
+        /**
+         * Run the owner's alarm once the retained command is admitted; its
+         * settlement answers the caller's waiting observer.
+         */
+        const settle = async (requestId, start) => {
+          const running = start();
           while (
             (
               await registry.installationOperation({
@@ -1634,10 +1681,10 @@ for (const expected of ["installed", "needs_consent"]) {
           build.releaseId,
           expected === "needs_consent" ? ["computer.readFile"] : [],
         );
-        const installed = await settle(
-          "previous-install",
+        const host = await rootHost(env);
+        const installed = await settle("previous-install", () =>
           installOrSelect(
-            await rootHost(env),
+            host,
             "my-app",
             previous,
             { actor: owner.actor, role: "owner" },
@@ -1737,22 +1784,23 @@ for (const expected of ["installed", "needs_consent"]) {
         // node retry, or another build) waits; it is not a terminal refusal.
         const [, concurrent] = await settle(
           "workflow-build:" + build.jobId,
-          Promise.all([
-            registry.installWorkflowBuild(
-              build.jobId,
-              "my-app",
-              candidate,
-              owner.actor.memberId,
-              "bonsai",
-            ),
-            registry.installWorkflowBuild(
-              build.jobId,
-              "my-app",
-              candidate,
-              owner.actor.memberId,
-              "bonsai",
-            ),
-          ]),
+          () =>
+            Promise.all([
+              registry.installWorkflowBuild(
+                build.jobId,
+                "my-app",
+                candidate,
+                owner.actor.memberId,
+                "bonsai",
+              ),
+              registry.installWorkflowBuild(
+                build.jobId,
+                "my-app",
+                candidate,
+                owner.actor.memberId,
+                "bonsai",
+              ),
+            ]),
         );
         assert.deepEqual(concurrent, { status: 202, body: { pending: true } });
         const done = await registry.readBuild(build.jobId);

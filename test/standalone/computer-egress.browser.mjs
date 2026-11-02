@@ -13,6 +13,10 @@ import { teamComputerSchema } from "@fungi.computer/nacre/workbench";
 import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 import { expectPublicDownload } from "./computer-egress-guest.fixture.mjs";
 import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
+import {
   nativeAppClient,
   nativeWorkflowRoot,
 } from "./workflow-native.fixture.mjs";
@@ -113,7 +117,7 @@ try {
   const a = await createComputer("Egress A");
   const b = await createComputer("Egress B");
 
-  browser = await chromium.launch();
+  browser = await launchIsolatedChromium(chromium, portsOf(host.origin));
   for (const width of [1440, 390]) {
     await internetAccess(a, false);
     await internetAccess(b, true);

@@ -47,6 +47,8 @@ const apps = {
   prints: ["apps/prints/index.html", "Prints"],
   trellis: ["apps/trellis/index.html", "Trellis"],
 };
+// Trellis ships one inlined page (vite-plugin-singlefile); the rest split assets.
+const singleFile = new Set(["trellis"]);
 const names = Object.keys(apps);
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -135,22 +137,32 @@ for (const name of selected) {
     );
     assert.notEqual(prepared.output.kind, "backend");
     const ui = prepared.output.ui.content;
-    assert.equal(ui.kind, "assets", `${name}: split asset build`);
-    const paths = ui.assets.map((asset) => asset.path);
-    assert.ok(paths.includes("/index.html"), `${name}: emits index.html`);
     const decoder = new TextDecoder();
-    const stylesheets = ui.assets.filter((asset) =>
-      asset.path.endsWith(".css"),
-    );
-    assert.ok(stylesheets.length > 0, `${name}: emits a stylesheet`);
-    for (const stylesheet of stylesheets)
-      assert.doesNotMatch(
-        decoder.decode(stylesheet.bytes),
-        /@(?:source|theme|utility|plugin|apply)\b/,
-        `${name}: ${stylesheet.path} is compiled`,
+    const uncompiled = /@(?:source|theme|utility|plugin|apply)\b/;
+    let assetCount = 1;
+    if (singleFile.has(name)) {
+      assert.equal(ui.kind, "html", `${name}: single-file page build`);
+      const page = decoder.decode(ui.bytes);
+      assert.match(page, /<style\b/u, `${name}: inlines its stylesheet`);
+      assert.doesNotMatch(page, uncompiled, `${name}: inlined CSS is compiled`);
+    } else {
+      assert.equal(ui.kind, "assets", `${name}: split asset build`);
+      const paths = ui.assets.map((asset) => asset.path);
+      assetCount = paths.length;
+      assert.ok(paths.includes("/index.html"), `${name}: emits index.html`);
+      const stylesheets = ui.assets.filter((asset) =>
+        asset.path.endsWith(".css"),
       );
+      assert.ok(stylesheets.length > 0, `${name}: emits a stylesheet`);
+      for (const stylesheet of stylesheets)
+        assert.doesNotMatch(
+          decoder.decode(stylesheet.bytes),
+          uncompiled,
+          `${name}: ${stylesheet.path} is compiled`,
+        );
+    }
     console.log(
-      `PASS ${name}: ${distribution.files.length} source files, ${paths.length} assets, ${Math.round((Date.now() - started) / 1000)}s`,
+      `PASS ${name}: ${distribution.files.length} source files, ${assetCount} assets, ${Math.round((Date.now() - started) / 1000)}s`,
     );
   } finally {
     await rm(template, { recursive: true, force: true });

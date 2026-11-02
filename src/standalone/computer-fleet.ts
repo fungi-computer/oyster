@@ -31,11 +31,11 @@ export const standaloneFleetRequestSchema = z.discriminatedUnion("operation", [
     computerId: fleetComputerId,
   }),
   z.strictObject({
-    operation: z.literal("read-internet-access"),
+    operation: z.enum(["read-internet-access", "read-keep-awake"]),
     computerId: fleetComputerId,
   }),
   z.strictObject({
-    operation: z.literal("set-internet-access"),
+    operation: z.enum(["set-internet-access", "set-keep-awake"]),
     computerId: fleetComputerId,
     enabled: z.boolean(),
   }),
@@ -195,34 +195,39 @@ export function standaloneComputerFleetRoutes(
       return fleetResponse(result);
     },
   );
-  routes.get(
-    "/api/computers/:computerId/internet-access",
-    owner,
-    async (context, { principal }) => {
-      return fleetResponse(
-        await registryFor().computerFleet(principal.actor.memberId, {
-          operation: "read-internet-access",
-          computerId: context.req.param("computerId"),
-        }),
-      );
-    },
-  );
-  routes.put(
-    "/api/computers/:computerId/internet-access",
-    owner,
-    async (context, { principal }) => {
-      const input = z
-        .strictObject({ enabled: z.boolean() })
-        .parse(await context.req.json());
-      return fleetResponse(
-        await registryFor().computerFleet(principal.actor.memberId, {
-          operation: "set-internet-access",
-          computerId: context.req.param("computerId"),
-          enabled: input.enabled,
-        }),
-      );
-    },
-  );
+  // One owner switch per durable Computer setting, read and written alike.
+  for (const [path, read, write] of [
+    ["internet-access", "read-internet-access", "set-internet-access"],
+    ["keep-awake", "read-keep-awake", "set-keep-awake"],
+  ] as const) {
+    routes.get(
+      `/api/computers/:computerId/${path}`,
+      owner,
+      async (context, { principal }) =>
+        fleetResponse(
+          await registryFor().computerFleet(principal.actor.memberId, {
+            operation: read,
+            computerId: context.req.param("computerId"),
+          }),
+        ),
+    );
+    routes.put(
+      `/api/computers/:computerId/${path}`,
+      owner,
+      async (context, { principal }) => {
+        const input = z
+          .strictObject({ enabled: z.boolean() })
+          .parse(await context.req.json());
+        return fleetResponse(
+          await registryFor().computerFleet(principal.actor.memberId, {
+            operation: write,
+            computerId: context.req.param("computerId"),
+            enabled: input.enabled,
+          }),
+        );
+      },
+    );
+  }
   routes.get(
     "/api/computers/:computerId",
     owner,

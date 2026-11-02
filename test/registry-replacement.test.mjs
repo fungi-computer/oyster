@@ -586,6 +586,8 @@ for (const { acknowledgement, stopObservation } of [
     const server = createServer(async (incoming, outgoing) => {
       try {
         const url = new URL(incoming.url, origin);
+        // The status door holds this read until the owner settles it.
+        if (url.pathname.endsWith("/status")) firstStatus.resolve();
         const headers = Object.entries(incoming.headers).flatMap(
           ([key, value]) =>
             Array.isArray(value)
@@ -630,7 +632,6 @@ for (const { acknowledgement, stopObservation } of [
           Object.fromEntries(response.headers),
         );
         outgoing.end(Buffer.from(await response.arrayBuffer()));
-        if (url.pathname.endsWith("/status")) firstStatus.resolve();
       } catch (cause) {
         errors.push({ method: incoming.method, path: incoming.url, cause });
         firstStatus.reject(cause);

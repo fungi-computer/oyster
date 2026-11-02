@@ -2,7 +2,7 @@ import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 // Edit in Inkcap on the production standalone root: captured Tourtois, Bonsai
 // and Inkcap Releases, a local real Git provider, and a real browser.
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -12,34 +12,20 @@ import { log, error } from "node:console";
 import process from "node:process";
 import { parse } from "jsonc-parser";
 import { chromium, expect } from "playwright/test";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
+import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
+import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
+import { workflowGitProvider } from "./workflow-git.fixture.mjs";
+import { seedDemo } from "../../../../apps/bonsai/scripts/seed-demo.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const repository = fileURLToPath(new URL("../../../../", import.meta.url));
 const shots = process.env.EDIT_IN_INKCAP_SHOTS;
 assert.ok(shots, "Set EDIT_IN_INKCAP_SHOTS to the review screenshot directory");
 await mkdir(shots, { recursive: true });
-for (const args of [
-  [
-    "--workspace-root",
-    "run",
-    "turbo:run",
-    "run",
-    "build",
-    "--filter=@fungi.computer/oyster...",
-    "--concurrency=3",
-    "--output-logs=errors-only",
-  ],
-]) {
-  const prepared = spawnSync("pnpm", args, { cwd: root, stdio: "inherit" });
-  assert.equal(prepared.status, 0, "Edit in Inkcap proof prerequisites failed");
-}
-const { packRelease, installRelease } =
-  await import("@fungi.computer/oyster/pack");
-const { standaloneAppSet } =
-  await import("@fungi.computer/oyster/standalone/app-set");
-const { workflowGitProvider } = await import("./workflow-git.fixture.mjs");
-const { seedDemo } =
-  await import("../../../../apps/bonsai/scripts/seed-demo.mjs");
 
 await mkdir(`${root}.botanical`, { recursive: true });
 const work = await mkdtemp(`${root}.botanical/edit-in-inkcap-`);
@@ -204,7 +190,9 @@ async function runProof() {
       ownerKeyFile: keyFile,
       phase: "prepare",
     });
-    browser = await chromium.launch({ headless: true });
+    browser = await launchIsolatedChromium(chromium, portsOf(origin), {
+      headless: true,
+    });
     const errors = [];
     let run = 0;
     for (const width of [1440, 390])

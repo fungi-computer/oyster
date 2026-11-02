@@ -19,49 +19,23 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
-// A frozen pnpm install is the only preparation required. Build the maintained
-// dependency closure and generated root page before importing their outputs.
-for (const args of [
-  [
-    "--workspace-root",
-    "run",
-    "turbo:run",
-    "run",
-    "build",
-    "--filter=@fungi.computer/oyster...",
-    "--concurrency=3",
-    "--output-logs=errors-only",
-  ],
-]) {
-  const prepared = spawnSync("pnpm", args, { cwd: root, stdio: "inherit" });
-  assert.equal(prepared.status, 0, "Native push proof prerequisites failed");
-}
-const { grantDeclaredAppCapabilities } =
-  await import("./owner-grants.fixture.mjs");
-const { committedAppRecipe } =
-  await import("./committed-app-recipe.fixture.mjs");
-const {
+import { grantDeclaredAppCapabilities } from "./owner-grants.fixture.mjs";
+import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
+import {
   runNativeGit,
   nativeWorkflowHost,
   nativeAppClient,
   nativeFixtureWorkspace,
   until,
-} = await import("./workflow-native.fixture.mjs");
+} from "./workflow-native.fixture.mjs";
+import { buildAppDeclaration } from "@fungi.computer/agar/backend-declaration";
+import { appBackend } from "../../../../apps/bonsai/backend/methods.ts";
+import { publishSource } from "@fungi.computer/oyster/pack";
+import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
+import packageMetadata from "../../../../apps/bonsai/package.json" with { type: "json" };
 
-const { buildAppDeclaration } =
-  await import("@fungi.computer/agar/backend-declaration");
-const { appBackend } =
-  await import("../../../../apps/bonsai/backend/methods.ts");
-const { publishSource } = await import("@fungi.computer/oyster/pack");
-const { standaloneAppSet } =
-  await import("@fungi.computer/oyster/standalone/app-set");
-const { default: packageMetadata } = await import(
-  "../../../../apps/bonsai/package.json",
-  {
-    with: { type: "json" },
-  }
-);
+// Turbo builds the Oyster dependency closure before this proof runs.
+const root = fileURLToPath(new URL("../../", import.meta.url));
 const appDeclaration = buildAppDeclaration(
   appBackend,
   packageMetadata.fungi.app,

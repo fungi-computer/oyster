@@ -5,9 +5,13 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import { URL } from "node:url";
 import { chromium } from "playwright";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../tooling/proof-runner/isolated-chromium.mjs";
 import { homePageFixture } from "./home-page.fixture.mjs";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
-import { standaloneComputerFleetRoutes } from "../src/standalone/computer-fleet.ts";
+import { standaloneComputerFleetRoutes } from "../dist/standalone/computer-fleet.js";
 
 // The page imports this host-owned entry; the Release's own module stays at
 // its UI path, where released Oyster 0.2.0 served it immutable.
@@ -137,7 +141,8 @@ test(
           selectedComputer: async () => computers[0].computerId,
           computerFleet: async (memberId, request) => {
             assert.equal(memberId, "owner");
-            assert.equal(request.operation, "list");
+            // The directory admits with "list"; the shell's picker reads "choices".
+            assert.ok(["list", "choices"].includes(request.operation));
             const end = request.page.offset + request.page.limit;
             return {
               computers: computers.slice(request.page.offset, end),
@@ -149,7 +154,9 @@ test(
     );
     let browser;
     try {
-      browser = await chromium.launch({ headless: true });
+      browser = await launchIsolatedChromium(chromium, portsOf(origin.origin), {
+        headless: true,
+      });
       const page = await browser.newPage();
       await page.goto(`${origin.origin}/apps/desktop/`);
       const offered = await page.locator("#fleet-computers").textContent();
@@ -235,7 +242,11 @@ for (const revoked of [true, false]) {
     { timeout: 30_000 },
     async () => {
       const origin = await shellOrigin();
-      const browser = await chromium.launch({ headless: true });
+      const browser = await launchIsolatedChromium(
+        chromium,
+        portsOf(origin.origin),
+        { headless: true },
+      );
       try {
         const page = await browser.newPage();
         assert.deepEqual(await loadHome(page, origin, revoked), {
@@ -274,7 +285,11 @@ test(
   { timeout: 30_000 },
   async () => {
     const origin = await shellOrigin();
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchIsolatedChromium(
+      chromium,
+      portsOf(origin.origin),
+      { headless: true },
+    );
     try {
       const context = await browser.newContext();
       origin.state.released = true;
@@ -340,7 +355,11 @@ test(
     document.documentElement.dataset.workerAttempts = JSON.stringify(attempts);
     export const mountShell = async () => () => {};
   `);
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchIsolatedChromium(
+      chromium,
+      portsOf(origin.origin),
+      { headless: true },
+    );
     try {
       const page = await browser.newPage();
       const violations = [];

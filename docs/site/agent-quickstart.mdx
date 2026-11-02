@@ -108,6 +108,10 @@ If it fails:
   running `pnpm add`. If it names a new dependency not listed there, stop and
   review that package before allowing its scripts; do not treat exit 1 as
   success.
+- `ERR_PNPM_UNEXPECTED_STORE`: this directory was installed from a different
+  pnpm store than your current default. Run the same `pnpm add` again with
+  `--store-dir` set to the store the error says the dependencies are linked
+  from; do not delete `node_modules` to get past it.
 - `cp: cannot stat …/examples/standalone/…`: the install did not finish. Run
   `pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0`
   again and read its first error.
@@ -380,8 +384,6 @@ If it fails:
 
 - The Oyster README (`node_modules/@fungi.computer/oyster/README.md`) explains
   the host, Apps, capabilities, MCP and the shell in depth.
-- [oyster.shiit.app](https://oyster.shiit.app/) runs this same host with the
-  seven starter Apps.
 - Oyster is built from the other Fungi packages, each its own repository under
   [github.com/fungi-computer](https://github.com/fungi-computer) and on npm as
   `@fungi.computer/<name>`. The README's "Part of Fungi" section lists them.

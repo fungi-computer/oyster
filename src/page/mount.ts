@@ -8,6 +8,7 @@ import {
 import { appApiMethodNameSchema } from "@fungi.computer/puffball/app";
 import { appIdSchema } from "@fungi.computer/puffball/effect";
 import { createBrowserActionHandler } from "@fungi.computer/nacre";
+import { APP_SURFACE_DOCUMENT_TIMEOUT_MS } from "@fungi.computer/nacre/window-manager";
 import { createAppSurfaceCommandHost } from "@fungi.computer/nacre/command-host";
 // App page: mounts one installed App's sandboxed frame and gives it the
 // capabilities this Oyster host provides. Bundled into `shellScript`.
@@ -383,24 +384,101 @@ export type OysterAppConnectionOptions = Readonly<{
   reservedChords: readonly import("@fungi.computer/agar/host").AppHostReservedChord[];
   theme: string;
 }>;
-/** Connect a child or home App using the same admitted Oyster slot handles. */
+/** The App's own ready window: once its document loads, it announces itself for 10 s. */
+const APP_CONNECT_TIMEOUT_MS = 10_000;
+
+/** Resolve `work`, or reject with the signal's reason once it aborts. */
+function untilAborted<A>(work: Promise<A>, signal: AbortSignal): Promise<A> {
+  const stopped = () =>
+    signal.reason instanceof Error
+      ? signal.reason
+      : new Error("App open was stopped", { cause: signal.reason });
+  if (signal.aborted) return Promise.reject(stopped());
+  return new Promise<A>((resolve, reject) => {
+    const stop = () => {
+      reject(stopped());
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", stop);
+        resolve(value);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener("abort", stop);
+        reject(
+          cause instanceof Error
+            ? cause
+            : new Error("App open failed", { cause }),
+        );
+      },
+    );
+  });
+}
+
+/**
+ * Connect a child or home App using the same admitted Oyster slot handles.
+ * The host navigates the App's frame (`config.uiUrl`) only once it listens for
+ * the App's ready signal, so slow capability resolution on a cold Oyster can
+ * never outlast that signal. Opening is bounded: the capabilities and the
+ * document get the shared cold-document budget, and the handshake after the
+ * document loads gets the App's own ready window.
+ */
 export async function connectOysterApp(
   options: OysterAppConnectionOptions,
 ): Promise<AppHost> {
   const { config, frame } = options;
   if (frame.contentWindow === null) throw new Error("App frame is unavailable");
-  const capabilities = await oysterAppCapabilities(options);
+  const deadline = new AbortController();
+  const expire = () => {
+    deadline.abort();
+  };
+  let timer = setTimeout(expire, APP_SURFACE_DOCUMENT_TIMEOUT_MS);
+  const opening = AbortSignal.any([options.signal, deadline.signal]);
+  const documentLoaded = () => {
+    clearTimeout(timer);
+    timer = setTimeout(expire, APP_CONNECT_TIMEOUT_MS);
+  };
+  try {
+    return await openOysterApp(options, frame.contentWindow, opening, () => {
+      frame.addEventListener("load", documentLoaded, { once: true });
+      frame.src = config.uiUrl;
+    });
+  } catch (cause) {
+    if (deadline.signal.aborted && !options.signal.aborted)
+      throw new AppError("App did not open in time", {
+        code: "TIMEOUT",
+        retryable: true,
+      });
+    throw cause;
+  } finally {
+    clearTimeout(timer);
+    frame.removeEventListener("load", documentLoaded);
+  }
+}
+
+async function openOysterApp(
+  options: OysterAppConnectionOptions,
+  appWindow: Window,
+  opening: AbortSignal,
+  navigate: () => void,
+): Promise<AppHost> {
+  const { config, frame } = options;
+  const capabilities = await untilAborted(
+    oysterAppCapabilities(options),
+    opening,
+  );
   const agents = agentDirectory(capabilities);
   const releaseBrowser = options.agentBrowser.mount(
     frame,
     options.agentCommands,
   );
   options.signal.addEventListener("abort", releaseBrowser, { once: true });
-  const host = await connectAppHost({
-    appWindow: frame.contentWindow,
+  const connecting = connectAppHost({
+    appWindow,
     expectedAppOrigin: "null",
     hostWindow: window,
-    signal: options.signal,
+    signal: opening,
     launch: {
       identity: {
         appId: config.appId,
@@ -437,7 +515,9 @@ export async function connectOysterApp(
         signal: options.signal,
       }),
     },
-  }).catch((cause: unknown) => {
+  });
+  navigate();
+  const host = await connecting.catch((cause: unknown) => {
     releaseBrowser();
     throw cause;
   });

@@ -33,6 +33,7 @@ import { TerminalCapability } from "../src/page/terminal.ts";
 import { computerSlots } from "../src/computer.ts";
 // Use the maintained browser build, including the page/shell JSX configuration.
 import { oysterAppCapabilities } from "../dist/page/mount.js";
+import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
 
 test("capability handles pin their Computer across JSON, file and transport requests", async (context) => {
   const requests = [];
@@ -1050,7 +1051,9 @@ test("a browser HTTP 204 visit crosses RPC without disconnecting the Agent inbox
     platform: "browser",
     write: false,
   });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
   try {
     const page = await browser.newPage();
     await page.route("http://oyster.test/**", async (route) => {
@@ -1146,7 +1149,7 @@ test("browser typing twenty characters and resizing uses one Oyster admission re
     write: false,
   });
   let admissions = 0;
-  const browser = await chromium.launch();
+  const browser = await launchIsolatedChromium(chromium, []);
   try {
     const page = await browser.newPage();
     await page.route("http://oyster.test/**", async (route) => {

@@ -1,5 +1,48 @@
 # @fungi.computer/oyster
 
+## 0.9.0
+
+### Minor Changes
+
+- Changes since 0.8.2:
+
+  - feat(prints): share one Print with a public, read-only link
+  - fix(docs): remove the Oyster public demo from public docs; correct landing
+    subscription claims
+  - fix(oyster): hear the App before loading it and bound opening
+  - fix(local): let macOS Workspace pnpm use its default store
+  - feat(grove): choose the new Agent's Computer in New Agent
+  - fix(oyster): settle a pre-commit installation failure as not applied
+  - feat(oyster): manage Keep awake from Oyster and Tourtois Computer settings
+  - perf(oyster): answer install waits from the owner's settlement
+  - perf(oyster): release held admit replies instead of waiting a 5 s poll
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.7.0
+  - @fungi.computer/caps@0.7.0
+  - @fungi.computer/computer@0.5.0
+  - @fungi.computer/darkroom@0.5.0
+  - @fungi.computer/forage@0.3.0
+  - @fungi.computer/nacre@0.1.3
+  - @fungi.computer/puffball@0.5.0
+  - @fungi.computer/shiitake@0.9.1
+  - @fungi.computer/braid@0.4.2
+  - @fungi.computer/workflows-wire@0.4.2
+  - @fungi.computer/knapsack@0.4.4
+  - @fungi.computer/mycelium@0.3.3
+  - @fungi.computer/shiitake-extensions@0.6.2
+  - @fungi.computer/zookeeper@0.0.9
+  - @fungi.computer/computer-contract@0.0.9
+
 ## 0.8.2
 
 ### Patch Changes

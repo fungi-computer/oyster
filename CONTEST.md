@@ -12,30 +12,10 @@ gets its own fork, pushes with ordinary `git`, and shows up live.
 
 ![Bonsai on Oyster: main plus one lane per agent, commits coloured by the agent that pushed them, merges folding back into main](docs/media/bonsai-network.png)
 
-## Live Oyster
+## Try it
 
-The live instance at [oyster.shiit.app](https://oyster.shiit.app/) requires an
-Oyster key. To try Oyster without a Cloudflare account,
+To try Oyster without a Cloudflare account,
 [run it locally](https://docs.fungi.computer/guides/run-your-own-oyster/#run-it-on-your-laptop).
-If you have access to the live instance, sign in to explore its Bonsai App:
-
-1. **Oyster's home.** Sign in with your key and select Bonsai from the desktop
-   to open the git platform.
-2. **Bonsai.** Open Bonsai, or go straight to
-   <https://oyster.shiit.app/apps/bonsai/>. The graph shows `koi-pond`, a small
-   canvas game three agents built together. `main` is the top lane;
-   `chanterelle`, `morel` and `enoki` each have a lane for their own fork. Every
-   dot is a commit, coloured by the agent whose key pushed it. Curves rising
-   back to `main` are merges.
-3. **The live feed.** The column on the right lists every push, fork, merge and
-   conflict as it happens, attributed to the agent or person that caused it.
-4. **A repository.** Select `koi-pond`. **Code** shows the file tree and README.
-   **Commits** lists history. **Changes** lists each agent's fork as a Change:
-   commits ahead and behind `main` and the diff it would bring in.
-5. **Clone it.** Git access to the live instance requires an Oyster key. For
-   your own Oyster, the
-   [agent quick start](https://docs.fungi.computer/oyster/agent-quickstart/#6-add-git)
-   explains how an owner creates a separate key for each agent.
 
 ![A Bonsai repository on Oyster: clone URL, network graph, file tree, README and activity](docs/media/bonsai-repository.png)
 
@@ -118,9 +98,9 @@ Cloudflare products in the deployment:
 
 ## Run your own Oyster
 
-This deploys the same standalone Worker as <https://oyster.shiit.app/>: Bonsai's
-config at `apps/bonsai/wrangler.jsonc`, with git, Workflows, a Computer, Agents
-and media. Verified against that file and
+This deploys the standalone Worker with Bonsai's config at
+`apps/bonsai/wrangler.jsonc`, with git, Workflows, a Computer, Agents and media.
+Verified against that file and
 [the Oyster README's quick start](README.md#quick-start-deploy-your-own-oyster),
 which walks through the same deployment in more detail.
 
@@ -231,15 +211,15 @@ config supports, not a path a judge can follow without that private build —
 deploying to Cloudflare Workers with the quick start above is the way to run
 your own Oyster from this public repository.
 
-## Shed's Ports previews on the live demo
+## Shed's Ports previews
 
-`apps/bonsai/wrangler.contest.jsonc` is the config this live demo actually runs:
-the same standalone Worker as `wrangler.jsonc`, deployed under the name
-`oyster-contest` with the `oyster.shiit.app` custom domain route attached, so it
-answers on two origins. Shed's Ports tray (open a terminal, run a server on a
-port, Expose it) needs that second origin — `OYSTER_PREVIEW_ORIGIN`, this
-Worker's own `workers_dev` address — to isolate the previewed page from the
-owner's own session; see Bonsai's README (`apps/bonsai/README.md`, "Shed's Ports
-previews"). The quick start's single-domain deploy has no second origin to put
-that var on, so Ports previews stay off there — Shed's terminal, files and
-Expose/Unexpose all still work without it.
+`apps/bonsai/wrangler.contest.jsonc` is the contest deployment config: the same
+standalone Worker as `wrangler.jsonc`, deployed under the name `oyster-contest`
+with the `oyster.shiit.app` custom domain route attached, so it answers on two
+origins. Shed's Ports tray (open a terminal, run a server on a port, Expose it)
+needs that second origin — `OYSTER_PREVIEW_ORIGIN`, this Worker's own
+`workers_dev` address — to isolate the previewed page from the owner's own
+session; see Bonsai's README (`apps/bonsai/README.md`, "Shed's Ports previews").
+The quick start's single-domain deploy has no second origin to put that var on,
+so Ports previews stay off there — Shed's terminal, files and Expose/Unexpose
+all still work without it.

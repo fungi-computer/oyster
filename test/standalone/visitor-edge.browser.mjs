@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { Hono } from "hono";
 import { chromium } from "playwright";
+import {
+  launchIsolatedChromium,
+  portsOf,
+} from "../../../../tooling/proof-runner/isolated-chromium.mjs";
 import { channelIds } from "../../dist/channels/ids.js";
 import { createVisitorEdge } from "../../dist/channels/visitor-edge.js";
 
@@ -87,7 +91,10 @@ const server = createServer(async (request, response) => {
   response.end(Buffer.from(await outgoing.arrayBuffer()));
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const browser = await chromium.launch();
+const browser = await launchIsolatedChromium(
+  chromium,
+  portsOf(`http://127.0.0.1:${server.address().port}`),
+);
 try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}/`);

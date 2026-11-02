@@ -486,7 +486,6 @@ it("shares explicit fresh-dashboard consent with proof callers, never replacemen
     key: "key",
     installationId: "tourtois",
     release: builtRelease("app_tourtois"),
-    pollMs: 1,
   });
   if (operation.state !== "succeeded")
     throw new Error("The correlated fresh installation must complete");
@@ -754,9 +753,16 @@ it("does not complete from a directory row while the correlated receipt is pendi
   const entered = Promise.withResolvers<undefined>();
   const gate = Promise.withResolvers<undefined>();
   let held = true;
+  let answeredPending = false;
   vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
+    // The next settlement wait stays open until the test releases it.
+    if (input.pathname.endsWith("/status") && held && answeredPending) {
+      entered.resolve(undefined);
+      await gate.promise;
+    }
     const response = await transport(input, init);
     if (input.pathname.endsWith("/status") && held) {
+      answeredPending = true;
       const receipt = installationOperationSchema.parse(await response.json());
       return Response.json({
         requestId: receipt.requestId,
@@ -774,10 +780,6 @@ it("does not complete from a directory row while the correlated receipt is pendi
     key: "key",
     installationId: "tourtois",
     release: builtRelease("app_tourtois"),
-    idle: async () => {
-      entered.resolve(undefined);
-      await gate.promise;
-    },
   }).then((value) => {
     completed = true;
     return value;
@@ -837,9 +839,16 @@ it("stops only observation when the caller cancels; the admitted receipt remains
   const controller = new AbortController();
   const entered = Promise.withResolvers<undefined>();
   const gate = Promise.withResolvers<undefined>();
+  let answeredPending = false;
   vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
+    // The second settlement wait stays open until the test releases it.
+    if (input.pathname.endsWith("/status") && answeredPending) {
+      entered.resolve(undefined);
+      await gate.promise;
+    }
     const response = await transport(input, init);
     if (!input.pathname.endsWith("/status")) return response;
+    answeredPending = true;
     const receipt = installationOperationSchema.parse(await response.json());
     return Response.json({
       requestId: receipt.requestId,
@@ -856,10 +865,6 @@ it("stops only observation when the caller cancels; the admitted receipt remains
     installationId: "tourtois",
     release: builtRelease("app_tourtois"),
     signal: controller.signal,
-    idle: async () => {
-      entered.resolve(undefined);
-      await gate.promise;
-    },
   }).then(
     (operation) => ({ kind: "completed", operation }),
     (error: unknown) => ({ kind: "observation-stopped", error }),
