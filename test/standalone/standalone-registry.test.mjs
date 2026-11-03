@@ -1838,3 +1838,148 @@ for (const expected of ["installed", "needs_consent"]) {
     },
   );
 }
+
+test("an owner attaches a machine to a named Computer; foreign callers and unknown Computers never reach it", async () => {
+  const tenants = new StandaloneTenants(state(new DatabaseSync(":memory:")));
+  const calls = [];
+  const env = {
+    OYSTER_ORIGIN: "https://fleet.test",
+    OYSTER_OWNER_KEY: "fleet-fixture-owner-key-24-characters", //gitleaks:allow
+    OYSTER_COMPUTER_ID: "default-workspace",
+    OYSTER_OWNER_NAME: "owner",
+    TENANTS: { getByName: () => tenants },
+    COMPUTER: {
+      getByName: (computerId) => ({
+        initializeFleetBackings: async () => undefined,
+        readBackends: async (grant, actor) => {
+          calls.push(["backends", computerId, [...grant.actions], actor]);
+          return [];
+        },
+        attachLocalBackend: async (grant, actor, request) => {
+          calls.push(["attach", computerId, [...grant.actions], actor]);
+          assert.equal(grant.computerId, computerId);
+          assert.equal(request.computerId, computerId);
+          return { backendId: "local-aaaaaaaaaaaaaaaa" };
+        },
+        detachLocalBackend: async (grant, actor, request) => {
+          calls.push(["detach", computerId, [...grant.actions], actor]);
+          assert.equal(request.computerId, computerId);
+          return { detached: true };
+        },
+      }),
+    },
+  };
+  const shared = await standaloneTenancy(env);
+  const owner = await shared.owner();
+  const registry = new RootRegistry(state(new DatabaseSync(":memory:")), env);
+  const created = await registry.computerFleet(owner.actor.memberId, {
+    operation: "create",
+    request: { name: "A", requestId: "A" },
+  });
+  const attach = {
+    computerId: created.computerId,
+    publicKey: Buffer.alloc(32, 7).toString("base64"),
+    hostLabel: "Laptop",
+    folderLabel: "notes",
+    requestId: "local_attach_request_one",
+  };
+  assert.deepEqual(
+    await registry.computerFleet(owner.actor.memberId, {
+      operation: "attach-local",
+      request: attach,
+    }),
+    { backendId: "local-aaaaaaaaaaaaaaaa" },
+  );
+  assert.deepEqual(
+    await registry.computerFleet(owner.actor.memberId, {
+      operation: "detach-local",
+      request: {
+        computerId: created.computerId,
+        backendId: "local-aaaaaaaaaaaaaaaa",
+      },
+    }),
+    { detached: true },
+  );
+  await registry.computerFleet(owner.actor.memberId, {
+    operation: "attach-local",
+    request: { ...attach, computerId: "default-workspace" },
+  });
+  assert.deepEqual(
+    calls.map(([kind, computerId, actions, actor]) => [
+      kind,
+      computerId === created.computerId ? "A" : computerId,
+      actions,
+      actor === owner.actor.memberId ? "owner" : actor,
+    ]),
+    [
+      ["attach", "A", ["backing"], "owner"],
+      ["detach", "A", ["backing"], "owner"],
+      ["attach", "default-workspace", ["backing"], "owner"],
+    ],
+  );
+  const before = calls.length;
+  for (const request of [
+    { operation: "attach-local", request: attach },
+    {
+      operation: "detach-local",
+      request: {
+        computerId: created.computerId,
+        backendId: "local-aaaaaaaaaaaaaaaa",
+      },
+    },
+    { operation: "backends", computerId: created.computerId },
+  ])
+    assert.deepEqual(await registry.computerFleet("foreign-owner", request), {
+      error: "owner_required",
+    });
+  for (const request of [
+    {
+      operation: "attach-local",
+      request: { ...attach, computerId: "foreign" },
+    },
+    { operation: "backends", computerId: "foreign" },
+  ])
+    assert.equal(
+      await registry.computerFleet(owner.actor.memberId, request),
+      null,
+    );
+  assert.equal(calls.length, before, "no Computer was woken for a refusal");
+});
+
+test("an attached machine dials its owned Computer with the signed request unchanged", async () => {
+  const forwarded = [];
+  const owned = ["default-workspace", "A"];
+  const env = {
+    OYSTER_ORIGIN: "https://fleet.test",
+    OYSTER_COMPUTER_ID: "default-workspace",
+    REGISTRY: {
+      getByName: () => ({ ownsComputer: (id) => owned.includes(id) }),
+    },
+    COMPUTER: {
+      getByName: (computerId) => ({
+        fetch: async (request) => {
+          forwarded.push([computerId, request.url, request.method]);
+          return new globalThis.Response(null, { status: 426 });
+        },
+      }),
+    },
+  };
+  const dial = (computerId) =>
+    standaloneWorker.fetch(
+      new globalThis.Request(
+        `https://fleet.test/api/computers/${computerId}/backends/local-aaaaaaaaaaaaaaaa/connect`,
+        { headers: { "x-seam": "signature" } },
+      ),
+      env,
+      {},
+    );
+  assert.equal((await dial("A")).status, 426);
+  assert.equal((await dial("foreign")).status, 404);
+  assert.deepEqual(forwarded, [
+    [
+      "A",
+      "https://fleet.test/api/computers/A/backends/local-aaaaaaaaaaaaaaaa/connect",
+      "GET",
+    ],
+  ]);
+});

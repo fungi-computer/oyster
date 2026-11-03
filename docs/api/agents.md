@@ -132,7 +132,7 @@ An owner's request to connect one remote MCP server to an Agent.
 
 ```ts
 type AgentMcpServerRefusal = Readonly<{
-  error: "not_found" | "duplicate_name" | "limit";
+  error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
 }>;
 ```
 
@@ -234,6 +234,7 @@ type OysterAgents = Readonly<{
         >
       >;
     };
+    keyId?: string;
   } | null>;
   decodeModelChoice: {
     keySource: "workers-ai" | "ai-gateway" | "byok";
@@ -246,6 +247,7 @@ type OysterAgents = Readonly<{
         >
       >;
     };
+    keyId?: string;
   } | null;
   setModelChoice: Promise<
     | {
@@ -259,6 +261,7 @@ type OysterAgents = Readonly<{
             >
           >;
         };
+        keyId?: string;
       }
     | Readonly<{
         error: "not_found" | "not_granted" | AgentModelRefusal;
@@ -288,6 +291,28 @@ type OysterAgents = Readonly<{
         error: "not_found" | "revision_conflict" | "not_granted";
       }>
   >;
+  modelKeys: Promise<
+    readonly Readonly<{
+      keyId: string;
+      provider: ModelKeyProvider;
+      label: string;
+      createdAt: number;
+      validatedAt: number;
+    }>[]
+  >;
+  sealModelKey: Promise<
+    | Readonly<{
+        keyId: string;
+        provider: ModelKeyProvider;
+        label: string;
+        createdAt: number;
+        validatedAt: number;
+      }>
+    | Readonly<{
+        error: ModelKeyRefusal;
+      }>
+  >;
+  removeModelKey: Promise<"deleted" | "absent">;
   mcpServers: Promise<
     | readonly Readonly<{
         serverId: string;
@@ -305,7 +330,7 @@ type OysterAgents = Readonly<{
         hasBearer: boolean;
       }>
     | Readonly<{
-        error: "not_found" | "duplicate_name" | "limit";
+        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
       }>
   >;
   removeMcpServer: Promise<boolean>;
@@ -348,10 +373,42 @@ type AgentModelRefusal =
   | "unsupported_key_source"
   | "key_source_mismatch"
   | "model_unavailable"
-  | "key_not_connected";
+  | "key_not_connected"
+  | "key_removed";
 ```
 
 Stable reason for rejecting a model or credential source before a run.
+
+---
+
+### ModelKeyRefusal
+
+```ts
+type ModelKeyRefusal =
+  | "invalid_key"
+  | "key_rejected"
+  | "provider_unavailable"
+  | "custody_unavailable"
+  | "key_removed"
+  | "target_denied"
+  | "limit";
+```
+
+Why a key could not be stored or used; stable, secret-free.
+
+---
+
+### ModelKeySealInput
+
+```ts
+type ModelKeySealInput = Readonly<{
+  provider: string;
+  label: string;
+  apiKey: string;
+}>;
+```
+
+What the owner submits to seal one provider key.
 
 ## Variables
 
@@ -407,6 +464,27 @@ function agentApprovalRoutes(agents): Routes<OysterEnv>;
 ```
 
 Host-owned direct approval under the admitted owner; never an App capability.
+
+#### Parameters
+
+| Parameter | Type                            |
+| --------- | ------------------------------- |
+| `agents`  | [`OysterAgents`](#oysteragents) |
+
+#### Returns
+
+[`Routes`](authorization.md#routes)\<[`OysterEnv`](host.md#oysterenv)\>
+
+---
+
+### modelKeyRoutes()
+
+```ts
+function modelKeyRoutes(agents): Routes<OysterEnv>;
+```
+
+Host-owned model-key custody for the owner directly. A key goes in once and
+never comes back out; listings carry provider, label and times only.
 
 #### Parameters
 

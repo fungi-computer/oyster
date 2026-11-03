@@ -67,6 +67,7 @@ import {
   agentCapabilities,
   agentApprovalRoutes,
   agentMcpServerRoutes,
+  modelKeyRoutes,
   type OysterAgents,
 } from "./agents.js";
 import {
@@ -1763,6 +1764,7 @@ export function oysterGitOwnerRoutes(
   if (agents !== undefined) {
     ownerRoutes.include(agentApprovalRoutes(agents));
     ownerRoutes.include(agentMcpServerRoutes(agents));
+    ownerRoutes.include(modelKeyRoutes(agents));
   }
   return ownerRoutes;
 }

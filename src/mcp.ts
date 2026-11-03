@@ -34,6 +34,11 @@ import {
   computerCreateRequestSchema,
   computerPageSchema,
 } from "@fungi.computer/computer/fleet/inventory-wire";
+import {
+  computerBackendViewSchema,
+  localBackendAttachSchema,
+  localBackendDetachSchema,
+} from "@fungi.computer/computer/fleet/wire";
 import { computerStateSchema } from "@fungi.computer/computer/fleet/wire";
 import { teamComputerDirectorySchema } from "@fungi.computer/nacre/workbench";
 import type { InvocationContext } from "@fungi.computer/mycelium";
@@ -92,6 +97,31 @@ const fleetComputer = z.strictObject({
   computerId: z.string(),
   name: z.string(),
 });
+const fleetBackends = z.strictObject({
+  backends: z.array(computerBackendViewSchema),
+});
+const fleetAttachInput = z.strictObject({
+  computerId: localBackendAttachSchema.shape.computerId,
+  publicKey: localBackendAttachSchema.shape.publicKey,
+  hostLabel: localBackendAttachSchema.shape.hostLabel,
+  folderLabel: localBackendAttachSchema.shape.folderLabel,
+  requestId: localBackendAttachSchema.shape.requestId.nullable().default(null),
+});
+const fleetAttachment = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("attached"),
+    requestId: z.string(),
+    backendId: z.string(),
+  }),
+  z.strictObject({
+    kind: z.enum(["uncertain", "denied", "conflict", "invalid"]),
+    requestId: z.string(),
+  }),
+]);
+const fleetDetachment = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("detached"), detached: z.boolean() }),
+  z.strictObject({ kind: z.enum(["denied", "uncertain", "invalid"]) }),
+]);
 const fleetCreation = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("created"),
@@ -163,6 +193,49 @@ export function computerControlSpecs(port: ComputerControlPort) {
         );
         return { ...result, requestId };
       },
+    },
+    backends: {
+      replay: "safe" as const,
+      description:
+        "List one Computer's attached execution backends (platform container, on-box VM, members' machines) with live status.",
+      input: fleetComputerId,
+      output: fleetBackends,
+      /** Return the attached list without waking any backend. */
+      execute: async (
+        input: z.output<typeof fleetComputerId>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetBackends>> => ({
+        backends: await port.backends(input.computerId, context),
+      }),
+    },
+    attachLocal: {
+      replay: "unsafe" as const,
+      description:
+        "Attach this authenticated member's machine to a Computer as an execution backend. Send only the device public key and labels; the folder path and private key stay on the machine. Retry an uncertain outcome with its returned requestId.",
+      input: fleetAttachInput,
+      output: fleetAttachment,
+      /** Mint one identity or preserve the requestId for an uncertain retry. */
+      execute: async (
+        input: z.output<typeof fleetAttachInput>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetAttachment>> => {
+        const requestId = input.requestId ?? fleetIds.request.generate();
+        const result = await port.attachLocal({ ...input, requestId }, context);
+        return { ...result, requestId };
+      },
+    },
+    detachLocal: {
+      replay: "unsafe" as const,
+      description:
+        "Detach a machine this member attached from a Computer. Its live connection closes and the Computer keeps its files. Safe to retry.",
+      input: localBackendDetachSchema,
+      output: fleetDetachment,
+      /** Close the attachment and its live connection; a gone one settles. */
+      execute: (
+        input: z.output<typeof localBackendDetachSchema>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetDetachment>> =>
+        port.detachLocal(input, context),
     },
   };
 }
@@ -613,7 +686,10 @@ export async function oysterAppSnapshot(
         JSON.stringify({
           installation,
           generation,
-          principal,
+          // The canonical caller facts, never the raw principal: a resolver may
+          // carry extra registry fields (membershipVersion) that the submit-time
+          // principal lacks, which would fence a legitimate approval.
+          caller,
           access: captured,
           api,
           family: familyFacts,
@@ -855,6 +931,13 @@ export function oysterMcpCatalogLoad(
                             ...fleetSpecs.create,
                             confirm: true,
                           }),
+                          backends: Mycelium.operation(fleetSpecs.backends),
+                          attachLocal: Mycelium.operation(
+                            fleetSpecs.attachLocal,
+                          ),
+                          detachLocal: Mycelium.operation(
+                            fleetSpecs.detachLocal,
+                          ),
                         },
                       }),
                     ],

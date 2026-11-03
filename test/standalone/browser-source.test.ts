@@ -10,6 +10,7 @@ const identity = () => ({
   teamId: "https://oyster.test",
   agentId: "agent-one",
 });
+const refusingSave = () => Promise.reject(new Error("No save in this test"));
 const session = { sessionId: "session-one" };
 const acquisitionContext = () => ({
   signal: new AbortController().signal,
@@ -31,7 +32,7 @@ function recordingBinding() {
 
 describe("standalone browser capability source", () => {
   it("offers no modules when the host has no BROWSER binding", async () => {
-    const source = standaloneBrowserSource(undefined, identity);
+    const source = standaloneBrowserSource(undefined, identity, refusingSave);
     const acquired = await source.acquire({
       ...acquisitionContext(),
       session,
@@ -43,9 +44,9 @@ describe("standalone browser capability source", () => {
     }
   });
 
-  it("offers exactly the eight driven cloudBrowser operations on a binding", async () => {
+  it("offers the eight driven cloudBrowser operations plus screenshot and pdf saves on a binding", async () => {
     const { binding, calls } = recordingBinding();
-    const source = standaloneBrowserSource(binding, identity);
+    const source = standaloneBrowserSource(binding, identity, refusingSave);
     const acquired = await source.acquire({
       ...acquisitionContext(),
       session,
@@ -71,12 +72,14 @@ describe("standalone browser capability source", () => {
             "cloudBrowser.close",
             "cloudBrowser.navigate",
             "cloudBrowser.open",
+            "cloudBrowser.pdf",
             "cloudBrowser.press",
+            "cloudBrowser.screenshot",
             "cloudBrowser.scroll",
             "cloudBrowser.snapshot",
             "cloudBrowser.type",
           ]);
-          expect(listing.total).toBe(8);
+          expect(listing.total).toBe(10);
           expect(listing.nextCursor).toBeNull();
           expect(calls).toEqual([]);
         } finally {
@@ -92,9 +95,11 @@ describe("standalone browser capability source", () => {
 
   it("offers no modules to a session-free caller even with a binding", async () => {
     const { binding, calls } = recordingBinding();
-    const acquired = await standaloneBrowserSource(binding, identity).acquire(
-      acquisitionContext(),
-    );
+    const acquired = await standaloneBrowserSource(
+      binding,
+      identity,
+      refusingSave,
+    ).acquire(acquisitionContext());
     try {
       expect(acquired.snapshot.modules).toEqual([]);
       expect(calls).toEqual([]);
@@ -110,12 +115,14 @@ describe("standalone browser capability source", () => {
     "refuses %s before the BROWSER provider sees an open",
     async (_label, url) => {
       const { binding, calls } = recordingBinding();
-      const acquired = await standaloneBrowserSource(binding, identity).acquire(
-        {
-          ...acquisitionContext(),
-          session,
-        },
-      );
+      const acquired = await standaloneBrowserSource(
+        binding,
+        identity,
+        refusingSave,
+      ).acquire({
+        ...acquisitionContext(),
+        session,
+      });
       try {
         let failure: unknown;
         let executions = 0;

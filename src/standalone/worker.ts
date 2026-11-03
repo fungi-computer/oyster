@@ -14,7 +14,10 @@ import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
 import { oysterPrincipalIsOwner } from "../authorization.js";
 import { standaloneComputerControl } from "./computer-control.js";
 import { standalonePermissionResources } from "./permission-resources.js";
-import { onBoxVmIngress } from "@fungi.computer/computer";
+import {
+  onBoxVmIngress,
+  ownerLocalBackendDialPath,
+} from "@fungi.computer/computer";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { installationWorkerEntrypoint } from "../installation-execution.js";
 import { putContentObject } from "../build-contract.js";
@@ -315,6 +318,18 @@ export default {
               standaloneWorkerErrorHandler,
             ),
           ).fetch(incoming, env, context),
+        localBackendDial: async (incoming) => {
+          const dial = ownerLocalBackendDialPath.exec(
+            new URL(incoming.url).pathname,
+          );
+          // Only a Computer this Oyster owns is addressed; no stray object is made.
+          if (
+            dial === null ||
+            !(await computerRegistry(env).ownsComputer(dial[1] ?? ""))
+          )
+            return new Response(null, { status: 404 });
+          return env.COMPUTER.getByName(dial[1] ?? "").fetch(incoming);
+        },
         workflowWebhooks: standaloneWorkflowWebhookRoutes(
           env,
           async (incoming) => {

@@ -1,12 +1,17 @@
 import { ModelPreferenceSchema } from "@fungi.computer/shiitake/model-preference";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { isModelKeyProvider } from "@fungi.computer/veil/model-keys";
 import * as Schema from "effect/Schema";
 
-/** A credential-source address, not credential material or a custodian locator. */
+/**
+ * A credential-source address, not credential material. `byok` names one of the
+ * instance's sealed model keys by id; no other source carries a key id.
+ */
 export const agentModelChoiceSchema = Schema.Struct({
   keySource: Schema.Literals(["workers-ai", "ai-gateway", "byok"]),
   model: ModelPreferenceSchema,
+  keyId: Schema.optional(Schema.NonEmptyString),
 });
 /** The Agent's model preference and source reference, never credential material. */
 export type AgentModelChoice = typeof agentModelChoiceSchema.Type;
@@ -17,7 +22,8 @@ export type AgentModelRefusal =
   | "unsupported_key_source"
   | "key_source_mismatch"
   | "model_unavailable"
-  | "key_not_connected";
+  | "key_not_connected"
+  | "key_removed";
 
 export class AgentModelRefused extends Error {
   constructor(readonly reason: AgentModelRefusal) {
@@ -35,13 +41,39 @@ const defaultChoice: AgentModelChoice = {
   },
 };
 
+/** Pi's maintained catalog for a provider a key may be brought for. */
+async function byokCatalog(
+  provider: "anthropic" | "openai" | "openrouter",
+): Promise<readonly Model<Api>[]> {
+  if (provider === "anthropic")
+    return (await import("@earendil-works/pi-ai/providers/anthropic"))
+      .anthropicProvider()
+      .getModels();
+  if (provider === "openai")
+    return (await import("@earendil-works/pi-ai/providers/openai"))
+      .openaiProvider()
+      .getModels();
+  return (await import("@earendil-works/pi-ai/providers/openrouter"))
+    .openrouterProvider()
+    .getModels();
+}
+
 /** Read the maintained Pi catalog; never accept a model from a different egress. */
 export async function selectAgentModel(
   choice: AgentModelChoice,
 ): Promise<Model<Api>> {
-  if (choice.keySource === "byok")
-    throw new AgentModelRefused("unsupported_key_source");
   const { providerId, modelId, reasoning } = choice.model;
+  if (choice.keySource === "byok") {
+    // Only a catalogued provider's own models; an OpenAI-compatible base has none.
+    if (!isModelKeyProvider(providerId) || providerId === "openai-compatible")
+      throw new AgentModelRefused("unsupported_key_source");
+    const found = (await byokCatalog(providerId)).find(
+      (item) => item.id === modelId,
+    );
+    if (found === undefined || (reasoning !== undefined && !found.reasoning))
+      throw new AgentModelRefused("model_unavailable");
+    return found;
+  }
   if (
     (choice.keySource === "workers-ai" &&
       providerId !== "cloudflare-workers-ai") ||
@@ -70,7 +102,7 @@ export function agentModelChoice(
     get<T = unknown>(key: string): Promise<T | undefined>;
     put(key: string, value: AgentModelChoice): Promise<void>;
   }>,
-  admit: (choice: AgentModelChoice) => void,
+  admit: (choice: AgentModelChoice) => void | Promise<void>,
 ) {
   return {
     async read(): Promise<AgentModelChoice> {
@@ -88,8 +120,11 @@ export function agentModelChoice(
       if (parsed._tag === "None")
         throw new AgentModelRefused("invalid_model_choice");
       const choice = parsed.value;
+      // A key id belongs to byok alone, and byok cannot run without one.
+      if ((choice.keySource === "byok") !== (choice.keyId !== undefined))
+        throw new AgentModelRefused("invalid_model_choice");
       await selectAgentModel(choice);
-      admit(choice);
+      await admit(choice);
       await storage.put(key, choice);
       return choice;
     },

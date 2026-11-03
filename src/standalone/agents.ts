@@ -82,6 +82,8 @@ import {
 } from "../agent-computer-source.js";
 import {
   standaloneAgentComputerPorts,
+  standaloneBrowserSave,
+  type StandaloneAgentComputerAccess,
   type StandaloneAgentComputerReply,
 } from "./agent-computers.js";
 import {
@@ -97,9 +99,22 @@ import { DurableObject } from "cloudflare:workers";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
 import { agentStoreKeeping } from "./agent-store.js";
+import type {
+  CredentialStorage,
+  StoredCredential,
+} from "@fungi.computer/veil/credential-store";
+import {
+  createInstanceCredentialStore,
+  createModelKeyVault,
+  ModelKeyRefused,
+  type ModelKeyRecord,
+  type ModelKeyRefusal,
+  type ModelKeySealInput,
+} from "./model-key-vault.js";
 import { agentArchiveOwner } from "./agent-archive-owner.js";
 import { agentArchiveProjection } from "../agent-archive-projection.js";
 import { standaloneBrowserSource } from "./browser.js";
+import { standaloneWebSource } from "./web.js";
 import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
 import {
   configuredProviderEgress,
@@ -148,7 +163,6 @@ import {
 import type { Avatar } from "@fungi.computer/sprite/avatar";
 import type { InvocationFrame } from "../invocation.js";
 import type { OysterJson } from "../host.js";
-import { defineIdFamily } from "@fungi.computer/cairn";
 import {
   agentIds,
   createAgentDirectory,
@@ -175,16 +189,13 @@ import type { HostActor } from "@fungi.computer/puffball/app";
 import type { OysterWorkerEnv } from "../workers.js";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
 import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
+import type { UiConnection } from "@fungi.computer/knapsack";
+import type { AgentMcpServerInput } from "../agents.js";
+import type { EgressRef } from "@fungi.computer/veil/connections";
 import type {
-  McpServerConnection,
-  UiConnection,
-} from "@fungi.computer/knapsack";
-import {
-  maxAgentMcpServers,
-  type AgentMcpServer,
-  type AgentMcpServerInput,
-  type AgentMcpServerRefusal,
-} from "../agents.js";
+  McpRequestData,
+  createAgentMcpConnections,
+} from "./agent-connections.js";
 import type {
   OysterAgent,
   AgentPolicyActor,
@@ -378,6 +389,8 @@ export type StandaloneAgentsEnv = Readonly<{
   AI_GATEWAY_AUTH_TOKEN?: string;
   AI_GATEWAY_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
+  /** Optional owner-funded Parallel key for `web.search`; Veil holds custody. */
+  PARALLEL_API_KEY?: string;
   /** Workers AI, the default model door. */
   AI?: AiBinding;
   /** The AI Gateway the binding routes through (default `default`). */
@@ -388,6 +401,8 @@ export type StandaloneAgentsEnv = Readonly<{
   KEYS?: StandaloneTenancyEnv["KEYS"];
   OYSTER_ORIGIN: string;
   OYSTER_OWNER_KEY?: string;
+  /** Instance credential key (32 bytes, base64url) that seals model API keys; generated at install, never in the repository. */
+  OYSTER_CREDENTIAL_KEY?: string;
   AGENTS: DurableObjectNamespace<StandaloneAgentBase>;
   /** Host-only directory custody. Guest entrypoints expose operations, not this binding; Codemode receives only Mycelium modules. */
   AGENT_DIRECTORY: DurableObjectNamespace<AgentDirectory>;
@@ -402,42 +417,6 @@ export type StandaloneAgentEnv = StandaloneAgentsEnv &
 const policyDirectorySchema = Schema.Struct({
   directoryName: Schema.NonEmptyString,
   tenantId: tenantIdSchema,
-});
-
-/** This Agent's remote MCP servers; the bearer stays in this Durable Object. */
-const storedMcpServersSchema = Schema.Array(
-  Schema.Struct({
-    serverId: Schema.NonEmptyString,
-    name: Schema.NonEmptyString,
-    url: Schema.NonEmptyString,
-    bearer: Schema.NullOr(Schema.NonEmptyString),
-  }),
-);
-type StoredMcpServer = (typeof storedMcpServersSchema.Type)[number];
-const mcpServersKey = "agent-mcp-servers";
-const mcpServerIds = defineIdFamily({
-  family: "oyster-mcp",
-  version: 1,
-  kinds: { server: { prefix: "mcp" } },
-});
-/** The Knapsack connection for one stored server; its bearer goes only to that endpoint. */
-function mcpConnection(server: StoredMcpServer): McpServerConnection {
-  const connection = {
-    id: `mcp.${server.serverId}`,
-    name: server.name,
-    url: new URL(server.url),
-  };
-  if (server.bearer === null) return connection;
-  return {
-    ...connection,
-    headers: { authorization: `Bearer ${server.bearer}` },
-  };
-}
-const toMcpServer = (stored: StoredMcpServer): AgentMcpServer => ({
-  serverId: stored.serverId,
-  name: stored.name,
-  url: stored.url,
-  hasBearer: stored.bearer !== null,
 });
 
 const instructions = [
@@ -543,31 +522,32 @@ export abstract class StandaloneAgentBase<
     for (const invalidate of this.computerInvalidations) invalidate();
   }
 
+  private computerAccess(): StandaloneAgentComputerAccess {
+    return {
+      computer: (computerId) => this.env.COMPUTER.getByName(computerId),
+      admit: async (captured) => {
+        const pin = await this.policyDirectory();
+        if (pin?.directoryName !== captured.scopeId)
+          throw new FleetGrantRefused();
+        return this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).admitAgentComputer(
+          {
+            scopeId: captured.scopeId,
+            agentId: captured.agentId,
+            attachment: captured.attachment,
+          },
+          pin.tenantId,
+        );
+      },
+    };
+  }
+
   private computerConnections() {
     return {
       read: () => this.computerSnapshot,
       connect: (connection: AgentComputerConnection) =>
-        standaloneAgentComputerPorts(
-          {
-            computer: (computerId) => this.env.COMPUTER.getByName(computerId),
-            admit: async (captured) => {
-              const pin = await this.policyDirectory();
-              if (pin?.directoryName !== captured.scopeId)
-                throw new FleetGrantRefused();
-              return this.env.AGENT_DIRECTORY.getByName(
-                pin.directoryName,
-              ).admitAgentComputer(
-                {
-                  scopeId: captured.scopeId,
-                  agentId: captured.agentId,
-                  attachment: captured.attachment,
-                },
-                pin.tenantId,
-              );
-            },
-          },
-          connection,
-        ),
+        standaloneAgentComputerPorts(this.computerAccess(), connection),
     };
   }
 
@@ -933,8 +913,38 @@ export abstract class StandaloneAgentBase<
       : null;
   }
 
+  /** The instance directory that owns this Agent's sealed model keys. */
+  private async keyDirectory() {
+    const pin = await this.policyDirectory();
+    if (pin === null) throw new AgentModelRefused("key_not_connected");
+    return this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+  }
+
+  /** The instance directory that owns this Agent's MCP connections and their credentials. */
+  private async mcpDirectory() {
+    const pin = await this.policyDirectory();
+    if (pin === null) throw new Error("Agent directory is unavailable");
+    return this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+  }
+
+  private agentName(): string {
+    const name = this.ctx.id.name;
+    if (name === undefined) throw new Error("Agent has no name");
+    return name;
+  }
+
+  /** A byok choice must name a stored key of the chosen provider. */
+  private async admitKey(choice: AgentModelChoice): Promise<void> {
+    if (choice.keySource !== "byok" || choice.keyId === undefined) return;
+    const record = await (await this.keyDirectory()).modelKey(choice.keyId);
+    if (record === null) throw new AgentModelRefused("key_removed");
+    if (record.provider !== choice.model.providerId)
+      throw new AgentModelRefused("key_source_mismatch");
+  }
+
   private choice() {
-    return agentModelChoice(this.ctx.storage, (choice) => {
+    return agentModelChoice(this.ctx.storage, async (choice) => {
+      await this.admitKey(choice);
       if (
         choice.keySource === "ai-gateway" &&
         configuredProviderEgress(this.env).baseUrl("ai-gateway") === null
@@ -993,6 +1003,34 @@ export abstract class StandaloneAgentBase<
     choice: AgentModelChoice,
   ): Promise<StandaloneModelSource> {
     const modelChoice = await selectAgentModel(choice);
+    if (choice.keySource === "byok" && choice.keyId !== undefined) {
+      await this.admitKey(choice);
+      const directory = await this.keyDirectory();
+      const keyId = choice.keyId;
+      const streamOptions: SimpleStreamOptions = {
+        // Pi needs some credential to build its request; the vault replaces it.
+        apiKey: "oyster-model-key",
+        fetch: async (input, init) => {
+          const request = new Request(input, init);
+          const sent = await directory.sendModelKey(keyId, {
+            url: request.url,
+            method: request.method,
+            headers: [...request.headers],
+            body: request.body === null ? null : await request.text(),
+          });
+          if (!(sent instanceof Response))
+            throw new AgentModelRefused(
+              sent.error === "key_removed"
+                ? "key_removed"
+                : "key_not_connected",
+            );
+          return sent;
+        },
+      };
+      if (choice.model.reasoning !== undefined)
+        streamOptions.reasoning = choice.model.reasoning;
+      return observedModels(normalizeModel(modelChoice), streamOptions);
+    }
     if (choice.keySource === "ai-gateway") {
       const egress = configuredProviderEgress(this.env);
       const baseUrl = egress.baseUrl("ai-gateway");
@@ -1090,54 +1128,20 @@ export abstract class StandaloneAgentBase<
   /** Listeners from live codemode acquisitions, told when the server list changes. */
   private readonly mcpInvalidations = new Set<() => void>();
 
-  private async storedMcpServers(): Promise<readonly StoredMcpServer[]> {
-    const stored = await this.ctx.storage.get(mcpServersKey);
-    return stored === undefined
-      ? []
-      : Schema.decodeUnknownSync(storedMcpServersSchema)(stored);
-  }
-
-  private async writeMcpServers(servers: readonly StoredMcpServer[]) {
-    await this.ctx.storage.put(mcpServersKey, servers);
+  /** Host-only: the directory told us this Agent's connections changed. */
+  invalidateMcpConnections(): void {
     for (const invalidate of this.mcpInvalidations) invalidate();
   }
 
-  /** Host-only: this Agent's MCP servers, without their bearer tokens. */
-  async mcpServers(): Promise<readonly AgentMcpServer[]> {
-    return (await this.storedMcpServers()).map(toMcpServer);
-  }
-
-  /** Host-only: connect one remote MCP server, admitted by the owner route. */
-  async addMcpServer(
-    input: AgentMcpServerInput,
-  ): Promise<AgentMcpServer | AgentMcpServerRefusal> {
-    const servers = await this.storedMcpServers();
-    if (servers.some((server) => server.name === input.name))
-      return { error: "duplicate_name" };
-    if (servers.length >= maxAgentMcpServers) return { error: "limit" };
-    const added: StoredMcpServer = {
-      serverId: mcpServerIds.server.generate(),
-      name: input.name,
-      url: new URL(input.url).href,
-      bearer: input.bearer,
-    };
-    await this.writeMcpServers([...servers, added]);
-    return toMcpServer(added);
-  }
-
-  /** Host-only: disconnect one MCP server. */
-  async removeMcpServer(serverId: string): Promise<boolean> {
-    const servers = await this.storedMcpServers();
-    const kept = servers.filter((server) => server.serverId !== serverId);
-    if (kept.length === servers.length) return false;
-    await this.writeMcpServers(kept);
-    return true;
-  }
-
   protected override async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
-    const [{ oysterAgentExtensions }, { Knapsack }] = await Promise.all([
+    const [
+      { oysterAgentExtensions },
+      { Knapsack },
+      { agentMcpSourceOptions, mcpRequestData },
+    ] = await Promise.all([
       import("@fungi.computer/shiitake-extensions/roster/conversation-agents"),
       import("@fungi.computer/knapsack"),
+      import("./agent-connections.js"),
     ]);
     const conversationAgents = await this.conversationAgents();
     const computerSource = createAgentComputerSource({
@@ -1203,37 +1207,57 @@ export abstract class StandaloneAgentBase<
               return computerSource.acquire(context);
             },
           },
-          Knapsack.mcpServers({
-            id: "agent-mcp",
-            read: async () => {
-              const servers = await this.storedMcpServers();
-              return {
-                // Secret-free: ids and endpoints, never the bearer.
-                version: JSON.stringify(
-                  servers.map((server) => [server.serverId, server.url]),
-                ),
-                servers: servers.map(mcpConnection),
-              };
-            },
-            subscribe: (invalidate) => {
-              this.mcpInvalidations.add(invalidate);
-              return () => this.mcpInvalidations.delete(invalidate);
-            },
-            onUnavailable: (error) => {
-              console.warn("agent MCP server unavailable", {
-                serverId: error.serverId,
-                reason: error.reason,
-              });
-            },
-            // The Worker's own egress: public internet only.
-            fetch: (url, init) => fetch(url, init),
-          }),
+          Knapsack.mcpServers(
+            agentMcpSourceOptions({
+              read: async () =>
+                (await this.mcpDirectory()).mcpProjection(this.agentName()),
+              subscribe: (invalidate) => {
+                this.mcpInvalidations.add(invalidate);
+                return () => this.mcpInvalidations.delete(invalidate);
+              },
+              onUnavailable: (error) => {
+                console.warn("agent MCP server unavailable", {
+                  serverId: error.serverId,
+                  reason: error.reason,
+                });
+              },
+              // Completed by the owner, which holds the credential.
+              fetch: async (ref, request) => {
+                const answer = await (
+                  await this.mcpDirectory()
+                ).mcpFetch(
+                  this.agentName(),
+                  ref,
+                  await mcpRequestData(request),
+                );
+                if ("error" in answer)
+                  throw new Error(`MCP connection refused: ${answer.error}`);
+                return answer;
+              },
+            }),
+          ),
           conversationAgents.control(() => this.controlDirectory()),
           (await this.ui()).source,
-          standaloneBrowserSource(this.env.BROWSER, () => ({
-            teamId: this.env.OYSTER_ORIGIN,
-            agentId: principal.actor.agentId,
-          })),
+          standaloneWebSource(this.env),
+          standaloneBrowserSource(
+            this.env.BROWSER,
+            () => ({
+              teamId: this.env.OYSTER_ORIGIN,
+              agentId: principal.actor.agentId,
+            }),
+            standaloneBrowserSave(
+              {
+                admit: this.computerAccess().admit,
+                write: (computerId, grant, path, bytes) =>
+                  this.env.COMPUTER.getByName(computerId).fileWrite(
+                    grant,
+                    path,
+                    bytes,
+                  ),
+              },
+              () => this.computerSnapshot,
+            ),
+          ),
         ],
         sandbox: createCodemodeSandbox(this.env.LOADER, "oyster-workerd"),
       },
@@ -1367,6 +1391,107 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   /** Directory's bounded-stale projection, never the Agent's flag authority. */
   archived(agentId: string): boolean {
     return this.archiveProjection().archived(agentId);
+  }
+
+  private modelKeys() {
+    const storage = this.ctx.storage;
+    return createModelKeyVault({
+      credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
+      storage: credentialStorage(storage),
+    });
+  }
+
+  /** Domain refusals cross the DO RPC boundary as data, not as Error prototypes. */
+  async sealModelKey(
+    input: ModelKeySealInput,
+  ): Promise<ModelKeyRecord | Readonly<{ error: ModelKeyRefusal }>> {
+    try {
+      return await this.modelKeys().seal(input);
+    } catch (error) {
+      if (error instanceof ModelKeyRefused) return { error: error.reason };
+      throw error;
+    }
+  }
+
+  listModelKeys(): Promise<readonly ModelKeyRecord[]> {
+    return this.modelKeys().list();
+  }
+
+  modelKey(keyId: string): Promise<ModelKeyRecord | null> {
+    return this.modelKeys().get(keyId);
+  }
+
+  removeModelKey(keyId: string): Promise<"deleted" | "absent"> {
+    return this.modelKeys().remove(keyId);
+  }
+
+  /** Host-only: the one place a stored key meets a provider request. */
+  async sendModelKey(
+    keyId: string,
+    request: Readonly<{
+      url: string;
+      method: string;
+      headers: readonly (readonly [string, string])[];
+      body: string | null;
+    }>,
+  ): Promise<Response | Readonly<{ error: ModelKeyRefusal }>> {
+    try {
+      return await this.modelKeys().send(
+        keyId,
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers.map(([name, value]) => [name, value]),
+          body: request.body,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ModelKeyRefused) return { error: error.reason };
+      throw error;
+    }
+  }
+
+  private mcpOwner: ReturnType<typeof createAgentMcpConnections> | undefined;
+  /** Loaded on the first MCP request: the SDK and OpenAPI decoders stay out of startup. */
+  private async mcpConnections() {
+    const { createAgentMcpConnections } =
+      await import("./agent-connections.js");
+    const storage = this.ctx.storage;
+    return (this.mcpOwner ??= createAgentMcpConnections({
+      ownerId: this.ctx.id.name ?? "agents",
+      store: storage,
+      vault: createInstanceCredentialStore({
+        credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
+        storage: credentialStorage(storage),
+      }),
+      // The Worker's own egress: public internet only.
+      send: (request) => fetch(request),
+      hasAgent: (agentId) => this.has(agentId),
+      notify: (agentId) =>
+        this.env.AGENTS.getByName(agentId).invalidateMcpConnections(),
+    }));
+  }
+
+  /** Host-only: an Agent's granted MCP servers, never their credentials. */
+  async mcpServers(agentId: string) {
+    return (await this.mcpConnections()).servers(agentId);
+  }
+
+  async addMcpServer(agentId: string, input: AgentMcpServerInput) {
+    return (await this.mcpConnections()).add(agentId, input);
+  }
+
+  async removeMcpServer(agentId: string, serverId: string) {
+    return (await this.mcpConnections()).remove(agentId, serverId);
+  }
+
+  /** Secret-free grants for one Agent: ids, versions and endpoints. */
+  async mcpProjection(agentId: string) {
+    return (await this.mcpConnections()).projection(agentId);
+  }
+
+  /** Host-only: complete one Agent MCP request; the credential opens only here. */
+  async mcpFetch(agentId: string, ref: EgressRef, request: McpRequestData) {
+    return (await this.mcpConnections()).fetch(agentId, ref, request);
   }
 
   private readonly computers: ReturnType<typeof createAgentComputers>;
@@ -2162,6 +2287,17 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   }
 }
 
+/** The directory's Durable Object storage as the credential store's key-value port. */
+const credentialStorage = (
+  storage: DurableObjectStorage,
+): CredentialStorage => ({
+  get: (key) => storage.get<StoredCredential>(key),
+  put: (key, value) => storage.put(key, value),
+  delete: (key) => storage.delete(key),
+  list: async (prefix) =>
+    new Map(await storage.list<StoredCredential>({ prefix })),
+});
+
 const everyOperation: OysterAgent["sessionOperations"] = [
   "agent.read",
   "agent.send",
@@ -2256,6 +2392,9 @@ export function standaloneAgents(
         return { error: "not_found" };
       return env.AGENTS.getByName(agentId).setModelChoice(choice);
     },
+    modelKeys: () => directory().listModelKeys(),
+    sealModelKey: (input) => directory().sealModelKey(input),
+    removeModelKey: (keyId) => directory().removeModelKey(keyId),
     policyStatus: async (agentId) => directory().policyStatus(agentId),
     appToolPolicy: (actor) =>
       directory().appToolPolicy(actor, scope?.tenantId ?? defaultTenant),
@@ -2283,17 +2422,10 @@ export function standaloneAgents(
         scope?.tenantId ?? defaultTenant,
       );
     },
-    mcpServers: async (agentId) =>
-      (await directory().has(agentId))
-        ? await env.AGENTS.getByName(agentId).mcpServers()
-        : null,
-    addMcpServer: async (agentId, input) =>
-      (await directory().has(agentId))
-        ? await env.AGENTS.getByName(agentId).addMcpServer(input)
-        : { error: "not_found" },
-    removeMcpServer: async (agentId, serverId) =>
-      (await directory().has(agentId)) &&
-      (await env.AGENTS.getByName(agentId).removeMcpServer(serverId)),
+    mcpServers: (agentId) => directory().mcpServers(agentId),
+    addMcpServer: (agentId, input) => directory().addMcpServer(agentId, input),
+    removeMcpServer: (agentId, serverId) =>
+      directory().removeMcpServer(agentId, serverId),
     fetch: async (agentId, request) => {
       const home = await directory().agentHome(agentId);
       if (home?.kind === "machine") {

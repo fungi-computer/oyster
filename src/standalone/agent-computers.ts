@@ -19,9 +19,11 @@ import {
   type AgentComputerProjection,
   type ComputerAttachmentInput,
 } from "../agent-computers.js";
+import type { SaveBrowserFile } from "../browser/index.js";
 import type {
   AgentComputerConnection,
   AgentComputerPorts,
+  AgentComputerSnapshot,
 } from "../agent-computer-source.js";
 import { type OysterEnv } from "../host.js";
 import { owner, routes as routeTable, type Routes } from "../authorization.js";
@@ -32,6 +34,60 @@ export type StandaloneAgentComputerAccess = Readonly<{
   admit: (connection: AgentComputerConnection) => Promise<ComputerGrant>;
   computer: (computerId: string) => Rpc.Provider<StandaloneAgentComputerRpc>;
 }>;
+
+/** A save named a Computer this Agent is not attached to, or the directory refused it. */
+class BrowserSaveDenied extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserSaveDenied";
+  }
+}
+
+/**
+ * `cloudBrowser.screenshot`/`pdf` bytes go straight to one attached Computer's
+ * file system, never through the model. The destination must be a Computer in
+ * the Agent's current attachments, and the directory re-admits it for
+ * `files.writeBytes` on every save, so a detached or revoked Computer refuses.
+ */
+export function standaloneBrowserSave(
+  access: Readonly<{
+    admit: StandaloneAgentComputerAccess["admit"];
+    write: (
+      computerId: string,
+      grant: ComputerGrant,
+      path: string,
+      bytes: Uint8Array,
+    ) => Promise<void>;
+  }>,
+  read: () => AgentComputerSnapshot | null,
+): SaveBrowserFile {
+  return async ({ computerId, path, bytes }) => {
+    const snapshot = read();
+    const attachment = snapshot?.projection.attachments.find(
+      (candidate) => candidate.computerId === computerId,
+    );
+    if (snapshot === null || attachment === undefined)
+      throw new BrowserSaveDenied(
+        `${computerId} is not a Computer this Agent is attached to`,
+      );
+    const grant = await access.admit({
+      scopeId: snapshot.scopeId,
+      agentId: snapshot.agentId,
+      attachment,
+      admission: () => attachment.admission,
+    });
+    if (
+      checkComputerGrant(grant, {
+        computerId,
+        action: "files.writeBytes",
+        now: Date.now(),
+      }).kind !== "admitted"
+    )
+      throw new FleetGrantRefused();
+    await access.write(computerId, grant, path, bytes);
+    return { computerId, path, bytes: bytes.byteLength };
+  };
+}
 
 /** Native operations use the captured Computer, never the mutable workspace selection. */
 export function standaloneAgentComputerPorts(

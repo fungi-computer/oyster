@@ -4,6 +4,9 @@ import { z } from "zod";
 import {
   computerCreateRequestSchema,
   computerPageSchema,
+  localBackendAttachSchema,
+  localBackendDetachRequestSchema,
+  localBackendDetachSchema,
 } from "@fungi.computer/computer/fleet";
 import { type OysterAuth, type OysterEnv } from "../host.js";
 import {
@@ -31,6 +34,21 @@ export const standaloneFleetRequestSchema = z.discriminatedUnion("operation", [
     computerId: fleetComputerId,
   }),
   z.strictObject({
+    operation: z.literal("backends"),
+    computerId: fleetComputerId,
+  }),
+  z.strictObject({
+    operation: z.literal("attach-local"),
+    request: localBackendAttachSchema,
+  }),
+  z.strictObject({
+    operation: z.literal("detach-local"),
+    request: z.union([
+      localBackendDetachSchema,
+      localBackendDetachRequestSchema,
+    ]),
+  }),
+  z.strictObject({
     operation: z.enum(["read-internet-access", "read-keep-awake"]),
     computerId: fleetComputerId,
   }),
@@ -47,14 +65,23 @@ export type StandaloneFleetRequest = z.input<
 
 function fleetStatus(
   result: Awaited<ReturnType<StandaloneRegistry["computerFleet"]>>,
-): 200 | 403 | 404 | 409 | 503 {
+): 200 | 400 | 403 | 404 | 409 | 503 {
   if (result === null) return 404;
   if ("error" in result)
-    return result.error === "owner_required"
-      ? 403
-      : result.error === "partial_init"
-        ? 503
-        : 409;
+    switch (result.error) {
+      case "owner_required":
+      case "not_owner":
+      case "local_limit":
+      case "unknown_computer":
+        return 403;
+      case "invalid":
+      case "not_enabled":
+        return 400;
+      case "partial_init":
+        return 503;
+      default:
+        return 409;
+    }
   return 200;
 }
 

@@ -1484,6 +1484,26 @@ try {
   const workflowsFrame = workflowsPane.frameLocator(
     ".tourtois-pane-body iframe",
   );
+  // Publication is a durable job the editor observes (a status read every
+  // second, then a paused "Publication is still running" note). Wait for that
+  // outcome, not for a wall-clock guess a loaded host overruns.
+  const publishAndAwaitRun = async () => {
+    await workflowsPane
+      .getByRole("button", { name: "Publish", exact: true })
+      .click();
+    const run = workflowsPane.locator('button[aria-label="Run"]:enabled');
+    const stopped = workflowsFrame.locator(
+      '.wf-bar-note[role="alert"], .wf-bar-note[role="status"]',
+    );
+    // A frame locator cannot join a page locator, so poll both.
+    await expectUi
+      .poll(async () => (await run.count()) + (await stopped.count()) > 0, {
+        message: "publication finished",
+        timeout: 0,
+      })
+      .toBe(true);
+    await expectUi(run, "publication enabled Run").toHaveCount(1);
+  };
   // Trellis publishes navigation into its host header; content stays framed.
   const chooseScope = async (name) => {
     const scope = workflowsPane.locator('[data-caps-window-crumb="scope"]');
@@ -1600,12 +1620,7 @@ try {
         );
         throw cause;
       }
-      await workflowsPane
-        .getByRole("button", { name: "Publish", exact: true })
-        .click();
-      await expectUi(
-        workflowsPane.getByRole("button", { name: "Run", exact: true }),
-      ).toBeEnabled({ timeout: 15_000 });
+      await publishAndAwaitRun();
       await workflowsPane.locator('[data-caps-window-crumb="version"]').click();
       const publishedVersion = uiPage.getByRole("menuitem", { name: /^v1 / });
       await expectUi(publishedVersion).toBeVisible();
@@ -1775,12 +1790,7 @@ try {
       await expectUi(
         workflowsPane.getByRole("button", { name: "Publish", exact: true }),
       ).toBeVisible({ timeout: 15_000 });
-      await workflowsPane
-        .getByRole("button", { name: "Publish", exact: true })
-        .click();
-      await expectUi(
-        workflowsPane.getByRole("button", { name: "Run", exact: true }),
-      ).toBeEnabled({ timeout: 15_000 });
+      await publishAndAwaitRun();
       await workflowsPane.locator('[data-caps-window-crumb="version"]').click();
       const publishedVersion = uiPage.getByRole("menuitem", { name: /^v1 / });
       await expectUi(publishedVersion).toBeVisible();

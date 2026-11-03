@@ -265,6 +265,19 @@ export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
 printf '%s' "$OYSTER_OWNER_KEY" | npx wrangler secret put OYSTER_OWNER_KEY
 ```
 
+### Set the credential key (to bring your own model keys)
+
+Model API keys you add in Settings are sealed on your Oyster under a 32-byte
+credential key held as a host secret. Generate it at install; it is never in the
+repository, storage or logs. Without it, adding a model key is refused.
+
+```sh
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' |
+  npx wrangler secret put OYSTER_CREDENTIAL_KEY
+```
+
+Keep a copy: losing it makes the sealed keys unreadable, and you re-add them.
+
 ### Install the starter Apps
 
 ```sh

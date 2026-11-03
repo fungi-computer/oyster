@@ -8,6 +8,15 @@
  */
 import type { Env } from "hono";
 import type { TenantPrincipal } from "./tenant.js";
+import type {
+  ModelKeyRecord,
+  ModelKeyRefusal,
+  ModelKeySealInput,
+} from "./standalone/model-key-vault.js";
+export type {
+  ModelKeyRefusal,
+  ModelKeySealInput,
+} from "./standalone/model-key-vault.js";
 import {
   agent,
   agents as agentCollection,
@@ -97,7 +106,7 @@ export type AgentMcpServer = Readonly<{
 export type AgentMcpServerInput = typeof agentMcpServerInputSchema.Type;
 /** Why connecting an MCP server was refused. */
 export type AgentMcpServerRefusal = Readonly<{
-  error: "not_found" | "duplicate_name" | "limit";
+  error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
 }>;
 /** At most this many MCP servers per Agent. */
 export const maxAgentMcpServers = 16;
@@ -228,6 +237,14 @@ export type OysterAgents = Readonly<{
     | PendingAgentPolicy
     | Readonly<{ error: "not_found" | "revision_conflict" | "not_granted" }>
   >;
+  /** The instance's sealed model keys, never their secrets. */
+  modelKeys(): Promise<readonly ModelKeyRecord[]>;
+  /** Validate with the provider, then seal one key; or an explicit refusal. */
+  sealModelKey(
+    input: ModelKeySealInput,
+  ): Promise<ModelKeyRecord | Readonly<{ error: ModelKeyRefusal }>>;
+  /** Remove one key; Agents that chose it then fail with `key_removed`. */
+  removeModelKey(keyId: string): Promise<"deleted" | "absent">;
   /** An Agent's connected MCP servers, or `null` when there is no such Agent. */
   mcpServers(agentId: string): Promise<readonly AgentMcpServer[] | null>;
   /** Connect one remote MCP server; the Agent's next run sees its tools. */
@@ -662,62 +679,132 @@ async function approvePolicy(
 
 /** Host-owned direct approval under the admitted owner; never an App capability. */
 export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
-  return routes<OysterEnv>()
-    .get("/api/agent-models/:agentId", owner("direct"), async (context) => {
-      const agentId = context.req.param("agentId");
-      if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-      const choice = await agents.readModelChoice(agentId);
-      return choice === null
-        ? refusal(404, "No such agent")
-        : Response.json(choice);
-    })
-    .put(
-      "/api/agent-models/:agentId",
-      owner("direct"),
-      async (context, { principal }) => {
+  return (
+    routes<OysterEnv>()
+      // One owner read for the settings panel: every Agent with its model choice.
+      .get("/api/agent-models", owner("direct"), async () => {
+        const rows = await Promise.all(
+          (await agents.list()).map(async (item) => ({
+            agentId: item.agentId,
+            name: item.name,
+            choice: await agents.readModelChoice(item.agentId),
+          })),
+        );
+        return Response.json({ agents: rows });
+      })
+      .get("/api/agent-models/:agentId", owner("direct"), async (context) => {
         const agentId = context.req.param("agentId");
         if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
-        const input = agents.decodeModelChoice(await context.req.text());
-        if (input === null) return refusal(400, "Invalid model choice");
-        const choice = await agents.setModelChoice(agentId, input, principal);
-        if ("error" in choice && choice.error === "invalid_model_choice")
-          return refusal(400, "Invalid model choice");
-        return "error" in choice
-          ? refusal(
-              choice.error === "not_found"
-                ? 404
-                : choice.error === "not_granted"
-                  ? 403
-                  : 409,
-              choice.error,
-            )
+        const choice = await agents.readModelChoice(agentId);
+        return choice === null
+          ? refusal(404, "No such agent")
           : Response.json(choice);
-      },
+      })
+      .put(
+        "/api/agent-models/:agentId",
+        owner("direct"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const input = agents.decodeModelChoice(await context.req.text());
+          if (input === null) return refusal(400, "Invalid model choice");
+          const choice = await agents.setModelChoice(agentId, input, principal);
+          if ("error" in choice && choice.error === "invalid_model_choice")
+            return refusal(400, "Invalid model choice");
+          return "error" in choice
+            ? refusal(
+                choice.error === "not_found"
+                  ? 404
+                  : choice.error === "not_granted"
+                    ? 403
+                    : 409,
+                choice.error,
+              )
+            : Response.json(choice);
+        },
+      )
+      .get("/api/agent-policies/:agentId", owner("direct"), async (context) => {
+        const agentId = context.req.param("agentId");
+        if (!(await knownAgent(agents, agentId)))
+          return refusal(404, "No such agent");
+        return Response.json({
+          expectedRevision: await agents.policyRevision(agentId),
+        });
+      })
+      .put(
+        "/api/agent-policies/:agentId",
+        owner("direct"),
+        async (context, { principal }) =>
+          approvePolicy(
+            agents,
+            principal,
+            "owner-direct",
+            context.req.param("agentId"),
+            await context.req.text(),
+          ),
+      )
+  );
+}
+
+const keyIdPattern = /^cred_[A-Za-z0-9_-]{1,64}$/u;
+const sealRequestSchema = Schema.Struct({
+  provider: Schema.Literals(["anthropic", "openai", "openrouter"]),
+  label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  apiKey: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(16_384),
+  ),
+});
+const modelKeyRefusalStatus = {
+  invalid_key: 400,
+  key_rejected: 422,
+  provider_unavailable: 502,
+  custody_unavailable: 503,
+  key_removed: 404,
+  target_denied: 400,
+  limit: 409,
+} satisfies Record<ModelKeyRefusal, number>;
+
+/**
+ * Host-owned model-key custody for the owner directly. A key goes in once and
+ * never comes back out; listings carry provider, label and times only.
+ */
+export function modelKeyRoutes(agents: OysterAgents): Routes<OysterEnv> {
+  return routes<OysterEnv>()
+    .get("/api/model-keys", owner("direct"), async () =>
+      Response.json({ keys: await agents.modelKeys() }),
     )
-    .get("/api/agent-policies/:agentId", owner("direct"), async (context) => {
-      const agentId = context.req.param("agentId");
-      if (!(await knownAgent(agents, agentId)))
-        return refusal(404, "No such agent");
-      return Response.json({
-        expectedRevision: await agents.policyRevision(agentId),
-      });
+    .post("/api/model-keys", owner("direct"), async (context) => {
+      const length = Number(context.req.header("content-length") ?? "0");
+      if (length > 32 * 1024) return refusal(413, "Request too large");
+      const input = Schema.decodeUnknownOption(
+        Schema.fromJsonString(sealRequestSchema),
+        { onExcessProperty: "error" },
+      )(await context.req.text());
+      if (input._tag === "None")
+        return refusal(400, "Choose a provider, name the key and paste it");
+      const sealed = await agents.sealModelKey(input.value);
+      return "error" in sealed
+        ? refusal(modelKeyRefusalStatus[sealed.error], sealed.error)
+        : Response.json(sealed, { status: 201 });
     })
-    .put(
-      "/api/agent-policies/:agentId",
-      owner("direct"),
-      async (context, { principal }) =>
-        approvePolicy(
-          agents,
-          principal,
-          "owner-direct",
-          context.req.param("agentId"),
-          await context.req.text(),
-        ),
-    );
+    .delete("/api/model-keys/:keyId", owner("direct"), async (context) => {
+      const keyId = context.req.param("keyId");
+      if (!keyIdPattern.test(keyId)) return refusal(404, "No such key");
+      return (await agents.removeModelKey(keyId)) === "deleted"
+        ? new Response(null, { status: 204 })
+        : refusal(404, "No such key");
+    });
 }
 
 const serverIdPattern = /^[a-z0-9_-]{1,64}$/u;
-const mcpRefusalStatus = { not_found: 404, duplicate_name: 409, limit: 409 };
+const mcpRefusalStatus = {
+  not_found: 404,
+  duplicate_name: 409,
+  limit: 409,
+  invalid_endpoint: 400,
+};
 
 /**
  * Host-owned Agent MCP server custody for the owner directly; never an App

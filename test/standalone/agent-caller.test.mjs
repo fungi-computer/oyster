@@ -202,6 +202,9 @@ test("standalone owner attaches fleet and configured Computers without an App, r
         put: async (key, value) => {
           values.set(key, value);
         },
+        delete: async (key) => values.delete(key),
+        list: async ({ prefix }) =>
+          new Map([...values].filter(([key]) => key.startsWith(prefix))),
       },
       blockConcurrencyWhile: (work) => work(),
     };
@@ -533,7 +536,8 @@ test("standalone owner attaches fleet and configured Computers without an App, r
       });
       const unsupported = await modelRequest(sibling.agentId, "PUT", {
         keySource: "byok",
-        model: gatewayChoice.model,
+        keyId: "cred_unused",
+        model: { providerId: "cloudflare-workers-ai", modelId: "@cf/x/y" },
       });
       assert.equal(unsupported.status, 409);
       assert.deepEqual(await unsupported.json(), {
@@ -577,6 +581,166 @@ test("standalone owner attaches fleet and configured Computers without an App, r
       );
       env.AI_GATEWAY_AUTH_TOKEN = "fixture-gateway-secret";
       assert.deepEqual(await read(sibling.agentId), gatewayChoice);
+    },
+  );
+  await t.test(
+    "owner model keys seal once, pick per Agent, reach the provider only at egress and fail explicitly once removed",
+    async () => {
+      const byokAgent = directory.create(
+        "Key agent",
+        "create-key-agent",
+        owner,
+        "owner-direct",
+      );
+      await env.AGENTS.getByName(byokAgent.agentId).usePolicyDirectory({
+        directoryName: tenantScope(
+          defaultTenant,
+          env.OYSTER_ORIGIN,
+        ).durableName("agents"),
+        tenantId: defaultTenant,
+      });
+      const secretKey = `sk-test-${"y".repeat(16)}`;
+      const send = (path, method, body) => {
+        const init = {
+          method,
+          headers: {
+            Authorization: `Bearer ${ownerKey}`,
+            "Content-Type": "application/json",
+          },
+        };
+        if (body !== undefined) init.body = JSON.stringify(body);
+        return standaloneWorker.fetch(
+          new Request(`https://oyster.test${path}`, init),
+          env,
+          { waitUntil: (work) => background.push(work) },
+        );
+      };
+      const sealBody = {
+        provider: "openai",
+        label: "Work key",
+        apiKey: secretKey,
+      };
+      const seen = [];
+      let providerStatus = 200;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        seen.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+        });
+        return new Response('{"data":[]}', {
+          status: providerStatus,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      try {
+        const noSecret = await send("/api/model-keys", "POST", sealBody);
+        assert.equal(noSecret.status, 503);
+        assert.deepEqual(await noSecret.json(), {
+          error: "custody_unavailable",
+        });
+        env.OYSTER_CREDENTIAL_KEY = "B".repeat(43);
+        providerStatus = 401;
+        const rejected = await send("/api/model-keys", "POST", sealBody);
+        assert.equal(rejected.status, 422);
+        assert.deepEqual(await rejected.json(), { error: "key_rejected" });
+        providerStatus = 200;
+        const sealed = await send("/api/model-keys", "POST", sealBody);
+        assert.equal(sealed.status, 201);
+        const sealedText = await sealed.text();
+        assert.ok(!sealedText.includes(secretKey));
+        const record = JSON.parse(sealedText);
+        const listed = await (await send("/api/model-keys", "GET")).text();
+        assert.ok(!listed.includes(secretKey));
+        assert.deepEqual(JSON.parse(listed), { keys: [record] });
+
+        const choice = {
+          keySource: "byok",
+          keyId: record.keyId,
+          model: { providerId: "openai", modelId: "gpt-6-luna" },
+        };
+        const put = (agentId, body) =>
+          send(`/api/agent-models/${agentId}`, "PUT", body);
+        const unknown = await put(byokAgent.agentId, {
+          ...choice,
+          keyId: "cred_unknown",
+        });
+        assert.equal(unknown.status, 409);
+        assert.deepEqual(await unknown.json(), { error: "key_removed" });
+        const missingId = await put(byokAgent.agentId, {
+          keySource: "byok",
+          model: choice.model,
+        });
+        assert.equal(missingId.status, 400);
+        const wrongProvider = await put(byokAgent.agentId, {
+          ...choice,
+          model: {
+            providerId: "anthropic",
+            modelId: "claude-sonnet-4-5",
+          },
+        });
+        assert.equal(wrongProvider.status, 409);
+        assert.equal((await put(byokAgent.agentId, choice)).status, 200);
+        agentHosts.delete(byokAgent.agentId);
+        const persisted = await send(
+          `/api/agent-models/${byokAgent.agentId}`,
+          "GET",
+        );
+        const persistedText = await persisted.text();
+        assert.ok(!persistedText.includes(secretKey));
+        assert.deepEqual(JSON.parse(persistedText), choice);
+        const overview = await (await send("/api/agent-models", "GET")).json();
+        assert.deepEqual(
+          overview.agents.find(({ agentId }) => agentId === byokAgent.agentId),
+          { agentId: byokAgent.agentId, name: "Key agent", choice },
+        );
+
+        const host = env.AGENTS.getByName(byokAgent.agentId);
+        const lease = await host.modelSource().acquire({
+          sessionId: "route-byok",
+          preference: null,
+          signal: new AbortController().signal,
+        });
+        seen.length = 0;
+        const events = lease.stream(
+          lease.model,
+          {
+            messages: [{ role: "user", content: "hi", timestamp: 1 }],
+          },
+          {},
+        );
+        const outcome = await events.result();
+        assert.ok(
+          seen.some(
+            (call) =>
+              call.url.startsWith("https://api.openai.com/") &&
+              call.authorization === `Bearer ${secretKey}`,
+          ),
+          "the stored key is attached at provider egress",
+        );
+        assert.ok(!JSON.stringify(outcome).includes(secretKey));
+        await lease.release();
+
+        const removed = await send(`/api/model-keys/${record.keyId}`, "DELETE");
+        assert.equal(removed.status, 204);
+        assert.equal(
+          (await send(`/api/model-keys/${record.keyId}`, "DELETE")).status,
+          404,
+        );
+        await assert.rejects(
+          () =>
+            host.modelSource().acquire({
+              sessionId: "route-byok-removed",
+              preference: null,
+              signal: new AbortController().signal,
+            }),
+          (error) => error.reason === "key_removed",
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+        env.OYSTER_CREDENTIAL_KEY = undefined;
+      }
     },
   );
   invalidations.length = 0;

@@ -510,6 +510,38 @@ async function runProof() {
       installationId: "bonsai",
     });
     assert.equal(installed.status, 201, "Local Bonsai installation failed");
+    // Installing is not consent: the owner approves Bonsai's declared grants
+    // through the ordinary set-grants command, against the server's pins.
+    const grantsUrl = `${origin}/api/installations/bonsai/grants`;
+    const grantsPage = await globalThis.fetch(grantsUrl, {
+      headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+      signal: globalThis.AbortSignal.timeout(30_000),
+    });
+    assert.equal(grantsPage.status, 200, await grantsPage.clone().text());
+    const pins = await grantsPage.json();
+    const granted = await globalThis.fetch(grantsUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        storeGeneration: pins.storeGeneration,
+        authorityVersion: pins.permissions.authority.authorityVersion,
+        artifactDigest: pins.artifactDigest,
+        command: {
+          kind: "change-grants",
+          changes: pins.permissions.declaredOperations.capabilities.map(
+            ({ capability, operations }) => ({
+              capability,
+              grant: { operations, resources: "tenant-scope" },
+            }),
+          ),
+        },
+      }),
+      signal: globalThis.AbortSignal.timeout(30_000),
+    });
+    assert.equal(granted.status, 200, await granted.text());
 
     // The receiver, as its own process (see receiverScript above), so wrangler
     // dev's real TLS delivery is never stalled by this script's own blocking

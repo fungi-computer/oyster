@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -63,6 +63,10 @@
     "./browser/boot": {
       "types": "./dist/browser/boot.d.ts",
       "import": "./dist/browser/boot.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "import": "./dist/web/index.js"
     },
     "./invocation": {
       "types": "./dist/invocation.d.ts",
@@ -309,7 +313,7 @@
     "build": "pnpm run clean && tsc -p tsconfig.build.json && tsc -p src/page/tsconfig.build.json && node scripts/build-page.mjs && node scripts/build-candidate-cli.mjs",
     "clean": "node --input-type=module --eval \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit && tsc -p src/page/tsconfig.json && tsc -p examples/tsconfig.json && tsc -p examples/notes-app/ui/tsconfig.json && tsc -p src/build/tsconfig.json && tsc -p src/build/snapshot-programs/tsconfig.json && tsc -p test/build/tsconfig.json && tsc -p test/page/tsconfig.json && tsc -p test/standalone/tsconfig.json",
-    "test": "pnpm run test:boot-ui && node test/core.mjs && vitest run --config vitest.config.mjs && vitest run --config vitest.browser.config.mjs && node --test test/mcp-catalog.test.mjs test/agent-catalog-memory.test.mjs test/agent-catalog-cap.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/startup-graph.test.mjs test/guest-security.test.mjs test/host-routes.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs test/authorization-law.test.mjs test/git-key-scope.test.mjs test/owner-only-admission.test.mjs && node --import tsx --test test/authorization.test.ts test/page-capabilities.test.mjs test/approval-page.test.mjs test/approval-native-control.test.mjs test/approval-handoff.test.mjs test/grant-consent-fixture.test.mjs test/external-app.test.mjs test/retired-frame-binding.test.mjs test/machine-link/home.test.mjs test/machine-link/enrollment.test.ts test/machine-link/fences.test.ts test/machine-link/audience.test.ts test/machine-link/presence.test.ts test/machine-link/client.test.ts test/machine-link/delivery.test.ts test/machine-link/custody.test.ts test/machine-link/replay-capacity.test.ts && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs test/installation-commit-race.test.mjs && node --import tsx --test test/older-oyster-store.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs && vitest run --config vitest.tenancy-node.config.mjs && vitest run --config vitest.tenancy-cloudflare.config.mjs && vitest run --config vitest.tenancy-cloudflare-eviction.config.mjs && vitest run --config vitest.tenancy-cold-directory.config.mjs && pnpm run test:standalone",
+    "test": "pnpm run test:boot-ui && node test/core.mjs && vitest run --config vitest.config.mjs && vitest run --config vitest.browser.config.mjs && node --test test/mcp-catalog.test.mjs test/agent-catalog-memory.test.mjs test/agent-catalog-cap.test.mjs test/mcp-isolate.test.mjs test/mcp-owner.test.mjs test/pack.test.mjs test/auth.test.mjs && node test/files.mjs && node --test test/startup-graph.test.mjs test/guest-security.test.mjs test/host-routes.test.mjs test/key-routes.test.mjs test/app-calls.test.mjs test/computer-caller.test.mjs test/capabilities.test.mjs test/bindings.test.mjs test/no-darkroom.test.mjs test/authorization-law.test.mjs test/git-key-scope.test.mjs test/owner-only-admission.test.mjs && node --import tsx --test test/authorization.test.ts test/page-capabilities.test.mjs test/approval-page.test.mjs test/approval-native-control.test.mjs test/approval-handoff.test.mjs test/grant-consent-fixture.test.mjs test/external-app.test.mjs test/retired-frame-binding.test.mjs test/machine-link/home.test.mjs test/machine-link/enrollment.test.ts test/machine-link/fences.test.ts test/machine-link/audience.test.ts test/machine-link/presence.test.ts test/machine-link/client.test.ts test/machine-link/delivery.test.ts test/machine-link/custody.test.ts test/machine-link/replay-capacity.test.ts && node --test test/app-build-contract.test.mjs test/captured-app.test.mjs && node test/agents.mjs && node --test test/agent-mcp-servers.test.mjs && node test/git-transport.mjs && node --test test/artifacts-git.test.mjs test/git-credential-reuse.test.mjs && node --import tsx --test test/invocation-race.test.ts && node --import tsx test/git-admission.mjs && node --import tsx --test test/root-data.test.ts && node --test test/root-host.test.mjs test/page-lifetime.test.mjs test/registry-replacement.test.mjs test/installation-commit-race.test.mjs && node --import tsx --test test/older-oyster-store.test.mjs && node --import tsx --test test/tenant-scope.test.mjs test/tenant-host.test.mjs test/tenant-principal.test.mjs && vitest run --config vitest.tenancy-node.config.mjs && vitest run --config vitest.tenancy-cloudflare.config.mjs && vitest run --config vitest.tenancy-cloudflare-eviction.config.mjs && vitest run --config vitest.tenancy-cold-directory.config.mjs && pnpm run test:web && pnpm run test:standalone",
     "lint": "eslint src test examples --max-warnings=0 && oxlint --config ../../oxlint.config.ts --deny-warnings src test examples",
     "format:check": "node ../../tooling/repository/scripts/format-package-check.mjs",
     "lint:anti-slop": "node ../../tooling/repository/scripts/lint-package-anti-slop.mjs",
@@ -320,6 +324,7 @@
     "stranger": "tsx ../../tooling/repository/src/artifacts/cli.ts --repo-root ../.. .",
     "test:packed-native": "node --import tsx test/stranger/qualify-packed.mjs",
     "test:background-replay": "node test/background-replay.native.mjs",
+    "test:web": "vitest run --reporter=default --config vitest.web.config.mjs",
     "test:standalone": "vitest run --config vitest.standalone.config.mjs && node --import tsx --test test/standalone/agent-caller.test.mjs test/standalone/workers-media.test.mjs test/standalone/workers-computer.test.mjs test/standalone/workflow-git-pass-frame.test.mjs test/standalone/webhook-abuse.test.mjs test/standalone/webhook-custody.test.mjs test/standalone/webhook-ingress.test.mjs test/standalone/workers-workflows.test.mjs test/standalone/workflow-provider.test.mjs test/standalone/standalone-tenancy.test.mjs test/standalone/standalone-registry.test.mjs && node --import tsx test/standalone/agent-key-access.proof.mjs",
     "test:visitor-edge-browser": "node test/standalone/visitor-edge.browser.mjs",
     "test:source-builds": "node test/source-distribution-build.native.mjs",
@@ -339,14 +344,16 @@
     "test:app-fork": "node --import tsx test/standalone/app-fork.native.mjs",
     "test:landed-push": "node --import tsx test/standalone/landed-push.native.mjs",
     "test:computer-egress": "node --import tsx test/standalone/computer-egress.native.mjs",
+    "test:model-keys-browser": "bash ../../tooling/proof-runner/run-proof.sh node --import tsx test/standalone/model-keys.browser.mjs",
     "test:computer-egress-browser": "bash ../../tooling/proof-runner/run-proof.sh node --import tsx test/standalone/computer-egress.browser.mjs",
-    "test:nightly": "pnpm run test:background-replay && pnpm run test:git-door && pnpm run test:approval-wake:celld && pnpm run test:recovery-copy:celld && pnpm run test:standalone:celld && pnpm run test:storage-backend:celld && pnpm run test:mcp-owner:celld && pnpm run test:mcp-computer && pnpm run test:mcp-fleet && pnpm run test:agents && pnpm run test:app-fork && pnpm run test:landed-push && pnpm run test:loader-workflows && pnpm run test:seed-demo && pnpm run test:shell-entry && pnpm run test:page-launch && pnpm run test:visitor-edge-browser && pnpm run test:boot-browser && pnpm run test:grant-consent && pnpm run test:grant-consent:native && pnpm run test:source-builds && pnpm run test:packed-native && pnpm run test:workflows && pnpm run test:computer-egress && pnpm run test:computer-egress-browser",
+    "test:nightly": "pnpm run test:background-replay && pnpm run test:git-door && pnpm run test:approval-wake:celld && pnpm run test:recovery-copy:celld && pnpm run test:standalone:celld && pnpm run test:storage-backend:celld && pnpm run test:mcp-owner:celld && pnpm run test:mcp-computer && pnpm run test:mcp-fleet && pnpm run test:local-backend && pnpm run test:agents && pnpm run test:app-fork && pnpm run test:landed-push && pnpm run test:loader-workflows && pnpm run test:seed-demo && pnpm run test:shell-entry && pnpm run test:page-launch && pnpm run test:visitor-edge-browser && pnpm run test:boot-browser && pnpm run test:grant-consent && pnpm run test:grant-consent:native && pnpm run test:source-builds && pnpm run test:packed-native && pnpm run test:workflows && pnpm run test:computer-egress && pnpm run test:computer-egress-browser",
     "test:loader-workflows": "node --import tsx test/standalone/loader-workflows.native.mjs",
     "test:workflows": "node --import tsx test/standalone/workflows.native.mjs",
     "test:agents": "node test/standalone/agents-sandbox.native.mjs && node test/standalone/agent-model-choice.native.mjs",
     "proof:agent-browser": "node test/standalone/agent-browser.native.mjs",
     "test:mcp-computer": "node test/standalone/mcp-computer.native.mjs",
     "test:mcp-fleet": "node test/standalone/mcp-fleet.native.mjs",
+    "test:local-backend": "node test/standalone/local-backend.native.mjs",
     "capture:tourtois-home": "node test/standalone/tourtois-home.browser.mjs",
     "capture:shell-fork": "OYSTER_PROOF_SHELL_FORK=1 node test/standalone/tourtois-home.browser.mjs",
     "capture:gills": "OYSTER_PROOF_GILLS=1 node --import tsx test/standalone/tourtois-home.browser.mjs",
@@ -396,6 +403,7 @@
     "@pnpm/lockfile.fs": "1100.2.13",
     "@pnpm/lockfile.pruner": "1100.0.27",
     "effect": "4.0.2",
+    "entities": "8.0.0",
     "esbuild": "0.28.2",
     "eventsource": "5.1.1",
     "hono": "4.13.5",

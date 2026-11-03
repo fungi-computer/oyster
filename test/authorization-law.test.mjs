@@ -708,6 +708,7 @@ test("every host /api route's owner reach is classified", async () => {
     "PUT /api/computers/selected direct-or-app",
     "POST /api/agents/:agentId/computers/:operation direct-or-app",
     "POST /api/installations/:installationId/workflows/webhooks direct-or-app",
+    "GET /api/agent-models direct",
     "GET /api/agent-models/:agentId direct",
     "PUT /api/agent-models/:agentId direct",
     "GET /api/agent-policies/:agentId direct",
@@ -715,6 +716,9 @@ test("every host /api route's owner reach is classified", async () => {
     "GET /api/agent-mcp-servers direct",
     "POST /api/agent-mcp-servers/:agentId direct",
     "DELETE /api/agent-mcp-servers/:agentId/:serverId direct",
+    "GET /api/model-keys direct",
+    "POST /api/model-keys direct",
+    "DELETE /api/model-keys/:keyId direct",
     "GET /api/workbench/directory direct-or-app",
     "ALL /api/workbench/storage/:installationId/:operation direct-or-app",
     "GET /api/installations direct-or-app",
@@ -1063,6 +1067,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
   const top = serveDoors(
     standaloneWorkerRoutes({
       machineLink: async () => new Response("link"),
+      localBackendDial: async () => new Response("dial"),
       workflowWebhooks: standaloneWorkflowWebhookRoutes(
         { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
         async () => null,
@@ -1082,9 +1087,10 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
       });
       assert.equal(response.status, 404, path);
     }
-  // The Worker's own /api doors are exactly the signed and device doors.
+  // The Worker's own /api doors are exactly the signed, attached-machine and device doors.
   const doors = standaloneWorkerRoutes({
     machineLink: async () => new Response("link"),
+    localBackendDial: async () => new Response("dial"),
     workflowWebhooks: standaloneWorkflowWebhookRoutes(
       { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
       async () => null,
@@ -1096,6 +1102,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
     .map((route) => [route.path, route.requirement.kind]);
   assert.deepEqual(doors, [
     ["/api/teams/:teamId/local/mesh/:deviceId/connect", "door"],
+    ["/api/computers/:computerId/backends/:backendId/connect", "door"],
     [
       "/api/installations/:installationId/workflows/webhooks/:bindingId",
       "door",

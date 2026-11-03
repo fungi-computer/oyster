@@ -1,6 +1,6 @@
 /**
  * The standalone Worker's top-level table, before any tenant is selected:
- * device enrollment and links, signed Workflow webhook delivery, then the
+ * device enrollment and links, attached-machine dials, signed Workflow webhook delivery, then the
  * selected tenant's own declared host table for every other path. The Worker
  * and the authorization law both compose it here.
  */
@@ -11,6 +11,8 @@ import { door, routes, type Routes } from "../authorization.js";
 export type StandaloneWorkerRoutePorts = Readonly<{
   /** The machine-link doors' own table, served for this request. */
   machineLink: (request: Request) => Promise<Response>;
+  /** A machine's signed dial to its attached Computer, verified by that Computer. */
+  localBackendDial: (request: Request) => Promise<Response>;
   /** Signed Workflow webhook delivery, verified by the library's run owner. */
   workflowWebhooks: Routes<BlankEnv>;
   /** The selected tenant's declared host table. */
@@ -31,6 +33,13 @@ export function standaloneWorkerRoutes(
       "/api/teams/:teamId/local/mesh/:deviceId/connect",
       door("a machine link; the device's link verifies Seam"),
       (context) => ports.machineLink(context.req.raw),
+    )
+    .all(
+      "/api/computers/:computerId/backends/:backendId/connect",
+      door(
+        "an attached machine's dial; the Computer verifies its Seam signature",
+      ),
+      (context) => ports.localBackendDial(context.req.raw),
     )
     .include(ports.workflowWebhooks)
     .all(

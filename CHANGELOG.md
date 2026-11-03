@@ -1,5 +1,54 @@
 # @fungi.computer/oyster
 
+## 0.10.0
+
+### Minor Changes
+
+- Changes since 0.9.0:
+
+  - fix(oyster): load agent connections on first use
+  - feat(oyster): serve agent servers through veil connections
+  - fix(oyster): wait for Workflow publication's outcome, not a 15s guess
+  - fix(oyster): make model-key test fixtures obviously fake
+  - fix(oyster): load the Workers sockets door only when a page is read
+  - feat(oyster): move agent web tools into Oyster; standalone gets web and
+    saves
+  - fix(oyster): declare the model-key routes and keep route law clean
+  - feat(oyster): bring your own model key on standalone Oyster
+  - feat(oyster): attach a local folder to a standalone Oyster Computer
+  - fix(oyster): fence approvals on canonical caller facts, not the raw
+    principal
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/burrow@0.2.1
+  - @fungi.computer/caps@0.7.1
+  - @fungi.computer/computer@0.6.0
+  - @fungi.computer/gills@0.2.1
+  - @fungi.computer/mycelium@0.3.4
+  - @fungi.computer/veil@0.4.0
+  - @fungi.computer/braid@0.4.3
+  - @fungi.computer/carrier@0.2.1
+  - @fungi.computer/shiitake-extensions@0.6.3
+  - @fungi.computer/agar@0.7.1
+  - @fungi.computer/nacre@0.1.4
+  - @fungi.computer/puffball@0.5.1
+  - @fungi.computer/shiitake@0.9.2
+  - @fungi.computer/knapsack@0.4.5
+  - @fungi.computer/workflows-wire@0.4.3
+  - @fungi.computer/bird-dog@0.3.2
+  - @fungi.computer/seam@0.2.1
+  - @fungi.computer/darkroom@0.5.1
+  - @fungi.computer/forage@0.3.1
+  - @fungi.computer/zookeeper@0.0.10
+  - @fungi.computer/computer-contract@0.0.10
+
 ## 0.9.0
 
 ### Minor Changes

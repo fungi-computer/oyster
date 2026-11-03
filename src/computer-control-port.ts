@@ -3,7 +3,11 @@ import type {
   computerCreateRequestSchema,
   computerPageSchema,
 } from "@fungi.computer/computer/fleet/inventory-wire";
-import type { computerStateSchema } from "@fungi.computer/computer/fleet/wire";
+import type {
+  computerBackendViewSchema,
+  computerStateSchema,
+  LocalBackendAttachInput,
+} from "@fungi.computer/computer/fleet/wire";
 import type { teamComputerDirectorySchema } from "@fungi.computer/nacre/workbench";
 import type { InvocationContext } from "@fungi.computer/mycelium";
 
@@ -33,5 +37,26 @@ export type ComputerControlPort = Readonly<{
   ): Promise<
     | { kind: "created"; computer: { computerId: string; name: string } }
     | { kind: "uncertain" | "denied" | "conflict" | "invalid" }
+  >;
+  /** List one Computer's attached execution backends with live status. */
+  backends(
+    computerId: string,
+    context: InvocationContext,
+  ): Promise<z.output<typeof computerBackendViewSchema>[]>;
+  /** Attach the caller's machine, or replay the same request. */
+  attachLocal(
+    input: LocalBackendAttachInput,
+    context: InvocationContext,
+  ): Promise<
+    | { kind: "attached"; backendId: string }
+    | { kind: "uncertain" | "denied" | "conflict" | "invalid" }
+  >;
+  /** Detach a machine the caller attached; one already gone settles. */
+  detachLocal(
+    input: Readonly<{ computerId: string; backendId: string }>,
+    context: InvocationContext,
+  ): Promise<
+    | { kind: "detached"; detached: boolean }
+    | { kind: "denied" | "uncertain" | "invalid" }
   >;
 }>;

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  computerBackendViewSchema,
   computerStateSchema,
   type FleetComputer,
 } from "@fungi.computer/computer/fleet";
@@ -20,6 +21,28 @@ const inventoryPage = z.strictObject({
 const inventoryError = z.strictObject({
   error: z.string(),
 });
+const backendList = z.strictObject({
+  backends: z.array(computerBackendViewSchema),
+});
+const attachedBackend = z.strictObject({ backendId: z.string() });
+const detachedBackend = z.strictObject({ detached: z.boolean() });
+
+/** A typed refusal from the owner-admitted fleet, as the MCP result kinds. */
+function refusedKind(
+  result: unknown,
+): "denied" | "conflict" | "invalid" | undefined {
+  const error = inventoryError.safeParse(result);
+  if (!error.success) return undefined;
+  switch (error.data.error) {
+    case "request_conflict":
+      return "conflict";
+    case "invalid":
+    case "not_enabled":
+      return "invalid";
+    default:
+      return "denied";
+  }
+}
 
 /** MCP control speaks to the same owner-admitted durable fleet as HTTP. */
 export function standaloneComputerControl(
@@ -78,6 +101,36 @@ export function standaloneComputerControl(
         kind: "created",
         computer: { computerId: computer.computerId, name: computer.name },
       };
+    },
+    backends: async (computerId) =>
+      backendList.parse(
+        available(await fleet({ operation: "backends", computerId })),
+      ).backends,
+    attachLocal: async (input) => {
+      let result: unknown;
+      try {
+        result = await fleet({ operation: "attach-local", request: input });
+      } catch {
+        // The attachment may have committed; the caller retries its requestId.
+        return { kind: "uncertain" };
+      }
+      if (result === null) return { kind: "denied" };
+      const refused = refusedKind(result);
+      if (refused !== undefined) return { kind: refused };
+      return { kind: "attached", ...attachedBackend.parse(result) };
+    },
+    detachLocal: async (input) => {
+      let result: unknown;
+      try {
+        result = await fleet({ operation: "detach-local", request: input });
+      } catch {
+        return { kind: "uncertain" };
+      }
+      if (result === null) return { kind: "denied" };
+      const refused = refusedKind(result);
+      if (refused === "conflict") return { kind: "uncertain" };
+      if (refused !== undefined) return { kind: refused };
+      return { kind: "detached", ...detachedBackend.parse(result) };
     },
   };
 }

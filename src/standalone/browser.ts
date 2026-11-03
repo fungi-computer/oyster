@@ -6,6 +6,7 @@ import {
   type Browser,
   type BrowserBinding,
   type BrowserMeter,
+  type SaveBrowserFile,
 } from "../browser/index.js";
 import { causeClass } from "../cause-class.js";
 
@@ -60,11 +61,13 @@ function standaloneBrowser(binding: BrowserBinding): Browser {
 /**
  * The agent's `cloudBrowser` tool on a standalone Oyster, or an empty source
  * when the deployment declares no BROWSER binding. Driven sessions only: no
- * Quick Reads, no Computer save, no member handoff on this host.
+ * Quick Reads and no member handoff on this host. Screenshots and PDFs save
+ * to an attached Computer through `saveFile`.
  */
 export function standaloneBrowserSource(
   binding: BrowserBinding | undefined,
   identity: () => Readonly<{ teamId: string; agentId: string }>,
+  saveFile: SaveBrowserFile,
 ): CapabilitySource {
   if (binding === undefined)
     return {
@@ -86,7 +89,7 @@ export function standaloneBrowserSource(
       },
     },
     quickReads: false,
-    saveFile: null,
+    saveFile,
     requestHandoff: null,
   });
 }

@@ -3,7 +3,8 @@
   // The same standalone Oyster for runtimes without the Artifacts binding
   // (celld): git goes to the Artifacts REST API. Pass ARTIFACTS_ACCOUNT_ID,
   // ARTIFACTS_NAMESPACE, ARTIFACTS_API_TOKEN, OYSTER_ORIGIN and
-  // OYSTER_OWNER_KEY as vars or secrets.
+  // OYSTER_OWNER_KEY as vars or secrets. Set OYSTER_CREDENTIAL_KEY (32 random
+  // bytes, base64url) as a secret to let the owner store model API keys.
   "name": "bonsai-celld",
   "main": "../examples/standalone/worker.ts",
   "compatibility_date": "2026-09-04",

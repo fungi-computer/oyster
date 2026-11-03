@@ -250,6 +250,10 @@ export abstract class StandaloneRegistry
           ),
         };
       }
+      case "backends":
+      case "attach-local":
+      case "detach-local":
+        return this.#machines(memberId, input);
       case "select": {
         const computer = this.#computers.read(input.computerId);
         if (computer === null) return null;
@@ -276,6 +280,47 @@ export abstract class StandaloneRegistry
           expiresAt: Date.now() + 60_000,
           provenance: { actor: memberId },
         });
+    }
+  }
+
+  /** Attached machines of one owned Computer; the Computer holds the rows. */
+  async #machines(
+    memberId: string,
+    input: Extract<
+      StandaloneFleetRequest,
+      { operation: "backends" | "attach-local" | "detach-local" }
+    >,
+  ) {
+    const computerId =
+      input.operation === "backends"
+        ? input.computerId
+        : input.request.computerId;
+    if (!this.ownsComputer(computerId)) return null;
+    const computer = this.#env.COMPUTER.getByName(computerId);
+    const authority = {
+      computerId,
+      actions: new Set<"backing">(["backing"]),
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: memberId },
+    };
+    switch (input.operation) {
+      case "backends":
+        // The RPC result is disposable; the registry returns plain data.
+        return {
+          backends: [...(await computer.readBackends(authority, memberId))],
+        };
+      case "attach-local":
+        return await computer.attachLocalBackend(
+          authority,
+          memberId,
+          input.request,
+        );
+      case "detach-local":
+        return await computer.detachLocalBackend(
+          authority,
+          memberId,
+          input.request,
+        );
     }
   }
 

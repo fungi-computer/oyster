@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
@@ -256,6 +257,146 @@ test("multiple Computers start independently on standalone and foreign grants wa
     }
   }
   assert.deepEqual(pushed, ["A", "B"]);
+});
+
+test("an owner attaches and detaches a machine on one Computer through the fleet", () => {
+  class AttachedComputer extends ComputerDO {
+    rebuilt = 0;
+    workspace() {
+      this.rebuilt += 1;
+      return {};
+    }
+  }
+  const database = new DatabaseSync(":memory:");
+  try {
+    const computer = new AttachedComputer(
+      { id: { name: "A" }, storage: fromNodeSqlite(database) },
+      {},
+    );
+    const grant = (overrides = {}) => ({
+      computerId: "A",
+      actions: new Set(["backing"]),
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: "owner" },
+      ...overrides,
+    });
+    const attach = {
+      computerId: "A",
+      publicKey: Buffer.alloc(32, 7).toString("base64"),
+      hostLabel: "Laptop",
+      folderLabel: "notes",
+      requestId: "local_attach_request_one",
+    };
+    assert.throws(
+      () =>
+        computer.attachLocalBackend(
+          grant({ computerId: "B" }),
+          "owner",
+          attach,
+        ),
+      FleetGrantRefused,
+    );
+    assert.throws(
+      () =>
+        computer.attachLocalBackend(
+          grant({ actions: new Set(["start"]) }),
+          "owner",
+          attach,
+        ),
+      FleetGrantRefused,
+    );
+    assert.deepEqual(
+      computer.readBackends(grant(), "owner").map((backend) => backend.kind),
+      ["platform-container"],
+    );
+    const attached = computer.attachLocalBackend(grant(), "owner", attach);
+    assert.match(attached.backendId, /^local-[a-z2-7]{16}$/);
+    assert.deepEqual(
+      computer.attachLocalBackend(grant(), "owner", attach),
+      attached,
+      "a replayed request returns the same backend",
+    );
+    assert.deepEqual(
+      computer.attachLocalBackend(grant(), "owner", {
+        ...attach,
+        folderLabel: "elsewhere",
+      }),
+      { error: "request_conflict" },
+    );
+    assert.deepEqual(computer.readBackends(grant(), "owner"), [
+      {
+        id: attached.backendId,
+        kind: "local",
+        status: "offline",
+        queuePosition: null,
+        hostId: null,
+        hostLabel: "Laptop",
+        folderLabel: "notes",
+        detachable: true,
+      },
+      {
+        id: "container",
+        kind: "platform-container",
+        status: "ready",
+        queuePosition: null,
+        hostId: null,
+        hostLabel: null,
+        folderLabel: null,
+        detachable: false,
+      },
+    ]);
+    assert.equal(
+      computer
+        .readBackends(grant(), "someone")
+        .find((backend) => backend.kind === "local")?.detachable,
+      false,
+    );
+    assert.deepEqual(
+      computer.detachLocalBackend(grant(), "someone", {
+        computerId: "A",
+        backendId: attached.backendId,
+      }),
+      { error: "not_owner" },
+    );
+    const detach = {
+      computerId: "A",
+      backendId: attached.backendId,
+    };
+    assert.deepEqual(computer.detachLocalBackend(grant(), "owner", detach), {
+      detached: true,
+    });
+    assert.deepEqual(
+      computer.detachLocalBackend(grant(), "owner", detach),
+      { detached: false },
+      "detaching one already gone settles",
+    );
+    assert.deepEqual(
+      computer.readBackends(grant(), "owner").map((backend) => backend.kind),
+      ["platform-container"],
+    );
+    assert.deepEqual(
+      computer.detachLocalBackend(grant(), "owner", {
+        computerId: "A",
+        requestId: "local_attach_request_two",
+      }),
+      { detached: false },
+    );
+    assert.deepEqual(
+      computer.attachLocalBackend(grant(), "owner", {
+        ...attach,
+        requestId: "local_attach_request_two",
+      }),
+      { error: "request_conflict" },
+      "a cancelled request cannot attach later",
+    );
+    assert.equal(
+      computer.rebuilt >= 2,
+      true,
+      "attach and detach rebuild the Workspace",
+    );
+  } finally {
+    database.close();
+  }
 });
 
 // Exercise the public Instance and real shared gate. Only the Worker Loader,

@@ -80,11 +80,15 @@ import {
   checkComputerGrant,
   computerActionSchema,
   computerGrantSchema,
+  ComputerBackingError,
   createFleetBacking,
   FleetGrantRefused,
   FleetLifecycle,
   type ComputerAction,
+  type ComputerBackendView,
   type ComputerGrant,
+  type LocalBackendAttachInput,
+  type LocalBackendDetachInput,
 } from "@fungi.computer/computer/fleet";
 import { AppInstanceError, selectionOf } from "../index.js";
 import { type FrameBindingMethods } from "../cloudflare.js";
@@ -316,6 +320,11 @@ export type StandaloneAgentComputerRpc = ComputerFilesRpc &
       authority: ComputerGrant,
       input: z.output<typeof patchInputSchema>,
     ): Promise<z.output<typeof patchOutputSchema>>;
+    fileWrite(
+      authority: ComputerGrant,
+      path: string,
+      bytes: Uint8Array,
+    ): Promise<void>;
   }>;
 
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
@@ -378,6 +387,78 @@ export class ComputerDO
       this.#id(),
       z.array(hostedBackingSchema).parse(backings),
     ).backends;
+  }
+
+  /**
+   * The attached set changed in storage: rebuild the Workspace now, so a
+   * detached machine's live connection closes before the control returns.
+   */
+  #attachedSetChanged(): void {
+    this.#backends = undefined;
+    this.workspace();
+  }
+
+  /** The owner's attached backends with live status. Reads wake nothing. */
+  readBackends(authority: ComputerGrant, actor: string): ComputerBackendView[] {
+    this.#accept(authority, "backing");
+    // Describing first gives a never-used Computer its creation record.
+    const described = this.describeBackends();
+    const owners = createFleetBacking(this.state.storage).localOwners(
+      this.#id(),
+    );
+    return described.map((backend) => ({
+      id: backend.id,
+      kind: backend.kind,
+      status: backend.status,
+      queuePosition: null,
+      hostId: backend.hostId ?? null,
+      hostLabel: backend.hostLabel ?? null,
+      folderLabel: backend.folderLabel ?? null,
+      detachable: owners.get(backend.id) === actor,
+    }));
+  }
+
+  /** Attach the owner's machine; a replay of the same request returns it. */
+  attachLocalBackend(
+    authority: ComputerGrant,
+    actor: string,
+    input: LocalBackendAttachInput,
+  ) {
+    this.#accept(authority, "backing");
+    // The default Computer gains its creation record on first read.
+    this.attachedBackends();
+    try {
+      const result = createFleetBacking(this.state.storage).attachLocal(actor, {
+        ...input,
+        computerId: this.#id(),
+      });
+      this.#attachedSetChanged();
+      return { backendId: result.backendId };
+    } catch (cause) {
+      if (cause instanceof ComputerBackingError) return { error: cause.code };
+      throw cause;
+    }
+  }
+
+  /** Detach the owner's machine and close its live connection. */
+  detachLocalBackend(
+    authority: ComputerGrant,
+    actor: string,
+    input: LocalBackendDetachInput,
+  ) {
+    this.#accept(authority, "backing");
+    this.attachedBackends();
+    try {
+      const result = createFleetBacking(this.state.storage).detachLocal(actor, {
+        ...input,
+        computerId: this.#id(),
+      });
+      this.#attachedSetChanged();
+      return { detached: result.detached };
+    } catch (cause) {
+      if (cause instanceof ComputerBackingError) return { error: cause.code };
+      throw cause;
+    }
   }
 
   /** An admitted fleet control starts exactly this Computer's hosted backend. */
