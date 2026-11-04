@@ -310,6 +310,25 @@ export function createChannelVisitors(
     };
   };
 
+  /**
+   * Whether this visitor may still be served: not revoked and holding an
+   * unexpired access token. A host that does not keep the bearer asks this at
+   * every stream beat, so revocation ends a stream without the token.
+   */
+  const live = (bindingId: string, visitorId: string): boolean => {
+    ensure();
+    return (
+      sql
+        .exec(
+          "SELECT 1 FROM hub_channel_visitors v WHERE v.visitor_id=? AND v.binding_id=? AND v.revoked=0 AND EXISTS (SELECT 1 FROM hub_channel_visitor_tokens t WHERE t.visitor_id=v.visitor_id AND t.kind='access' AND t.expires_at>?)",
+          visitorId,
+          bindingId,
+          options.now(),
+        )
+        .toArray().length > 0
+    );
+  };
+
   /** Revoke a swept visitor and drop its token hashes. */
   const forget = (visitorId: string) => {
     ensure();
@@ -325,7 +344,21 @@ export function createChannelVisitors(
     });
   };
 
-  return { ensure, mint, refresh, authenticate, forget };
+  /** Revoke the old identity before issuing a replacement on this binding. */
+  const rotate = async (
+    binding: ConversationBinding | null,
+    siteKey: string,
+    token: string,
+    addressHash: string,
+  ): Promise<VisitorGrant | Readonly<{ kind: "unauthorized" }>> => {
+    if (binding === null) return { kind: "unauthorized" };
+    const visitor = await authenticate(binding.bindingId, token);
+    if (visitor === null) return { kind: "unauthorized" };
+    forget(visitor.visitorId);
+    return mint(binding, siteKey, addressHash);
+  };
+
+  return { ensure, mint, refresh, authenticate, live, forget, rotate };
 }
 /** Anonymous visitor identity owner. */
 export type ChannelVisitors = ReturnType<typeof createChannelVisitors>;

@@ -16,6 +16,10 @@ import type {
 import { visitorBearerSchema, type VisitorGrant } from "./visitors.js";
 import { visitorRequestSchema } from "./visitor-request.js";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
+import {
+  verifyTurnstileToken,
+  type TurnstileConfiguration,
+} from "../turnstile.js";
 
 /**
  * The public web-channel edge. The host owns address lookup, visitor identity
@@ -31,6 +35,9 @@ const messageSchema = visitorRequestSchema.extend({
   text: z.string().trim().min(1).max(16_000),
 });
 const refreshSchema = z.strictObject({ refreshSecret: visitorBearerSchema });
+const mintSchema = z.strictObject({
+  turnstileToken: z.string().min(1).max(2048).optional(),
+});
 const sessionReadSchema = z
   .strictObject({
     limit: z.number().int().min(1).max(200).optional(),
@@ -49,12 +56,27 @@ const decodeJson = Schema.decodeUnknownOption(
 /** Public address facts the host supplies after looking up an embed site. */
 export type VisitorSiteAddress = Readonly<{ bindingId: string }>;
 /** Embed-safe site chrome returned by the host after binding admission. */
-export type VisitorSiteFacts = Readonly<{
+export type VisitorSiteFacts = {
   accent?: string;
   name: string;
   avatar: Avatar;
   origins: readonly string[];
+  /** The owner requires a Turnstile check before this site mints a visitor. */
+  turnstile?: boolean;
+};
+
+/** How a host checks a site's Turnstile requirement; read per request. */
+export type VisitorTurnstile = Readonly<{
+  configuration: TurnstileConfiguration;
+  timeoutMs: number;
+  onError: (cause: unknown) => void;
 }>;
+
+// An edge-local type marker, not a wire credential. Only authentication here
+// constructs it; the Agent verifies a separate HMAC after DO RPC cloning.
+const verifiedByVisitorEdge = Symbol("oyster.edge-authenticated");
+export type EdgeVerifiedVisitor<V extends object> = V &
+  Readonly<{ [verifiedByVisitorEdge]: true }>;
 
 /** An opened host door, disposed after the edge has returned a response. */
 export type VisitorEdgeChannel = Readonly<{
@@ -154,9 +176,11 @@ export type VisitorEdgeHost<
   openChannel: (
     context: Context<E>,
     site: Site,
-    visitor: Visitor,
+    visitor: EdgeVerifiedVisitor<Visitor>,
   ) => Promise<VisitorEdgeChannel>;
   addressHash: (context: Context<E>) => Promise<string>;
+  /** Host-owned Turnstile configuration, applied to sites that require it. */
+  turnstile: (context: Context<E>) => VisitorTurnstile;
   assetPath: (kind: "widget" | "styles") => string;
   onError: (error: Error, context: Context<E>) => Response | Promise<Response>;
 }>;
@@ -174,6 +198,9 @@ const DENIAL_STATUS = {
   event_conflict: 409,
   refresh_invalid: 401,
   refresh_reused: 401,
+  turnstile_required: 400,
+  turnstile_failed: 403,
+  turnstile_unavailable: 503,
 } as const;
 
 function denied(reason: keyof typeof DENIAL_STATUS): Response {
@@ -223,6 +250,7 @@ async function embedDocument(
   siteKey: string,
   facts: Readonly<{ accent?: string; name: string; avatar: Avatar }>,
   assets: (kind: "widget" | "styles") => string,
+  turnstileSiteKey: string | null,
 ): Promise<string> {
   return (
     await html`<!doctype html>
@@ -241,11 +269,34 @@ async function embedDocument(
             data-accent="${facts.accent ?? ""}"
             data-name="${facts.name}"
             data-avatar="${JSON.stringify(facts.avatar)}"
+            data-turnstile-site="${turnstileSiteKey ?? ""}"
           ></div>
           <script type="module" src="${assets("widget")}"></script>
         </body>
       </html>`
   ).toString();
+}
+
+/** The reason a Turnstile-protected mint is refused, or null when it may go on. */
+async function refuseWithoutTurnstile(
+  turnstile: VisitorTurnstile,
+  token: string | undefined,
+  remoteIp: string | undefined,
+): Promise<
+  "turnstile_required" | "turnstile_failed" | "turnstile_unavailable" | null
+> {
+  const { configuration } = turnstile;
+  if (configuration.kind === "disabled") return null;
+  if (configuration.kind === "misconfigured") return "turnstile_unavailable";
+  if (token === undefined) return "turnstile_required";
+  const verdict = await verifyTurnstileToken(
+    remoteIp === undefined
+      ? { secretKey: configuration.secretKey, token }
+      : { secretKey: configuration.secretKey, token, remoteIp },
+    { timeoutMs: turnstile.timeoutMs, onError: turnstile.onError },
+  );
+  if (verdict === "passed") return null;
+  return verdict === "failed" ? "turnstile_failed" : "turnstile_unavailable";
 }
 
 export function createVisitorEdge<
@@ -266,7 +317,11 @@ export function createVisitorEdge<
   ): Promise<VisitorEdgeChannel | null> {
     const visitor = await host.authenticateVisitor(context, site, token);
     if (visitor === null) return null;
-    return host.openChannel(context, site, visitor);
+    const verified: EdgeVerifiedVisitor<Visitor> = {
+      ...visitor,
+      [verifiedByVisitorEdge]: true,
+    };
+    return host.openChannel(context, site, verified);
   }
 
   return new Hono<E>()
@@ -281,25 +336,41 @@ export function createVisitorEdge<
         siteKey,
       });
       if (facts === null) return context.text("Not found", 404);
-      return new Response(await embedDocument(siteKey, facts, host.assetPath), {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store",
-          "referrer-policy": "no-referrer",
-          "x-content-type-options": "nosniff",
-          "content-security-policy": [
-            "default-src 'none'",
-            "script-src 'self'",
-            "style-src 'self'",
-            "font-src 'self'",
-            "img-src 'self' data:",
-            "connect-src 'self'",
-            "base-uri 'none'",
-            "form-action 'none'",
-            `frame-ancestors ${frameAncestors(facts.origins) || "'none'"}`,
-          ].join("; "),
+      const challenge = host.turnstile(context).configuration;
+      const turnstileSiteKey =
+        facts.turnstile === true && challenge.kind === "enabled"
+          ? challenge.siteKey
+          : null;
+      const challengeOrigin = "https://challenges.cloudflare.com";
+      return new Response(
+        await embedDocument(siteKey, facts, host.assetPath, turnstileSiteKey),
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+            "x-content-type-options": "nosniff",
+            "content-security-policy": [
+              "default-src 'none'",
+              turnstileSiteKey === null
+                ? "script-src 'self'"
+                : `script-src 'self' ${challengeOrigin}`,
+              "style-src 'self'",
+              "font-src 'self'",
+              "img-src 'self' data:",
+              turnstileSiteKey === null
+                ? "connect-src 'self'"
+                : `connect-src 'self' ${challengeOrigin}`,
+              ...(turnstileSiteKey === null
+                ? []
+                : [`frame-src ${challengeOrigin}`]),
+              "base-uri 'none'",
+              "form-action 'none'",
+              `frame-ancestors ${frameAncestors(facts.origins) || "'none'"}`,
+            ].join("; "),
+          },
         },
-      });
+      );
     })
     .get("/api/embed/v1/sites/:siteKey/theme", async (context) => {
       // Public chrome and an advisory address check. CSP still admits the frame.
@@ -337,7 +408,28 @@ export function createVisitorEdge<
       const hash = await host.addressHash(context);
       const site = await route(context);
       if (site === null) return denied("unmapped");
+      const raw = await context.req.text();
+      if (raw.length > 4_096) return denied("too_long");
+      const json = raw === "" ? Option.some({}) : decodeJson(raw);
+      const body = Option.isNone(json)
+        ? null
+        : mintSchema.safeParse(json.value);
+      if (body?.success !== true)
+        return context.json({ error: "invalid_input" }, 400);
       using channels = await host.openSite(context, site);
+      const facts = await channels.readChannelSite({
+        bindingId: site.bindingId,
+        siteKey: context.req.param("siteKey"),
+      });
+      // An unreadable site is refused by the mint itself, with its own reason.
+      if (facts?.turnstile === true) {
+        const refusal = await refuseWithoutTurnstile(
+          host.turnstile(context),
+          body.data.turnstileToken,
+          context.req.header("cf-connecting-ip"),
+        );
+        if (refusal !== null) return denied(refusal);
+      }
       const grant = await channels.mintChannelVisitor({
         bindingId: site.bindingId,
         siteKey: context.req.param("siteKey"),

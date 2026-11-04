@@ -59,6 +59,11 @@ const edge = createVisitorEdge({
     });
   },
   addressHash: () => Promise.resolve("not used"),
+  turnstile: () => ({
+    configuration: { kind: "disabled" },
+    timeoutMs: 1000,
+    onError: () => undefined,
+  }),
   assetPath: (kind) => `/${kind}`,
   onError: (error) => {
     throw error;

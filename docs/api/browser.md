@@ -693,6 +693,21 @@ The agent-facing slice of `Browser`, possibly behind a host RPC hop.
 
 ---
 
+### BrowserHandoffPorts
+
+```ts
+type BrowserHandoffPorts = Readonly<{
+  channel: ((sessionId, reason) => boolean) | null;
+  viewPath: (owner, leaseId) => string;
+}>;
+```
+
+How a host hands a paused lease to a person. A channel Session (a website
+visitor) takes the conversation handoff; every other Session gets the live view
+and asks the person itself.
+
+---
+
 ### CdpSocket
 
 ```ts
@@ -765,6 +780,55 @@ idea which Team or Session owns one. This registry is in-process (one Hub
 instance): see the report for why a durable, cross-instance counter (the
 `TeamDO`-backed shape Computer admission uses) is the better home for this
 long-term.
+
+---
+
+### LiveViewDoor
+
+```ts
+type LiveViewDoor = (action, signal) => Promise<BinaryResult | null>;
+```
+
+One admitted viewer's door into one lease: `Browser.member` already bound to it.
+
+#### Parameters
+
+| Parameter | Type                                          |
+| --------- | --------------------------------------------- |
+| `action`  | [`BrowserMemberAction`](#browsermemberaction) |
+| `signal`  | `AbortSignal`                                 |
+
+#### Returns
+
+`Promise`\<[`BinaryResult`](#binaryresult) \| `null`\>
+
+---
+
+### LiveViewPaths
+
+```ts
+type LiveViewPaths = Readonly<{
+  view: string;
+  frame: string;
+  input: string;
+}>;
+```
+
+The three paths a host serves for one lease, relative to its own origin.
+
+---
+
+### LiveView
+
+```ts
+type LiveView = Readonly<{
+  page: () => Response;
+  frame: (signal) => Promise<Response>;
+  input: (request, signal) => Promise<Response>;
+}>;
+```
+
+The handlers for one lease's view, frame and input routes.
 
 ---
 
@@ -1118,7 +1182,7 @@ const CLOUD_BROWSER_DESCRIPTIONS: Readonly<{
   scroll: "Scroll an open session's page by a pixel delta.";
   screenshot: "Capture a PNG screenshot of an open session's page and save it to a Computer path; returns the saved byte count, never the bytes.";
   pdf: "Render an open session's page to PDF and save it to a Computer path; returns the saved byte count, never the bytes.";
-  handoff: "Ask a Team member to take over an open session for a login or captcha; a card appears in the conversation and the run continues once they finish.";
+  handoff: "Pause an open session so the person can take over for a login or captcha. In a channel conversation the owner is notified and takes over. Otherwise the result is {paused: true, view}: ask the person with the question tool, include the view link, and wait for their answer. They press Done in the view to resume; drive again only after that.";
   close: "End a driven session and release its lease.";
 }>;
 ```
@@ -1367,20 +1431,63 @@ function browserCapabilitySource(deps): CapabilitySource;
 
 Compose the `cloudBrowser` source for one Session, on either host. `browser` is
 the module's lease door (in-process, or the Hub's egress RPC); `saveFile` is the
-host's Computer bytes writer and `requestHandoff` its "needs you" card. A host
-without one passes `null` and the matching operations are not offered. A lease
-needs a Session identity, so a session-free host (e.g. the MCP execute path)
-gets no module at all.
+host's Computer bytes writer and `handoff` its "needs you" ports. A host without
+a Computer passes `null` for `saveFile` and that operation is not offered. A
+lease needs a Session identity, so a session-free host (e.g. the MCP execute
+path) gets no module at all.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                                                                        |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps`    | `Readonly`\<\{ `identity`: () => \| `Readonly`\<\{ `teamId`: `string`; `agentId`: `string`; \}\> \| `null`; `browser`: [`AgentBrowserDoor`](#agentbrowserdoor); `quickReads`: `boolean`; `saveFile`: [`SaveBrowserFile`](#savebrowserfile) \| `null`; `requestHandoff`: ((`sessionId`, `reason`) => `void`) \| `null`; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deps`    | `Readonly`\<\{ `identity`: () => \| `Readonly`\<\{ `teamId`: `string`; `agentId`: `string`; \}\> \| `null`; `browser`: [`AgentBrowserDoor`](#agentbrowserdoor); `quickReads`: `boolean`; `saveFile`: [`SaveBrowserFile`](#savebrowserfile) \| `null`; `handoff`: [`BrowserHandoffPorts`](#browserhandoffports); \}\> |
 
 #### Returns
 
 `CapabilitySource`
+
+---
+
+### liveViewPaths()
+
+```ts
+function liveViewPaths(base): LiveViewPaths;
+```
+
+The host-relative paths for a lease whose live view is served under `base`.
+
+#### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `base`    | `string` |
+
+#### Returns
+
+[`LiveViewPaths`](#liveviewpaths)
+
+---
+
+### liveView()
+
+```ts
+function liveView(door, paths, report): LiveView;
+```
+
+Build the handlers for one admitted viewer and lease. `report` receives a
+request body that did not decode, so the host can log it with its own sink.
+
+#### Parameters
+
+| Parameter | Type                              |
+| --------- | --------------------------------- |
+| `door`    | [`LiveViewDoor`](#liveviewdoor)   |
+| `paths`   | [`LiveViewPaths`](#liveviewpaths) |
+| `report`  | (`event`, `cause`) => `void`      |
+
+#### Returns
+
+[`LiveView`](#liveview)
 
 ---
 

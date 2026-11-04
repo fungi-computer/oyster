@@ -1,8 +1,11 @@
 import type { CapabilitySource } from "@fungi.computer/mycelium";
+import { match } from "path-to-regexp";
 import {
   bindingSessions,
   browserCapabilitySource,
   createBrowser,
+  liveView,
+  liveViewPaths,
   type Browser,
   type BrowserBinding,
   type BrowserMeter,
@@ -58,11 +61,18 @@ function standaloneBrowser(binding: BrowserBinding): Browser {
   return browser;
 }
 
+/** The owner-admitted live-view base for one Agent's lease (see `agents.ts`'s cloud-browser route). */
+function viewBase(agentId: string, leaseId: string): string {
+  return `/agents/${encodeURIComponent(agentId)}/cloud-browser/${encodeURIComponent(leaseId)}`;
+}
+
 /**
  * The agent's `cloudBrowser` tool on a standalone Oyster, or an empty source
  * when the deployment declares no BROWSER binding. Driven sessions only: no
- * Quick Reads and no member handoff on this host. Screenshots and PDFs save
- * to an attached Computer through `saveFile`.
+ * Quick Reads. `handoff` pauses the lease and returns the owner's live view;
+ * `channel` stays null until the host supplies a conversations owner, which
+ * is the seam a channel Session's conversation handoff plugs into. Screenshots
+ * and PDFs save to an attached Computer through `saveFile`.
  */
 export function standaloneBrowserSource(
   binding: BrowserBinding | undefined,
@@ -90,6 +100,55 @@ export function standaloneBrowserSource(
     },
     quickReads: false,
     saveFile,
-    requestHandoff: null,
+    handoff: {
+      channel: null,
+      viewPath: (owner, leaseId) =>
+        liveViewPaths(viewBase(owner.agentId, leaseId)).view,
+    },
   });
+}
+
+/**
+ * The Agent DO's side of the owner's live view. The browser singleton lives in
+ * this isolate, so the Worker's owner-admitted `/agents/:agentId/cloud-browser`
+ * route forwards here and this calls `Browser.member` on the Agent's own
+ * lease. Admission is the Worker's; this only serves already-admitted requests.
+ */
+export function standaloneBrowserLiveView(
+  binding: BrowserBinding | undefined,
+  identity: () => Readonly<{ teamId: string; agentId: string }>,
+): (request: Request) => Promise<Response> {
+  const route = match<{ leaseId: string; part: string }>(
+    "/cloud-browser/:leaseId/:part",
+  );
+  const handlers = (leaseId: string) => {
+    if (binding === undefined) return null;
+    const { teamId, agentId } = identity();
+    const browser = standaloneBrowser(binding);
+    return liveView(
+      (action, signal) => browser.member(teamId, leaseId, action, signal),
+      liveViewPaths(viewBase(agentId, leaseId)),
+      (event, cause) => {
+        console.warn("Oyster browser", {
+          kind: event,
+          cause: causeClass(cause),
+        });
+      },
+    );
+  };
+  const none = () => Response.json({ error: "no_browser" }, { status: 404 });
+  return (request) => {
+    const found = route(new URL(request.url).pathname);
+    if (found === false) return Promise.resolve(none());
+    const { leaseId, part } = found.params;
+    const view = handlers(leaseId);
+    if (view === null) return Promise.resolve(none());
+    if (part === "view" && request.method === "GET")
+      return Promise.resolve(view.page());
+    if (part === "frame" && request.method === "GET")
+      return view.frame(request.signal);
+    if (part === "input" && request.method === "POST")
+      return view.input(request, request.signal);
+    return Promise.resolve(none());
+  };
 }

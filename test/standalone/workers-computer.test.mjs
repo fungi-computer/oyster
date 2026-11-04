@@ -1086,10 +1086,19 @@ function fixture() {
   };
 }
 
+/** The approved grant the host dispatcher admits a Computer route under. */
+const computerGrant = {
+  capability: "computer.execute",
+  capabilityApproved: true,
+  operations: [],
+  resources: "tenant-scope",
+};
+
 /** The host's admission; these routes read only the principal from it. */
 const admitted = (principal) => ({
   principal,
   installation: { installationId: "computer-proof", status: "enabled" },
+  grant: computerGrant,
 });
 
 test("owner and key routes use the same fixed Computer as workspace files, ignoring guest selectors", async () => {
@@ -1365,7 +1374,11 @@ test("a canonical owner principal can request the frozen installation port previ
     { liveKey: keysLiveOf(env), appToolPolicy: () => null },
   );
   const ports = (principal) =>
-    routes.request("/ports", {}, { principal, installation });
+    routes.request(
+      "/ports",
+      {},
+      { principal, installation, grant: computerGrant },
+    );
   // Port previews stay owner-only even for an admitted key.
   const key = await ports({ actor: { kind: "team-key", keyId: "caller" } });
   assert.equal(key.status, 403);
@@ -2046,6 +2059,7 @@ test("the Computer owner issues port previews to the live canonical owner member
       {
         principal: { actor: { kind: "member", memberId }, role: "owner" },
         installation,
+        grant: computerGrant,
       },
     );
   const accepted = await portsRoute(owner.actor.memberId);

@@ -7,5 +7,10 @@
     "outDir": "../../dist"
   },
   "include": ["*.ts", "*.tsx"],
-  "exclude": ["main.tsx", "grant-consent.tsx"]
+  "exclude": [
+    "main.tsx",
+    "grant-consent.tsx",
+    "embed-loader.tsx",
+    "embed-widget.tsx"
+  ]
 }

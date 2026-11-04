@@ -710,15 +710,33 @@ assert.deepEqual(
   capabilities.flatMap(
     (capability) => capability.ownerDirect?.declarations() ?? [],
   ),
-  ["/agents", "/agents/:agentId/archive", "/agents/:agentId/unarchive"].map(
-    (path) => ({
+  [
+    ...[
+      "/agents",
+      "/agents/:agentId/archive",
+      "/agents/:agentId/unarchive",
+    ].map((path) => ({
       methods: ["POST"],
       path,
       requirement: { kind: "owner", via: "direct" },
-    }),
-  ),
+    })),
+    {
+      methods: ["GET", "POST"],
+      path: "/agents/:agentId/cloud-browser/*",
+      requirement: { kind: "owner", via: "direct" },
+    },
+  ],
 );
 for (const who of ["key", "member", "agent", "anonymous"]) {
+  assert.equal(
+    (
+      await direct("/agents/agent_1/cloud-browser/lease_1/view", who, {
+        method: "GET",
+      })
+    ).status,
+    who === "anonymous" ? 401 : 403,
+    "only the owner, directly, opens a browser live view",
+  );
   for (const operation of ["archive", "unarchive"]) {
     const response = await direct("/agents/agent_1/" + operation, who);
     assert.equal(response.status, who === "anonymous" ? 401 : 403, who);

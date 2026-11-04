@@ -1,11 +1,15 @@
 import { permissionCatalog } from "../apps/catalog.js";
 import * as Result from "effect/Result";
-import type { AppDeclaration } from "@fungi.computer/puffball/app";
+import type {
+  AppCapabilityId,
+  AppDeclaration,
+} from "@fungi.computer/puffball/app";
 import {
   applyInstallationCommand,
   deriveDeclaredOperations,
   type CapabilityOperationDescriptor,
   type Installation,
+  type ResourceRef,
 } from "../apps/index.js";
 
 /** Build fixture state through the same approval owner used by installation routes. */
@@ -16,6 +20,8 @@ export async function approvedInstallation(
     installationId: string;
     instanceId: Installation["instanceId"];
     descriptors?: readonly CapabilityOperationDescriptor[];
+    /** Narrow these capabilities to exactly these resources, as the owner's picker does. */
+    selected?: Partial<Record<AppCapabilityId, readonly ResourceRef[]>>;
   }>,
 ): Promise<Installation> {
   const result = applyInstallationCommand(
@@ -49,13 +55,21 @@ export async function approvedInstallation(
     input.declaration,
     input.descriptors ?? [],
   );
+  const selected = input.selected ?? {};
   const changes = declaredOperations.capabilities
-    .filter(({ capability }) => permissionCatalog[capability].consent === "ask")
+    .filter(
+      ({ capability }) =>
+        permissionCatalog[capability].consent === "ask" ||
+        selected[capability] !== undefined,
+    )
     .map(
       ({ capability, operations }) =>
         ({
           capability,
-          grant: { operations, resources: "tenant-scope" },
+          grant: {
+            operations,
+            resources: selected[capability] ?? "tenant-scope",
+          },
         }) satisfies import("../apps/installation.js").GrantChange,
     );
   if (changes.length === 0) return installed;

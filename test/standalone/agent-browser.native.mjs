@@ -155,6 +155,91 @@ try {
   console.log(
     "Standalone Oyster Agent browsed a real page through its BROWSER binding: PASS",
   );
+
+  // The "needs you" handoff: the Agent pauses the lease and gets a live view
+  // for the person; the owner views, clicks, types and presses Done.
+  const owner = { Authorization: `Bearer ${key}` };
+  const handoffResponse = await fetch(`${origin}/probe/handoff`, {
+    headers: owner,
+    signal: AbortSignal.timeout(120_000),
+  });
+  const handoffBody = await handoffResponse.text();
+  assert.equal(handoffResponse.status, 200, redact(handoffBody));
+  const handoffRun = JSON.parse(JSON.parse(handoffBody).probe);
+  const { agentId } = JSON.parse(handoffBody);
+  assert.equal(handoffRun.terminal.outcome, "completed");
+  const [handoffResult] = handoffRun.results;
+  assert.equal(
+    handoffResult.isError,
+    false,
+    JSON.stringify(handoffResult.content),
+  );
+  const handoff = JSON.parse(handoffResult.content[0].text);
+  assert.match(handoff.leaseId, /^lease_/);
+  const viewPath = `/agents/${agentId}/cloud-browser/${handoff.leaseId}`;
+  // Paused, not handed to a channel: the Agent gets the host's view path.
+  assert.deepEqual(handoff.handed, { paused: true, view: `${viewPath}/view` });
+  // A drive on the paused lease is refused and says what to do.
+  assert.match(handoff.whilePaused, /press Done/);
+
+  const view = (path, init = {}, headers = owner) =>
+    fetch(`${origin}${viewPath}${path}`, {
+      ...init,
+      headers: { ...headers, ...init.headers },
+      signal: AbortSignal.timeout(60_000),
+    });
+  const input = (body, headers) =>
+    view(
+      "/input",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      headers,
+    );
+  // Anonymous and foreign callers are refused on every view route.
+  for (const headers of [{}, { Authorization: "Bearer not-the-owner-key" }]) {
+    for (const response of [
+      await view("/view", {}, headers),
+      await view("/frame", {}, headers),
+      await input({ kind: "click", x: 1, y: 1 }, headers),
+    ])
+      assert.ok(
+        response.status === 401 || response.status === 403,
+        `view route admitted a non-owner (${String(response.status)})`,
+      );
+  }
+  const page = await view("/view");
+  const html = await page.text();
+  assert.equal(page.status, 200, redact(html));
+  assert.match(html, /Cloud browser/);
+  assert.doesNotMatch(html, new RegExp(key));
+  const frame = await view("/frame");
+  assert.equal(frame.status, 200);
+  assert.equal(frame.headers.get("content-type"), "image/png");
+  const png = new Uint8Array(await frame.arrayBuffer());
+  assert.deepEqual(Array.from(png.slice(1, 4)), [80, 78, 71]);
+  assert.equal((await input({ kind: "click", x: 20, y: 20 })).status, 200);
+  assert.equal((await input({ kind: "type", text: "hello" })).status, 200);
+  assert.equal((await input({ kind: "eval", code: "1" })).status, 400);
+  // Done resumes the lease, and the Agent's next drive succeeds.
+  assert.equal((await input({ kind: "resume" })).status, 200);
+  const driveResponse = await fetch(
+    `${origin}/probe/drive?agentId=${encodeURIComponent(agentId)}&leaseId=${encodeURIComponent(handoff.leaseId)}`,
+    { headers: owner, signal: AbortSignal.timeout(120_000) },
+  );
+  const driveBody = await driveResponse.text();
+  assert.equal(driveResponse.status, 200, redact(driveBody));
+  const driven = JSON.parse(JSON.parse(driveBody).probe);
+  assert.equal(driven.terminal.outcome, "completed");
+  assert.equal(driven.results[0].isError, false);
+  const after = JSON.parse(driven.results[0].content[0].text);
+  assert.match(after.tree, /Example Domain/);
+  assert.equal(after.closed, true);
+  console.log(
+    "Standalone Oyster Agent handed a page to its owner and resumed it: PASS",
+  );
 } finally {
   if (child) {
     child.kill("SIGTERM");

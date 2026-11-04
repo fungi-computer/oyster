@@ -59,6 +59,10 @@ import { serveDoors } from "../authorization.js";
 import { standaloneWorkerRoutes } from "./worker-routes.js";
 import { HTTPException } from "hono/http-exception";
 import { standaloneOwnerRoutes } from "./owner-routes.js";
+import {
+  standaloneWebsiteApp,
+  type StandaloneWebsiteEnv,
+} from "./website-channels.js";
 import { standaloneComputerSelection } from "./computer-fleet.js";
 import {
   serveOysterComputerEgress,
@@ -75,6 +79,7 @@ export type StandaloneEnv = OysterGitWorkerEnv &
   StandaloneTenancyEnv &
   StandaloneComputerEnv &
   StandaloneAgentsEnv &
+  StandaloneWebsiteEnv &
   StandaloneMachineLinkBindings &
   OysterMediaEnv &
   StandaloneWorkflowEnv &
@@ -273,6 +278,9 @@ export class OysterComputerEgress extends WorkerEntrypoint<
   }
 }
 
+/** The public website channel: one edge, authenticated per request. */
+const website = standaloneWebsiteApp();
+
 const standaloneWorkerErrorHandler: ErrorHandler = (error, context) => {
   if (error instanceof StandaloneSeedConfigurationChanged) {
     const { refusal } = error;
@@ -318,6 +326,8 @@ export default {
               standaloneWorkerErrorHandler,
             ),
           ).fetch(incoming, env, context),
+        website: (incoming) =>
+          Promise.resolve(website.fetch(incoming, env, context)),
         localBackendDial: async (incoming) => {
           const dial = ownerLocalBackendDialPath.exec(
             new URL(incoming.url).pathname,

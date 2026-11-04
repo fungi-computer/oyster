@@ -1,0 +1,17 @@
+/*
+ * The visitor conversation's own sheet, compiled from Parakeet's Tailwind
+ * source (which carries the Caps foundation) and scanning only the two embed
+ * programs, so a host serves the widget without Hub's or Tourtois's styles.
+ */
+@import "@fungi.computer/parakeet/tailwind.css";
+@source "./embed-loader.tsx";
+@source "./embed-widget.tsx";
+@source "./embed-challenge.ts";
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  font-family: var(--font-sans);
+}

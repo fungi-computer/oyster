@@ -1,11 +1,12 @@
 /**
  * The standalone root's owner routes: App source seeding, builds, the Computer
- * fleet, Agent Computer attachment and Workflow webhook controls. The Worker
+ * fleet, Agent Computer attachment, website channels and Workflow webhook
+ * controls. The Worker
  * and the authorization law both compose them from this one function.
  */
 import type { OysterEnv, OysterHost } from "../host.js";
 import type { Routes } from "../authorization.js";
-import type { TenantScope } from "../tenant.js";
+import { defaultTenant, type TenantScope } from "../tenant.js";
 import { agentDirectoryForScope } from "./agent-directory.js";
 import type { StandaloneAgentsEnv } from "./agents.js";
 import { standaloneAgentComputerRoutes } from "./agent-computers.js";
@@ -17,10 +18,15 @@ import { standaloneBuildRoutes } from "./builds.js";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { standaloneComputerFleetRoutes } from "./computer-fleet.js";
 import { standaloneWorkflowWebhookControls } from "./workflow-webhooks.js";
+import {
+  standaloneWebsiteControl,
+  standaloneWebsiteRoutes,
+} from "./website-channels.js";
 import type { StandaloneWorkflowEnv } from "./workflows.js";
 
 /** The bindings the standalone owner routes reach, resolved per request. */
 export type StandaloneOwnerRoutesEnv = AppSourceBindingEnv &
+  Pick<StandaloneAgentsEnv, "AGENTS" | "OYSTER_ORIGIN"> &
   Pick<StandaloneComputerEnv, "REGISTRY"> &
   Pick<StandaloneAgentsEnv, "AGENT_DIRECTORY"> &
   Pick<StandaloneWorkflowEnv, "WORKFLOW_RUNS">;
@@ -34,7 +40,7 @@ export function standaloneOwnerRoutes(
   // A tenant's registry owns its installations, builds and Computer fleet.
   const registry = () => env.REGISTRY.getByName(scope.durableName("registry"));
   const directory = () => agentDirectoryForScope(env, scope);
-  return appSourceOwnerRoutes(env, scope)
+  const owned = appSourceOwnerRoutes(env, scope)
     .include(standaloneBuildRoutes(registry))
     .include(standaloneComputerFleetRoutes(registry))
     .include(
@@ -48,4 +54,10 @@ export function standaloneOwnerRoutes(
       }),
     )
     .include(standaloneWorkflowWebhookControls(env, hostFor));
+  // A website is served from the default tenant's directory, which owns it.
+  return scope.tenantId === defaultTenant
+    ? owned.include(
+        standaloneWebsiteRoutes(standaloneWebsiteControl(env, directory)),
+      )
+    : owned;
 }

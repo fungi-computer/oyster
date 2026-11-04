@@ -78,6 +78,7 @@ import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
 import {
   applyInstallationCommand,
   installationIdSchema,
+  type ApprovedGrant,
   type Installation,
   type InstallationCommand,
   type InstallationReader,
@@ -342,6 +343,8 @@ export type CapabilityAdmission = Readonly<{
   principal: TenantPrincipal;
   /** The enabled installation the gate admitted for this capability. */
   installation: Installation;
+  /** The installation's approved grant for this capability: its operations and selected resources. */
+  grant: ApprovedGrant;
 }>;
 
 /** Capability routes read the host's admission from `c.env`; they never authenticate. */
@@ -1136,10 +1139,19 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         }).kind === "refused"
       )
         continue;
+      // The route names its exact resource; the table decides it within this
+      // grant's selection, never the principal's wider reach alone.
+      const grant = grantsFor(
+        facts.installation,
+        facts.declaration,
+        facts.declaredOperations,
+        capability.permission,
+      );
+      if (grant === null) continue;
       url.pathname = `/${url.pathname.slice(capability.base.length)}`;
       return capabilityTable(capability).fetch(
         new Request(url, context.req.raw),
-        { principal, installation },
+        { principal, installation, grant },
       );
     }
     return refusal(403, "Capability permission denied");

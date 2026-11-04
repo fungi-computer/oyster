@@ -17,6 +17,7 @@ import { timing } from "hono/timing";
 import type { MiddlewareHandler } from "hono/types";
 import * as Schema from "effect/Schema";
 import type { HostActor } from "@fungi.computer/puffball/app";
+import type { ApprovedGrant } from "./apps/installation.js";
 import type { AppToolPolicy } from "./apps/tools.js";
 import { oysterKeyVocabulary, type LiveOysterKey } from "./keys.js";
 import type { CapabilityEnv, OysterAuthResult, OysterHost } from "./host.js";
@@ -243,8 +244,34 @@ export type RequestFacts = Readonly<{
   principal: () => Promise<OysterAuthResult>;
   /** Whether an App sent this request (the page bridge, or any capability call). */
   mediated: boolean;
+  /** The Agents this request's delegated App grant selects. */
+  agents: AgentCeiling;
   ports: AuthorityPorts;
 }>;
+
+/**
+ * The Agents an App's admitted capability grant reaches: every Agent its
+ * principal reaches, or exactly the selected ones. A request no App
+ * capability narrowed carries `"all"`; principal reach still decides.
+ */
+export type AgentCeiling = "all" | ReadonlySet<string>;
+
+/** An admitted grant's resources as an Agent ceiling; a non-Agent selection reaches no Agent. */
+export function agentCeiling(
+  resources: ApprovedGrant["resources"],
+): AgentCeiling {
+  return resources === "tenant-scope"
+    ? "all"
+    : new Set(
+        resources.flatMap((resource) =>
+          resource.kind === "agent" ? [resource.id] : [],
+        ),
+      );
+}
+
+function withinCeiling(ceiling: AgentCeiling, agentId: string): boolean {
+  return ceiling === "all" || ceiling.has(agentId);
+}
 
 /** A refusal this module returns before any handler runs. */
 function refused(status: number, error: string): Response {
@@ -377,6 +404,8 @@ export type OwnerOrigin = "owner-direct" | "app";
 export type OwnerAdmission = Readonly<{
   principal: OwnerPrincipal;
   origin: OwnerOrigin;
+  /** Whether the App grant that carried this request selects this Agent. */
+  delegatesAgent: (agentId: string) => boolean;
 }>;
 
 /**
@@ -394,7 +423,11 @@ export function owner(
     const origin: OwnerOrigin = facts.mediated ? "app" : "owner-direct";
     if (via === "direct" && origin === "app")
       return refused(403, "Owner direct only");
-    return { principal, origin };
+    return {
+      principal,
+      origin,
+      delegatesAgent: (agentId) => withinCeiling(facts.agents, agentId),
+    };
   });
 }
 
@@ -474,20 +507,38 @@ export function agent(
     if (authority instanceof Response) return authority;
     const agentId = await id(facts);
     if (agentId === null) return refused(400, "Name the Agent");
-    if (!reachesAgent(authority, agentId))
+    if (
+      !reachesAgent(authority, agentId) ||
+      !withinCeiling(facts.agents, agentId)
+    )
       return refused(403, "Agent access denied");
     return { authority, principal: authority.principal, agentId };
   });
 }
 
-/** Agents (and their inbox rows): the owner sees all, a key its granted Agents. */
-export function agents(): Requirement<CollectionAdmission<string>> {
+/** What an Agent collection route receives. */
+export type AgentCollectionAdmission = CollectionAdmission<string> &
+  Readonly<{
+    /** Whether {@link CollectionAdmission.reaches} admits every Agent, so nothing needs filtering. */
+    everyAgent: boolean;
+  }>;
+
+/**
+ * Agents (and their inbox rows): the owner sees all, a key its granted
+ * Agents, and either only within the App grant that carried the request.
+ */
+export function agents(): Requirement<AgentCollectionAdmission> {
   return requirement({ kind: "agents" }, async (facts) => {
     const authority = await signedInAuthority(facts);
     if (authority instanceof Response) return authority;
     return {
       authority,
-      reaches: (agentId) => Promise.resolve(reachesAgent(authority, agentId)),
+      everyAgent: authority.kind === "owner" && facts.agents === "all",
+      reaches: (agentId) =>
+        Promise.resolve(
+          reachesAgent(authority, agentId) &&
+            withinCeiling(facts.agents, agentId),
+        ),
     };
   });
 }
@@ -540,7 +591,7 @@ type Entry<E extends Env> =
         hono: Hono<E>,
         principal: PrincipalSource<E>,
         ports: AuthorityPorts,
-        mediated: (request: Request) => boolean,
+        delegation: DelegationSource<E>,
       ) => void;
     }>
   | Readonly<{ kind: "table"; table: Routes<E> }>;
@@ -689,7 +740,7 @@ export class Routes<E extends Env> {
     this.#entries.push({
       kind: "route",
       declaration: { methods, path, requirement: record.declared },
-      mount: (hono, principal, ports, mediated) => {
+      mount: (hono, principal, ports, delegation) => {
         // One admission per request, shared down the middleware chain.
         const admittedFor = new WeakMap<object, Readonly<{ value: A }>>();
         const gate: MiddlewareHandler<E, P> = async (context, next) => {
@@ -703,7 +754,7 @@ export class Routes<E extends Env> {
               return decoded._tag === "Some" ? decoded.value : null;
             },
             principal: () => principal(context),
-            mediated: mediated(context.req.raw),
+            ...delegation(context),
             ports,
           });
           if (admitted instanceof Response) return admitted;
@@ -769,16 +820,26 @@ export type HostServeOptions = Readonly<{
   serverTiming?: Readonly<{ totalDescription: string }>;
 }>;
 
+/** Whether an App carried one request, and the Agents its grant selects. */
+type DelegationSource<E extends Env> = (
+  context: Context<E>,
+) => Pick<RequestFacts, "mediated" | "agents">;
+
 /** What `serveTable` needs; never built from caller-supplied fields. */
-type ServeRules = Readonly<{
+type ServeRules<E extends Env> = Readonly<{
   headers: readonly ResponseHeaders[];
   serverTiming: Readonly<{ totalDescription: string }> | null;
-  mediated: (request: Request) => boolean;
+  delegation: DelegationSource<E>;
 }>;
 
-/** The page bridge names the installation an App call comes from. */
-const bridged = (request: Request) =>
-  request.headers.has("X-Oyster-Installation");
+/**
+ * The page bridge names the installation an App call comes from. A host
+ * route it reaches is no capability, so no capability grant narrows it.
+ */
+const bridged = (context: Context) => ({
+  mediated: context.req.raw.headers.has("X-Oyster-Installation"),
+  agents: "all" as const,
+});
 
 /**
  * Serve one table: the only `Hono` the Oyster host builds. Each route runs
@@ -790,7 +851,7 @@ function serveTable<E extends Env>(
   table: Routes<E>,
   principal: PrincipalSource<E>,
   ports: AuthorityPorts,
-  rules: ServeRules,
+  rules: ServeRules<E>,
 ): Hono<E> {
   const { entries, errorHandler } = recordOf(table);
   const hono = new Hono<E>();
@@ -833,10 +894,10 @@ function serveTable<E extends Env>(
         serveTable(entry.table, principal, ports, {
           headers: [],
           serverTiming: null,
-          mediated: rules.mediated,
+          delegation: rules.delegation,
         }),
       );
-    else entry.mount(hono, principal, ports, rules.mediated);
+    else entry.mount(hono, principal, ports, rules.delegation);
   const handler = errorHandler();
   if (handler !== undefined) hono.onError(handler);
   return hono;
@@ -884,7 +945,7 @@ export function serveHost<E extends Env>(
       serverTiming: Object.hasOwn(options, "serverTiming")
         ? (options.serverTiming ?? null)
         : null,
-      mediated: bridged,
+      delegation: bridged,
     }),
   );
 }
@@ -900,7 +961,7 @@ export function serveDoors<E extends Env>(table: Routes<E>): ServedTable<E> {
       table,
       () => Promise.resolve({ kind: "refused", status: 401 }),
       { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
-      { headers: [], serverTiming: null, mediated: bridged },
+      { headers: [], serverTiming: null, delegation: bridged },
     ),
   );
 }
@@ -910,7 +971,8 @@ export function serveDoors<E extends Env>(table: Routes<E>): ServedTable<E> {
  * admission, read from `c.env`: the App already holds the capability, and
  * each route still decides its own resource. Every request here is
  * App-mediated, however it was admitted (a header or a browser socket's
- * query), so `owner("direct")` always refuses inside a capability.
+ * query), so `owner("direct")` always refuses inside a capability, and
+ * every Agent decision stays within the admitted grant's selection.
  */
 export function serveCapability(
   table: Routes<CapabilityEnv>,
@@ -922,7 +984,14 @@ export function serveCapability(
       (context) =>
         Promise.resolve({ kind: "admitted", principal: context.env.principal }),
       ports,
-      { headers: [], serverTiming: null, mediated: () => true },
+      {
+        headers: [],
+        serverTiming: null,
+        delegation: (context) => ({
+          mediated: true,
+          agents: agentCeiling(context.env.grant.resources),
+        }),
+      },
     ),
   );
 }

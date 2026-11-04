@@ -65,7 +65,7 @@ export const CLOUD_BROWSER_DESCRIPTIONS = Object.freeze({
     "A work browser for reading and driving public pages. markdown/links/scrape/extract " +
     "need no session. open/navigate/snapshot/click/type/press/scroll drive one session by " +
     "leaseId; screenshot/pdf save to a Computer path (bytes never enter this transcript). " +
-    "handoff asks a Team member to take over for a login or captcha; close ends the lease. " +
+    "handoff pauses the session for the person to take over for a login or captcha; close ends the lease. " +
     "To show the member something yourself, use the Session browser tools, not this.",
   markdown:
     "Render a JavaScript page and return it as markdown, truncated to maxChars (default 20000).",
@@ -85,7 +85,7 @@ export const CLOUD_BROWSER_DESCRIPTIONS = Object.freeze({
     "Capture a PNG screenshot of an open session's page and save it to a Computer path; returns the saved byte count, never the bytes.",
   pdf: "Render an open session's page to PDF and save it to a Computer path; returns the saved byte count, never the bytes.",
   handoff:
-    "Ask a Team member to take over an open session for a login or captcha; a card appears in the conversation and the run continues once they finish.",
+    "Pause an open session so the person can take over for a login or captcha. In a channel conversation the owner is notified and takes over. Otherwise the result is {paused: true, view}: ask the person with the question tool, include the view link, and wait for their answer. They press Done in the view to resume; drive again only after that.",
   close: "End a driven session and release its lease.",
 } as const);
 
@@ -120,7 +120,7 @@ function cloudBrowserFailureMessage(error: CloudBrowserFailure): string {
     case "CloudBrowserLeaseNotFound":
       return "that leaseId is not open for this session; call open first";
     case "CloudBrowserLeasePaused":
-      return "a Team member is driving this lease; wait for them to finish";
+      return "a person has this lease; ask them to press Done in the browser view, then try again";
     case "CloudBrowserCapacityExceeded":
       return "this Team has too many cloud browsers open at once; close one first";
     case "CloudBrowserCreditDenied":
@@ -171,9 +171,11 @@ const destinationResultSchema = z.strictObject({
   path: z.string(),
   bytes: z.number().int().nonnegative(),
 });
-const handoffResultSchema = z.strictObject({
-  status: z.literal("handed_off"),
-});
+/** A channel Session's owner was notified, or the person is given a live view. */
+const handoffResultSchema = z.union([
+  z.strictObject({ status: z.literal("handed_off") }),
+  z.strictObject({ paused: z.literal(true), view: z.string().min(1) }),
+]);
 
 /**
  * The host's door for screenshot/PDF bytes: a named path on a Computer the
@@ -207,8 +209,10 @@ type SessionBrowser = Readonly<{
   ) => Promise<CloudBrowserOperationResult>;
   quickReads: boolean;
   saveFile: SaveBrowserFile | null;
-  handoff: ((leaseId: string, reason: string) => Promise<void>) | null;
+  handoff: (leaseId: string, reason: string) => Promise<HandoffResult>;
 }>;
+
+type HandoffResult = z.output<typeof handoffResultSchema>;
 
 /** The registrations one host offers, in the shape `Mycelium.module` reads. */
 type OfferedOperations = {
@@ -301,7 +305,7 @@ function buildCloudBrowserModule(options: SessionBrowser) {
   }
 
   function handoffOperation(
-    handoff: (leaseId: string, reason: string) => Promise<void>,
+    handoff: (leaseId: string, reason: string) => Promise<HandoffResult>,
   ) {
     return {
       handoff: Mycelium.operation({
@@ -313,10 +317,9 @@ function buildCloudBrowserModule(options: SessionBrowser) {
         }),
         output: handoffResultSchema,
         execute: (input) =>
-          run("handoff", handoffResultSchema, async () => {
-            await handoff(input.leaseId, input.reason);
-            return { status: "handed_off" };
-          }),
+          run("handoff", handoffResultSchema, () =>
+            handoff(input.leaseId, input.reason),
+          ),
       }),
     };
   }
@@ -478,8 +481,7 @@ function buildCloudBrowserModule(options: SessionBrowser) {
   if (options.quickReads) Object.assign(operations, quickReads);
   if (options.saveFile !== null)
     Object.assign(operations, saveOperations(options.saveFile));
-  if (options.handoff !== null)
-    Object.assign(operations, handoffOperation(options.handoff));
+  Object.assign(operations, handoffOperation(options.handoff));
   return Mycelium.module({
     id: "cloud-browser",
     name: "cloudBrowser",
@@ -489,11 +491,30 @@ function buildCloudBrowserModule(options: SessionBrowser) {
 }
 
 /**
+ * How a host hands a paused lease to a person. A channel Session (a website
+ * visitor) takes the conversation handoff; every other Session gets the live
+ * view and asks the person itself.
+ */
+export type BrowserHandoffPorts = Readonly<{
+  /**
+   * Request the channel conversation handoff for this Session. True when the
+   * Session is a channel conversation and was handed off; false for any other
+   * Session. `null` when the host has no conversations owner.
+   */
+  channel: ((sessionId: string, reason: string) => boolean) | null;
+  /** The host-relative live-view path for one lease of this Session's owner. */
+  viewPath: (
+    owner: Readonly<{ teamId: string; agentId: string }>,
+    leaseId: string,
+  ) => string;
+}>;
+
+/**
  * Compose the `cloudBrowser` source for one Session, on either host. `browser`
  * is the module's lease door (in-process, or the Hub's egress RPC); `saveFile`
- * is the host's Computer bytes writer and `requestHandoff` its "needs you"
- * card. A host without one passes `null` and the matching operations are not
- * offered. A lease needs a Session identity, so a session-free host (e.g. the
+ * is the host's Computer bytes writer and `handoff` its "needs you" ports. A
+ * host without a Computer passes `null` for `saveFile` and that operation is
+ * not offered. A lease needs a Session identity, so a session-free host (e.g. the
  * MCP execute path) gets no module at all.
  */
 export function browserCapabilitySource(
@@ -502,7 +523,7 @@ export function browserCapabilitySource(
     browser: AgentBrowserDoor;
     quickReads: boolean;
     saveFile: SaveBrowserFile | null;
-    requestHandoff: ((sessionId: string, reason: string) => void) | null;
+    handoff: BrowserHandoffPorts;
   }>,
 ): CapabilitySource {
   return {
@@ -521,18 +542,16 @@ export function browserCapabilitySource(
         agentId: identity.agentId,
         sessionId,
       };
-      const requestHandoff = deps.requestHandoff;
       const registration = buildCloudBrowserModule({
         call: (op, opSignal) => deps.browser.call(owner, op, opSignal),
         quickReads: deps.quickReads,
         saveFile: deps.saveFile,
-        handoff:
-          requestHandoff === null
-            ? null
-            : async (leaseId, reason) => {
-                await deps.browser.handoff(owner, leaseId);
-                requestHandoff(sessionId, `cloud browser: ${reason}`);
-              },
+        handoff: async (leaseId, reason) => {
+          await deps.browser.handoff(owner, leaseId);
+          if (deps.handoff.channel?.(sessionId, `cloud browser: ${reason}`))
+            return { status: "handed_off" };
+          return { paused: true, view: deps.handoff.viewPath(owner, leaseId) };
+        },
       });
       return Promise.resolve({
         snapshot: { version: "cloud-browser-v1", modules: [registration] },

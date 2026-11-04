@@ -11,9 +11,9 @@ import { visitorStream } from "@fungi.computer/shiitake/server-visitor-stream";
 import type {
   ChannelConversations,
   SessionDoor,
-} from "../../src/channels/conversations.js";
+} from "../channels/conversations.js";
 
-/** A test SessionDoor over a real Shiitake owner; Hub composes its own (`apps/hub/src/channels/session-door.ts`). */
+/** Translate a standalone Agent's Shiitake owner into Oyster's channel Session port. */
 export function channelSessionDoor(
   open: () => Promise<ShiitakeOwnerAgent>,
   deliverGrants: (sessionId: string) => void,

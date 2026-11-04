@@ -3461,11 +3461,21 @@ test("the agent host captures one App source per acquisition and retains agent a
   ).options();
   assert.equal(reads, 0, "construction does not capture an installation list");
   assert.equal(
-    (await options.instructions.load({})).modules,
+    (
+      await options.instructions.load({
+        sessionId: "owner-session",
+        commandId: "c",
+        signal: new AbortController().signal,
+      })
+    ).modules,
     undefined,
     "instructions do not project duplicate modules",
   );
-  const { text } = await options.instructions.load({});
+  const { text } = await options.instructions.load({
+    sessionId: "owner-session",
+    commandId: "c",
+    signal: new AbortController().signal,
+  });
   assert.ok(text.includes(forageDiscoveryInstructions));
   assert.match(text, /env\.BONSAI\.repos\.list\(\{\}\)/u);
   assert.doesNotMatch(text, /\["/u, "no bracket call syntax in the prompt");

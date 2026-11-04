@@ -531,8 +531,39 @@ deploy with `wrangler deploy`. Sign in at `/login`.
 Oyster is owner-only. A browser signs in only with the owner key, through
 `/login` and its `SameSite=Strict` session cookie. Named keys sign in only by
 header (`Authorization`), for MCP, Git and the API; no cookie admits a named
-key. Anonymous requests reach only `/login`, `robots.txt` and digest-pinned
-shell and App UI bytes.
+key. Anonymous requests reach only `/login`, `robots.txt`, digest-pinned shell
+and App UI bytes, and the website chat described next.
+
+### Website chat on a separate site
+
+Owner-only means only the owner signs in to Oyster; it does not stop you from
+putting an Agent on a public website. In Settings, choose Channels, then Add
+website: pick the Agent, give the address of your site and a brief, and paste
+the script tag Oyster shows you into that site:
+
+```html
+<script
+  src="https://your-oyster.example/embed/v1.js"
+  data-site="site_pk_…"
+  data-theme="auto"
+  async
+></script>
+```
+
+Visitors are anonymous channel parties of that one Agent, never Oyster
+principals, keys or App callers. They talk to the Agent itself, with its own
+tools and permissions and the persona you wrote added to its instructions; they
+cannot sign in to Oyster or reach your account. Each site has its own key, a
+list of allowed origins, rate limits per visitor and per network address, and a
+pause switch; a new site key stops the old code at once. The same page can
+require a Cloudflare Turnstile check before a visitor can chat, and shows the
+conversations so you can read what visitors said.
+
+The surface is closed until you set two host secrets, each at least 32 bytes:
+`OYSTER_WEBSITE_PROOF_KEY` signs a visitor's identity between the public edge
+and the website Agent, and `OYSTER_WEBSITE_ADDRESS_KEY` salts the hashed network
+address used for rate limits. For Turnstile, set `TURNSTILE_SITE_KEY` and
+`TURNSTILE_SECRET_KEY` (or `TURNSTILE=off` for local use over `http`).
 
 The celld example is a limited trial, not the full Cloudflare setup above. It
 requires access to Fungi's private celld fork. Use

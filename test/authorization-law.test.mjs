@@ -28,8 +28,13 @@ const ownRouters = new Map([
   ["machine-link/host.ts", "machine link DO, behind the connect door"],
   ["machine-link/link.ts", "machine link DO, behind the connect door"],
   ["standalone/workflows.ts", "Workflow run DO, behind the webhook door"],
-  // Mounted by the Hub with its own visitor tokens; Oyster never serves it.
-  ["channels/visitor-edge.ts", "Hub-mounted embed door"],
+  // Mounted by the Hub and by the standalone Worker-top embed doors; it
+  // authenticates a visitor's bearer itself and is never an owner route.
+  ["channels/visitor-edge.ts", "embed door, mounted by Hub and standalone"],
+  [
+    "standalone/website-channels.ts",
+    "public website edge behind the embed doors",
+  ],
   // Sign-in adapters: their routes are the login door itself.
   ["tenancy/auth0.ts", "sign-in adapter"],
   ["tenancy/owner-key.ts", "sign-in adapter"],
@@ -492,6 +497,7 @@ const { approvalCapability } = await import("../dist/approval-capability.js");
 const { capabilityFixture } = await import("../dist/testing/index.js");
 const {
   Requirement,
+  agent,
   owner,
   publicRoute,
   routes,
@@ -521,7 +527,7 @@ const directOwnerPaths = [
   /^\/api\/installations\/:installationId\/(?:grants|status)$/u,
   /^\/api\/agent-models\//u,
   /^\/api\/agent-policies\//u,
-  /^\/api\/agent-mcp-servers(?:\/|$)/u,
+  /^\/api\/connections(?:\/|$)/u,
 ];
 
 /** A host composed with every Oyster-owned table the standalone root serves. */
@@ -708,14 +714,23 @@ test("every host /api route's owner reach is classified", async () => {
     "PUT /api/computers/selected direct-or-app",
     "POST /api/agents/:agentId/computers/:operation direct-or-app",
     "POST /api/installations/:installationId/workflows/webhooks direct-or-app",
+    "GET /api/websites direct",
+    "POST /api/websites direct",
+    "PUT /api/websites/:bindingId direct",
+    "GET /api/websites/:bindingId/conversations direct",
+    "GET /api/websites/:bindingId/conversations/:sessionId direct",
     "GET /api/agent-models direct",
     "GET /api/agent-models/:agentId direct",
     "PUT /api/agent-models/:agentId direct",
     "GET /api/agent-policies/:agentId direct",
     "PUT /api/agent-policies/:agentId direct",
-    "GET /api/agent-mcp-servers direct",
-    "POST /api/agent-mcp-servers/:agentId direct",
-    "DELETE /api/agent-mcp-servers/:agentId/:serverId direct",
+    "GET /api/connections direct",
+    "POST /api/connections direct",
+    "GET /api/connections/callback direct",
+    "GET /api/connections/:connectionId/tools direct",
+    "PUT /api/connections/:connectionId/agents/:agentId direct",
+    "DELETE /api/connections/:connectionId/agents/:agentId direct",
+    "DELETE /api/connections/:connectionId direct",
     "GET /api/model-keys direct",
     "POST /api/model-keys direct",
     "DELETE /api/model-keys/:keyId direct",
@@ -928,6 +943,12 @@ test("inside a capability table every request is App-mediated", async () => {
   // parameter (no header) presents it.
   const admission = {
     principal: { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+    grant: {
+      capability: "agent.manage",
+      capabilityApproved: true,
+      operations: [],
+      resources: "tenant-scope",
+    },
   };
   const direct = await capability.request(
     "https://oyster.test/direct",
@@ -941,6 +962,32 @@ test("inside a capability table every request is App-mediated", async () => {
     admission,
   );
   assert.equal(await either.text(), "app");
+});
+
+test("inside a capability table an Agent decision stays within the grant's selection", async () => {
+  const capability = serveCapability(
+    routes().get("/agents/:agentId", agent(), (_context, { agentId }) =>
+      Response.json(agentId),
+    ),
+    { liveKey: async () => null, appToolPolicy: () => null },
+  );
+  const admission = {
+    principal: { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+    grant: {
+      capability: "agent.read",
+      capabilityApproved: true,
+      operations: [],
+      resources: [{ kind: "agent", id: "agent_a" }],
+    },
+  };
+  const read = (agentId) =>
+    capability.request(`https://oyster.test/agents/${agentId}`, {}, admission);
+  assert.equal((await read("agent_a")).status, 200);
+  assert.equal(
+    (await read("agent_b")).status,
+    403,
+    "the owner reaches agent_b, but the App's grant selects only agent_a",
+  );
 });
 
 // A route that would leak if its requirement could be bent.
@@ -1067,6 +1114,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
   const top = serveDoors(
     standaloneWorkerRoutes({
       machineLink: async () => new Response("link"),
+      website: async () => new Response("website"),
       localBackendDial: async () => new Response("dial"),
       workflowWebhooks: standaloneWorkflowWebhookRoutes(
         { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
@@ -1090,6 +1138,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
   // The Worker's own /api doors are exactly the signed, attached-machine and device doors.
   const doors = standaloneWorkerRoutes({
     machineLink: async () => new Response("link"),
+    website: async () => new Response("website"),
     localBackendDial: async () => new Response("dial"),
     workflowWebhooks: standaloneWorkflowWebhookRoutes(
       { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
@@ -1102,6 +1151,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
     .map((route) => [route.path, route.requirement.kind]);
   assert.deepEqual(doors, [
     ["/api/teams/:teamId/local/mesh/:deviceId/connect", "door"],
+    ["/api/embed/*", "door"],
     ["/api/computers/:computerId/backends/:backendId/connect", "door"],
     [
       "/api/installations/:installationId/workflows/webhooks/:bindingId",

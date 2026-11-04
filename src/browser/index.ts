@@ -20,8 +20,16 @@ export {
   browserCapabilitySource,
   CLOUD_BROWSER_DESCRIPTIONS,
   type AgentBrowserDoor,
+  type BrowserHandoffPorts,
   type SaveBrowserFile,
 } from "./capability-source.js";
+export {
+  liveView,
+  liveViewPaths,
+  type LiveView,
+  type LiveViewDoor,
+  type LiveViewPaths,
+} from "./live-view.js";
 export {
   CloudBrowserCapacityExceeded,
   CloudBrowserCreditDenied,

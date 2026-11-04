@@ -234,4 +234,29 @@ describe("anonymous web visitor identity in the shared SQLite owner", () => {
       ).toEqual({ kind: "denied", reason: "refresh_invalid" });
     });
   });
+
+  it("serves a visitor only while it is unrevoked and holds a live access token", async () => {
+    await withVisitors(async (visitors, setNow) => {
+      const binding = webBinding();
+      if (binding.selector.provider !== "web")
+        throw new Error("Expected web binding");
+      const grant = await visitors.mint(
+        binding,
+        binding.selector.siteKey,
+        "address",
+      );
+      if (grant.kind !== "granted") throw new Error("Expected a grant");
+      const { visitorId, accessExpiresAt } = grant.credentials;
+      expect(visitors.live(binding.bindingId, visitorId)).toBe(true);
+      expect(visitors.live(channelIds.binding.generate(), visitorId)).toBe(
+        false,
+      );
+      setNow(accessExpiresAt);
+      expect(visitors.live(binding.bindingId, visitorId)).toBe(false);
+      setNow(0);
+      expect(visitors.live(binding.bindingId, visitorId)).toBe(true);
+      visitors.forget(visitorId);
+      expect(visitors.live(binding.bindingId, visitorId)).toBe(false);
+    });
+  });
 });

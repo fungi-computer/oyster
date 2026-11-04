@@ -22,6 +22,7 @@ import {
   agents as agentCollection,
   owner,
   routes,
+  type OwnerAdmission,
   type OwnerPrincipal,
   type Routes,
 } from "./authorization.js";
@@ -94,24 +95,36 @@ export type PendingAgentPolicy = Readonly<{
   status: "pending";
   revision: string;
 }>;
-/** One remote MCP server connected to an Agent; its bearer token is never returned. */
-export type AgentMcpServer = Readonly<{
-  serverId: string;
-  /** The guest calls this server's tools as `env.mcp.<name>.<tool>()`. */
+/** What an Agent may do with one connection: everything, only reads, or named tools. */
+export type ConnectionAccess = "all" | "read" | readonly string[];
+/** One connection as its owner sees it; no secret, locator or token ever appears. */
+export type OysterConnection = Readonly<{
+  connectionId: string;
+  /** The guest calls an MCP server's tools as `env.mcp.<name>.<tool>()`. */
   name: string;
+  label: string;
+  kind: "mcp" | "openapi";
   url: string;
-  hasBearer: boolean;
+  auth: "none" | "token" | "oauth";
+  /** `pending` waits for the owner to sign in at the server; `reconnect_required` needs a new sign-in. */
+  state: "connected" | "pending" | "reconnect_required";
+  grants: readonly Readonly<{ agentId: string; access: ConnectionAccess }>[];
 }>;
-/** An owner's request to connect one remote MCP server to an Agent. */
-export type AgentMcpServerInput = typeof agentMcpServerInputSchema.Type;
-/** Why connecting an MCP server was refused. */
-export type AgentMcpServerRefusal = Readonly<{
+/** A newly added connection; `authorizeUrl` is where the owner signs in, when the server uses OAuth. */
+export type ConnectionAdded = Readonly<{
+  connectionId: string;
+  authorizeUrl: string | null;
+}>;
+/** Why a connection change was refused. */
+export type ConnectionRefusal = Readonly<{
   error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
 }>;
-/** At most this many MCP servers per Agent. */
-export const maxAgentMcpServers = 16;
-/** Owner input for one MCP server: a guest identifier, an `https:` endpoint and an optional bearer. */
-export const agentMcpServerInputSchema = Schema.Struct({
+/** An owner's request to connect one remote MCP server. */
+export type ConnectionInput = typeof connectionInputSchema.Type;
+/** At most this many connections per Agent. */
+export const maxAgentConnections = 16;
+/** Owner input for one MCP connection: a guest identifier, an `https:` endpoint and an optional bearer. */
+export const connectionInputSchema = Schema.Struct({
   name: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]{0,31}$/u)),
   url: Schema.String.check(
     Schema.isMaxLength(2_048),
@@ -132,6 +145,30 @@ export const agentMcpServerInputSchema = Schema.Struct({
       Schema.isMaxLength(4_096),
       Schema.isPattern(/^[\x21-\x7e]+$/u),
     ),
+  ),
+  /**
+   * Sign in at the server instead of pasting a token. Without a client the
+   * server's dynamic registration is used; with one, the secret is sealed.
+   */
+  oauth: Schema.optional(
+    Schema.Struct({
+      clientId: Schema.optional(
+        Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+      ),
+      clientSecret: Schema.optional(
+        Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(4_096),
+          Schema.isPattern(/^[\x21-\x7e]+$/u),
+        ),
+      ),
+      scope: Schema.optional(
+        Schema.String.check(
+          Schema.isMaxLength(512),
+          Schema.isPattern(/^[\x21-\x7e ]+$/u),
+        ),
+      ),
+    }),
   ),
 });
 
@@ -245,15 +282,32 @@ export type OysterAgents = Readonly<{
   ): Promise<ModelKeyRecord | Readonly<{ error: ModelKeyRefusal }>>;
   /** Remove one key; Agents that chose it then fail with `key_removed`. */
   removeModelKey(keyId: string): Promise<"deleted" | "absent">;
-  /** An Agent's connected MCP servers, or `null` when there is no such Agent. */
-  mcpServers(agentId: string): Promise<readonly AgentMcpServer[] | null>;
-  /** Connect one remote MCP server; the Agent's next run sees its tools. */
-  addMcpServer(
+  /** Every connection with the Agents that may use it. */
+  connections(): Promise<readonly OysterConnection[]>;
+  /** Connect one remote MCP server; no Agent has it until the owner grants it. */
+  addConnection(
+    input: ConnectionInput,
+  ): Promise<ConnectionAdded | ConnectionRefusal>;
+  /** Give an Agent access to a connection, or change how much it has. */
+  grantConnection(
+    connectionId: string,
     agentId: string,
-    input: AgentMcpServerInput,
-  ): Promise<AgentMcpServer | AgentMcpServerRefusal>;
-  /** Disconnect one MCP server; `false` when the Agent or server is unknown. */
-  removeMcpServer(agentId: string, serverId: string): Promise<boolean>;
+    access: ConnectionAccess,
+  ): Promise<Readonly<{ ok: true }> | ConnectionRefusal>;
+  /** End one Agent's access; `false` when it had none. */
+  ungrantConnection(connectionId: string, agentId: string): Promise<boolean>;
+  /** Disconnect for everyone; `false` when the connection is unknown. */
+  removeConnection(connectionId: string): Promise<boolean>;
+  /** The tool names an MCP connection offers, for choosing a narrower grant. */
+  connectionTools(
+    connectionId: string,
+  ): Promise<readonly string[] | ConnectionRefusal>;
+  /** Settle a sign-in: the authorization server's redirect, by state and code. */
+  completeMcpConnection(
+    query: Readonly<{ state: string; code: string; iss: string | undefined }>,
+  ): Promise<Readonly<{ ok: true }> | Readonly<{ error: string }>>;
+  /** The exact redirect URL an owner registers with an OAuth app. */
+  mcpCallbackUrl(): string;
   /** Serve this Agent's Shiitake and Knapsack Session browser transports. */
   fetch(agentId: string, request: Request): Promise<Response | null>;
   /** This member's Session and Workflow review rows, admitted by the host. */
@@ -312,7 +366,9 @@ export function agentCapabilities(
     {
       ...shared,
       id: "agent.manage",
-      ownerDirect: ownerAgentRoutes<OysterEnv>(agents, "direct"),
+      ownerDirect: routes<OysterEnv>()
+        .include(ownerAgentRoutes<OysterEnv>(agents, "direct"))
+        .include(cloudBrowserViewRoutes<OysterEnv>(agents)),
       permission: "agent.manage",
       version: agentManage.version,
       methods: {
@@ -384,6 +440,33 @@ export function agentCapabilities(
   ];
 }
 
+/**
+ * The person's live view of a paused cloud-browser lease: the owner, direct
+ * only (never an App acting for them), served by the Agent that holds the lease.
+ */
+function cloudBrowserViewRoutes<E extends Env>(
+  agents: OysterAgents,
+): Routes<E> {
+  return routes<E>().on(
+    ["GET", "POST"],
+    "/agents/:agentId/cloud-browser/*",
+    owner("direct"),
+    async (context) => {
+      const agentId = context.req.param("agentId");
+      if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+      const incoming = context.req.raw;
+      const path = new URL(incoming.url).pathname.slice(
+        `/agents/${agentId}`.length,
+      );
+      const response = await agents.fetch(
+        agentId,
+        new Request(`https://agent.internal${path}`, incoming),
+      );
+      return response ?? refusal(404, "No such agent");
+    },
+  );
+}
+
 /** The owner capability: create, archive and restore, never Session transport. */
 function ownerAgentRoutes<E extends Env>(
   agents: OysterAgents,
@@ -413,11 +496,11 @@ function ownerAgentRoutes<E extends Env>(
         ),
       );
     })
-    .post("/agents/:agentId/archive", owner(via), (context, { principal }) =>
-      changeArchive(agents, context.req.param("agentId"), true, principal),
+    .post("/agents/:agentId/archive", owner(via), (context, admission) =>
+      changeArchive(agents, context.req.param("agentId"), true, admission),
     )
-    .post("/agents/:agentId/unarchive", owner(via), (context, { principal }) =>
-      changeArchive(agents, context.req.param("agentId"), false, principal),
+    .post("/agents/:agentId/unarchive", owner(via), (context, admission) =>
+      changeArchive(agents, context.req.param("agentId"), false, admission),
     );
 }
 
@@ -545,9 +628,9 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .get(
         "/member/inbox",
         agentCollection(),
-        async (_context, { authority, reaches }) => {
+        async (_context, { authority, everyAgent, reaches }) => {
           const inbox = await agents.inbox();
-          if (authority.kind === "owner")
+          if (everyAgent)
             return Response.json({
               items: inbox.items,
               next: null,
@@ -562,7 +645,9 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
             next: null,
             // The global revision changes for ungranted Agents too. Key feeds have
             // no scoped event stream, so expose neither that revision nor its events.
-            cursor: 0,
+            // An owner's narrowed App keeps the owner's change stream, which
+            // announces only a `reset`, so it keeps the revision that stream resumes from.
+            cursor: authority.kind === "owner" ? inbox.revision : 0,
           });
         },
       )
@@ -623,9 +708,10 @@ async function changeArchive(
   agents: OysterAgents,
   agentId: string,
   archived: boolean,
-  principal: OwnerPrincipal,
+  { principal, delegatesAgent }: OwnerAdmission,
 ): Promise<Response> {
   if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");
+  if (!delegatesAgent(agentId)) return refusal(403, "Agent access denied");
   const result = await agents.setArchived(agentId, archived, principal);
   if ("error" in result)
     return Response.json(result, {
@@ -798,75 +884,147 @@ export function modelKeyRoutes(agents: OysterAgents): Routes<OysterEnv> {
     });
 }
 
-const serverIdPattern = /^[a-z0-9_-]{1,64}$/u;
-const mcpRefusalStatus = {
+const connectionIdPattern = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const connectionRefusalStatus = {
   not_found: 404,
   duplicate_name: 409,
   limit: 409,
   invalid_endpoint: 400,
 };
+const accessSchema = Schema.Struct({
+  access: Schema.Union([
+    Schema.Literal("all"),
+    Schema.Literal("read"),
+    Schema.Array(
+      Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+    ).check(Schema.isMaxLength(256)),
+  ]),
+});
 
 /**
- * Host-owned Agent MCP server custody for the owner directly; never an App
- * capability. Bearer tokens go in and never come back out.
+ * Host-owned connection custody for the owner directly; never an App
+ * capability. Tokens go in and never come back out.
  */
-export function agentMcpServerRoutes(agents: OysterAgents): Routes<OysterEnv> {
+export function connectionRoutes(agents: OysterAgents): Routes<OysterEnv> {
   return (
     routes<OysterEnv>()
-      // One owner read for the settings panel: every Agent with its servers.
-      .get("/api/agent-mcp-servers", owner("direct"), async () => {
-        const listed = await agents.list();
-        const rows = await Promise.all(
-          listed.map(async (item) => ({
-            agentId: item.agentId,
-            name: item.name,
-            servers: (await agents.mcpServers(item.agentId)) ?? [],
-          })),
-        );
-        return Response.json({ agents: rows });
+      // One owner read for the settings panel: every connection and every Agent.
+      .get("/api/connections", owner("direct"), async () => {
+        const [connections, listed] = await Promise.all([
+          agents.connections(),
+          agents.list(),
+        ]);
+        return Response.json({
+          callbackUrl: agents.mcpCallbackUrl(),
+          agents: listed.map(({ agentId, name }) => ({ agentId, name })),
+          connections,
+        });
       })
-      .post(
-        "/api/agent-mcp-servers/:agentId",
+      .post("/api/connections", owner("direct"), async (context) => {
+        const length = Number(context.req.header("content-length") ?? "0");
+        if (length > 16 * 1024) return refusal(413, "Request too large");
+        const input = Schema.decodeUnknownOption(
+          Schema.fromJsonString(connectionInputSchema),
+          { onExcessProperty: "error" },
+        )(await context.req.text());
+        if (input._tag === "None")
+          return refusal(
+            400,
+            "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
+          );
+        if (input.value.oauth !== undefined && input.value.bearer !== null)
+          return refusal(400, "Choose a token or sign-in, not both");
+        const added = await agents.addConnection(input.value);
+        return "error" in added
+          ? refusal(connectionRefusalStatus[added.error], added.error)
+          : Response.json(added, { status: 201 });
+      })
+      // The authorization server's redirect: the owner's browser, signed in.
+      .get("/api/connections/callback", owner("direct"), async (context) => {
+        const query = context.req.query();
+        if (
+          query.error !== undefined ||
+          query.state === undefined ||
+          query.code === undefined
+        )
+          return refusal(400, "The sign-in was not completed");
+        const settled = await agents.completeMcpConnection({
+          state: query.state,
+          code: query.code,
+          iss: query.iss,
+        });
+        return "error" in settled
+          ? refusal(400, "The sign-in could not be completed")
+          : new Response(null, { status: 303, headers: { location: "/" } });
+      })
+      .get(
+        "/api/connections/:connectionId/tools",
         owner("direct"),
         async (context) => {
-          if (!agentIdPattern.test(context.req.param("agentId")))
-            return refusal(404, "No such agent");
+          const connectionId = context.req.param("connectionId");
+          if (!connectionIdPattern.test(connectionId))
+            return refusal(404, "No such connection");
+          const tools = await agents.connectionTools(connectionId);
+          return "error" in tools
+            ? refusal(connectionRefusalStatus[tools.error], tools.error)
+            : Response.json({ tools });
+        },
+      )
+      .put(
+        "/api/connections/:connectionId/agents/:agentId",
+        owner("direct"),
+        async (context) => {
+          const connectionId = context.req.param("connectionId");
+          const agentId = context.req.param("agentId");
+          if (
+            !connectionIdPattern.test(connectionId) ||
+            !agentIdPattern.test(agentId)
+          )
+            return refusal(404, "No such connection");
           const length = Number(context.req.header("content-length") ?? "0");
-          if (length > 16 * 1024) return refusal(413, "Request too large");
+          if (length > 64 * 1024) return refusal(413, "Request too large");
           const input = Schema.decodeUnknownOption(
-            Schema.fromJsonString(agentMcpServerInputSchema),
+            Schema.fromJsonString(accessSchema),
             { onExcessProperty: "error" },
           )(await context.req.text());
           if (input._tag === "None")
-            return refusal(
-              400,
-              "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
-            );
-          const added = await agents.addMcpServer(
-            context.req.param("agentId"),
-            input.value,
+            return refusal(400, "Choose all, read, or a list of tools");
+          const granted = await agents.grantConnection(
+            connectionId,
+            agentId,
+            input.value.access,
           );
-          return "error" in added
-            ? refusal(mcpRefusalStatus[added.error], added.error)
-            : Response.json(added, { status: 201 });
+          return "error" in granted
+            ? refusal(connectionRefusalStatus[granted.error], granted.error)
+            : new Response(null, { status: 204 });
         },
       )
       .delete(
-        "/api/agent-mcp-servers/:agentId/:serverId",
+        "/api/connections/:connectionId/agents/:agentId",
         owner("direct"),
         async (context) => {
-          const serverId = context.req.param("serverId");
+          const connectionId = context.req.param("connectionId");
+          const agentId = context.req.param("agentId");
           if (
-            !agentIdPattern.test(context.req.param("agentId")) ||
-            !serverIdPattern.test(serverId)
+            !connectionIdPattern.test(connectionId) ||
+            !agentIdPattern.test(agentId)
           )
-            return refusal(404, "No such server");
-          return (await agents.removeMcpServer(
-            context.req.param("agentId"),
-            serverId,
-          ))
+            return refusal(404, "No such connection");
+          return (await agents.ungrantConnection(connectionId, agentId))
             ? new Response(null, { status: 204 })
-            : refusal(404, "No such server");
+            : refusal(404, "No such access");
+        },
+      )
+      .delete(
+        "/api/connections/:connectionId",
+        owner("direct"),
+        async (context) => {
+          const connectionId = context.req.param("connectionId");
+          if (!connectionIdPattern.test(connectionId))
+            return refusal(404, "No such connection");
+          return (await agents.removeConnection(connectionId))
+            ? new Response(null, { status: 204 })
+            : refusal(404, "No such connection");
         },
       )
   );

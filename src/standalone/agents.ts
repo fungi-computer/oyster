@@ -34,6 +34,35 @@ import type { PostEnvelope } from "@fungi.computer/carrier/post";
 import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
 import { agentMail } from "./agent-mail.js";
 import {
+  createChannelConversations,
+  type ChannelConversation,
+  type ChannelConversations,
+} from "../channels/conversations.js";
+import {
+  transcriptLine,
+  type WebsiteTranscript,
+} from "@fungi.computer/nacre/website-channels";
+import type { ConversationBinding } from "../channels/binding.js";
+import {
+  personChannelInstructions,
+  type CreateWebsiteInput,
+  type UpdateWebsiteInput,
+  type WebsiteBinding,
+} from "../channels/web-binding.js";
+import { decideChannelRunSafely } from "../channels/run-decision.js";
+import {
+  createWebsiteChannelOwner,
+  websiteOutcome,
+  type WebsiteChannelOwner,
+  type WebsiteRefusal,
+  type WebsiteSite,
+} from "./website-channels.js";
+import { channelSessionDoor } from "./channel-session-door.js";
+import { createAuthenticatedVisitorChannel } from "../channels/visitor-channel.js";
+import { verifyVisitor, type ProvenVisitor } from "./visitor-proof.js";
+import { createVisitorStreamSlots } from "../channels/visitor-stream-slots.js";
+import type { VisitorReadOptions } from "../channels/conversations.js";
+import {
   createStandaloneMachineEnrollment,
   standaloneMachineAgentHome,
   standaloneMachineLinkAuthority,
@@ -113,7 +142,10 @@ import {
 } from "./model-key-vault.js";
 import { agentArchiveOwner } from "./agent-archive-owner.js";
 import { agentArchiveProjection } from "../agent-archive-projection.js";
-import { standaloneBrowserSource } from "./browser.js";
+import {
+  standaloneBrowserLiveView,
+  standaloneBrowserSource,
+} from "./browser.js";
 import { standaloneWebSource } from "./web.js";
 import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
 import {
@@ -190,12 +222,16 @@ import type { OysterWorkerEnv } from "../workers.js";
 import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
 import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
 import type { UiConnection } from "@fungi.computer/knapsack";
-import type { AgentMcpServerInput } from "../agents.js";
-import type { EgressRef } from "@fungi.computer/veil/connections";
+import type { ConnectionAccess, ConnectionInput } from "../agents.js";
 import type {
+  EgressRef,
   McpRequestData,
-  createAgentMcpConnections,
-} from "./agent-connections.js";
+} from "@fungi.computer/veil/connections";
+import type { createAgentMcpConnections } from "./agent-connections.js";
+import type {
+  CapabilitySource,
+  CapabilitySourceContext,
+} from "@fungi.computer/mycelium";
 import type {
   OysterAgent,
   AgentPolicyActor,
@@ -383,6 +419,12 @@ export type AgentEntry = Readonly<{
 
 /** Bindings the agent host reads. */
 export type StandaloneAgentsEnv = Readonly<{
+  /**
+   * Host secret (at least 32 bytes) that signs a website visitor's identity
+   * between the public edge and its website Agent. Without it no website
+   * Agent admits a visitor. Never sent to a browser.
+   */
+  OYSTER_WEBSITE_PROOF_KEY?: string;
   /** Configured standalone-owner identity subject; never a stored member ID. */
   OYSTER_OWNER_NAME?: string;
   /** Gateway custody remains in Veil; only the host receives these bindings. */
@@ -474,6 +516,247 @@ export abstract class StandaloneAgentBase<
 
   /** The deployable root's host for this Agent's pinned tenant. */
   protected abstract hostFor(scope: TenantScope): Promise<OysterHost>;
+  private channelOwner: ChannelConversations | undefined;
+  private channelDoor: ReturnType<typeof channelSessionDoor> | undefined;
+  private readonly acquireChannelStream = createVisitorStreamSlots();
+  /** The website bindings that name this Agent, as the directory last said. */
+  private readonly websiteBindings = new Map<string, WebsiteBinding>();
+  /** The owner's current record of one binding; hosts and tests supply it. */
+  protected readChannelBinding(
+    bindingId: string,
+  ): Promise<WebsiteBinding | null> {
+    return agentDirectoryForScope(
+      this.env,
+      tenantScope(defaultTenant, this.env.OYSTER_ORIGIN),
+    ).websiteBinding(bindingId);
+  }
+  /**
+   * Read one binding afresh from its owner: suspension, persona and edits are
+   * never stale. A binding that names another Agent is not this Agent's.
+   */
+  protected async loadChannelBinding(
+    bindingId: string,
+  ): Promise<WebsiteBinding | null> {
+    const binding = await this.readChannelBinding(bindingId);
+    if (binding === null || binding.agentId !== this.ctx.id.name) {
+      this.websiteBindings.delete(bindingId);
+      return null;
+    }
+    this.websiteBindings.set(bindingId, binding);
+    return binding;
+  }
+  /** A web host shares its edge's private assertion key with its Agent. */
+  protected channelProofKey(): string | null {
+    return this.env.OYSTER_WEBSITE_PROOF_KEY ?? null;
+  }
+  /**
+   * The one per-Session decision, with the binding read afresh: an owner
+   * Session is private, a visitor's runs only while its binding is active.
+   * Tools and permissions stay the Agent's own either way.
+   */
+  private async channelRun(sessionId: string | undefined) {
+    const conversation =
+      sessionId === undefined
+        ? null
+        : this.channelConversations().sessionConversation(sessionId);
+    if (conversation !== null)
+      await this.loadChannelBinding(conversation.bindingId);
+    return this.cachedChannelRun(sessionId);
+  }
+  /** The same decision from what this Agent already read; unknown denies. */
+  private cachedChannelRun(sessionId: string | undefined) {
+    return decideChannelRunSafely(
+      () => {
+        const conversation =
+          sessionId === undefined
+            ? null
+            : this.channelConversations().sessionConversation(sessionId);
+        return {
+          conversationBindingId: conversation?.bindingId ?? null,
+          binding:
+            conversation === null
+              ? null
+              : (this.websiteBindings.get(conversation.bindingId) ?? null),
+        };
+      },
+      sessionId ?? "none",
+      (cause) => {
+        console.error("channel run decision failed", cause);
+      },
+    );
+  }
+  /** Shiitake calls instructions.load at the start of the actual model turn.
+   * Capture that command before any asynchronous guidance can change the
+   * handoff version; participant projection otherwise hides its reply. A
+   * visitor's Session adds the fixed channel rules and the owner's persona to
+   * the Agent's own instructions, never replacing them. */
+  protected channelInstructions(
+    source: CloudflareShiitakeOptions["instructions"],
+  ): CloudflareShiitakeOptions["instructions"] {
+    return {
+      load: async (input) => {
+        const conversation = this.channelConversations().sessionConversation(
+          input.sessionId,
+        );
+        if (conversation === null) return source.load(input);
+        this.channelConversations().captureTurn(
+          input.sessionId,
+          input.commandId,
+        );
+        const decision = await this.channelRun(input.sessionId);
+        if (decision.kind !== "channel")
+          throw new Error("Website channel binding is unavailable");
+        const base = await source.load(input);
+        return {
+          revision: `${base.revision}+website-${String(decision.binding.authorityVersion)}`,
+          text: `${base.text}\n\n${personChannelInstructions(decision.binding.persona)}`,
+        };
+      },
+    };
+  }
+  /** Owner read of one website's conversations; the host admits the owner first. */
+  async websiteConversations(
+    bindingId: string,
+  ): Promise<readonly ChannelConversation[]> {
+    const binding = await this.loadChannelBinding(bindingId);
+    return binding === null ? [] : this.channelConversations().list(bindingId);
+  }
+  /** Owner read of one conversation of a website, from its Session. */
+  async websiteTranscript(
+    bindingId: string,
+    sessionId: string,
+  ): Promise<WebsiteTranscript | null> {
+    const binding = await this.loadChannelBinding(bindingId);
+    const conversation =
+      this.channelConversations().sessionConversation(sessionId);
+    if (binding === null || conversation?.bindingId !== bindingId) return null;
+    const snapshot = await (
+      await this.shiitake()
+    )
+      .session(sessionId)
+      .read({ limit: 200 });
+    return {
+      sessionId,
+      label: conversation.label,
+      lines: snapshot.messages.flatMap((message) => {
+        const line = transcriptLine(message);
+        return line === null ? [] : [line];
+      }),
+    };
+  }
+  private channelBinding(bindingId: string): ConversationBinding | null {
+    return this.websiteBindings.get(bindingId) ?? null;
+  }
+  private channelSessionDoor() {
+    return (this.channelDoor ??= channelSessionDoor(
+      () => this.shiitake(),
+      () => {
+        // A visitor's Session runs on this Agent's own tools; nothing to deliver.
+      },
+      () => this.channelConversations(),
+    ));
+  }
+  /**
+   * Compose Oyster's channel owner on this Agent's real store and Shiitake.
+   * A host must supply its own binding lookup after authenticating its edge;
+   * this does not install an inbound route or mint provider credentials.
+   */
+  protected channelConversations(): ChannelConversations {
+    if (this.channelOwner !== undefined) return this.channelOwner;
+    const owner = createChannelConversations({
+      sql: this.ctx.storage.sql,
+      transactionSync: (body) => this.ctx.storage.transactionSync(body),
+      binding: (id) => this.channelBinding(id),
+      door: this.channelSessionDoor(),
+      now: () => Date.now(),
+    });
+    return (this.channelOwner = owner);
+  }
+  /**
+   * Internal DO RPC only: the HTTP edge authenticates once in the central
+   * visitor owner, then selects this Agent. No bearer or client-provided
+   * visitor id enters this method. Its caller retains the SSE recheck callback.
+   */
+  private visitorConversation() {
+    const conversations = this.channelConversations();
+    return createAuthenticatedVisitorChannel({
+      binding: (id) => this.channelBinding(id),
+      conversations: () => conversations,
+      sessionDoor: () => this.channelSessionDoor(),
+      intake: (event) => conversations.receive(event),
+      acquireStream: this.acquireChannelStream,
+      now: () => Date.now(),
+    });
+  }
+  private async verifiedVisitor(bindingId: string, visitor: ProvenVisitor) {
+    const binding = await this.loadChannelBinding(bindingId);
+    if (binding?.lifecycle !== "active")
+      throw new Error("Website channel binding is unavailable");
+    return verifyVisitor(bindingId, visitor, this.channelProofKey());
+  }
+  async sendChannelVisitor(
+    bindingId: string,
+    visitor: ProvenVisitor,
+    requestId: string,
+    text: string,
+  ) {
+    const verified = await this.verifiedVisitor(bindingId, visitor);
+    return this.visitorConversation().send(
+      bindingId,
+      verified,
+      requestId,
+      text,
+    );
+  }
+  async withdrawChannelVisitor(
+    bindingId: string,
+    visitor: ProvenVisitor,
+    requestId: string,
+  ) {
+    const verified = await this.verifiedVisitor(bindingId, visitor);
+    return this.visitorConversation().withdraw(bindingId, verified, requestId);
+  }
+  async latestPendingChannelVisitor(bindingId: string, visitor: ProvenVisitor) {
+    const verified = await this.verifiedVisitor(bindingId, visitor);
+    return this.visitorConversation().latestPending(bindingId, verified);
+  }
+  async openChannelVisitor(
+    bindingId: string,
+    visitor: ProvenVisitor,
+    options: VisitorReadOptions,
+  ) {
+    const verified = await this.verifiedVisitor(bindingId, visitor);
+    return this.visitorConversation().open(bindingId, verified, options);
+  }
+  /**
+   * A stream is reauthorized at every beat by the central visitor owner, not
+   * by a callback held across this Durable Object's RPC boundary: the site must
+   * still be active and the visitor still live.
+   */
+  async watchChannelVisitor(bindingId: string, visitor: ProvenVisitor) {
+    const verified = await this.verifiedVisitor(bindingId, visitor);
+    return this.visitorConversation().watch(
+      bindingId,
+      verified,
+      async (visitorId) => {
+        const binding = await this.loadChannelBinding(bindingId);
+        return (
+          binding?.lifecycle === "active" &&
+          (await this.channelVisitorLive(bindingId, visitorId))
+        );
+      },
+    );
+  }
+  /** Whether the central visitor owner still serves this visitor. */
+  protected channelVisitorLive(
+    bindingId: string,
+    visitorId: string,
+  ): Promise<boolean> {
+    return agentDirectoryForScope(
+      this.env,
+      tenantScope(defaultTenant, this.env.OYSTER_ORIGIN),
+    ).websiteVisitorLive(bindingId, visitorId);
+  }
   /** Each installed Release's verified catalog surface, built once per Release for this Agent's lifetime. */
   #appSurfaces: AppSurfaceCache | undefined;
   private uiOwner: UiConnection | undefined;
@@ -625,6 +908,11 @@ export abstract class StandaloneAgentBase<
     request: Request,
   ): Promise<Response> | undefined {
     const pathname = new URL(request.url).pathname;
+    if (pathname.startsWith("/cloud-browser/"))
+      return standaloneBrowserLiveView(this.env.BROWSER, () => ({
+        teamId: this.env.OYSTER_ORIGIN,
+        agentId: this.ctx.id.name ?? "agent",
+      }))(request);
     if (pathname.startsWith("/browser/"))
       return this.ui().then((connection) => connection.fetch(request));
     // The Home command reads attachments inside a synchronous state transaction.
@@ -1133,15 +1421,21 @@ export abstract class StandaloneAgentBase<
     for (const invalidate of this.mcpInvalidations) invalidate();
   }
 
+  /**
+   * A full override must retain channelSource and channelInstructions:
+   * dropping them removes a suspended website's run refusal and turn capture.
+   */
   protected override async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
     const [
       { oysterAgentExtensions },
       { Knapsack },
-      { agentMcpSourceOptions, mcpRequestData },
+      { agentMcpSourceOptions },
+      { mcpRequestData },
     ] = await Promise.all([
       import("@fungi.computer/shiitake-extensions/roster/conversation-agents"),
       import("@fungi.computer/knapsack"),
       import("./agent-connections.js"),
+      import("@fungi.computer/veil/connections"),
     ]);
     const conversationAgents = await this.conversationAgents();
     const computerSource = createAgentComputerSource({
@@ -1160,11 +1454,21 @@ export abstract class StandaloneAgentBase<
     const principal = {
       actor: { kind: "agent", agentId: this.ctx.id.name ?? "agent" },
     } as const;
+    const channelSource = (source: CapabilitySource): CapabilitySource => ({
+      ...source,
+      acquire: async (context) =>
+        (await this.channelRun(context.session?.sessionId)).kind !== "denied"
+          ? source.acquire(context)
+          : {
+              snapshot: { version: "channel-denied", modules: [] },
+              release: () => Promise.resolve(),
+            },
+    });
     return {
       model: this.modelSource(),
       meta: { schema: FungiMessageMetaSchema },
       ...this.mail().host,
-      instructions: {
+      instructions: this.channelInstructions({
         load: async () => {
           const { appApprovalInstructions } = await import("../mcp.js");
           return {
@@ -1172,14 +1476,14 @@ export abstract class StandaloneAgentBase<
             text: instructions + "\n" + appApprovalInstructions,
           };
         },
-      },
+      }),
       tools: {
         sources: [
           {
             id: "oyster-apps",
             // Capture once per catalog acquisition, so the next run sees
             // changed Releases, installation authority and removals.
-            acquire: async (context) => {
+            acquire: async (context: CapabilitySourceContext) => {
               const host = await this.appHost();
               if (host === null)
                 return {
@@ -1202,15 +1506,19 @@ export abstract class StandaloneAgentBase<
           },
           {
             id: computerSource.id,
-            acquire: async (context) => {
+            acquire: async (context: CapabilitySourceContext) => {
               await this.preparedComputerSnapshot();
               return computerSource.acquire(context);
             },
           },
           Knapsack.mcpServers(
             agentMcpSourceOptions({
+              // Like attached Computers: an Agent not yet pinned to its
+              // directory has no connections, rather than a failing source.
               read: async () =>
-                (await this.mcpDirectory()).mcpProjection(this.agentName()),
+                (await this.policyDirectory()) === null
+                  ? { revision: 0, connections: [] }
+                  : (await this.mcpDirectory()).mcpProjection(this.agentName()),
               subscribe: (invalidate) => {
                 this.mcpInvalidations.add(invalidate);
                 return () => this.mcpInvalidations.delete(invalidate);
@@ -1258,7 +1566,7 @@ export abstract class StandaloneAgentBase<
               () => this.computerSnapshot,
             ),
           ),
-        ],
+        ].map(channelSource),
         sandbox: createCodemodeSandbox(this.env.LOADER, "oyster-workerd"),
       },
       extensions: {
@@ -1269,14 +1577,15 @@ export abstract class StandaloneAgentBase<
               prepare: async () => {
                 await this.preparedComputerSnapshot();
               },
-              read: () =>
-                readAgentComputerConnections(this.computerConnections()).map(
-                  ({ name, attachmentId, files }) => ({
-                    name,
-                    attachmentId,
-                    port: files.port,
-                  }),
-                ),
+              read: ({ sessionId }) =>
+                (this.cachedChannelRun(sessionId).kind !== "denied"
+                  ? readAgentComputerConnections(this.computerConnections())
+                  : []
+                ).map(({ name, attachmentId, files }) => ({
+                  name,
+                  attachmentId,
+                  port: files.port,
+                })),
             },
           }),
         ],
@@ -1468,20 +1777,45 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       hasAgent: (agentId) => this.has(agentId),
       notify: (agentId) =>
         this.env.AGENTS.getByName(agentId).invalidateMcpConnections(),
+      callbackUrl: mcpCallbackUrl(this.env.OYSTER_ORIGIN),
     }));
   }
 
-  /** Host-only: an Agent's granted MCP servers, never their credentials. */
-  async mcpServers(agentId: string) {
-    return (await this.mcpConnections()).servers(agentId);
+  /** Host-only: every connection with the Agents that may use it, never a credential. */
+  async connections() {
+    return (await this.mcpConnections()).list();
   }
 
-  async addMcpServer(agentId: string, input: AgentMcpServerInput) {
-    return (await this.mcpConnections()).add(agentId, input);
+  async addConnection(input: ConnectionInput) {
+    return (await this.mcpConnections()).add(input);
   }
 
-  async removeMcpServer(agentId: string, serverId: string) {
-    return (await this.mcpConnections()).remove(agentId, serverId);
+  async grantConnection(
+    connectionId: string,
+    agentId: string,
+    access: ConnectionAccess,
+  ) {
+    return (await this.mcpConnections()).grant(connectionId, agentId, access);
+  }
+
+  async ungrantConnection(connectionId: string, agentId: string) {
+    return (await this.mcpConnections()).ungrant(connectionId, agentId);
+  }
+
+  async removeConnection(connectionId: string) {
+    return (await this.mcpConnections()).remove(connectionId);
+  }
+
+  async connectionTools(connectionId: string) {
+    return (await this.mcpConnections()).tools(connectionId);
+  }
+
+  async completeMcpConnection(query: {
+    state: string;
+    code: string;
+    iss: string | undefined;
+  }) {
+    return (await this.mcpConnections()).complete(query);
   }
 
   /** Secret-free grants for one Agent: ids, versions and endpoints. */
@@ -1945,6 +2279,102 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     };
   }
 
+  private websiteChannelsOwner: WebsiteChannelOwner | undefined;
+  private websites(): WebsiteChannelOwner {
+    return (this.websiteChannelsOwner ??= createWebsiteChannelOwner({
+      sql: this.ctx.storage.sql,
+      transactionSync: (body) => this.ctx.storage.transactionSync(body),
+      agentExists: (agentId) => this.has(agentId),
+      agentIdentity: (agentId) => {
+        const id = agentIds.agent.parse(agentId);
+        if (!id.ok || this.archived(agentId)) return null;
+        const entry = this.directory.read(this.grant(), id.value);
+        return entry === null
+          ? null
+          : { name: entry.name, avatar: this.avatars.read(agentId) };
+      },
+    }));
+  }
+
+  /** Owner read of every website bound to one of this tenant's Agents. */
+  websiteList(
+    principal: TenantPrincipal,
+  ): readonly WebsiteBinding[] | WebsiteRefusal {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    return this.websites().bindings.list();
+  }
+
+  /** Owner-only: put a chosen Agent behind a new site key. */
+  websiteCreate(
+    principal: TenantPrincipal,
+    input: CreateWebsiteInput,
+    requestId: string,
+  ): WebsiteBinding | WebsiteRefusal {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    return websiteOutcome(() =>
+      this.websites().bindings.create(input, requestId),
+    );
+  }
+
+  /** Owner-only edit, fenced by the version the owner last read. */
+  websiteUpdate(
+    principal: TenantPrincipal,
+    bindingId: string,
+    input: UpdateWebsiteInput,
+  ): WebsiteBinding | WebsiteRefusal {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    return websiteOutcome(() =>
+      this.websites().bindings.update(bindingId, input),
+    );
+  }
+
+  /** Host-only: the binding a website Agent serves, read fresh on every use. */
+  websiteBinding(bindingId: string): WebsiteBinding | null {
+    return this.websites().bindings.read(bindingId);
+  }
+
+  /** Host-only public lookup: a site key resolves to its site, or to nothing. */
+  websiteSite(siteKey: string): WebsiteSite | null {
+    return this.websites().site(siteKey);
+  }
+
+  websiteMint(bindingId: string, siteKey: string, addressHash: string) {
+    return this.websites().visitors.mint(
+      this.websites().bindings.read(bindingId),
+      siteKey,
+      addressHash,
+    );
+  }
+
+  websiteRefresh(bindingId: string, refreshSecret: string) {
+    return this.websites().visitors.refresh(
+      this.websites().bindings.read(bindingId),
+      refreshSecret,
+    );
+  }
+
+  websiteRotate(
+    bindingId: string,
+    siteKey: string,
+    accessToken: string,
+    addressHash: string,
+  ) {
+    return this.websites().visitors.rotate(
+      this.websites().bindings.read(bindingId),
+      siteKey,
+      accessToken,
+      addressHash,
+    );
+  }
+
+  websiteVisitorLive(bindingId: string, visitorId: string): boolean {
+    return this.websites().visitors.live(bindingId, visitorId);
+  }
+
+  websiteAuthenticate(bindingId: string, accessToken: string) {
+    return this.websites().visitors.authenticate(bindingId, accessToken);
+  }
+
   list(options?: Readonly<{ archived?: boolean }>): readonly AgentEntry[] {
     const archived = this.archiveProjection().archivedIds();
     return this.directory
@@ -2287,6 +2717,10 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   }
 }
 
+/** Where an authorization server returns the owner after a sign-in. */
+const mcpCallbackUrl = (origin: string) =>
+  new URL("/api/connections/callback", origin).href;
+
 /** The directory's Durable Object storage as the credential store's key-value port. */
 const credentialStorage = (
   storage: DurableObjectStorage,
@@ -2422,10 +2856,18 @@ export function standaloneAgents(
         scope?.tenantId ?? defaultTenant,
       );
     },
-    mcpServers: (agentId) => directory().mcpServers(agentId),
-    addMcpServer: (agentId, input) => directory().addMcpServer(agentId, input),
-    removeMcpServer: (agentId, serverId) =>
-      directory().removeMcpServer(agentId, serverId),
+    connections: () => directory().connections(),
+    addConnection: (input) => directory().addConnection(input),
+    grantConnection: (connectionId, agentId, access) =>
+      directory().grantConnection(connectionId, agentId, access),
+    ungrantConnection: (connectionId, agentId) =>
+      directory().ungrantConnection(connectionId, agentId),
+    removeConnection: (connectionId) =>
+      directory().removeConnection(connectionId),
+    connectionTools: (connectionId) =>
+      directory().connectionTools(connectionId),
+    completeMcpConnection: (query) => directory().completeMcpConnection(query),
+    mcpCallbackUrl: () => mcpCallbackUrl(env.OYSTER_ORIGIN),
     fetch: async (agentId, request) => {
       const home = await directory().agentHome(agentId);
       if (home?.kind === "machine") {

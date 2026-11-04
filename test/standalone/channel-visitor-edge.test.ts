@@ -76,6 +76,11 @@ function edge() {
       return Promise.resolve(door(visitor.visitorId));
     },
     addressHash: () => Promise.resolve("hash"),
+    turnstile: () => ({
+      configuration: { kind: "disabled" },
+      timeoutMs: 1000,
+      onError: () => undefined,
+    }),
     assetPath: (kind: "widget" | "styles") => `/${kind}`,
     onError: (error: Error) => {
       throw error;

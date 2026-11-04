@@ -103,40 +103,72 @@ An App's requested tools await the owner's direct approval.
 
 ---
 
-### AgentMcpServer
+### ConnectionAccess
 
 ```ts
-type AgentMcpServer = Readonly<{
-  serverId: string;
+type ConnectionAccess = "all" | "read" | readonly string[];
+```
+
+What an Agent may do with one connection: everything, only reads, or named
+tools.
+
+---
+
+### OysterConnection
+
+```ts
+type OysterConnection = Readonly<{
+  connectionId: string;
   name: string;
+  label: string;
+  kind: "mcp" | "openapi";
   url: string;
-  hasBearer: boolean;
+  auth: "none" | "token" | "oauth";
+  state: "connected" | "pending" | "reconnect_required";
+  grants: readonly Readonly<{
+    agentId: string;
+    access: ConnectionAccess;
+  }>[];
 }>;
 ```
 
-One remote MCP server connected to an Agent; its bearer token is never returned.
+One connection as its owner sees it; no secret, locator or token ever appears.
 
 ---
 
-### AgentMcpServerInput
+### ConnectionAdded
 
 ```ts
-type AgentMcpServerInput = typeof agentMcpServerInputSchema.Type;
+type ConnectionAdded = Readonly<{
+  connectionId: string;
+  authorizeUrl: string | null;
+}>;
 ```
 
-An owner's request to connect one remote MCP server to an Agent.
+A newly added connection; `authorizeUrl` is where the owner signs in, when the
+server uses OAuth.
 
 ---
 
-### AgentMcpServerRefusal
+### ConnectionRefusal
 
 ```ts
-type AgentMcpServerRefusal = Readonly<{
+type ConnectionRefusal = Readonly<{
   error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
 }>;
 ```
 
-Why connecting an MCP server was refused.
+Why a connection change was refused.
+
+---
+
+### ConnectionInput
+
+```ts
+type ConnectionInput = typeof connectionInputSchema.Type;
+```
+
+An owner's request to connect one remote MCP server.
 
 ---
 
@@ -313,27 +345,55 @@ type OysterAgents = Readonly<{
       }>
   >;
   removeModelKey: Promise<"deleted" | "absent">;
-  mcpServers: Promise<
-    | readonly Readonly<{
-        serverId: string;
-        name: string;
-        url: string;
-        hasBearer: boolean;
-      }>[]
-    | null
+  connections: Promise<
+    readonly Readonly<{
+      connectionId: string;
+      name: string;
+      label: string;
+      kind: "mcp" | "openapi";
+      url: string;
+      auth: "none" | "token" | "oauth";
+      state: "connected" | "pending" | "reconnect_required";
+      grants: readonly Readonly<{
+        agentId: string;
+        access: ConnectionAccess;
+      }>[];
+    }>[]
   >;
-  addMcpServer: Promise<
+  addConnection: Promise<
     | Readonly<{
-        serverId: string;
-        name: string;
-        url: string;
-        hasBearer: boolean;
+        connectionId: string;
+        authorizeUrl: string | null;
       }>
     | Readonly<{
         error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
       }>
   >;
-  removeMcpServer: Promise<boolean>;
+  grantConnection: Promise<
+    | Readonly<{
+        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+      }>
+    | Readonly<{
+        ok: true;
+      }>
+  >;
+  ungrantConnection: Promise<boolean>;
+  removeConnection: Promise<boolean>;
+  connectionTools: Promise<
+    | readonly string[]
+    | Readonly<{
+        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+      }>
+  >;
+  completeMcpConnection: Promise<
+    | Readonly<{
+        ok: true;
+      }>
+    | Readonly<{
+        error: string;
+      }>
+  >;
+  mcpCallbackUrl: string;
   fetch: Promise<Response | null>;
   inbox: Promise<
     Readonly<{
@@ -412,28 +472,35 @@ What the owner submits to seal one provider key.
 
 ## Variables
 
-### maxAgentMcpServers
+### maxAgentConnections
 
 ```ts
-const maxAgentMcpServers: 16 = 16;
+const maxAgentConnections: 16 = 16;
 ```
 
-At most this many MCP servers per Agent.
+At most this many connections per Agent.
 
 ---
 
-### agentMcpServerInputSchema
+### connectionInputSchema
 
 ```ts
-const agentMcpServerInputSchema: Struct<{
+const connectionInputSchema: Struct<{
   name: String;
   url: String;
   bearer: NullOr<String>;
+  oauth: optional<
+    Struct<{
+      clientId: optional<String>;
+      clientSecret: optional<String>;
+      scope: optional<String>;
+    }>
+  >;
 }>;
 ```
 
-Owner input for one MCP server: a guest identifier, an `https:` endpoint and an
-optional bearer.
+Owner input for one MCP connection: a guest identifier, an `https:` endpoint and
+an optional bearer.
 
 ## Functions
 
@@ -498,14 +565,14 @@ never comes back out; listings carry provider, label and times only.
 
 ---
 
-### agentMcpServerRoutes()
+### connectionRoutes()
 
 ```ts
-function agentMcpServerRoutes(agents): Routes<OysterEnv>;
+function connectionRoutes(agents): Routes<OysterEnv>;
 ```
 
-Host-owned Agent MCP server custody for the owner directly; never an App
-capability. Bearer tokens go in and never come back out.
+Host-owned connection custody for the owner directly; never an App capability.
+Tokens go in and never come back out.
 
 #### Parameters
 

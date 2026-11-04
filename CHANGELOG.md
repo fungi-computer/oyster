@@ -1,5 +1,52 @@
 # @fungi.computer/oyster
 
+## 0.11.0
+
+### Minor Changes
+
+- Changes since 0.10.0:
+
+  - fix(oyster): keep the embed build graphs out of the Worker bundle
+  - fix(oyster): keep App Agent routes within the installation's selected Agents
+  - fix(connections): end each row with its keys and set the redirect URL as a
+    fact
+  - feat(connections): bring MCP connections and the one connections port to the
+    hub
+  - feat(connections): one connections panel and port on the standalone host
+  - feat(hub): serve openapi connectors from the veil connections core
+  - fix(oyster,hub): classify the website routes and keep Shiitake's client out
+    of the Team bundle
+  - fix(oyster): classify the sign-in callback route and update the settings
+    fixtures
+  - fix(tourtois): export the added-server schema with its port
+  - feat(oyster): sign in to agent servers with oauth
+  - fix(oyster): give an unpinned Agent no MCP connections instead of a failing
+    source
+  - feat(oyster): hand a paused cloud browser to the person on both hosts
+  - fix(oyster): satisfy the lint and suppression budgets for the website
+    channel
+  - fix(oyster): resolve the website directory when a route runs, not when its
+    table is built
+  - fix(tourtois): lay out the website facts without inventing styles
+  - feat(oyster): serve website chat from a self-hosted Oyster
+  - feat(oyster): ask a Turnstile-protected site's visitors for the check
+  - feat(oyster): compose the standalone website channel
+  - fix(oyster): drop duplicate nightly script from the visitor slices
+  - feat(oyster): compose authenticated standalone website visitors
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/nacre@0.2.0
+  - @fungi.computer/parakeet@0.8.0
+  - @fungi.computer/shiitake@0.10.0
+  - @fungi.computer/veil@0.5.0
+  - @fungi.computer/shiitake-extensions@0.6.4
+  - @fungi.computer/zookeeper@0.0.11
+
 ## 0.10.0
 
 ### Minor Changes

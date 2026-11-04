@@ -10,7 +10,7 @@ import {
 import { computerList } from "@fungi.computer/agar/computer";
 import { agentApprovalRoutes, type OysterAgents } from "../agents.js";
 import type { LiveOysterKey } from "../keys.js";
-import type { Installation } from "../apps/index.js";
+import type { Installation, ResourceRef } from "../apps/index.js";
 import { fileCapabilities, type FileSource } from "../files.js";
 import {
   createOyster,
@@ -33,6 +33,8 @@ export type CapabilityFixtureOptions = Readonly<{
   adapters?: readonly OysterCapability[];
   /** Grant the file adapters over this source instead of the probe. */
   fileSource?: FileSource;
+  /** Capabilities the owner narrowed to exactly these resources. */
+  selected?: Partial<Record<AppCapabilityId, readonly ResourceRef[]>>;
   /** `false` clears the owner's approval after install. */
   admitted?: boolean;
   authenticate?: (request: Request) => Promise<OysterAuthResult>;
@@ -125,6 +127,7 @@ export async function capabilityFixture(
     release: declaredRelease,
     declaration: declaration ?? emptyAppDeclaration,
     descriptors: capabilities,
+    selected: options.selected ?? {},
   });
   if (options.admitted === false)
     installation = {

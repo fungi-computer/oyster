@@ -17,6 +17,8 @@ export type ConversationBinding = Readonly<{
         siteKey: string;
         origins: readonly string[];
         accent?: string | undefined;
+        /** Visitors must pass Turnstile before a mint. */
+        turnstile?: boolean | undefined;
       }>
     | Readonly<{ provider: "discord" | "email" | "game" }>;
   /** Zod's optional binding projection may carry an explicit undefined. */

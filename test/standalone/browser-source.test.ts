@@ -70,6 +70,7 @@ describe("standalone browser capability source", () => {
           expect(listing.results.map((operation) => operation.path)).toEqual([
             "cloudBrowser.click",
             "cloudBrowser.close",
+            "cloudBrowser.handoff",
             "cloudBrowser.navigate",
             "cloudBrowser.open",
             "cloudBrowser.pdf",
@@ -79,7 +80,7 @@ describe("standalone browser capability source", () => {
             "cloudBrowser.snapshot",
             "cloudBrowser.type",
           ]);
-          expect(listing.total).toBe(10);
+          expect(listing.total).toBe(11);
           expect(listing.nextCursor).toBeNull();
           expect(calls).toEqual([]);
         } finally {
