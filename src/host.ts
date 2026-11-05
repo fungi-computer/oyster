@@ -159,17 +159,8 @@ import {
   type PageAssetLoader,
 } from "./page-assets.js";
 import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import {
-  CenteredCard,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "@fungi.computer/caps/components/card";
-import { Form, Field, FormFooter } from "@fungi.computer/caps/components/field";
-import { Input } from "@fungi.computer/caps/components/input";
-import { Button } from "@fungi.computer/caps/components/button";
+import { hostPage, hostPageAsset, type HostPageState } from "./host-page.js";
+import { parseAccept } from "hono/utils/accept";
 import { parseArtifactRef, type AppApi } from "@fungi.computer/puffball";
 import { isBuildJobLogRef } from "./build/job-log.js";
 
@@ -936,52 +927,32 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     },
   );
 
-  table.get("/login", publicRoute("the sign-in form"), async () => {
+  const page = async (
+    state: HostPageState,
+    options: Omit<
+      Parameters<typeof hostPage>[0],
+      "state" | "title" | "stylesheets"
+    > = {},
+  ) => {
     const { loginFonts, styles } = await assets();
-    const form = renderToStaticMarkup(
-      createElement(
-        CenteredCard,
-        null,
-        createElement(
-          CardHeader,
-          null,
-          createElement(CardTitle, { level: 2 }, "Sign in"),
-        ),
-        createElement(
-          CardContent,
-          null,
-          createElement(
-            Form,
-            { method: "post", action: "/login" },
-            createElement(Field, {
-              label: "Owner key",
-              required: true,
-              children: createElement(Input, {
-                name: "key",
-                type: "password",
-                autoComplete: "current-password",
-                required: true,
-              }),
-            }),
-            createElement(
-              FormFooter,
-              { layout: "stretch", divider: false },
-              createElement(Button, { type: "submit" }, "Sign in"),
-            ),
-          ),
-        ),
-      ),
-    );
-    return new Response(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in · ${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${styles.path}"><link rel="stylesheet" href="${loginFonts.path}"></head><body class="px-lg">${form}</body></html>`,
-      {
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-        },
-      },
-    );
-  });
+    return hostPage({
+      state,
+      title,
+      stylesheets: [styles.path, loginFonts.path],
+      ...options,
+    });
+  };
+  table.get(
+    "/_oyster/host-assets/*",
+    publicRoute("content-addressed host illustrations and layout"),
+    (context) => hostPageAsset(new URL(context.req.url).pathname),
+  );
+  table.get("/login", publicRoute("the sign-in form"), () => page("login"));
+  table.get(
+    "/login/key-help",
+    publicRoute("owner key recovery instructions, without a reset"),
+    () => page("key-help"),
+  );
   table.post(
     "/login",
     door("the host's own sign-in checks the posted key"),
@@ -1061,6 +1032,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       matches: match(`${capability.base}${method.path}`, {
         end: method.kind !== "transport",
         sensitive: true,
+        decode: false,
       }),
     })),
   );
@@ -1194,28 +1166,35 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         (await admitted.reaches(installation))
       )
         installations.push(installation);
-    const items = installations
-      .map(
-        (installation) =>
-          `<li><a href="/apps/${escapeHtml(installation.installationId)}/">${escapeHtml(installation.installationId)}</a> <small>${escapeHtml(installation.release.releaseId)}</small>${admitted.authority.kind === "owner" ? ` <a href="/api/installations/${encodeURIComponent(installation.installationId)}/grants">App access</a>` : ""}</li>`,
-      )
-      .join("");
     const resetAt = await host.installations.resetAt?.();
-    const resetNotice =
+    const reset =
       resetAt !== undefined &&
       resetAt !== null &&
-      !stored.some((installation) => installation.status === "enabled")
-        ? "<p>This update reset your installed Apps. Reinstall them with npx oyster install-apps.</p>"
-        : "";
-    return new Response(
-      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title>${tabIcon}<h1>${escapeHtml(title)}</h1>${resetNotice}<ul>${items || "<li>No Apps installed yet.</li><li>Install Apps with <code>npx oyster install-apps</code></li>"}</ul>`,
-      {
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
-      },
+      !stored.some((installation) => installation.status === "enabled");
+    const directory = host.workbench ? await host.workbench.directory() : null;
+    const names = new Map(
+      directory?.apps.map((app) => [app.installationId, app.displayName]),
+    );
+    const apps = installations.map((installation) => {
+      const app = {
+        id: installation.installationId,
+        name:
+          names.get(installation.installationId) ?? installation.installationId,
+      };
+      return admitted.authority.kind === "owner"
+        ? {
+            ...app,
+            accessHref: `/api/installations/${encodeURIComponent(installation.installationId)}/grants`,
+          }
+        : app;
+    });
+    return page(
+      host.homeInstallationId !== undefined
+        ? "desktop-missing"
+        : apps.length === 0
+          ? "empty"
+          : "root",
+      { apps, reset },
     );
   });
 
@@ -2087,13 +2066,98 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     },
   );
 
+  // Present errors only at the host's document boundary. App assets, transports
+  // and API responses retain their status, headers and machine-readable body.
+  const appEntry = match("/apps/:installationId/", { decode: false });
+  const documentResponse = async (
+    request: Pick<Request, "url" | "method" | "headers">,
+    response: Response,
+  ) => {
+    const path = new URL(request.url).pathname;
+    if (capabilityRoutes.some((route) => route.matches(path))) return response;
+    const document =
+      parseAccept(request.headers.get("Accept") ?? "").find(
+        (entry) =>
+          entry.q > 0 && ["text/html", "application/json"].includes(entry.type),
+      )?.type === "text/html" &&
+      ((request.method === "GET" &&
+        (Boolean(appEntry(path)) ||
+          ![
+            "/api",
+            "/ui",
+            "/ui-entry",
+            "/_oyster",
+            "/apps",
+            "/mcp",
+            "/git",
+          ].some(
+            (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+          ))) ||
+        (request.method === "POST" && path === "/login"));
+    if (!document || response.status < 400) return response;
+    const state =
+      path === "/login" && [400, 401].includes(response.status)
+        ? "login-invalid"
+        : response.status === 403
+          ? "access-denied"
+          : response.status >= 500
+            ? "server-error"
+            : "not-found";
+    let rendered: Response;
+    try {
+      rendered = await page(state, { status: response.status });
+    } catch (cause) {
+      if (!(cause instanceof PageAssetsLoadError)) throw cause;
+      console.error(
+        "Host page assets unavailable; serving recovery document",
+        cause,
+      );
+      rendered = await hostPage({ state, title, status: response.status });
+    }
+    // Keep timing, robots and retry metadata from the original refusal.
+    response.headers.forEach((value, name) => {
+      if (
+        ![
+          "content-type",
+          "content-length",
+          "content-encoding",
+          "cache-control",
+          "etag",
+          "vary",
+        ].includes(name)
+      )
+        rendered.headers.set(name, value);
+    });
+    return rendered;
+  };
   return {
     declarations: () => table.declarations(),
-    serve: () =>
-      serveHost(table, authenticate, ports, {
-        // Server-Timing names the Durable Object hops a request waited on.
+    serve: () => {
+      const served = serveHost(table, authenticate, ports, {
         serverTiming: { totalDescription: "Oyster" },
         headers: [noIndex],
-      }),
+      });
+      return {
+        ...served,
+        fetch: async (...args) =>
+          documentResponse(args[0], await served.fetch(...args)),
+        request: async (...args) => {
+          const [input, init] = args;
+          const request = {
+            url:
+              input instanceof Request
+                ? input.url
+                : new URL(input, "http://localhost").href,
+            method:
+              init?.method ?? (input instanceof Request ? input.method : "GET"),
+            headers: new Headers(
+              init?.headers ??
+                (input instanceof Request ? input.headers : undefined),
+            ),
+          };
+          return documentResponse(request, await served.request(...args));
+        },
+      };
+    },
   };
 }

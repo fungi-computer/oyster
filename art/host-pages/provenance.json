@@ -1,0 +1,42 @@
+{
+  "review": "Oyster page mocks approved 2026-11-05",
+  "renderer": "@fungi.computer/sprite/ink",
+  "outputs": [
+    {
+      "file": "desktop-build-dark-800.avif",
+      "reviewedSha256": "02fa976e033d33978c16676805ab9ce38eae808d5c1c906679760af6362c1978"
+    },
+    {
+      "file": "desktop-build-light-800.avif",
+      "reviewedSha256": "d4f06a28ee829ce3138d3aab8f3589e1d5fe2eb239b312c26447cb6c03dc158c"
+    },
+    {
+      "file": "desktop-build.json",
+      "reviewedSha256": "4882a3355b6729d9c77903b4c053e54ecdbcb304cb0389f9ead0a5d67acbf9ed"
+    },
+    {
+      "file": "key-dark-800.avif",
+      "reviewedSha256": "0abb486b12c84ab82c38d25000fba5cc7fc010d430fa609ff4f0d2bf55c9dc1a"
+    },
+    {
+      "file": "key-light-800.avif",
+      "reviewedSha256": "a7feab5700ea01ee485b5f93ead6ccb4812bfdf46f15ade65a6e2d3744c1fbca"
+    },
+    {
+      "file": "key.json",
+      "reviewedSha256": "774f450881a6ab85eecb7006bc357b4c25e877e881c486123baa510e2edfbcb2"
+    },
+    {
+      "file": "offline-dark-800.avif",
+      "reviewedSha256": "3b38543f004759b4ace2cc6f570cb211c40301a4ecbac1a67c7ddf030a39be11"
+    },
+    {
+      "file": "offline-light-800.avif",
+      "reviewedSha256": "dd71c922f9220f781cf6913ec2bea9a59f864f78d23605fc926acaf264974f5c"
+    },
+    {
+      "file": "offline.json",
+      "reviewedSha256": "9024145345dedb6dc4f504970a3dae7dd2c39bf27a255e40543cdfed97a4c66c"
+    }
+  ]
+}

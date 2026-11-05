@@ -4,7 +4,7 @@ export declare const pageScript: string;
 /** Shared host fonts, served once as a digest-pinned stylesheet. */
 export declare const fontStyles: string;
 
-/** The sans family alone, for the sign-in page. */
+/** Nunito and Maple Mono, for host entry and recovery pages. */
 export declare const loginFontStyles: string;
 
 /** Caps styles for server-rendered host pages. */

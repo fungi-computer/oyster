@@ -21,7 +21,7 @@ test("every Oyster page a person opens in a tab carries the Fungi sigil, under a
     null,
   );
   const app = createOyster({ ...host });
-  const link = `<link rel="icon" type="image/svg+xml" href="${fungiFaviconHref}">`;
+  const link = `<link rel="icon" type="image/svg+xml" href="${fungiFaviconHref}"`;
   for (const path of ["/login", "/", "/apps/context-probe/"]) {
     const response = await app.request(path);
     assert.equal(response.status, 200, path);

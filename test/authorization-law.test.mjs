@@ -778,7 +778,9 @@ test("every host /api route refuses anyone but the owner", async () => {
 // credential (MCP, Git, signed webhooks, the posted owner key).
 const anonymousPublicPaths = [
   "/_oyster/assets/*",
+  "/_oyster/host-assets/*",
   "/login",
+  "/login/key-help",
   "/robots.txt",
   "/ui-entry/:installationId/:releaseId/shell.js",
   "/ui/:installationId/:releaseId/*",

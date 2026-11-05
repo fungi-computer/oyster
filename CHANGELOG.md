@@ -1,5 +1,15 @@
 # @fungi.computer/oyster
 
+## 0.13.0
+
+### Minor Changes
+
+- Changes since 0.12.1:
+
+  - fix(oyster): copy refusal headers with forEach for every consumer's lib
+  - fix(oyster): clear host page admission checks
+  - feat(oyster): design host entry and recovery pages
+
 ## 0.12.1
 
 ### Patch Changes

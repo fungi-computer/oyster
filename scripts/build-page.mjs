@@ -1,8 +1,17 @@
 // Bundle the App page script into a module exporting its source text, so the
 // Oyster host can serve it from any runtime without an asset pipeline.
 import { build } from "esbuild";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { URL } from "node:url";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +39,10 @@ async function stylesheet(...entries) {
 const [styles, fonts, loginFonts] = await Promise.all([
   stylesheet("@fungi.computer/caps/styles.css"),
   stylesheet("@fungi.computer/caps/fonts.css"),
-  stylesheet("@fungi.computer/caps/fonts-sans.css"),
+  stylesheet(
+    "@fungi.computer/caps/fonts-sans.css",
+    "@fungi.computer/stipe/fonts-mono.css",
+  ),
 ]);
 
 const result = await build({
@@ -280,3 +292,79 @@ for (const declaration of ["embed-scripts.d.ts", "embed-metafiles.d.ts"])
     new URL(`../src/${declaration}`, import.meta.url),
     new URL(declaration, dist),
   );
+
+// Host recovery is independent of Tourtois and the App boot bundle. Only these
+// three approved illustrations ship; original manga sources remain in review.
+const hostPageBundle = await build({
+  entryPoints: [new URL("../src/page/host-page.ts", import.meta.url).pathname],
+  outdir: "host-page-build",
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  minify: true,
+  write: false,
+  legalComments: "none",
+  logLevel: "warning",
+});
+const hostPageOutput = hostPageBundle.outputFiles.find((file) =>
+  file.path.endsWith(".js"),
+);
+const hostPageStyles = hostPageBundle.outputFiles.find((file) =>
+  file.path.endsWith(".css"),
+);
+if (!hostPageOutput || !hostPageStyles)
+  throw new Error("Host page bundle must produce script and layout");
+const hostAssets = {};
+function addHostAsset(name, bytes, contentType, encoding = "utf8") {
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  hostAssets[name] = {
+    path: `/_oyster/host-assets/${hash}/${name}`,
+    contentType,
+    source: bytes.toString(encoding),
+    encoding,
+  };
+}
+addHostAsset(
+  "host-page.js",
+  Buffer.from(hostPageOutput.text),
+  "text/javascript; charset=utf-8",
+);
+addHostAsset(
+  "layout.css",
+  Buffer.from(hostPageStyles.text),
+  "text/css; charset=utf-8",
+);
+for (const name of ["desktop-build", "key", "offline"]) {
+  addHostAsset(
+    `${name}.json`,
+    Buffer.from(
+      JSON.stringify(
+        JSON.parse(
+          await readFile(
+            new URL(`../art/host-pages/${name}.json`, import.meta.url),
+            "utf8",
+          ),
+        ),
+      ),
+    ),
+    "application/json",
+  );
+  for (const theme of ["light", "dark"])
+    addHostAsset(
+      `${name}-${theme}.avif`,
+      await readFile(
+        new URL(`../art/host-pages/${name}-${theme}-800.avif`, import.meta.url),
+      ),
+      "image/avif",
+      "base64",
+    );
+}
+await writeFile(
+  new URL("host-page-assets.js", dist),
+  `export const hostPageAssets = ${JSON.stringify(hostAssets)};\n`,
+);
+await copyFile(
+  new URL("../src/host-page-assets.d.ts", import.meta.url),
+  new URL("host-page-assets.d.ts", dist),
+);

@@ -531,8 +531,8 @@ test("login keeps its ordinary owner-key POST and uses the responsive Caps form"
   const response = await app.request("/login");
   const html = await response.text();
   assert.match(html, /name="viewport" content="width=device-width/u);
-  assert.match(html, /class="caps-centered-card/u);
-  assert.match(html, /class="caps-form"/u);
+  assert.match(html, /class="caps-trading-card"/u);
+  assert.match(html, /class="form-stack"/u);
   assert.match(html, /method="post" action="\/login"/u);
   assert.match(html, /name="key"/u);
   assert.match(html, /type="password"/u);
@@ -545,7 +545,7 @@ test("login keeps its ordinary owner-key POST and uses the responsive Caps form"
   );
 });
 
-test("login ships only the sans font family it renders", async () => {
+test("login ships Nunito and Maple Mono, with no display font", async () => {
   const app = await homePageFixture();
   const html = await (await app.request("/login")).text();
   const fonts = /<link rel="stylesheet" href="([^"]+login-fonts.css)"/u.exec(
@@ -564,7 +564,7 @@ test("login ships only the sans font family it renders", async () => {
       (match) => match[1],
     ),
   );
-  assert.deepEqual([...families], ["Nunito"]);
+  assert.deepEqual([...families], ["Nunito", "Maple Mono"]);
   const shared = await (
     await app.request(
       /<link rel="stylesheet" href="([^"]+\/fonts.css)"/u.exec(
@@ -574,7 +574,7 @@ test("login ships only the sans font family it renders", async () => {
       )?.[1],
     )
   ).text();
-  assert.ok(css.length < shared.length / 4);
+  assert.ok(css.length < shared.length);
 });
 
 test("owner permission reads use the host resource directory, never an App's claimed identities", async () => {
