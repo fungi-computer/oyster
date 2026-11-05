@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `oyster install-apps`: seed, build on the Oyster's own Computer, and install
+// `oyster try` starts a local Oyster; `oyster install-apps`: seed, build on the Oyster's own Computer, and install
 // the seven starter Apps (Tourtois, Bonsai, Shed, Inkcap, Trellis, Prints,
 // and Grove). Each comes from its own public repository by default,
 // or from a Botanical checkout with `--from <directory>`.
@@ -13,6 +13,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
+import { Cli } from "@fungi.computer/lantern";
+import {
+  createTryCli,
+  reportTryFailure,
+  tryOyster,
+  tryUsage,
+} from "./try-cli.js";
 import {
   installReleaseCommand,
   installReleaseUsage,
@@ -68,7 +75,7 @@ function seconds(milliseconds: number) {
   return `${(milliseconds / 1000).toFixed(1)}s`;
 }
 
-function timingTable(results: readonly InstalledStarterApp[]) {
+function timingTable(results: readonly InstalledStarterApp[]): string[] {
   const rows = results.map(({ installationId, timings }) => [
     installationId,
     seconds(timings.fetch),
@@ -93,12 +100,22 @@ function timingTable(results: readonly InstalledStarterApp[]) {
     "upload",
     "install",
   ];
-  return [header, ...rows].map((row) => row.join("\t")).join("\n");
+  const table = [header, ...rows];
+  const widths = header.map((_, column) =>
+    Math.max(...table.map((row) => row[column]?.length ?? 0)),
+  );
+  return table.map((row) =>
+    row
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join("  ")
+      .trimEnd(),
+  );
 }
 
 export async function installApps(
   args: readonly string[],
   install: typeof installStandaloneAppSet = installStandaloneAppSet,
+  ui: Cli = new Cli({ brand: "fungi" }),
 ) {
   const { values } = parseArgs({
     args: [...args],
@@ -116,6 +133,7 @@ export async function installApps(
     process.stdout.write(helpText);
     return;
   }
+  ui.welcome("Oyster: install the starter Apps");
   const url = process.env.OYSTER_URL;
   const key = process.env.OYSTER_OWNER_KEY;
   if (!url || !key) throw new Error(missingVariableMessage(url, key));
@@ -149,20 +167,24 @@ export async function installApps(
       url,
       key,
       concurrency,
+      // Builds run side by side, so each report is its own line, not a spinner.
       report: (message) => {
-        process.stdout.write(`${message}\n`);
+        ui.step(message);
       },
     });
     const elapsed = performance.now() - started;
-    process.stdout.write(`\n${timingTable(installed)}\n`);
-    process.stdout.write("\nApp\tResult\n");
-    for (const app of installed)
-      process.stdout.write(`${app.installationId}\tinstalled\n`);
-    for (const app of failed)
-      process.stdout.write(`${app.installationId}\tfailed: ${app.reason}\n`);
-    process.stdout.write(
-      `\nInstalled ${String(installed.length)} Apps; failed ${String(failed.length)} in ${seconds(elapsed)}.${installed.length > 0 ? ` Open ${url}/ to use the installed Apps.` : ""}\n`,
-    );
+    if (installed.length > 0) ui.note("Build timings", timingTable(installed));
+    ui.note("Apps", [
+      ...installed.map((app) => `${app.installationId}  installed`),
+      ...failed.map((app) => `${app.installationId}  failed: ${app.reason}`),
+    ]);
+    const summary = `Installed ${String(installed.length)} Apps; failed ${String(failed.length)} in ${seconds(elapsed)}.`;
+    if (failed.length > 0)
+      ui.warn(
+        summary,
+        `Fix the failed Apps above and run oyster install-apps again.`,
+      );
+    else ui.outro(`${summary} Open ${url}/ to use the installed Apps.`);
     if (values.timings !== undefined)
       await writeFile(
         values.timings,
@@ -192,16 +214,29 @@ export async function runInstallAppsCli(
 ): Promise<void> {
   const [command, ...rest] = args;
   if (command === "--help" || command === "-h") {
-    process.stdout.write(usage + "\n" + installReleaseUsage + "\n");
-  } else if (command !== "install-apps" && command !== "install") {
+    process.stdout.write(
+      tryUsage + "\n" + usage + "\n" + installReleaseUsage + "\n",
+    );
+  } else if (
+    command !== "try" &&
+    command !== "install-apps" &&
+    command !== "install"
+  ) {
     process.stderr.write(`${usage}\n`);
     process.exitCode = 2;
+  } else if (command === "try") {
+    const ui = createTryCli(rest);
+    await tryOyster(rest, undefined, ui).catch((cause: unknown) => {
+      reportTryFailure(cause, ui);
+      process.exitCode = 1;
+    });
   } else
     await (
       command === "install" ? installReleaseCommand(rest) : installApps(rest)
     ).catch((cause: unknown) => {
-      process.stderr.write(
-        `${cause instanceof Error ? cause.message : String(cause)}\n`,
+      new Cli({ brand: "fungi", output: process.stderr }).problem(
+        cause instanceof Error ? cause.message : String(cause),
+        `Run \`oyster ${command} --help\` for the options.`,
       );
       process.exitCode = 1;
     });

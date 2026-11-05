@@ -10,6 +10,7 @@ import {
   type InstallationOperation,
 } from "./installation-operations.js";
 
+/** An installation operation that has finished: it is no longer pending. */
 export type InstallationCompletion = Exclude<
   InstallationOperation,
   { state: "pending" }

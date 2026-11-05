@@ -519,7 +519,7 @@ export function agent(
 /** What an Agent collection route receives. */
 export type AgentCollectionAdmission = CollectionAdmission<string> &
   Readonly<{
-    /** Whether {@link CollectionAdmission.reaches} admits every Agent, so nothing needs filtering. */
+    /** Whether `reaches` admits every Agent, so nothing needs filtering. */
     everyAgent: boolean;
   }>;
 

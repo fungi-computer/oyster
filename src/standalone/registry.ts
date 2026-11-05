@@ -39,6 +39,7 @@ import { buildJobsFromOlderOyster } from "../older-oyster-store.js";
 import type { TeamAppCandidateManifest } from "../build-contract.js";
 import { readBuildManifest, appBuildRecipe } from "../build/workspace-build.js";
 import type { BuildGitEvent } from "../build-egress.js";
+import type { ContentObjectOwner } from "../build/content-objects.js";
 import { standaloneTenancy, type StandaloneTenancyEnv } from "./tenancy.js";
 import type { ComputerDO } from "./computer.js";
 import type { ComputerEnv } from "@fungi.computer/computer";
@@ -826,7 +827,10 @@ export abstract class StandaloneRegistry
     jobId: string,
     computerObjectId: string,
     grant: string,
-  ): Promise<Readonly<{ maxObjectBytes: number }> | null> {
+  ): Promise<Readonly<{
+    maxObjectBytes: number;
+    owner: ContentObjectOwner;
+  }> | null> {
     return (await this.#appBuilds()).admitObjectUpload(
       jobId,
       computerObjectId,

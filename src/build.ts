@@ -39,5 +39,6 @@ export {
   writeArtifactRoot,
   type ImmutableArtifactObjects,
   type StagedArtifactObject,
+  type StagedCandidateObject,
   type StagedBuildOutput,
 } from "./build/artifact-writer.js";

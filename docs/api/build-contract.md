@@ -28,6 +28,18 @@ The parts of an R2 bucket a content-object store uses.
 
 ---
 
+### ContentObjectOwner
+
+```ts
+type ContentObjectOwner = Readonly<{
+  namespace: string;
+}>;
+```
+
+The one Team or tenant whose uploads share a key namespace.
+
+---
+
 ### CandidateObject
 
 ```ts
@@ -916,19 +928,42 @@ asset's type is its manifest's, so it is an octet stream.
 
 ## Functions
 
-### contentObjectRef()
+### contentObjectOwner()
 
 ```ts
-function contentObjectRef(digest): ArtifactRef;
+function contentObjectOwner(id): ContentObjectOwner;
 ```
 
-The store key of one content-addressed object.
+Name the upload namespace of a Team or tenant id. Ids are opaque to the store,
+so the namespace is a fixed-length digest of the id.
 
 #### Parameters
 
-| Parameter | Type           |
-| --------- | -------------- |
-| `digest`  | `Sha256Digest` |
+| Parameter | Type     |
+| --------- | -------- |
+| `id`      | `string` |
+
+#### Returns
+
+[`ContentObjectOwner`](#contentobjectowner)
+
+---
+
+### contentObjectRef()
+
+```ts
+function contentObjectRef(owner, digest, mediaType): ArtifactRef;
+```
+
+The store key of one uploaded object: its owner, digest and stored media type.
+
+#### Parameters
+
+| Parameter   | Type                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `owner`     | [`ContentObjectOwner`](#contentobjectowner)                                                                   |
+| `digest`    | `Sha256Digest`                                                                                                |
+| `mediaType` | \| `"text/html; charset=utf-8"` \| `"application/vnd.fungi.app-backend+json"` \| `"application/octet-stream"` |
 
 #### Returns
 
@@ -969,22 +1004,28 @@ Describe a stored object by its size and the SHA-256 the store verified.
 ```ts
 function putContentObject(
   bucket,
+  owner,
   object,
   body,
   mediaType,
 ): Promise<"stored" | "refused">;
 ```
 
-Stream one object into the store under its digest. The store refuses a body
-whose SHA-256 differs; an object already stored with the same verified digest
-and size is kept (write-once: a stored version may be pinned by a Release) and
-the body is discarded, never stored.
+Stream one object into the store under its owner, digest and media type. The
+store refuses a body whose SHA-256 differs. The key is write-once (a stored
+version may be pinned by a Release): the put is conditional on the key being
+absent, and an existing object is never replaced. When the key already holds an
+object of the named size whose store-verified digest is the named one, or that
+the store never checksummed (a packed upload's plain bytes, which the candidate
+check reads and hashes), the body is discarded and the object kept; any other
+existing object refuses the upload.
 
 #### Parameters
 
 | Parameter           | Type                                                                                                          |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `bucket`            | [`ContentObjectBucket`](#contentobjectbucket)                                                                 |
+| `owner`             | [`ContentObjectOwner`](#contentobjectowner)                                                                   |
 | `object`            | \{ `digest`: `Sha256Digest`; `byteLength`: `number`; \}                                                       |
 | `object.digest`     | `Sha256Digest`                                                                                                |
 | `object.byteLength` | `number`                                                                                                      |
@@ -1082,7 +1123,8 @@ The stored media type a request names, if it is one an object may carry.
 function candidateManifestObjects(output): readonly CandidateUpload[];
 ```
 
-Every distinct object a manifest names, each once, in manifest order.
+Every distinct object (digest and stored type) a manifest names, each once, in
+manifest order.
 
 #### Parameters
 

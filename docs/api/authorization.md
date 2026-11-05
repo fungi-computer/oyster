@@ -458,11 +458,24 @@ type RequestFacts = Readonly<{
   body: <T>(schema) => Promise<T | null>;
   principal: () => Promise<OysterAuthResult>;
   mediated: boolean;
+  agents: AgentCeiling;
   ports: AuthorityPorts;
 }>;
 ```
 
 The request facts a requirement reads.
+
+---
+
+### AgentCeiling
+
+```ts
+type AgentCeiling = "all" | ReadonlySet<string>;
+```
+
+The Agents an App's admitted capability grant reaches: every Agent its principal
+reaches, or exactly the selected ones. A request no App capability narrowed
+carries `"all"`; principal reach still decides.
 
 ---
 
@@ -516,6 +529,7 @@ the shell.
 type OwnerAdmission = Readonly<{
   principal: OwnerPrincipal;
   origin: OwnerOrigin;
+  delegatesAgent: (agentId) => boolean;
 }>;
 ```
 
@@ -553,6 +567,19 @@ type AgentAdmission = Readonly<{
 ```
 
 What an Agent route receives.
+
+---
+
+### AgentCollectionAdmission
+
+```ts
+type AgentCollectionAdmission = CollectionAdmission<string> &
+  Readonly<{
+    everyAgent: boolean;
+  }>;
+```
+
+What an Agent collection route receives.
 
 ---
 
@@ -969,6 +996,27 @@ Whether a live key's grants permit a one-use device enrollment.
 
 ---
 
+### agentCeiling()
+
+```ts
+function agentCeiling(resources): AgentCeiling;
+```
+
+An admitted grant's resources as an Agent ceiling; a non-Agent selection reaches
+no Agent.
+
+#### Parameters
+
+| Parameter   | Type                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------- |
+| `resources` | \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: `string`; `id`: `string`; \}\>[] |
+
+#### Returns
+
+[`AgentCeiling`](#agentceiling)
+
+---
+
 ### unauthenticated()
 
 ```ts
@@ -1039,6 +1087,7 @@ function owner(via): Requirement<
   Readonly<{
     principal: OwnerPrincipal;
     origin: OwnerOrigin;
+    delegatesAgent: (agentId) => boolean;
   }>
 >;
 ```
@@ -1057,7 +1106,7 @@ serves): consent and secrets never ride an App.
 
 [`Requirement`](#requirement)\<`Readonly`\<\{ `principal`:
 [`OwnerPrincipal`](#ownerprincipal); `origin`: [`OwnerOrigin`](#ownerorigin);
-\}\>\>
+`delegatesAgent`: (`agentId`) => `boolean`; \}\>\>
 
 ---
 
@@ -1160,20 +1209,15 @@ owner, or a key granted `agents.use` for that Agent id.
 ### agents()
 
 ```ts
-function agents(): Requirement<
-  Readonly<{
-    authority: Authority;
-    reaches: (item) => Promise<boolean>;
-  }>
->;
+function agents(): Requirement<AgentCollectionAdmission>;
 ```
 
-Agents (and their inbox rows): the owner sees all, a key its granted Agents.
+Agents (and their inbox rows): the owner sees all, a key its granted Agents, and
+either only within the App grant that carried the request.
 
 #### Returns
 
-[`Requirement`](#requirement)\<`Readonly`\<\{ `authority`:
-[`Authority`](#authority); `reaches`: (`item`) => `Promise`\<`boolean`\>; \}\>\>
+[`Requirement`](#requirement)\<[`AgentCollectionAdmission`](#agentcollectionadmission)\>
 
 ---
 
@@ -1286,7 +1330,8 @@ Serve one capability's declared table under the host dispatcher's admission,
 read from `c.env`: the App already holds the capability, and each route still
 decides its own resource. Every request here is App-mediated, however it was
 admitted (a header or a browser socket's query), so `owner("direct")` always
-refuses inside a capability.
+refuses inside a capability, and every Agent decision stays within the admitted
+grant's selection.
 
 #### Parameters
 

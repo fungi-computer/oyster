@@ -1,5 +1,52 @@
 # @fungi.computer/oyster
 
+## 0.12.0
+
+### Minor Changes
+
+- Changes since 0.11.0:
+
+  - feat(docs): hand your LLM this URL for every door
+  - fix(oyster): keep oyster install progress on stderr so stdout stays the
+    result
+  - feat(oyster): put install-apps and install on Lantern
+  - feat(oyster): give oyster try a Lantern experience
+  - fix(oyster): export the installation completion types its public API names
+  - fix(oyster): link the deploy step by URL, not an anchor the quick start page
+    lacks
+  - feat(oyster): open try on the signed-in Oyster desktop
+  - fix(oyster): keep a Quick start heading the package site requires
+  - feat(oyster): open try on the signed-in Oyster desktop
+  - feat(oyster): try Oyster locally with one command
+  - fix(app-publisher): key uploaded content objects by owning Team
+  - feat(front-doors): lead with the local try-it path and an install-now button
+  - fix(docs,hub,spore): first-time-user fixes for the invite-only path and
+    versions
+  - fix(oyster): scope the Workflow webhook host rate key to the tenant
+  - fix(app-publisher): key uploaded content objects by digest and media type
+  - fix(oyster): keep Release roots out of the upload namespace; write-once
+    objects
+  - feat(connections): move GitHub and Computer Git onto the shared connections
+    core
+  - fix(oyster): keep App INBOX bindings within the installation's selected
+    Agents
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.6.1
+  - @fungi.computer/lantern@0.4.0
+  - @fungi.computer/seam@0.2.2
+  - @fungi.computer/shiitake@0.11.0
+  - @fungi.computer/veil@0.6.0
+  - @fungi.computer/parakeet@0.8.1
+  - @fungi.computer/shiitake-extensions@0.6.5
+  - @fungi.computer/zookeeper@0.0.12
+
 ## 0.11.0
 
 ### Minor Changes

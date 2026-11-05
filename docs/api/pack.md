@@ -53,6 +53,31 @@ readonly requestId: string;
 
 ## Type Aliases
 
+### InstallationCompletion
+
+```ts
+type InstallationCompletion = Exclude<
+  InstallationOperation,
+  {
+    state: "pending";
+  }
+>;
+```
+
+An installation operation that has finished: it is no longer pending.
+
+---
+
+### InstallationOperation
+
+```ts
+type InstallationOperation = z.output<typeof installationOperationSchema>;
+```
+
+The owner's answer about one installation request.
+
+---
+
 ### PackOptions
 
 ```ts
@@ -84,6 +109,157 @@ type PackedRelease = Readonly<{
 ```
 
 A packed Release on disk.
+
+## Variables
+
+### installationOperationSchema
+
+```ts
+const installationOperationSchema: ZodDiscriminatedUnion<[ZodObject<{
+  requestId: ZodString;
+  requestedInstallationId: ZodLazy<ZodString>;
+  installationId: ZodLazy<ZodString>;
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  state: ZodLiteral<"pending">;
+}, $strict>, ZodObject<{
+  requestId: ZodString;
+  requestedInstallationId: ZodLazy<ZodString>;
+  installationId: ZodLazy<ZodString>;
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  state: ZodLiteral<"succeeded">;
+  reference: ZodObject<{
+     generation: ZodString;
+     instanceId: ZodPipe<ZodUnknown, ZodTransform<InstanceId, unknown>>;
+     authorityVersion: ZodNumber;
+     status: ZodEnum<{
+        enabled: "enabled";
+        disabled: "disabled";
+        deleted: "deleted";
+     }>;
+  }, $strict>;
+  creation: ZodEnum<{
+     fresh: "fresh";
+     replacement: "replacement";
+     reminted: "reminted";
+  }>;
+  uiCheck: ZodNullable<ZodDiscriminatedUnion<[ZodObject<{
+     kind: ZodLiteral<"passed">;
+   }, $strict>, ZodObject<{
+     kind: ZodLiteral<"failed">;
+     code: ZodLiteral<"ui_mount_failed">;
+     diagnostics: ZodOptional<ZodObject<..., ...>>;
+   }, $strict>, ZodObject<{
+     kind: ZodLiteral<"not_checked">;
+     code: ZodEnum<{
+        boot_runner_unavailable: ...;
+        boot_browser_binding_missing: ...;
+        boot_clone_unavailable: ...;
+        boot_timeout: ...;
+        boot_cleanup_failed: ...;
+        ui_check_not_run_on_host: ...;
+     }>;
+  }, $strict>], "kind">>;
+  installation: ZodNullable<ZodObject<{
+     installationId: ZodLazy<ZodString>;
+     instanceId: ZodNullable<ZodPipe<ZodUnknown, ZodTransform<InstanceId, unknown>>>;
+     appId: ZodPipe<ZodUnknown, ZodTransform<AppId, unknown>>;
+     release: ZodPipe<ZodUnknown, ZodTransform<{
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ...;
+           artifactDigest: ...;
+           provenance: ...;
+        };
+     }, unknown>>;
+     releasePin: ZodEnum<{
+        pinned: "pinned";
+        floating: "floating";
+     }>;
+     authority: ZodObject<{
+        authorityVersion: ZodLazy<ZodNumber>;
+        declaredOperationsDigest: ZodPipe<ZodUnknown, ZodTransform<..., ...>>;
+        approvedGrants: ZodLazy<ZodReadonly<...>>;
+        approval: ZodNullable<ZodLazy<...>>;
+     }, $strict>;
+     status: ZodEnum<{
+        enabled: "enabled";
+        disabled: "disabled";
+        deleted: "deleted";
+     }>;
+  }, $strict>>;
+}, $strict>, ZodObject<{
+  requestId: ZodString;
+  requestedInstallationId: ZodLazy<ZodString>;
+  installationId: ZodLazy<ZodString>;
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  state: ZodLiteral<"refused">;
+  status: ZodNumber;
+  code: ZodString;
+}, $strict>, ZodObject<{
+  requestId: ZodString;
+  requestedInstallationId: ZodLazy<ZodString>;
+  installationId: ZodLazy<ZodString>;
+  release: ZodPipe<ZodUnknown, ZodTransform<{
+     releaseId: ReleaseId;
+     appId: AppId;
+     artifact: {
+        artifactRef: ArtifactRef;
+        artifactDigest: Sha256Digest;
+        provenance: {
+           sourceRevision: SourceRevision;
+           sourceTreeDigest: Sha256Digest;
+           buildRecipeDigest: Sha256Digest;
+        };
+     };
+  }, unknown>>;
+  state: ZodLiteral<"unconfirmed">;
+  outcome: ZodEnum<{
+     cancelled: "cancelled";
+     outcome_unknown: "outcome_unknown";
+     interrupted: "interrupted";
+  }>;
+}, $strict>], "state">;
+```
+
+Parses the owner's answer about one installation request: pending, installed,
+refused or unconfirmed.
 
 ## Functions
 
@@ -156,9 +332,9 @@ is reported as an unconfirmed observation, not refusal.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                   |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; `onAdmitted?`: (`operation`) => `void`; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                         |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; `onAdmitted?`: (`operation`) => `void`; `onCompleted?`: (`operation`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
 
 #### Returns
 

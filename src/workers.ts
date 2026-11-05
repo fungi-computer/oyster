@@ -932,13 +932,19 @@ export type OysterBindingContext<Env> = Readonly<{
  */
 export type OysterBindingRow<Env> = Readonly<{
   methods: Readonly<Record<string, FrameBindingMethod<OysterBindingResult>>>;
-  /** Serve one decoded packet; the Instance has already admitted its frame and grant. */
+  /**
+   * Serve one decoded packet; the Instance has already admitted its frame and
+   * grant. `admitted` is the installation that packet's one Registry read
+   * re-admitted: its approved grants are the resource ceiling a row applies
+   * to results no single `requestedResource` selects.
+   */
   dispatch(
     context: OysterBindingContext<Env>,
     frame: InvocationFrame<OysterInvocationHost>,
     props: FrameBindingProps,
     method: string,
     args: readonly unknown[],
+    admitted: Installation,
   ): Promise<OysterBindingResult>;
 }>;
 
@@ -1412,6 +1418,7 @@ export class OysterInstance<
       props,
       method,
       args,
+      current,
     );
     if (this.frames.active(props.frameId) !== frame)
       throw new AppInstanceError("revoked");

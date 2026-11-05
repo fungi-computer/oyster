@@ -34,7 +34,7 @@ test("native rate admission and bounded leases refuse without allocating per-sen
   assert.equal(keys.at(-1), keys[2]);
 });
 
-test("full admitted scope identities fit the edge's bounded key representation without losing host or binding isolation", async () => {
+test("full admitted scope identities fit the edge's bounded key representation without losing tenant or binding isolation", async () => {
   const keys = [];
   const limiter = {
     limit: async ({ key }) => {
@@ -57,9 +57,9 @@ test("full admitted scope identities fit the edge's bounded key representation w
   await first.bindingAdmission("b".repeat(256));
   await second.bindingAdmission("b".repeat(256));
   await first.bindingAdmission("c".repeat(256));
-  assert.equal(keys[0], keys[1]);
-  assert.notEqual(keys[0], keys[2]);
-  assert.equal(new Set(keys.slice(2)).size, 3);
+  // Two tenants on one host never share a host rate key.
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(new Set(keys).size, 5);
 });
 
 test("simultaneous native successes cannot overbook the streaming lease ceiling", async () => {

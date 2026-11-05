@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { parseSha256Digest } from "@fungi.computer/puffball";
 import {
+  contentObjectOwner,
+  contentObjectRef,
   putContentObject,
   type ContentObjectBucket,
 } from "@fungi.computer/oyster/build-contract";
@@ -23,11 +26,11 @@ function liveBuild(
     admitObject: (jobId, grant) =>
       Promise.resolve(
         jobId === "build_live" && grant === "grant"
-          ? { maxObjectBytes: 8 }
+          ? { maxObjectBytes: 8, owner: contentObjectOwner("tenant-1") }
           : null,
       ),
-    storeObject: (object, body, mediaType) =>
-      putContentObject(bucket, object, body, mediaType),
+    storeObject: (object, body, mediaType, owner) =>
+      putContentObject(bucket, owner, object, body, mediaType),
     exchangeTemplate: (repository, request) => {
       if (repository !== "template-shed")
         return Promise.resolve(new Response(null, { status: 403 }));
@@ -54,7 +57,9 @@ const hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
 
 /** R2 as the egress streams into it: a put whose body's SHA-256 is not the
- * one it names is refused and stores nothing. */
+ * one it names is refused and stores nothing, and a put under
+ * `onlyIf: { etagDoesNotMatch: "*" }` on a taken key stores nothing and
+ * resolves `null`. */
 function r2Fake(objects: Map<string, Uint8Array>): ContentObjectBucket {
   return {
     head: (key) => {
@@ -73,14 +78,15 @@ function r2Fake(objects: Map<string, Uint8Array>): ContentObjectBucket {
             },
       );
     },
-    async put(key, value, { sha256 }) {
+    async put(key, value, { sha256, onlyIf }) {
       const bytes =
         value instanceof Uint8Array
           ? value
           : new Uint8Array(await new Response(value).arrayBuffer());
       if (hex(bytes) !== sha256) throw new Error("Checksum mismatch");
+      if (onlyIf?.etagDoesNotMatch === "*" && objects.has(key)) return null;
       objects.set(key, bytes);
-      return null;
+      return { key };
     },
   };
 }
@@ -393,7 +399,16 @@ describe("standalone Oyster Computer egress", () => {
         { build },
       );
     expect((await put(bytes, hex(bytes))).response.status).toBe(204);
-    expect(objects.get(`artifact:sha256-${hex(bytes)}`)).toEqual(bytes);
+    // Stored in the admitted tenant's namespace.
+    expect(
+      objects.get(
+        contentObjectRef(
+          contentObjectOwner("tenant-1"),
+          parseSha256Digest(`sha256:${hex(bytes)}`),
+          "application/octet-stream",
+        ),
+      ),
+    ).toEqual(bytes);
     // Write-once: the same object again is kept.
     expect((await put(bytes, hex(bytes))).response.status).toBe(204);
     // A body that is not its digest is refused by the store.

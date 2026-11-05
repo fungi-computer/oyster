@@ -18,6 +18,70 @@ raw bytes; if output exceeds 2 MiB it retains the head and tail and reports
 Deploy one Worker, run `npx oyster install-apps`, and your Oyster builds seven
 Apps on its own Computer and opens on the Tourtois desktop.
 
+## Quick start: try it on your computer
+
+No Cloudflare account, Docker or payment. You need Node 24 or newer and Git.
+
+```sh
+npx @fungi.computer/oyster try
+```
+
+That creates `./my-oyster`, installs it, starts Oyster at
+`http://127.0.0.1:8787`, builds the Oyster desktop (Tourtois) from its public
+source, installs a one-page Hello App and opens your browser through a one-time
+sign-in link (the key is never put in a URL). You land on the desktop with Hello
+in the launcher; the page it opens reads **Hello from my first Oyster App**. The
+owner key is saved in `my-oyster/.oyster-owner` and never printed. Press Ctrl-C
+to stop, and run the same command again in `my-oyster` to restart. Use
+`--port <number>` for another port and `--no-open` to keep the browser closed.
+Output is quiet: install and server logs go to `my-oyster/.oyster/`, and
+`--verbose` streams them instead. Piped or CI output is plain lines.
+
+<details>
+<summary>What it does under the hood</summary>
+
+`try` runs these steps (shown for pnpm 11; with npm, skip the
+`pnpm-workspace.yaml`). Wrangler is an ordinary dependency; nothing is hidden.
+
+```sh
+mkdir my-oyster && cd my-oyster
+cat > pnpm-workspace.yaml <<'YAML'
+allowBuilds:
+  "@google/genai": false
+  "@mongodb-js/zstd": false
+  esbuild: true
+  exifreader: false
+  node-liblzma: false
+  protobufjs: false
+  workerd: true
+YAML
+pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0
+pnpm add -D wrangler
+cp node_modules/@fungi.computer/oyster/examples/standalone/{worker.ts,wrangler.jsonc} .
+export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
+echo "$OYSTER_OWNER_KEY" > .oyster-owner
+npx wrangler dev --local --enable-containers=false --ip 127.0.0.1 --port 8787 \
+  --local-upstream oyster.test --upstream-protocol https \
+  --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:https://oyster.test
+```
+
+Then it builds Tourtois from `github.com/fungi-computer/tourtois` the same way
+(`src/standalone/local-desktop.ts`), and packs a committed one-page
+`bundled-html` App with `packRelease` and installs it as `hello` with
+`installRelease` (both from `@fungi.computer/oyster/pack`) against
+`OYSTER_URL=http://127.0.0.1:8787`; the source is `src/standalone/hello-app.ts`
+in this package.
+
+</details>
+
+Locally there is no Computer, git storage or Workers AI, so you install your own
+App rather than the seven starter Apps below. The
+[short quick start](https://docs.fungi.computer/oyster-quickstart/) walks the
+same path; the
+[agent quick start](https://docs.fungi.computer/oyster/agent-quickstart/) adds
+MCP and deployment. For the full desktop, continue to the
+[guide to running your own Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/#deploy-it).
+
 ## What you get
 
 `oyster install-apps` installs these Apps. Each one lives in its own repository
@@ -63,7 +127,7 @@ git through Cloudflare Artifacts, a Computer (a Linux workspace in a Cloudflare
 Container) that builds Apps and runs their terminals and files, Agents on
 Workers AI, Workflows and media.
 
-## Quick start: deploy your own Oyster
+## Deploy to Cloudflare
 
 Deciding what to run?
 [Is Oyster for you?](https://docs.fungi.computer/is-oyster-for-you/) compares
@@ -183,16 +247,12 @@ Wrangler version rather than silently adding unrelated token permissions.
 
 ### Upgrading Oyster
 
-Oyster's version is not Fungi's: Fungi 0.9.0 ships Oyster 0.8.2 with
-`@fungi.computer/computer` 0.4.2. Find the versions for each Fungi release on
-the
+Oyster's version is not Fungi's. Find the Oyster and Computer versions for your
+Fungi release on the
 [Open source page](https://docs.fungi.computer/reference/packages/#package-versions-in-each-fungi-release),
-then run the upgrade in your Oyster project with the same pnpm and store that
-installed it:
-
-```sh
-pnpm add @fungi.computer/oyster@0.8.2 @fungi.computer/computer@0.4.2
-```
+then run the upgrade command in
+[Upgrade Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/#upgrade-oyster)
+in your Oyster project, with the same pnpm and store that installed it.
 
 Redeploy with the same `npx wrangler deploy` command you deployed with, then run
 `npx oyster install-apps`. If pnpm stops with `ERR_PNPM_UNEXPECTED_STORE`, rerun

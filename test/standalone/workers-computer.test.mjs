@@ -3041,6 +3041,86 @@ test("cached Agent bindings admit only the current frame before fleet effects", 
   assert.equal(sends.length, 2);
 });
 
+test("INBOX packets stay within the installation's selected Agents", async (t) => {
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const directory = new AgentDirectory(
+    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
+  );
+  const owner = { actor: { kind: "member", memberId: "Levi" }, role: "owner" };
+  const a = directory.create("Alpha", "create-alpha", owner, "owner-direct");
+  const b = directory.create("Bravo", "create-bravo", owner, "owner-direct");
+  const row = {
+    sessionId: "garden",
+    title: "Garden",
+    createdAt: 1,
+    lastActivityAt: 2,
+    state: "done",
+  };
+  const { env } = fixture();
+  const inboxEnv = {
+    ...env,
+    AGENT_DIRECTORY: { getByName: () => directory },
+    AGENTS: {
+      getByName: () => ({
+        inboxRows: async () => ({ rows: [row], revision: 3 }),
+      }),
+    },
+  };
+  const inbox = [{ name: "INBOX", operations: ["page", "visit"] }];
+  const narrowed = await instanceBinding(
+    t,
+    inboxEnv,
+    ["ports"],
+    "inbox-selected",
+    inbox,
+    undefined,
+    undefined,
+    false,
+    { agentResources: [{ kind: "agent", id: a.agentId }] },
+  );
+  const selected = await narrowed.run(async (_computer, { INBOX }) => {
+    const page = await INBOX.page();
+    await assert.rejects(
+      INBOX.visit({ agentId: b.agentId, sessionId: "garden" }),
+      {
+        code: "binding_not_granted",
+      },
+    );
+    const visit = await INBOX.visit({
+      agentId: a.agentId,
+      sessionId: "garden",
+    });
+    return { page, visit };
+  });
+  assert.equal(selected.status, 200, await selected.clone().text());
+  assert.deepEqual(await selected.json(), {
+    page: { items: [{ ...row, agentId: a.agentId }], next: null, cursor: 0 },
+    visit: { visited: true },
+  });
+  assert.deepEqual(
+    directory.visits().map(({ agentId }) => agentId),
+    [a.agentId],
+    "an unselected Agent's Session is never marked visited",
+  );
+  const tenant = await instanceBinding(
+    t,
+    inboxEnv,
+    ["ports"],
+    "inbox-tenant",
+    inbox,
+  );
+  const everyAgent = await tenant.run((_computer, { INBOX }) => INBOX.page());
+  assert.equal(everyAgent.status, 200, await everyAgent.clone().text());
+  const page = await everyAgent.json();
+  assert.deepEqual(
+    page.items.map(({ agentId }) => agentId).sort(),
+    [a.agentId, b.agentId].sort(),
+  );
+  assert.equal(page.cursor, directory.revision() + 6);
+});
+
 for (const binding of ["COMPUTER", "WORKFLOWS"]) {
   test(`a delayed Bonsai ${binding} packet cannot borrow the successor frame`, async (t) => {
     const { env, calls } = fixture();

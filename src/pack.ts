@@ -15,6 +15,7 @@ import {
   installOnOyster,
   installationObservationSignal,
   completedInstallationResponse,
+  type InstallationCompletion,
   type InstallationObservationBudget,
 } from "./installation-client.js";
 import {
@@ -45,7 +46,14 @@ import {
 import { pushTemplateSource } from "./source/template-push.js";
 import { sha256 } from "./release.js";
 import type { InstallationOperation } from "./installation-operations.js";
-export { InstallationObservationError } from "./installation-client.js";
+export {
+  InstallationObservationError,
+  type InstallationCompletion,
+} from "./installation-client.js";
+export {
+  installationOperationSchema,
+  type InstallationOperation,
+} from "./installation-operations.js";
 
 /** One committed repository and its canonical App build recipe. */
 export type PackOptions = Readonly<{
@@ -224,6 +232,8 @@ export async function installRelease(
     installationId?: string;
     /** Report owner-correlated admission without shortening the completion wait. */
     onAdmitted?: (operation: InstallationOperation) => void;
+    /** Runs once with the completed operation, before the response is made. */
+    onCompleted?: (operation: InstallationCompletion) => Promise<void>;
   }> &
     InstallationObservationBudget,
 ): Promise<Response> {
@@ -261,6 +271,7 @@ export async function installRelease(
   if (input.onAdmitted !== undefined)
     installation = { ...installation, onAdmitted: input.onAdmitted };
   const operation = await installOnOyster(installation);
+  await input.onCompleted?.(operation);
   return completedInstallationResponse(operation);
 }
 

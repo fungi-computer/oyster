@@ -30,6 +30,7 @@ import {
   createLocalCommitSourceCapture,
 } from "../src/build/local-build.js";
 import {
+  candidateManifestObjects,
   encodeTeamAppCandidateManifest,
   teamAppCandidateManifestSchema,
   type TeamAppCandidateManifest,
@@ -38,8 +39,10 @@ import {
   contentObjectRef,
   putContentObject,
   type ContentObjectBucket,
+  contentObjectOwner,
 } from "../src/build/content-objects.js";
 import { stageBuildOutput } from "../src/build/artifact-writer.js";
+import { createBuildEgress } from "../src/build-egress.js";
 import { backendJsonSchema } from "@fungi.computer/puffball/backend";
 import {
   createOysterAppBuilds,
@@ -60,6 +63,9 @@ import {
   type ArtifactHeads,
   type ArtifactStore,
 } from "../src/release.js";
+
+/** The fixture tenant's upload namespace. */
+const tenantObjects = contentObjectOwner("tenant-1");
 
 const assets = {
   maxManifestBytes: 65_536,
@@ -176,7 +182,9 @@ function memoryStore(): ArtifactStore &
 }
 
 /** The same memory as an R2 bucket the egress streams into: a put whose
- * body's SHA-256 differs from the one it names is refused. */
+ * body's SHA-256 differs from the one it names is refused, and a put under
+ * `onlyIf: { etagDoesNotMatch: "*" }` on a taken key stores nothing and
+ * resolves `null`. */
 function bucketOver(
   store: ReturnType<typeof memoryStore>,
 ): ContentObjectBucket {
@@ -201,15 +209,17 @@ function bucketOver(
             },
       );
     },
-    async put(key, value, { sha256 }) {
+    async put(key, value, { sha256, onlyIf }) {
       const bytes =
         value instanceof Uint8Array
           ? value
           : new Uint8Array(await new Response(value).arrayBuffer());
       const digest = digestOf(bytes);
       if (digest !== `sha256:${sha256}`) throw new Error("Checksum mismatch");
+      if (onlyIf?.etagDoesNotMatch === "*" && store.objects.has(key))
+        return null;
       store.objects.set(key, { bytes, digest });
-      return null;
+      return { key };
     },
   };
 }
@@ -219,15 +229,21 @@ async function upload(
   store: ReturnType<typeof memoryStore>,
   output: BuildOutput = built,
 ) {
-  for (const object of stageBuildOutput(output).objects)
+  const staged = stageBuildOutput(output);
+  for (const object of candidateManifestObjects(staged.manifest)) {
+    const bytes = staged.objects.find(
+      ({ digest }) => digest === object.digest,
+    )?.bytes;
     expect(
       await putContentObject(
         bucketOver(store),
-        { digest: object.digest, byteLength: object.bytes.byteLength },
-        new Response(object.bytes).body,
-        "application/octet-stream",
+        tenantObjects,
+        object,
+        new Response(bytes).body,
+        object.mediaType,
       ),
     ).toBe("stored");
+  }
 }
 
 function fixture(
@@ -559,7 +575,10 @@ it("builds a registered source's exact commit on the Computer into a verified Re
     // Object uploads: this job's grant on this Computer, bounded by its recipe.
     expect(
       await builds.admitObjectUpload(jobId, computerObjectId, grantOf(command)),
-    ).toEqual({ maxObjectBytes: assets.maxObjectBytes * 2 });
+    ).toEqual({
+      maxObjectBytes: assets.maxObjectBytes * 2,
+      owner: tenantObjects,
+    });
     expect(
       await builds.admitObjectUpload(jobId, computerObjectId, "forged"),
     ).toBeNull();
@@ -764,6 +783,7 @@ it("refuses an uploaded object whose bytes are not its digest, keeping a verifie
   expect(
     await putContentObject(
       bucketOver(store),
+      tenantObjects,
       named,
       new Response(new TextEncoder().encode("forged")).body,
       "application/octet-stream",
@@ -773,6 +793,7 @@ it("refuses an uploaded object whose bytes are not its digest, keeping a verifie
   expect(
     await putContentObject(
       bucketOver(store),
+      tenantObjects,
       named,
       new Response(asset.bytes).body,
       "application/octet-stream",
@@ -780,17 +801,141 @@ it("refuses an uploaded object whose bytes are not its digest, keeping a verifie
   ).toBe("stored");
   // Write-once: the verified object is kept; another body is read through
   // and discarded (cancelling it would reset the uploader's connection).
-  const before = store.objects.get(contentObjectRef(named.digest));
+  const before = store.objects.get(
+    contentObjectRef(tenantObjects, named.digest, "application/octet-stream"),
+  );
   expect(
     await putContentObject(
       bucketOver(store),
+      tenantObjects,
       named,
       new Response(asset.bytes).body,
       "application/octet-stream",
     ),
   ).toBe("stored");
-  expect(store.objects.get(contentObjectRef(named.digest))).toBe(before);
+  expect(
+    store.objects.get(
+      contentObjectRef(tenantObjects, named.digest, "application/octet-stream"),
+    ),
+  ).toBe(before);
+  // Write-once: bytes the store never checksummed are never replaced. Of
+  // another size they refuse the upload; of the named size they are kept for
+  // the candidate check to read and hash.
+  const plain = new Uint8Array([1, 2]);
+  const other = { digest: digestOf(plain), byteLength: plain.byteLength };
+  for (const [held, outcome] of [
+    [{ bytes: new Uint8Array([1, 2, 3]), digest: null }, "refused"],
+    [{ bytes: new Uint8Array([3, 4]), digest: null }, "stored"],
+  ] as const) {
+    store.objects.set(
+      contentObjectRef(tenantObjects, other.digest, "application/octet-stream"),
+      held,
+    );
+    expect(
+      await putContentObject(
+        bucketOver(store),
+        tenantObjects,
+        other,
+        new Response(plain).body,
+        "application/octet-stream",
+      ),
+    ).toBe(outcome);
+    expect(
+      store.objects.get(
+        contentObjectRef(
+          tenantObjects,
+          other.digest,
+          "application/octet-stream",
+        ),
+      ),
+    ).toBe(held);
+  }
 });
+
+it("keeps a recorded Release root out of reach of a later job's object uploads", async () => {
+  const manifestBytes = new TextEncoder().encode(
+    encodeTeamAppCandidateManifest(candidate),
+  );
+  const manifestDigest = digestOf(manifestBytes);
+  // Each run either records the Release or, as a later job, uploads its
+  // canonical manifest bytes as a content object.
+  let uploads = false;
+  let uploaded: Response | null = null;
+  const { builds, store } = fixture(async ({ jobId, command }) => {
+    const credentialId =
+      builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
+    if (!uploads) {
+      await builds.submitCandidate(
+        jobId,
+        candidate,
+        grantOf(command),
+        credentialId,
+      );
+      builds.record({
+        kind: "build-status",
+        jobId,
+        credentialId,
+        status: "succeeded",
+        detail: null,
+      });
+      return 0;
+    }
+    const egress = createBuildEgress({
+      admitBuild: (id) =>
+        Promise.resolve(builds.admitBuild(id, computerObjectId)),
+      admitObject: (id, grant) =>
+        builds.admitObjectUpload(id, computerObjectId, grant),
+      storeObject: (object, body, mediaType, admitted) =>
+        putContentObject(
+          bucketOver(store),
+          admitted.owner,
+          object,
+          body,
+          mediaType,
+        ),
+      submitCandidate: () =>
+        Promise.resolve(new Response(null, { status: 500 })),
+      record: () => Promise.resolve(),
+    });
+    const url = new URL(
+      `http://egress/jobs/${jobId}/objects/sha256-${manifestDigest.slice("sha256:".length)}`,
+    );
+    uploaded = await egress.fetch(
+      new Request(url, {
+        method: "PUT",
+        body: manifestBytes,
+        headers: {
+          "Content-Length": String(manifestBytes.byteLength),
+          "Content-Type": "application/octet-stream",
+          "X-Team-App-Build": grantOf(command),
+        },
+      }),
+      url,
+    );
+    return 1;
+  });
+  const first = await (
+    await builds.start({ appId, sourceRevision, requestedBy: "owner-1" })
+  ).run();
+  expect(first.status).toBe("succeeded");
+  if (first.release === null) throw new Error("The build recorded no Release");
+  const release = first.release;
+  uploads = true;
+  const later = await (
+    await builds.start({ appId, sourceRevision, requestedBy: "owner-1" })
+  ).run();
+  expect(later.status).toBe("failed");
+  expect(uploaded).not.toBeNull();
+  expect((await verifyRelease(store, release)).ui?.kind).toBe("assets");
+  uploads = false;
+  const rebuilt = await (
+    await builds.start({ appId, sourceRevision, requestedBy: "owner-1" })
+  ).run();
+  expect(rebuilt.status).toBe("succeeded");
+  if (rebuilt.release === null)
+    throw new Error("The rebuild recorded no Release");
+  expect((await verifyRelease(store, rebuilt.release)).ui?.kind).toBe("assets");
+}, 60_000);
 
 it("fails a build whose Computer exits without a Release", async () => {
   const { builds } = fixture(() => Promise.resolve(1));
@@ -1183,7 +1328,7 @@ async function expectBound(
   expect([...over.store.objects.keys()].sort()).toEqual(
     [
       ...stageBuildOutput(output).objects.map((object) =>
-        contentObjectRef(object.digest),
+        contentObjectRef(tenantObjects, object.digest, object.mediaType),
       ),
       `artifact:build-log-${over.done.jobId}`,
     ].sort(),

@@ -100,6 +100,7 @@ const terminalOperationSchema = z.discriminatedUnion("state", [
   unconfirmedSchema.extend(identity),
 ]);
 /** One wire contract for admission and subsequent authoritative observation. */
+/** Parses the owner's answer about one installation request: pending, installed, refused or unconfirmed. */
 export const installationOperationSchema = z.discriminatedUnion("state", [
   pendingOperationSchema,
   successReferenceSchema
@@ -113,6 +114,7 @@ export const installationOperationSchema = z.discriminatedUnion("state", [
   refusalSchema.extend(identity),
   unconfirmedSchema.extend(identity),
 ]);
+/** The owner's answer about one installation request. */
 export type InstallationOperation = z.output<
   typeof installationOperationSchema
 >;

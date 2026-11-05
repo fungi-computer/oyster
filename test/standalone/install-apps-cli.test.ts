@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { PassThrough } from "node:stream";
+import { Cli } from "@fungi.computer/lantern";
 import type {
   InstalledStarterApp,
   StarterAppSetResult,
@@ -63,29 +65,25 @@ it("the import-safe handler prints failed Apps and sets a non-zero exit code", a
     ],
   };
   const originalCode = process.exitCode;
-  const output: string[] = [];
-  const write = vi
-    .spyOn(process.stdout, "write")
-    .mockImplementation((chunk) => {
-      output.push(String(chunk));
-      return true;
-    });
+  const stream = new PassThrough();
+  const chunks: string[] = [];
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
+  const ui = new Cli({ brand: "fungi", output: stream, interactive: false });
   try {
     vi.stubEnv("OYSTER_URL", "https://oyster.test");
     vi.stubEnv("OYSTER_OWNER_KEY", "key");
     const { installApps: installAppsCommand } =
       await import("../../src/standalone/install-apps-cli.js");
-    await installAppsCommand([], () => Promise.resolve(result));
-    expect(output.join("")).toContain("tourtois\tinstalled");
-    expect(output.join("")).toContain(
-      "bonsai\tfailed: bonsai build failed: compile",
+    await installAppsCommand([], () => Promise.resolve(result), ui);
+    expect(chunks.join("")).toContain("tourtois  installed");
+    expect(chunks.join("")).toContain(
+      "bonsai  failed: bonsai build failed: compile",
     );
-    expect(output.join("")).toContain("shed\tinstalled");
-    expect(output.join("")).toContain("Installed 2 Apps; failed 1");
+    expect(chunks.join("")).toContain("shed  installed");
+    expect(chunks.join("")).toContain("Installed 2 Apps; failed 1");
     expect(process.exitCode).toBe(1);
   } finally {
     process.exitCode = originalCode;
-    write.mockRestore();
     vi.unstubAllEnvs();
   }
 });

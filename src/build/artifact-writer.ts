@@ -1,9 +1,11 @@
 /**
- * Oyster's one immutable artifact representation: digest-addressed bytes
+ * Oyster's one immutable artifact representation: content-addressed bytes
  * keyed by artifact reference, with media types carried by the App build
- * and asset manifests (never by the store). The local packer writes it to a
- * directory, and a host's build owner writes it to that host's artifact store,
- * so a Release built on the host and one packed and uploaded share objects.
+ * and asset manifests. A build's own objects are named as uploads are
+ * (`contentObjectRef`: owner, digest and stored media type); the objects only
+ * the store's owner derives are named outside that namespace. The local packer
+ * writes it to a directory, and a host's build owner writes it to that host's
+ * artifact store under the building Team's or tenant's namespace.
  *
  * It has two halves. Staging turns a build's bytes into content-addressed
  * objects and the output manifest that names them by digest and size. The
@@ -35,8 +37,13 @@ import {
   type Sha256Digest,
 } from "@fungi.computer/puffball";
 import type { BuildOutput, StoredArtifact } from "./effect.js";
+import {
+  contentObjectRef,
+  type ContentObjectOwner,
+} from "./content-objects.js";
 import type {
   CandidateObject,
+  CandidateObjectMediaType,
   CandidateOutputManifest,
 } from "./submission-contract.js";
 
@@ -58,10 +65,17 @@ export type StagedArtifactObject = Readonly<{
   digest: Sha256Digest;
 }>;
 
+/** One distinct object a build's output manifest names, before it has an owner. */
+export type StagedCandidateObject = Readonly<{
+  bytes: Uint8Array;
+  digest: Sha256Digest;
+  mediaType: CandidateObjectMediaType;
+}>;
+
 /** A build's output manifest and each distinct object it names. */
 export type StagedBuildOutput = Readonly<{
   manifest: CandidateOutputManifest;
-  objects: readonly StagedArtifactObject[];
+  objects: readonly StagedCandidateObject[];
 }>;
 
 /** The small objects a root write stores, and the root they make. */
@@ -76,8 +90,8 @@ function sha256(bytes: Uint8Array): Sha256Digest {
   );
 }
 
-/** The content address of an object: `artifact:sha256-<hex>`. */
-function contentArtifactRef(digest: Sha256Digest): ArtifactRef {
+/** The address of a derived object: `artifact:sha256-<hex>`, which no upload can name. */
+function derivedArtifactRef(digest: Sha256Digest): ArtifactRef {
   return parseArtifactRef(`artifact:sha256-${digest.slice("sha256:".length)}`);
 }
 
@@ -96,15 +110,18 @@ type PreparedUi = Extract<BuildOutput, { kind: "ui" }>["ui"];
  * digest and size, and each distinct object once.
  */
 export function stageBuildOutput(output: BuildOutput): StagedBuildOutput {
-  const objects: StagedArtifactObject[] = [];
-  const stage = (bytes: Uint8Array): CandidateObject => {
+  const objects: StagedCandidateObject[] = [];
+  const stage = (
+    bytes: Uint8Array,
+    mediaType: CandidateObjectMediaType,
+  ): CandidateObject => {
     const digest = sha256(bytes);
-    if (!objects.some((object) => object.digest === digest))
-      objects.push({
-        artifactRef: contentArtifactRef(digest),
-        bytes: bytes.slice(),
-        digest,
-      });
+    if (
+      !objects.some(
+        (object) => object.digest === digest && object.mediaType === mediaType,
+      )
+    )
+      objects.push({ bytes: bytes.slice(), digest, mediaType });
     return { digest, byteLength: bytes.byteLength };
   };
   const declared =
@@ -113,7 +130,10 @@ export function stageBuildOutput(output: BuildOutput): StagedBuildOutput {
     prepared.content.kind === "html"
       ? {
           mediaType: "text/html; charset=utf-8",
-          content: { kind: "html", ...stage(prepared.content.bytes) },
+          content: {
+            kind: "html",
+            ...stage(prepared.content.bytes, "text/html; charset=utf-8"),
+          },
         }
       : {
           mediaType: "application/vnd.fungi.app-assets+json",
@@ -122,7 +142,7 @@ export function stageBuildOutput(output: BuildOutput): StagedBuildOutput {
             base: prepared.content.base,
             assets: prepared.content.assets.map((asset) => ({
               path: asset.path,
-              ...stage(asset.bytes),
+              ...stage(asset.bytes, "application/octet-stream"),
             })),
           },
         };
@@ -130,11 +150,21 @@ export function stageBuildOutput(output: BuildOutput): StagedBuildOutput {
     output.kind === "ui"
       ? { kind: "ui", ui: ui(output.ui), ...declared }
       : output.kind === "backend"
-        ? { kind: "backend", backend: stage(output.backend), ...declared }
+        ? {
+            kind: "backend",
+            backend: stage(
+              output.backend,
+              "application/vnd.fungi.app-backend+json",
+            ),
+            ...declared,
+          }
         : {
             kind: "app",
             ui: ui(output.ui),
-            backend: stage(output.backend),
+            backend: stage(
+              output.backend,
+              "application/vnd.fungi.app-backend+json",
+            ),
             ...declared,
           };
   return { manifest, objects };
@@ -147,20 +177,24 @@ export function stageBuildOutput(output: BuildOutput): StagedBuildOutput {
 function artifactRootObjects(
   manifest: CandidateOutputManifest,
   options: Readonly<{
+    owner: ContentObjectOwner;
     rootArtifactRef: ArtifactRef;
     assetPolicy: AssetBuildPolicy | undefined;
   }>,
 ): DerivedArtifactRoot {
   const objects: StagedArtifactObject[] = [];
-  const referenced = (object: CandidateObject) => ({
-    artifactRef: contentArtifactRef(object.digest),
+  const referenced = (
+    object: CandidateObject,
+    mediaType: CandidateObjectMediaType,
+  ) => ({
+    artifactRef: contentObjectRef(options.owner, object.digest, mediaType),
     digest: object.digest,
     version: object.digest,
     byteLength: object.byteLength,
   });
   const stage = (bytes: Uint8Array, ref?: ArtifactRef) => {
     const digest = sha256(bytes);
-    const artifactRef = ref ?? contentArtifactRef(digest);
+    const artifactRef = ref ?? derivedArtifactRef(digest);
     objects.push({ artifactRef, bytes, digest });
     return {
       artifactRef,
@@ -173,7 +207,10 @@ function artifactRootObjects(
   const storedUi = (() => {
     if (ui === null) return null;
     if (ui.content.kind === "html")
-      return { ...referenced(ui.content), mediaType: ui.mediaType };
+      return {
+        ...referenced(ui.content, "text/html; charset=utf-8"),
+        mediaType: ui.mediaType,
+      };
     if (!options.assetPolicy)
       throw new Error("Asset writer requires explicit policy");
     const byPath = new Map<string, CandidateObject>();
@@ -192,7 +229,11 @@ function artifactRootObjects(
         : mediaType;
       if (!contentType)
         throw new Error("Build asset has no maintained content type");
-      assets.push({ path, ...referenced(asset), contentType });
+      assets.push({
+        path,
+        ...referenced(asset, "application/octet-stream"),
+        contentType,
+      });
     }
     const assetManifest = new TextEncoder().encode(
       Schema.encodeUnknownSync(assetBuildJsonSchema)({
@@ -208,7 +249,10 @@ function artifactRootObjects(
     manifest.kind === "ui"
       ? null
       : {
-          ...referenced(manifest.backend),
+          ...referenced(
+            manifest.backend,
+            "application/vnd.fungi.app-backend+json",
+          ),
           mediaType: "application/vnd.fungi.app-backend+json" as const,
         };
   const rootBytes = new TextEncoder().encode(
@@ -252,6 +296,7 @@ export async function writeArtifactRoot(
   manifest: CandidateOutputManifest,
   objects: ImmutableArtifactObjects,
   options: Readonly<{
+    owner: ContentObjectOwner;
     rootArtifactRef: ArtifactRef;
     assetPolicy: AssetBuildPolicy | undefined;
   }>,
@@ -266,12 +311,18 @@ export async function writeImmutableArtifact(
   output: BuildOutput,
   objects: ImmutableArtifactObjects,
   options: Readonly<{
+    owner: ContentObjectOwner;
     rootArtifactRef: ArtifactRef;
     assetPolicy: AssetBuildPolicy | undefined;
   }>,
 ): Promise<StoredArtifact> {
   const staged = stageBuildOutput(output);
   const derived = artifactRootObjects(staged.manifest, options);
-  await storeObjects([...staged.objects, ...derived.objects], objects);
+  const owned = staged.objects.map(({ bytes, digest, mediaType }) => ({
+    artifactRef: contentObjectRef(options.owner, digest, mediaType),
+    bytes,
+    digest,
+  }));
+  await storeObjects([...owned, ...derived.objects], objects);
   return derived.root;
 }

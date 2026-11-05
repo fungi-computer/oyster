@@ -236,7 +236,7 @@ export function candidateObjectMediaType(
 export type CandidateUpload = CandidateObject &
   Readonly<{ mediaType: CandidateObjectMediaType }>;
 
-/** Every distinct object a manifest names, each once, in manifest order. */
+/** Every distinct object (digest and stored type) a manifest names, each once, in manifest order. */
 export function candidateManifestObjects(
   output: CandidateOutputManifest,
 ): readonly CandidateUpload[] {
@@ -245,15 +245,15 @@ export function candidateManifestObjects(
     object: CandidateObject,
     mediaType: CandidateObjectMediaType,
   ) => {
-    const seen = objects.find(({ digest }) => digest === object.digest);
-    if (seen === undefined)
+    const named = objects.filter(({ digest }) => digest === object.digest);
+    if (named.some(({ byteLength }) => byteLength !== object.byteLength))
+      throw new Error("One object digest names two sizes");
+    if (!named.some((seen) => seen.mediaType === mediaType))
       objects.push({
         digest: object.digest,
         byteLength: object.byteLength,
         mediaType,
       });
-    else if (seen.byteLength !== object.byteLength)
-      throw new Error("One object digest names two sizes");
   };
   if (output.kind !== "backend") {
     const { content } = output.ui;

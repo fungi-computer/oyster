@@ -101,8 +101,8 @@ Cloudflare products in the deployment:
 This deploys the standalone Worker with Bonsai's config at
 `apps/bonsai/wrangler.jsonc`, with git, Workflows, a Computer, Agents and media.
 Verified against that file and
-[the Oyster README's quick start](README.md#quick-start-deploy-your-own-oyster),
-which walks through the same deployment in more detail.
+[the Oyster README's quick start](README.md#deploy-to-cloudflare), which walks
+through the same deployment in more detail.
 
 You need a Cloudflare account on Workers Paid with Artifacts and Containers
 enabled, Docker running locally (`wrangler deploy` builds the Computer image),

@@ -80,26 +80,27 @@ export function isBuildGitPrincipal<P extends Readonly<{ kind: string }>>(
  * The build-report handler for `/jobs/:id/(candidate|artifact|status)` and
  * `PUT /jobs/:id/objects/sha256-<hex>`. `admitBuild` is the host's own
  * live-job lookup; `admitObject` admits one object upload for a live job's
- * grant and answers its size bound; `storeObject` streams an admitted object
- * into the host's content-addressed store, which verifies its digest;
+ * grant and answers its size bound (and whatever else the host's store needs,
+ * such as the owner namespace); `storeObject` streams an admitted object into
+ * the host's content-addressed store, which verifies its digest;
  * `submitCandidate` hands an admitted manifest to the host's Publisher
  * custody; `record` delivers a reported fact to the host's own projection.
  * `report` observes a body or JSON decode failure without changing its 400
  * outcome; a host may wire its own structured logger or omit it.
  */
-export function createBuildEgress(
+export function createBuildEgress<
+  Admission extends Readonly<{ maxObjectBytes: number }>,
+>(
   options: Readonly<{
     admitBuild: (
       jobId: string,
     ) => Promise<Readonly<{ credentialId: string }> | null>;
-    admitObject: (
-      jobId: string,
-      grant: string,
-    ) => Promise<Readonly<{ maxObjectBytes: number }> | null>;
+    admitObject: (jobId: string, grant: string) => Promise<Admission | null>;
     storeObject: (
       object: CandidateObject,
       body: ReadableStream<Uint8Array> | null,
       mediaType: CandidateObjectMediaType,
+      admitted: Admission,
     ) => Promise<"stored" | "refused">;
     submitCandidate: (
       jobId: string,
@@ -149,6 +150,7 @@ export function createBuildEgress(
       }),
       request.body,
       mediaType,
+      admitted,
     );
     return new Response(null, { status: stored === "stored" ? 204 : 400 });
   };

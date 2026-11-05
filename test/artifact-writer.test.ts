@@ -9,10 +9,15 @@ import {
   writeImmutableArtifact,
   type ImmutableArtifactObjects,
 } from "../src/build/artifact-writer.js";
+import {
+  contentObjectOwner,
+  contentObjectRef,
+} from "../src/build/content-objects.js";
 import type { BuildOutput } from "../src/build/effect.js";
 
 const encoder = new TextEncoder();
 const rootArtifactRef = parseArtifactRef("artifact:root-under-test");
+const owner = contentObjectOwner("team_under_test");
 const generous: AssetBuildPolicy = {
   maxManifestBytes: 65_536,
   maxObjects: 16,
@@ -55,6 +60,7 @@ function memoryObjects(): ImmutableArtifactObjects & {
 async function sizes() {
   const store = memoryObjects();
   await writeImmutableArtifact(single, store, {
+    owner,
     rootArtifactRef,
     assetPolicy: generous,
   });
@@ -75,7 +81,11 @@ async function refusedWithNothingStored(
 ) {
   const store = memoryObjects();
   await expect(
-    writeImmutableArtifact(output, store, { rootArtifactRef, assetPolicy }),
+    writeImmutableArtifact(output, store, {
+      owner,
+      rootArtifactRef,
+      assetPolicy,
+    }),
   ).rejects.toThrow();
   expect(store.objects.size).toBe(0);
 }
@@ -102,6 +112,7 @@ it("bounds the asset manifest and the App root by the policy's maxManifestBytes"
   });
   const store = memoryObjects();
   await writeImmutableArtifact(single, store, {
+    owner,
     rootArtifactRef,
     assetPolicy: { ...generous, maxManifestBytes: measured.root },
   });
@@ -112,6 +123,7 @@ it("bounds the asset manifest and the App root by the policy's maxManifestBytes"
 it("writes the same asset manifest and root from staged objects as the local packer", async () => {
   const packed = memoryObjects();
   const packedRoot = await writeImmutableArtifact(pair, packed, {
+    owner,
     rootArtifactRef,
     assetPolicy: generous,
   });
@@ -119,8 +131,12 @@ it("writes the same asset manifest and root from staged objects as the local pac
   const staged = stageBuildOutput(pair);
   const hosted = memoryObjects();
   for (const object of staged.objects)
-    await hosted.create(object.artifactRef, object.bytes);
+    await hosted.create(
+      contentObjectRef(owner, object.digest, object.mediaType),
+      object.bytes,
+    );
   const hostedRoot = await writeArtifactRoot(staged.manifest, hosted, {
+    owner,
     rootArtifactRef,
     assetPolicy: generous,
   });
@@ -155,7 +171,7 @@ it("refuses a manifest naming one asset path twice before writing anything", asy
         },
       },
       store,
-      { rootArtifactRef, assetPolicy: generous },
+      { owner, rootArtifactRef, assetPolicy: generous },
     ),
   ).rejects.toThrow("Duplicate build path");
   expect(store.objects.size).toBe(0);

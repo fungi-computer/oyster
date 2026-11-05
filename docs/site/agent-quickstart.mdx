@@ -95,6 +95,14 @@ cp node_modules/@fungi.computer/oyster/examples/standalone/worker.ts .
 cp node_modules/@fungi.computer/oyster/examples/standalone/wrangler.jsonc .
 ```
 
+pnpm 11 holds back any version published in the last day, so a brand-new release
+may not be the one it installs. Run
+`pnpm ls @fungi.computer/oyster @fungi.computer/computer` to see which versions
+you got, and compare them with
+[Package versions in each Fungi release](https://docs.fungi.computer/reference/packages/#package-versions-in-each-fungi-release).
+To install a specific release, name its versions, as in
+[Upgrade Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/#upgrade-oyster).
+
 Expected output: pnpm lists the added package after each `add`, and `ls` now
 shows `node_modules`, `package.json`, `pnpm-workspace.yaml`, `worker.ts` and
 `wrangler.jsonc`.

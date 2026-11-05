@@ -26,6 +26,7 @@ import {
   recordComputerEgress,
 } from "@fungi.computer/computer/egress";
 import { createBuildEgress, type BuildGitEvent } from "../build-egress.js";
+import type { ContentObjectOwner } from "../build/content-objects.js";
 import type {
   CandidateObject,
   CandidateObjectMediaType,
@@ -43,16 +44,20 @@ export type OysterComputerBuildPort = Readonly<{
   /** One read-only exchange with a template repository a live job names. */
   exchangeTemplate(repository: string, request: Request): Promise<Response>;
   admitBuild(jobId: string): Promise<Readonly<{ credentialId: string }> | null>;
-  /** One object upload for a live job's grant, and its size bound. */
+  /** One object upload for a live job's grant, its size bound and owner. */
   admitObject(
     jobId: string,
     grant: string,
-  ): Promise<Readonly<{ maxObjectBytes: number }> | null>;
-  /** Stream one admitted object into the host's Release store. */
+  ): Promise<Readonly<{
+    maxObjectBytes: number;
+    owner: ContentObjectOwner;
+  }> | null>;
+  /** Stream one admitted object into the host's Release store, in its owner's namespace. */
   storeObject(
     object: CandidateObject,
     body: ReadableStream<Uint8Array> | null,
     mediaType: CandidateObjectMediaType,
+    owner: ContentObjectOwner,
   ): Promise<"stored" | "refused">;
   submitCandidate(
     jobId: string,
@@ -130,8 +135,8 @@ export async function serveOysterComputerEgress(
     response = await createBuildEgress({
       admitBuild: (jobId) => options.build.admitBuild(jobId),
       admitObject: (jobId, grant) => options.build.admitObject(jobId, grant),
-      storeObject: (object, body, mediaType) =>
-        options.build.storeObject(object, body, mediaType),
+      storeObject: (object, body, mediaType, admitted) =>
+        options.build.storeObject(object, body, mediaType, admitted.owner),
       submitCandidate: (jobId, manifest, grant, credentialId) =>
         options.build.submitCandidate(jobId, manifest, grant, credentialId),
       record: (event) => options.build.record(event),

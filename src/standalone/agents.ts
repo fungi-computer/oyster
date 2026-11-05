@@ -205,9 +205,13 @@ import {
   type FleetMessage,
 } from "@fungi.computer/shiitake/fleet";
 import type { AppSurfaceCache } from "../mcp.js";
-import { appToolPolicySchema, type AppToolPolicy } from "../apps/index.js";
+import {
+  appToolPolicySchema,
+  type AppToolPolicy,
+  type Installation,
+} from "../apps/index.js";
 import { oysterPrincipalId, type OysterHost } from "../host.js";
-import { oysterPrincipalIsOwner } from "../authorization.js";
+import { agentCeiling, oysterPrincipalIsOwner } from "../authorization.js";
 import {
   defaultTenant,
   tenantIdSchema,
@@ -2988,6 +2992,10 @@ export const agentFrameMethods = {
       decodeArgs: (raw) => agentBindingArgs.INBOX.visit.parse(raw),
       decodeResult: decodeInboxVisit,
       requiredOperations: () => ["visit"],
+      requestedResource: (raw) => ({
+        kind: "agent",
+        id: agentBindingArgs.INBOX.visit.parse(raw)[0].agentId,
+      }),
     },
   },
   AGENTS: {
@@ -3064,6 +3072,7 @@ export async function dispatchAgentBinding(
   props: FrameBindingProps,
   method: string,
   args: readonly unknown[],
+  admitted: Installation,
 ): Promise<OysterJson> {
   frame.signal.throwIfAborted();
   if (frame.facts.selection.owner.kind !== "installation")
@@ -3081,8 +3090,24 @@ export async function dispatchAgentBinding(
       >;
   if (props.binding === "INBOX" && method === "page") {
     agentBindingArgs.INBOX.page.parse(args);
+    const read = admitted.authority.approvedGrants.find(
+      (grant) => grant.capability === "agent.read",
+    );
+    if (read === undefined) throw new AppInstanceError("binding_not_granted");
+    const ceiling = agentCeiling(read.resources);
     const inbox = await standaloneAgents(env, scope).inbox();
-    result = { items: inbox.items, next: null, cursor: inbox.revision };
+    result =
+      ceiling === "all"
+        ? { items: inbox.items, next: null, cursor: inbox.revision }
+        : {
+            items: inbox.items.filter(
+              (item) => "agentId" in item && ceiling.has(item.agentId),
+            ),
+            next: null,
+            // The global revision also moves for Agents outside the selection;
+            // with no scoped change stream, a narrowed App sees neither it nor their rows.
+            cursor: 0,
+          };
   } else if (props.binding === "INBOX" && method === "visit") {
     const [input] = agentBindingArgs.INBOX.visit.parse(args);
     if (!(await directory.has(input.agentId))) throw new Error("No such agent");

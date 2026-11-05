@@ -311,6 +311,7 @@ What Oyster's git door needs from the host beyond sign-in and Instances.
 type CapabilityAdmission = Readonly<{
   principal: TenantPrincipal;
   installation: Installation;
+  grant: ApprovedGrant;
 }>;
 ```
 

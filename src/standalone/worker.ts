@@ -260,9 +260,10 @@ export class OysterComputerEgress extends WorkerEntrypoint<
           registry.admitBuildObject(jobId, computerObjectId, grant),
         // The bytes stream from the Computer to R2, which checks the digest;
         // the registry only admits the upload and later reads the facts.
-        storeObject: (object, body, mediaType) =>
+        storeObject: (object, body, mediaType, owner) =>
           putContentObject(
             this.env.RELEASES,
+            owner,
             object,
             // R2 takes a stream of known length; the stated length is exact.
             body?.pipeThrough(new FixedLengthStream(object.byteLength)) ?? null,

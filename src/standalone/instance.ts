@@ -117,7 +117,7 @@ export const standaloneBindings: OysterBindingTable<StandaloneInstanceEnv> = {
   },
   INBOX: {
     methods: agentFrameMethods.INBOX,
-    dispatch: (context, frame, props, method, args) =>
+    dispatch: (context, frame, props, method, args, admitted) =>
       dispatchAgentBinding(
         context.env,
         context.scope(),
@@ -125,11 +125,12 @@ export const standaloneBindings: OysterBindingTable<StandaloneInstanceEnv> = {
         props,
         method,
         args,
+        admitted,
       ),
   },
   AGENTS: {
     methods: agentFrameMethods.AGENTS,
-    dispatch: (context, frame, props, method, args) =>
+    dispatch: (context, frame, props, method, args, admitted) =>
       dispatchAgentBinding(
         context.env,
         context.scope(),
@@ -137,6 +138,7 @@ export const standaloneBindings: OysterBindingTable<StandaloneInstanceEnv> = {
         props,
         method,
         args,
+        admitted,
       ),
   },
   /** The emit commits to the delivery owner; Workflows libraries receive it afterwards. */

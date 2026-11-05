@@ -22,6 +22,7 @@ import {
   writeImmutableArtifact,
   type ImmutableArtifactObjects,
 } from "./artifact-writer.js";
+import { contentObjectOwner } from "./content-objects.js";
 import {
   assetPathSchema,
   type AssetBuildPolicy,
@@ -1679,6 +1680,8 @@ async function writeArtifact(
     output,
     directoryArtifactObjects(artifactRoot, signal),
     {
+      // A local pack is one owner's private directory.
+      owner: contentObjectOwner("local"),
       rootArtifactRef: parseArtifactRef(
         `artifact:${Buffer.from(randomBytes(16)).toString("hex")}`,
       ),

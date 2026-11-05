@@ -31,11 +31,17 @@ export function workflowWebhookAbuse(options: {
   let active = 0;
   return {
     concurrency,
-    /** Per-instance streaming bound; durable run concurrency belongs to Braid. */
+    /**
+     * Per-instance streaming bound; durable run concurrency belongs to Braid.
+     * The rate key carries the tenant: a multi-tenant host (the Hub) serves
+     * every Team on one origin, and this lease is spent before any signature
+     * check, so a shared key would let one tenant's unauthenticated traffic
+     * refuse every other tenant's deliveries.
+     */
     async hostLease(): Promise<null | (() => void)> {
       if (active >= concurrency.hostConcurrency) return null;
       const { success } = await options.hostRate.limit({
-        key: rateKey(["workflow-webhooks", scope.host, "host"]),
+        key: rateKey([...prefix, "host"]),
       });
       // Native admission awaits I/O; simultaneous successful replies still
       // cannot overbook the local streaming ceiling.

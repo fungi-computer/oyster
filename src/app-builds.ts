@@ -52,7 +52,11 @@ import {
   digestTeamAppCandidateManifest,
   type TeamAppCandidateManifest,
 } from "./build/submission-contract.js";
-import { contentObjectRef } from "./build/content-objects.js";
+import {
+  contentObjectOwner,
+  contentObjectRef,
+  type ContentObjectOwner,
+} from "./build/content-objects.js";
 import {
   createTeamBuildPublisher,
   teamAppBuildCommand,
@@ -344,6 +348,8 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     read: (artifactRef) => options.artifacts.get(artifactRef),
   };
   migrateOysterAppBuilds(owner);
+  // This tenant's uploads, keyed apart from every other tenant's.
+  const objectOwner = contentObjectOwner(options.tenantId);
   // A job outlives the owner instance that started it: the Computer keeps
   // building and its own reports (objects, candidate, status) settle the
   // job, so an owner restart must not fail it. A job that reaches its expiry
@@ -952,7 +958,10 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       jobId: string,
       computerObjectId: string,
       grant: string,
-    ): Promise<Readonly<{ maxObjectBytes: number }> | null> {
+    ): Promise<Readonly<{
+      maxObjectBytes: number;
+      owner: ContentObjectOwner;
+    }> | null> {
       const job = readJob(jobId);
       if (
         computerObjectId !== options.computer.objectId ||
@@ -962,6 +971,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         return null;
       return {
         maxObjectBytes: pinnedRecipeObjectBound(decodeRecipe(job.recipe)),
+        owner: objectOwner,
       };
     },
     /**
@@ -999,26 +1009,40 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         if (!fitsPinnedRecipe(manifest.output, recipe))
           throw new Error("Candidate exceeds its pinned recipe");
         for (const object of candidateManifestObjects(manifest.output)) {
-          const head = await options.artifacts.head(
-            contentObjectRef(object.digest),
+          const artifactRef = contentObjectRef(
+            objectOwner,
+            object.digest,
+            object.mediaType,
           );
+          const head = await options.artifacts.head(artifactRef);
           if (
             head?.byteLength !== object.byteLength ||
-            head.digest !== object.digest
+            (head.digest !== null && head.digest !== object.digest)
           )
             throw new Error("Candidate object is not stored as named");
+          // Bytes the store never checksummed (a packed upload's plain
+          // object) are read and hashed, one object at a time.
+          if (head.digest === null)
+            await readVerified(options.artifacts, artifactRef, object.digest);
         }
         if (manifest.output.kind !== "ui")
           decodeCandidateBackend(
             await readVerified(
               options.artifacts,
-              contentObjectRef(manifest.output.backend.digest),
+              contentObjectRef(
+                objectOwner,
+                manifest.output.backend.digest,
+                "application/vnd.fungi.app-backend+json",
+              ),
               manifest.output.backend.digest,
             ),
           );
+        // The root is named by the manifest (one candidate, one root),
+        // outside the namespace uploads are stored in.
         const root = await writeArtifactRoot(manifest.output, storeObjects, {
+          owner: objectOwner,
           rootArtifactRef: parseArtifactRef(
-            `artifact:sha256-${await digestTeamAppCandidateManifest(manifest)}`,
+            `artifact:${await digestTeamAppCandidateManifest(manifest)}`,
           ),
           assetPolicy: recipe.assets,
         });
@@ -1031,7 +1055,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
             provenance: manifest.provenance,
           },
         });
-        // Each object was checked by its stored digest above.
+        // Each object was checked by its digest above.
         await verifyRelease(
           options.artifacts,
           release,
