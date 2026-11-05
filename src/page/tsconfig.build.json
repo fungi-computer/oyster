@@ -11,6 +11,7 @@
     "main.tsx",
     "grant-consent.tsx",
     "embed-loader.tsx",
-    "embed-widget.tsx"
+    "embed-widget.tsx",
+    "hello-app-connect.ts"
   ]
 }

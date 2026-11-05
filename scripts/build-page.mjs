@@ -72,6 +72,30 @@ await copyFile(
   new URL("../src/boot-host-script.d.ts", import.meta.url),
   new URL("boot-host-script.d.ts", dist),
 );
+const helloApp = await build({
+  entryPoints: [
+    new URL("../src/page/hello-app-connect.ts", import.meta.url).pathname,
+  ],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  minify: true,
+  write: false,
+  legalComments: "none",
+  logLevel: "warning",
+});
+const [helloAppOutput] = helloApp.outputFiles;
+if (helloAppOutput === undefined)
+  throw new Error("Hello App script produced no output");
+await writeFile(
+  new URL("hello-app-script.js", dist),
+  `export const helloAppScript = ${JSON.stringify(helloAppOutput.text)};\n`,
+);
+await copyFile(
+  new URL("../src/hello-app-script.d.ts", import.meta.url),
+  new URL("hello-app-script.d.ts", dist),
+);
 const wire = await build({
   entryPoints: [
     new URL("../src/frame-binding-wire.ts", import.meta.url).pathname,

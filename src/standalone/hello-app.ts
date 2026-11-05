@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { helloAppScript } from "#hello-app-script";
 import { installRelease, packRelease } from "../pack.js";
 
 const manifest = {
@@ -14,8 +15,9 @@ const manifest = {
   fungi: { app: { displayName: "Hello", icon: "fungi", capabilities: [] } },
 };
 
-const page =
-  "<!doctype html>\n<title>Hello</title>\n<h1>Hello from my first Oyster App</h1>\n";
+// The script announces the page to Oyster; without it the window never opens.
+export const helloPage =
+  '<!doctype html>\n<title>Hello</title>\n<h1>Hello from my first Oyster App</h1>\n<script type="module" src="./main.js"></script>\n';
 
 const exists = (path: string) =>
   access(path).then(
@@ -46,7 +48,8 @@ async function writeHelloApp(directory: string): Promise<string> {
     join(source, "package.json"),
     JSON.stringify(manifest, null, 2) + "\n",
   );
-  await writeFile(join(source, "bundle", "index.html"), page);
+  await writeFile(join(source, "bundle", "index.html"), helloPage);
+  await writeFile(join(source, "bundle", "main.js"), helloAppScript);
   git(source, ["init", "-q"]);
   git(source, ["add", "."]);
   git(source, ["commit", "-qm", "Hello App"]);

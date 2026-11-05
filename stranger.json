@@ -191,6 +191,8 @@
     "package/dist/git-journal.js",
     "package/dist/git.d.ts",
     "package/dist/git.js",
+    "package/dist/hello-app-script.d.ts",
+    "package/dist/hello-app-script.js",
     "package/dist/guest-policy.d.ts",
     "package/dist/guest-policy.js",
     "package/dist/host.d.ts",

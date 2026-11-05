@@ -317,7 +317,11 @@ function scopedSourceCapture(
   return {
     capture: () =>
       Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "app-publisher-"))),
+        Effect.sync(() =>
+          // Canonical, so every path derived from the scratch matches the
+          // realpaths pnpm reports (macOS tmpdir is a symlink).
+          realpathSync(mkdtempSync(join(tmpdir(), "app-publisher-"))),
+        ),
         (workdir) =>
           Effect.tryPromise({
             try: () => rm(workdir, { recursive: true, force: true }),

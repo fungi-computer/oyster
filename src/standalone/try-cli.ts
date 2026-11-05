@@ -83,6 +83,29 @@ export function createTryCli(args: readonly string[]): Cli {
     : new Cli({ brand: "fungi" });
 }
 
+/** The deepest Error in a `cause` chain, where the real failure lives. */
+function innermostError(cause: unknown): Error {
+  let current = cause instanceof Error ? cause : new Error(String(cause));
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (!(current.cause instanceof Error)) break;
+    current = current.cause;
+  }
+  return current;
+}
+
+const networkErrorCodes: ReadonlySet<unknown> = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+]);
+
+function isNetworkFailure(error: Error): boolean {
+  return "code" in error && networkErrorCodes.has(error.code);
+}
+
 /** Show a failed `oyster try` as an error with its next step. */
 export function reportTryFailure(cause: unknown, ui: Cli): void {
   if (cause instanceof TryError) ui.problem(cause.title, cause.next);
@@ -531,8 +554,10 @@ export async function tryOyster(
       )
       .catch((cause: unknown) => {
         ui.warn(
-          `Tourtois, the desktop, could not be built (${cause instanceof Error ? cause.message : String(cause)}). Continuing with the Hello App.`,
-          `Connect to the internet and run \`${command}\` again from ${directory} to try the desktop again.`,
+          `Tourtois, the desktop, could not be built (${innermostError(cause).message}). Continuing with the Hello App.`,
+          isNetworkFailure(innermostError(cause))
+            ? `Connect to the internet and run \`${command}\` again from ${directory} to try the desktop again.`
+            : `Run \`${command} --verbose\` from ${directory} and report this.`,
         );
       });
     const link = await ui.task("Opening your desktop", async () => {

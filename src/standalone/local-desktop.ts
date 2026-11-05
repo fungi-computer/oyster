@@ -4,7 +4,7 @@
 // packer and installs it as the home installation, approving its shell the
 // same way `install-apps` does.
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "effect/Schema";
@@ -42,7 +42,9 @@ export async function isInstalled(
 export async function installLocalDesktop(
   input: Readonly<{ url: string; key: string }>,
 ): Promise<void> {
-  const scratch = await mkdtemp(join(tmpdir(), "oyster-tourtois-"));
+  const scratch = await realpath(
+    await mkdtemp(join(tmpdir(), "oyster-tourtois-")),
+  );
   try {
     const source = join(scratch, "tourtois");
     git(scratch, ["clone", "--quiet", "--depth=1", tourtoisRepository, source]);

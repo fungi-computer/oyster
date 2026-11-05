@@ -1,5 +1,15 @@
 # @fungi.computer/oyster
 
+## 0.12.1
+
+### Patch Changes
+
+- Changes since 0.12.0:
+
+  - fix(oyster): connect the starter Hello App page so its window opens
+  - fix(oyster): canonicalize the build scratch root so try installs Tourtois on
+    macOS
+
 ## 0.12.0
 
 ### Minor Changes

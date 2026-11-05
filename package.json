@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -29,6 +29,10 @@
     "#frame-binding-wire-script": {
       "types": "./src/frame-binding-wire-script.d.ts",
       "default": "./dist/frame-binding-wire-script.js"
+    },
+    "#hello-app-script": {
+      "types": "./src/hello-app-script.d.ts",
+      "default": "./dist/hello-app-script.js"
     },
     "#page-script": {
       "types": "./src/page-script.d.ts",
@@ -380,6 +384,7 @@
     "test:mcp-computer": "node test/standalone/mcp-computer.native.mjs",
     "test:mcp-fleet": "node test/standalone/mcp-fleet.native.mjs",
     "test:local-backend": "node test/standalone/local-backend.native.mjs",
+    "proof:try-hello": "node test/standalone/try-hello.browser.mjs",
     "capture:tourtois-home": "node test/standalone/tourtois-home.browser.mjs",
     "capture:shell-fork": "OYSTER_PROOF_SHELL_FORK=1 node test/standalone/tourtois-home.browser.mjs",
     "capture:gills": "OYSTER_PROOF_GILLS=1 node --import tsx test/standalone/tourtois-home.browser.mjs",
