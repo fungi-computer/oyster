@@ -271,7 +271,8 @@ export async function createDefinitionEmission(
         );
       const file = join(source.snapshotPath, ".fungi-built-definition.mjs");
       await writeFile(file, declarationCode, { flag: "wx", mode: 0o600 });
-      const result = await promisify(execFile)(
+      signal.throwIfAborted();
+      const evaluation = promisify(execFile)(
         process.execPath,
         [
           "--input-type=module",
@@ -286,9 +287,21 @@ export async function createDefinitionEmission(
           timeout: 30_000,
           signal,
         },
-      ).catch((cause: unknown) => {
-        throw evaluationFailure(cause);
+      );
+      const closed = new Promise<void>((resolve) => {
+        evaluation.child.once("close", () => {
+          resolve();
+        });
       });
+      let result;
+      try {
+        result = await evaluation.catch((cause: unknown) => {
+          signal.throwIfAborted();
+          throw evaluationFailure(cause);
+        });
+      } finally {
+        await closed;
+      }
       return Schema.decodeUnknownSync(
         Schema.fromJsonString(appDeclarationSchema),
         { onExcessProperty: "error" },

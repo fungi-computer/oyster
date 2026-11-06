@@ -92,6 +92,7 @@ body {
   margin-top: 24px;
 }
 .detail {
+  overflow-wrap: anywhere;
   margin-top: 24px;
   padding: 16px 0;
   border-top: 1px solid var(--color-base-300);

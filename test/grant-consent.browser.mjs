@@ -302,6 +302,8 @@ test("owner consent submits explicit Release-bound approvals through the install
         await page
           .getByRole("heading", { name: "Bonsai permissions" })
           .waitFor();
+        // The identity heading is server-rendered; wait for the interactive editor.
+        await page.getByRole("checkbox", { name: "Send events" }).waitFor();
         assert.equal(
           await page.locator("html").getAttribute("data-theme"),
           theme === "dark" ? "mocha" : "latte",

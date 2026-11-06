@@ -1,7 +1,20 @@
 /** Node-only App source capture, compilation and artifact writing. */
 import { dependencyBuildProgram as bundledDependencyBuildProgram } from "#snapshot-program-scripts";
 export * from "./build/effect.js";
-export * from "./build/local-build.js";
+export {
+  createLocalSourceCapture,
+  createLocalDirectorySourceCapture,
+  createArtifactsSourceCapture,
+  createLocalCommitSourceCapture,
+  createFirstPartyAppSourceDistribution,
+  localSnapshotBuildOptions,
+  createLocalBuildExecutor,
+  createLocalArtifactWriter,
+  createLocalAppPublisher,
+  type FirstPartyAppSourceDistribution,
+  type LocalBuildExecutorOptions,
+  type LocalAppPublisherOptions,
+} from "./build/local-build.js";
 export {
   createDefinitionEmission,
   type AppBackendOutput,

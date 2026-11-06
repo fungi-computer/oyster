@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
+import { watch } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -295,4 +303,129 @@ test("installRelease uploads, submits once and awaits the correlated owner compl
     timeout.mock.calls.map((call) => call.arguments[0]),
     [20 * 60_000],
   );
+});
+
+test("an already cancelled pack leaves source and output untouched", async (t) => {
+  const { options } = await fixture(t, undefined);
+  const controller = new globalThis.AbortController();
+  controller.abort();
+  await assert.rejects(packRelease({ ...options, signal: controller.signal }), {
+    name: "AbortError",
+  });
+  await assert.rejects(readFile(join(options.outDirectory, "release.json")), {
+    code: "ENOENT",
+  });
+  assert.match(
+    await readFile(join(options.sourceDirectory, "bundle/index.html"), "utf8"),
+    /Committed/,
+  );
+});
+
+for (const phase of ["upload", "admission", "observation"]) {
+  test(`cancellation during ${phase} does not resubmit or claim an installation outcome`, async (t) => {
+    const { options } = await fixture(t, undefined);
+    const packed = await packRelease(options);
+    const controller = new globalThis.AbortController();
+    const requests = [];
+    let requestId;
+    let admitted = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        requests.push({ method: request.method, url: request.url });
+        if (request.url.startsWith("/api/artifacts/")) {
+          if (phase === "upload") controller.abort();
+          else response.writeHead(204).end();
+        } else if (request.method === "POST") {
+          requestId = request.headers["idempotency-key"];
+          if (phase === "admission") controller.abort();
+          else
+            response.writeHead(202, { "Content-Type": "application/json" }).end(
+              JSON.stringify({
+                state: "pending",
+                requestId,
+                requestedInstallationId: "fixture-app",
+                installationId: "fixture-app",
+                release: packed.release,
+              }),
+            );
+        } else controller.abort();
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    });
+    const failure = await installRelease({
+      directory: options.outDirectory,
+      url: `http://127.0.0.1:${server.address().port}`,
+      key: "fixture-owner",
+      installationId: "fixture-app",
+      signal: controller.signal,
+      onAdmitted: () => {
+        admitted += 1;
+      },
+    }).catch((cause) => cause);
+    if (phase === "upload") {
+      assert.equal(failure.name, "AbortError");
+      assert.equal(
+        requests.filter((request) => request.method === "POST").length,
+        0,
+      );
+    } else {
+      assert.match(failure.message, /Installation outcome unconfirmed/);
+      assert.equal(failure.requestId, requestId);
+      assert.equal(
+        requests.filter((request) => request.method === "POST").length,
+        1,
+      );
+      assert.equal(admitted, phase === "observation" ? 1 : 0);
+    }
+    assert.equal(
+      await readFile(join(options.outDirectory, "release.json"), "utf8")
+        .then(JSON.parse)
+        .then((release) => release.releaseId),
+      packed.release.releaseId,
+    );
+  });
+}
+
+test("cancellation during local artifact commit waits for all owned writes", async (t) => {
+  const { options } = await fixture(t, undefined);
+  const expected = await packRelease(options);
+  await rm(options.outDirectory, { recursive: true, force: true });
+  await mkdir(options.outDirectory);
+  const controller = new globalThis.AbortController();
+  let observedCommit = false;
+  const watcher = watch(options.outDirectory, (_event, name) => {
+    if (name === "artifacts") {
+      observedCommit = true;
+      controller.abort();
+    }
+  });
+  try {
+    await assert.rejects(
+      packRelease({ ...options, signal: controller.signal }),
+      { name: "AbortError" },
+    );
+    assert.equal(observedCommit, true);
+    const artifacts = await readdir(join(options.outDirectory, "artifacts"), {
+      recursive: true,
+      withFileTypes: true,
+    });
+    const files = artifacts.filter((entry) => entry.isFile());
+    assert.equal(files.length, expected.artifacts.length);
+    for (const file of files)
+      assert.ok(
+        (await readFile(join(file.parentPath, file.name))).byteLength > 0,
+      );
+    await assert.rejects(readFile(join(options.outDirectory, "release.json")), {
+      code: "ENOENT",
+    });
+  } finally {
+    watcher.close();
+  }
 });

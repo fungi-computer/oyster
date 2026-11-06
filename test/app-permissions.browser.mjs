@@ -213,6 +213,17 @@ async function appPermissionsProof(t, control = {}) {
         .catch((cause) => {
           throw new Error("Oyster grants iframe must load", { cause });
         });
+      const privilege = shell.getByText(
+        "Full access to your Team and every App",
+        { exact: true },
+      );
+      assert.equal(
+        await privilege.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth,
+        ),
+        true,
+        "The complete Shell privilege stays readable without a hover tooltip",
+      );
       assert.equal(await shell.getByLabel("Shell allowed").count(), 1);
       assert.equal(await shell.locator("[data-sigil]").count(), 1);
       assert.equal(await shell.getByRole("checkbox").count(), 0);
@@ -455,11 +466,11 @@ async function appPermissionsProof(t, control = {}) {
       assert.equal(writes, 2);
       await page.reload();
       await consent.getByLabel("Shell allowed").waitFor({ state: "attached" });
-      assert.equal(await page.locator(".caps-centered-card-stage").count(), 1);
+      assert.equal(await page.locator(".caps-trading-card").count(), 1);
       assert.equal(
         await page.getByRole("link", { name: "Back to Apps" }).count(),
         1,
-        "Standalone recovery keeps its own page chrome and Back link",
+        "Standalone recovery keeps host page chrome and an explicit decline link",
       );
       assert.deepEqual(errors, []);
       await page.close();

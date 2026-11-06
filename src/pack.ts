@@ -9,6 +9,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import {
@@ -71,6 +73,8 @@ export type PackOptions = Readonly<{
   packageStoreDirectory?: string;
   /** Where to write `release.json` and the immutable `artifacts/` directory. */
   outDirectory: string;
+  /** Interrupt local preparation and await its owned scratch/process cleanup. */
+  signal?: AbortSignal;
 }>;
 
 /** A packed Release on disk. */
@@ -95,6 +99,7 @@ async function packCapturedSource(
   options: Omit<PackOptions, "sourceDirectory">,
   sourceCapture: SourceCapture,
 ): Promise<PackedRelease> {
+  options.signal?.throwIfAborted();
   const revision = parseSourceRevision(options.sourceRevision);
   const out = resolve(options.outDirectory);
   const artifactsDirectory = join(out, "artifacts");
@@ -107,30 +112,45 @@ async function packCapturedSource(
         : { packageStoreDirectory: options.packageStoreDirectory },
     ),
   });
-  const prepared = await Effect.runPromise(
-    Effect.scoped(
-      preparer.prepareCandidate(
-        parseReleaseId(
-          options.releaseId ??
-            `rel_${revision.slice("git:".length, "git:".length + 12)}`,
+  const packed = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const prepared = yield* Effect.scoped(
+        preparer.prepareCandidate(
+          parseReleaseId(
+            options.releaseId ??
+              `rel_${revision.slice("git:".length, "git:".length + 12)}`,
+          ),
         ),
-      ),
-    ),
-  );
-  const release = await Effect.runPromise(
-    commitPreparedCandidate(prepared, {
-      artifactWriter: createLocalArtifactWriter(
-        artifactsDirectory,
-        options.recipe.assets,
-      ),
-      releaseCatalog: { createRelease: (value) => Promise.resolve(value) },
+      );
+      // These are local artifact writes, not host installation admission.
+      // Settle them before the caller may remove its output directory.
+      return yield* Effect.uninterruptible(
+        commitPreparedCandidate(prepared, {
+          artifactWriter: createLocalArtifactWriter(
+            artifactsDirectory,
+            options.recipe.assets,
+          ),
+          releaseCatalog: { createRelease: (value) => Promise.resolve(value) },
+        }),
+      );
     }),
+    { signal: options.signal },
   );
+  if (Exit.isFailure(packed)) {
+    // Scope cleanup defects must not disappear behind a simultaneous build failure.
+    const defect = packed.cause.reasons.find(Cause.isDieReason);
+    if (defect !== undefined) throw defect.defect;
+    if (Cause.hasInterruptsOnly(packed.cause)) options.signal?.throwIfAborted();
+    throw Cause.squash(packed.cause);
+  }
+  const release = packed.value;
+  options.signal?.throwIfAborted();
   await mkdir(out, { recursive: true });
   await writeFile(
     join(out, "release.json"),
     `${Schema.encodeUnknownSync(Schema.fromJsonString(releaseSchema))(release)}\n`,
   );
+  options.signal?.throwIfAborted();
   const artifacts = (await filesUnder(artifactsDirectory)).map((path) => ({
     artifactRef: parseArtifactRef(
       `artifact:${relative(artifactsDirectory, path)}`,
@@ -158,7 +178,7 @@ export async function packRelease(
  * and install it, or switch an existing installation to it
  * ({@link installRelease}).
  * `waitMs` starts with the upload/observation phase after packing; a supplied
- * caller signal retains its original lifetime through that phase.
+ * caller signal also interrupts packing and retains its original lifetime.
  */
 export async function installFromSource(
   input: Readonly<{
@@ -184,6 +204,8 @@ export async function installFromSource(
       sourceRevision: input.source.sourceRevision,
       outDirectory,
     };
+    if (input.signal !== undefined)
+      options = { ...options, signal: input.signal };
     if (input.releaseId !== undefined)
       options = { ...options, releaseId: input.releaseId };
     if (input.packageStoreDirectory !== undefined)

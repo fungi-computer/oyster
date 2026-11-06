@@ -1,10 +1,4 @@
 import { createRoot } from "react-dom/client";
-import {
-  CenteredCard,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "@fungi.computer/caps/components/card";
 import { Button } from "@fungi.computer/caps/components/button";
 import { appPermissionPageSchema } from "../apps/permissions.js";
 import {
@@ -27,6 +21,8 @@ bootstrapIsolatedPageTheme();
 
 const framed = window.parent !== window;
 if (framed) {
+  // The standalone host composition is not repeated inside Settings.
+  document.body.replaceChildren(root);
   // The embedding Settings section owns page padding and scrolling.
   document.documentElement.style.minHeight = "0";
   document.body.style.minHeight = "0";
@@ -57,19 +53,11 @@ createRoot(root).render(
   framed ? (
     <main style={{ display: "flow-root" }}>{editor}</main>
   ) : (
-    <CenteredCard>
-      <CardHeader>
-        <CardTitle>{config.appName} permissions</CardTitle>
-        <p>
-          {config.installationId} · {config.appId}
-        </p>
-      </CardHeader>
-      <CardContent>
-        {editor}
-        <Button asChild variant="ghost">
-          <a href="/">Back to Apps</a>
-        </Button>
-      </CardContent>
-    </CenteredCard>
+    <div>
+      {editor}
+      <Button asChild variant="outline">
+        <a href="/">Back to Apps</a>
+      </Button>
+    </div>
   ),
 );

@@ -226,6 +226,41 @@ test("the helper remains single-use, with a real manual POST and a key-free used
       404,
     );
   } finally {
-    helper.close();
+    await helper.close();
   }
+});
+
+test("permissions documents show identity and a safe exit before scripts load; JSON remains the grant contract", async () => {
+  const app = await homePageFixture({ approved: false });
+  const path = "/api/installations/desktop/grants";
+  const before = await (
+    await app.request(path, { headers: { Accept: "application/json" } })
+  ).json();
+  const response = await app.request(path, { headers: documentHeaders });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Choose what this App can do/);
+  assert.match(html, /Back to Apps/);
+  assert.match(html, /<noscript>/);
+  assert.match(html, /Needs review/);
+  assert.match(html, /Full access to your Team and every App/);
+  assert.match(html, /Only pick a shell you trust/);
+  assert.match(
+    html,
+    /To decline, return to Apps without saving or confirming a change/,
+  );
+  assert.ok(html.includes(before.artifactDigest));
+  assert.match(html, /login-fonts\.css/);
+  assert.equal(
+    html.includes('action="/api/installations/desktop/grants"'),
+    false,
+  );
+  const after = await (
+    await app.request(path, { headers: { Accept: "application/json" } })
+  ).json();
+  assert.deepEqual(
+    after,
+    before,
+    "viewing or leaving consent grants no authority",
+  );
 });

@@ -8,28 +8,44 @@
 //   npx @fungi.computer/oyster try [directory] [--port 8787] [--no-open] [--verbose]
 //
 // Output goes through Lantern, the shared Fungi terminal kit: a wordmark, one
-// spinner per real step, a success box and a next step for every failure. It
+// progress log per real step, a success box and a next step for every failure. It
 // is quiet by default; install and server output go to files under .oyster/
 // and --verbose streams them instead. Piped output or CI gets plain lines.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { addAbortListener } from "node:events";
+import { finished } from "node:stream/promises";
+import { runGit } from "../build/local-build.js";
+import {
+  CleanupError,
+  stopProcessGroup,
+  awaitCleanup,
+} from "../build/process-group.js";
+import { InstallationObservationError } from "../installation-client.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import {
   copyFile,
   mkdir,
+  mkdtemp,
+  rename,
   readdir,
+  rm,
   readFile,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:net";
-import { basename, delimiter, join, resolve } from "node:path";
+import { basename, dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { Cli } from "@fungi.computer/lantern";
 import * as z from "zod";
 import { installHelloApp } from "./hello-app.js";
-import { installLocalDesktop, isInstalled } from "./local-desktop.js";
+import {
+  installLocalDesktop,
+  localDesktopState,
+  type DesktopReadiness,
+} from "./local-desktop.js";
 import { startSignInLink, type SignInLink } from "./sign-in-link.js";
 
 export const tryUsage =
@@ -61,6 +77,40 @@ const logFile = join(".oyster", "wrangler.log");
 const installLogFile = join(".oyster", "install.log");
 const command = "npx @fungi.computer/oyster try";
 
+const pendingInstall = join(".oyster", "install.pending");
+const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+const retryCommand = (directory: string, port: number) =>
+  `${command} ${quote(directory)} --port ${String(port)}`;
+
+/** Lantern owns rendering; Oyster owns the measured phase and its lifetime. */
+async function timedTask<T>(
+  ui: Cli,
+  label: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  const elapsed = () => `${((performance.now() - started) / 1000).toFixed(1)}s`;
+  try {
+    return await ui.task(label, async (update) => {
+      const timer = setInterval(() => {
+        update(`${label} · ${elapsed()} elapsed`);
+      }, 5000);
+      try {
+        const result = await work();
+        update(`${label} · done in ${elapsed()}`);
+        return result;
+      } finally {
+        clearInterval(timer);
+      }
+    });
+  } catch (cause) {
+    ui.step(
+      `${label} · ${cause instanceof Error && cause.name === "AbortError" ? "stopped" : "failed"} after ${elapsed()}`,
+    );
+    throw cause;
+  }
+}
+
 /** A failure that knows the exact next step; the command shows both. */
 class TryError extends Error {
   readonly title: string;
@@ -74,8 +124,8 @@ class TryError extends Error {
 }
 
 /**
- * Streaming logs and a redrawing spinner cannot share a terminal, so
- * --verbose prints plain lines instead of spinners.
+ * Streaming logs and interactive progress cannot share a terminal, so
+ * --verbose prints plain lines.
  */
 export function createTryCli(args: readonly string[]): Cli {
   return args.includes("--verbose")
@@ -130,12 +180,14 @@ export type TryEffects = Readonly<{
     directory: string,
     manager: Manager,
     verbose: boolean,
+    signal: AbortSignal,
   ) => Promise<void>;
   /** Start Oyster and resolve once it answers; `stop` ends it. */
   startServer: (input: {
     directory: string;
     port: number;
     key: string;
+    signal: AbortSignal;
     verbose: boolean;
   }) => Promise<{ stop: () => Promise<void>; exited: Promise<number | null> }>;
   /** Install the Hello App on the running Oyster. */
@@ -143,22 +195,23 @@ export type TryEffects = Readonly<{
     directory: string;
     url: string;
     key: string;
+    signal: AbortSignal;
   }) => Promise<number>;
-  /** Build and install the Tourtois desktop unless it is already there. */
+  /** Prepare Tourtois without changing an existing installation or its approval. */
   installDesktop: (input: {
     directory: string;
     url: string;
     key: string;
-  }) => Promise<void>;
+    signal: AbortSignal;
+  }) => Promise<DesktopReadiness>;
   /** A one-time page that signs the owner in without the key in a URL. */
   signInLink: (input: {
     oysterUrl: string;
     key: string;
+    signal: AbortSignal;
   }) => Promise<SignInLink>;
   /** Open the browser. */
-  open: (url: string) => void;
-  /** Resolve when the user asks to stop. */
-  interrupted: () => Promise<void>;
+  open: (url: string, failed: () => void) => void;
   /** Check that the port is free. */
   portFree: (port: number) => Promise<boolean>;
 }>;
@@ -237,18 +290,41 @@ async function scaffold(
   own: OwnManifest,
   spec: string | undefined,
   manager: Manager,
-) {
-  await mkdir(directory, { recursive: true });
-  const examples = join(import.meta.dirname, "../../examples/standalone");
-  for (const name of ["worker.ts", "wrangler.jsonc"])
-    await copyFile(join(examples, name), join(directory, name));
-  await writeFile(join(directory, "package.json"), projectManifest(own, spec));
-  if (manager === "pnpm")
-    await writeFile(join(directory, "pnpm-workspace.yaml"), pnpmWorkspace);
-  await writeFile(
-    join(directory, ".gitignore"),
-    ".oyster/\n.wrangler/\nnode_modules/\n.oyster-owner\n",
-  );
+  signal: AbortSignal,
+): Promise<string> {
+  signal.throwIfAborted();
+  await mkdir(dirname(directory), { recursive: true });
+  const stage = await mkdtemp(join(dirname(directory), ".oyster-try-"));
+  try {
+    const examples = join(import.meta.dirname, "../../examples/standalone");
+    for (const name of ["worker.ts", "wrangler.jsonc"]) {
+      signal.throwIfAborted();
+      await copyFile(join(examples, name), join(stage, name));
+    }
+    await writeFile(join(stage, "package.json"), projectManifest(own, spec));
+    if (manager === "pnpm")
+      await writeFile(join(stage, "pnpm-workspace.yaml"), pnpmWorkspace);
+    await writeFile(
+      join(stage, ".gitignore"),
+      ".oyster/\n.wrangler/\nnode_modules/\n.oyster-owner\n",
+    );
+    const key = Array.from(randomBytes(24), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    await writeFile(join(stage, ownerKeyFile), key + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    });
+    signal.throwIfAborted();
+    await rename(stage, directory);
+    return key;
+  } finally {
+    await rm(stage, { recursive: true, force: true }).catch(
+      (cause: unknown) => {
+        throw new CleanupError("Project staging cleanup failed", { cause });
+      },
+    );
+  }
 }
 
 /** Write a child's output to a log file, and also to stderr when verbose. */
@@ -267,28 +343,55 @@ async function runInstall(
   directory: string,
   manager: Manager,
   verbose: boolean,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
   await mkdir(join(directory, ".oyster"), { recursive: true });
+  signal.throwIfAborted();
   const log = createWriteStream(join(directory, installLogFile));
+  const logClosed = Promise.allSettled([finished(log)]);
+  let child: ChildProcess | undefined;
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  let stopping: Promise<PromiseSettledResult<void>[]> | undefined;
+  const beginStop = () =>
+    (stopping ??= Promise.allSettled([
+      child === undefined ? Promise.resolve() : stopProcessGroup(child),
+    ]));
+  const stop = () => awaitCleanup(beginStop());
   try {
-    await new Promise<void>((done, fail) => {
-      const child = spawn(manager, ["install"], {
-        cwd: directory,
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: process.platform === "win32",
+    child = spawn(manager, ["install"], {
+      cwd: directory,
+      detached: process.platform !== "win32",
+      signal,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
+    captureOutput(child, log, verbose);
+    const closed = new Promise<void>((done, fail) => {
+      let failure: Error | undefined;
+      child?.once("error", (cause) => {
+        failure = cause;
       });
-      captureOutput(child, log, verbose);
-      child.on("error", (cause) => {
-        fail(new Error(`Could not run ${manager} install: ${cause.message}`));
-      });
-      child.on("close", (code) => {
-        if (code === 0) done();
+      child?.once("close", (code) => {
+        if (failure !== undefined) fail(failure);
+        else if (code === 0) done();
         else
           fail(new Error(`${manager} install failed (exit ${String(code)}).`));
       });
     });
+    listener = addAbortListener(signal, () => {
+      void beginStop();
+    });
+    try {
+      await closed;
+    } finally {
+      await stop();
+    }
+    signal.throwIfAborted();
   } finally {
+    listener?.[Symbol.dispose]();
     log.end();
+    await awaitCleanup(logClosed);
   }
 }
 
@@ -310,29 +413,23 @@ async function waitUntilReady(
   url: string,
   child: ChildProcess,
   timeoutMs: number,
+  signal: AbortSignal,
 ) {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) return false;
+  const stopped = () => child.exitCode !== null || child.signalCode !== null;
+  while (Date.now() < deadline && !signal.aborted) {
+    if (stopped()) return "exited";
     const answered = await fetch(`${url}/login`, {
-      signal: AbortSignal.timeout(2_000),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]),
     }).then(
       (response) => response.status < 500,
       () => false,
     );
-    if (answered) return true;
+    if (stopped()) return "exited";
+    if (answered) return "ready";
     await new Promise((wake) => setTimeout(wake, 500));
   }
-  return false;
-}
-
-async function tail(path: string) {
-  try {
-    const text = await readFile(path, "utf8");
-    return text.trim().split("\n").slice(-15).join("\n");
-  } catch {
-    return "(no log was written)";
-  }
+  return signal.aborted ? "exited" : "timeout";
 }
 
 function startWrangler(input: {
@@ -340,8 +437,10 @@ function startWrangler(input: {
   port: number;
   key: string;
   verbose: boolean;
+  signal: AbortSignal;
 }) {
   return (async () => {
+    input.signal.throwIfAborted();
     const wrangler = join(
       input.directory,
       "node_modules",
@@ -352,11 +451,13 @@ function startWrangler(input: {
     if (!(await exists(wrangler)))
       throw new TryError(
         `wrangler is not installed in ${input.directory}.`,
-        `Run \`npm install\` there, then run \`${command}\` again.`,
+        `Run \`npm install\` there, then run \`${retryCommand(input.directory, input.port)}\` again.`,
       );
     await mkdir(join(input.directory, ".oyster"), { recursive: true });
     const log = join(input.directory, logFile);
+    input.signal.throwIfAborted();
     const logStream = createWriteStream(log);
+    const logClosed = Promise.allSettled([finished(logStream)]);
     const url = `http://127.0.0.1:${String(input.port)}`;
     const child = spawn(
       process.execPath,
@@ -380,37 +481,74 @@ function startWrangler(input: {
       ],
       {
         cwd: input.directory,
+        detached: process.platform !== "win32",
+        signal: input.signal,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
       },
     );
     captureOutput(child, logStream, input.verbose);
+    const lifetime = new AbortController();
+    const spawnError = new Promise<"spawn-error">((done) => {
+      child.once("error", () => {
+        done("spawn-error");
+        lifetime.abort();
+      });
+    });
     const exited = new Promise<number | null>((done) => {
       child.on("close", (code) => {
-        logStream.end();
+        lifetime.abort();
         done(code);
       });
     });
-    const stop = async () => {
-      if (child.exitCode === null) child.kill("SIGTERM");
-      const forced = setTimeout(() => {
-        child.kill("SIGKILL");
-      }, 10_000);
-      await exited;
-      clearTimeout(forced);
-    };
-    if (!(await waitUntilReady(url, child, 120_000))) {
+    let stopping: Promise<PromiseSettledResult<void>[]> | undefined;
+    const beginStop = () =>
+      (stopping ??= Promise.allSettled([
+        (async () => {
+          try {
+            await stopProcessGroup(child);
+            await exited;
+          } finally {
+            abortListener[Symbol.dispose]();
+            logStream.end();
+            await awaitCleanup(logClosed);
+          }
+        })(),
+      ]));
+    const stop = () => awaitCleanup(beginStop());
+    const abortListener = addAbortListener(input.signal, () => {
+      void beginStop();
+    });
+    try {
+      const readiness = await Promise.race([
+        waitUntilReady(
+          url,
+          child,
+          120_000,
+          AbortSignal.any([lifetime.signal, input.signal]),
+        ),
+        spawnError,
+      ]);
+      input.signal.throwIfAborted();
+      if (readiness !== "ready") {
+        const diagnostic =
+          readiness === "spawn-error"
+            ? "Oyster could not launch its server process."
+            : readiness === "exited"
+              ? `Oyster stopped before readiness (${child.signalCode === null ? `exit ${String(child.exitCode)}` : `signal ${child.signalCode}`}).`
+              : "Oyster did not answer within 120 seconds.";
+        await stop();
+        throw new TryError(diagnostic, `Read ${log} for the server output.`);
+      }
+      return { stop, exited };
+    } catch (cause) {
       await stop();
-      throw new TryError(
-        "Oyster did not start.",
-        `Read ${log}, or run \`${command} --verbose\` to watch it start. The last lines:\n${await tail(log)}`,
-      );
+      throw cause;
     }
-    return { stop, exited };
   })();
 }
 
-function openBrowser(url: string) {
+function openBrowser(url: string, failed: () => void): void {
   const [command, args]: [string, string[]] =
     process.platform === "darwin"
       ? ["open", [url]]
@@ -418,20 +556,26 @@ function openBrowser(url: string) {
         ? ["cmd", ["/c", "start", "", url]]
         : ["xdg-open", [url]];
   const child = spawn(command, args, { stdio: "ignore", detached: true });
-  child.on("error", () => undefined);
+  let reported = false;
+  const reportFailure = () => {
+    if (reported) return;
+    reported = true;
+    failed();
+  };
+  child.once("error", reportFailure);
+  child.once("close", (code) => {
+    if (code !== 0) reportFailure();
+  });
   child.unref();
 }
 
-function untilInterrupted(): Promise<void> {
-  return new Promise((done) => {
-    const once = () => {
-      process.off("SIGINT", once);
-      process.off("SIGTERM", once);
-      done();
-    };
-    process.on("SIGINT", once);
-    process.on("SIGTERM", once);
-  });
+function isTryCancellation(cause: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted &&
+    (cause === signal.reason ||
+      (cause instanceof Error && cause.name === "AbortError") ||
+      cause instanceof InstallationObservationError)
+  );
 }
 
 const realEffects: TryEffects = {
@@ -440,12 +584,14 @@ const realEffects: TryEffects = {
   installHello: installHelloApp,
   installDesktop: async ({ directory, ...input }) => {
     process.env.PATH = `${join(directory, "node_modules", ".bin")}${delimiter}${process.env.PATH ?? ""}`;
-    if (!(await isInstalled({ ...input, installationId: "tourtois" })))
-      await installLocalDesktop(input);
+    const saved = await localDesktopState(input);
+    if (saved !== "missing") return saved;
+    await installLocalDesktop(input);
+    const installed = await localDesktopState(input);
+    return installed === "missing" ? "unavailable" : installed;
   },
   signInLink: startSignInLink,
   open: openBrowser,
-  interrupted: untilInterrupted,
   portFree,
 };
 
@@ -453,6 +599,7 @@ export async function tryOyster(
   args: readonly string[],
   effects: TryEffects = realEffects,
   ui: Cli = createTryCli(args),
+  callerSignal?: AbortSignal,
 ): Promise<void> {
   const { values, positionals } = parseArgs({
     args: [...args],
@@ -473,126 +620,293 @@ export async function tryOyster(
   }
   if (positionals.length > 1) throw new Error(tryUsage);
   ui.welcome("Oyster: your own Apps, running on this machine");
-  const major = Number(process.versions.node.split(".")[0]);
-  if (major < requiredNodeMajor)
-    throw new TryError(
-      `Oyster needs Node ${String(requiredNodeMajor)} or newer; this is Node ${process.versions.node}.`,
-      `Install a current Node from https://nodejs.org, then run \`${command}\` again.`,
-    );
-  if (!gitAvailable())
-    throw new TryError(
-      "Oyster builds the Hello App from a git commit, so it needs Git.",
-      `Install Git from https://git-scm.com, then run \`${command}\` again.`,
-    );
   const port = Number(values.port ?? "8787");
   if (!Number.isInteger(port) || port < 1 || port > 65_535)
     throw new TryError(
       "--port must be a number from 1 to 65535.",
       `For example: \`${command} --port 8788\`.`,
     );
-  const directory = resolve(
-    positionals[0] ??
-      ((await exists(join(process.cwd(), ownerKeyFile))) ? "." : "my-oyster"),
-  );
-  const keyPath = join(directory, ownerKeyFile);
-  const fresh = !(await exists(keyPath));
-  if (fresh) {
-    const occupied = (await exists(directory))
-      ? (await readdir(directory)).length > 0
-      : false;
-    if (occupied)
-      throw new TryError(
-        `${directory} already has files and is not an Oyster made by \`oyster try\`.`,
-        `Choose a new directory: \`${command} <directory>\`.`,
-      );
-  }
-  if (!(await effects.portFree(port)))
-    throw new TryError(
-      `Port ${String(port)} on 127.0.0.1 is already in use.`,
-      `Stop whatever is using it, or choose another port: \`${command} --port ${String(port + 1)}\`.`,
-    );
-  let key: string;
-  if (fresh) {
-    const manager = detectManager(process.env.npm_config_user_agent);
-    const own = await ownManifest();
-    await ui.task(`Creating ${basename(directory)}`, () =>
-      scaffold(directory, own, values.package, manager),
-    );
-    await ui
-      .task(`Installing dependencies with ${manager} (a minute or two)`, () =>
-        effects.installDependencies(directory, manager, verbose),
-      )
-      .catch((cause: unknown) => {
-        throw new TryError(
-          cause instanceof Error ? cause.message : String(cause),
-          `Read ${join(directory, installLogFile)} (or add --verbose), delete ${directory}, and run \`${command}\` again.`,
-        );
-      });
-    key = Array.from(randomBytes(24), (byte) =>
-      byte.toString(16).padStart(2, "0"),
-    ).join("");
-    await writeFile(keyPath, key + "\n", { mode: 0o600 });
-  } else {
-    key = (await readFile(keyPath, "utf8")).trim();
-    ui.info(`Restarting the Oyster in ${directory}`);
-  }
-  const url = `http://127.0.0.1:${String(port)}`;
-  const server = await ui.task("Starting Oyster", () =>
-    effects.startServer({ directory, port, key, verbose }),
-  );
-  let closeLink: () => void = () => undefined;
+  let directory = resolve(positionals[0] ?? "my-oyster");
+  const retryAtPort = (chosenPort: number) =>
+    retryCommand(directory, chosenPort) +
+    (values["no-open"] === true ? " --no-open" : "") +
+    (verbose ? " --verbose" : "") +
+    (values.package === undefined ? "" : ` --package ${quote(values.package)}`);
+  let retry = retryAtPort(port);
+  const retryWithLogs = () => retry + (verbose ? "" : " --verbose");
+  const cancellation = new AbortController();
+  const signal =
+    callerSignal === undefined
+      ? cancellation.signal
+      : AbortSignal.any([cancellation.signal, callerSignal]);
+  const interrupt = () => {
+    cancellation.abort();
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  let acquiredServer:
+    Awaited<ReturnType<TryEffects["startServer"]>> | undefined;
+  let closeLink: (() => Promise<void>) | undefined;
   try {
-    await ui.task("Installing the Hello App", () =>
-      effects.installHello({ directory, url, key }),
-    );
-    await ui
-      .task(
-        fresh
-          ? "Building Tourtois (about 2 min the first time)"
-          : "Checking Tourtois",
-        () => effects.installDesktop({ directory, url, key }),
-      )
-      .catch((cause: unknown) => {
-        ui.warn(
-          `Tourtois, the desktop, could not be built (${innermostError(cause).message}). Continuing with the Hello App.`,
-          isNetworkFailure(innermostError(cause))
-            ? `Connect to the internet and run \`${command}\` again from ${directory} to try the desktop again.`
-            : `Run \`${command} --verbose\` from ${directory} and report this.`,
+    if (
+      positionals[0] === undefined &&
+      (await exists(join(process.cwd(), ownerKeyFile)))
+    ) {
+      directory = process.cwd();
+      retry = retryAtPort(port);
+    }
+    signal.throwIfAborted();
+    const major = Number(process.versions.node.split(".")[0]);
+    if (major < requiredNodeMajor)
+      throw new TryError(
+        `Oyster needs Node ${String(requiredNodeMajor)} or newer; this is Node ${process.versions.node}.`,
+        `Install a current Node from https://nodejs.org, then run \`${retry}\` again.`,
+      );
+    if (!(await gitAvailable(signal)))
+      throw new TryError(
+        "Oyster builds the Hello App from a git commit, so it needs Git.",
+        `Install Git from https://git-scm.com, then run \`${retry}\` again.`,
+      );
+    const task = <T>(label: string, work: () => Promise<T>) =>
+      timedTask(ui, label, async () => {
+        signal.throwIfAborted();
+        const result = await work();
+        signal.throwIfAborted();
+        return result;
+      });
+    const keyPath = join(directory, ownerKeyFile);
+    const fresh = !(await exists(keyPath));
+    if (fresh) {
+      const occupied = (await exists(directory))
+        ? (await readdir(directory)).length > 0
+        : false;
+      if (occupied)
+        throw new TryError(
+          `${directory} already has files and is not an Oyster made by \`oyster try\`.`,
+          `Choose a new directory: \`${command} <directory>\`.`,
+        );
+    }
+    const available = await effects.portFree(port);
+    signal.throwIfAborted();
+    if (!available)
+      throw new TryError(
+        `Port ${String(port)} on 127.0.0.1 is already in use.`,
+        `Leave that listener running. Choose another port: \`${retryAtPort(port === 65535 ? 8787 : port + 1)}\`.`,
+      );
+    let key: string;
+    if (fresh) {
+      const manager = detectManager(process.env.npm_config_user_agent);
+      const own = await ownManifest();
+      key = await task(`Creating ${basename(directory)}`, () =>
+        scaffold(directory, own, values.package, manager, signal),
+      );
+    } else {
+      key = (await readFile(keyPath, "utf8")).trim();
+      ui.info(`Restarting the Oyster in ${directory}`);
+    }
+    if (
+      fresh ||
+      (await exists(join(directory, pendingInstall))) ||
+      !(await exists(join(directory, "node_modules/wrangler/bin/wrangler.js")))
+    ) {
+      const manager = (await exists(join(directory, "pnpm-workspace.yaml")))
+        ? "pnpm"
+        : "npm";
+      await mkdir(join(directory, ".oyster"), { recursive: true });
+      await writeFile(
+        join(directory, pendingInstall),
+        "Dependencies have not finished installing.\n",
+      );
+      await task(`Installing dependencies with ${manager}`, () =>
+        effects.installDependencies(directory, manager, verbose, signal),
+      ).catch((cause: unknown) => {
+        if (isTryCancellation(cause, signal)) throw cause;
+        throw new TryError(
+          innermostError(cause).message,
+          `Keep this project. Read ${join(directory, installLogFile)}, fix the reported cause, then run \`${retry}\`. Dependencies will be retried; your key and files stay in place.`,
         );
       });
-    const link = await ui.task("Opening your desktop", async () => {
-      const made = await effects.signInLink({ oysterUrl: url, key });
-      closeLink = made.close;
-      if (values["no-open"] !== true && process.stdout.isTTY)
-        effects.open(made.url);
-      return made;
-    });
-    ui.note("Oyster is running", [
-      `Open (works once):  ${link.url}`,
-      `Oyster:             ${url}`,
-      `Owner key saved in: ${keyPath}`,
-      `Hello App source:   ${join(directory, "hello-app")}`,
-      `Sign in later by pasting that key at ${url}/login.`,
-      "Press Ctrl-C to stop.",
-    ]);
-    const outcome = await Promise.race([
-      effects.interrupted().then(() => "interrupted" as const),
-      server.exited.then(() => "exited" as const),
-    ]);
-    if (outcome === "exited")
+      await rm(join(directory, pendingInstall));
+    }
+    const url = `http://127.0.0.1:${String(port)}`;
+    const server = await task("Starting Oyster", () =>
+      (async () => {
+        const resource = await effects.startServer({
+          directory,
+          port,
+          key,
+          verbose,
+          signal,
+        });
+        acquiredServer = resource;
+        return resource;
+      })(),
+    ).catch((cause: unknown) => {
+      if (isTryCancellation(cause, signal)) throw cause;
       throw new TryError(
-        "Oyster stopped unexpectedly.",
-        `Read ${join(directory, logFile)}, then run \`${command}\` again.`,
+        cause instanceof TryError ? cause.title : innermostError(cause).message,
+        `Read ${join(directory, logFile)}, then run \`${retryWithLogs()}\`.`,
       );
+    });
+    let serverExited = false;
+    const watchedExit = server.exited.then((code) => {
+      serverExited = true;
+      return code;
+    });
+    const assertRunning = () => {
+      signal.throwIfAborted();
+      if (serverExited)
+        throw new TryError(
+          "Oyster stopped unexpectedly during setup.",
+          `Read ${join(directory, logFile)}, then run \`${retryWithLogs()}\`.`,
+        );
+    };
+    const setupTask = <T>(label: string, work: () => Promise<T>) => {
+      assertRunning();
+      return task(label, async () => {
+        const result = await work();
+        assertRunning();
+        return result;
+      });
+    };
+    await setupTask("Installing the Hello App", async () => {
+      const status = await effects.installHello({
+        directory,
+        url,
+        key,
+        signal,
+      });
+      if (status < 200 || status >= 300)
+        throw new Error(
+          `Hello App installation returned HTTP ${String(status)}.`,
+        );
+    }).catch((cause: unknown) => {
+      if (signal.aborted || cause instanceof CleanupError) throw cause;
+      assertRunning();
+      throw new TryError(
+        innermostError(cause).message,
+        `Keep your Hello source. Run \`${retryWithLogs()}\` and report the install error if it repeats.`,
+      );
+    });
+    const desktop = await setupTask(
+      fresh ? "Building Tourtois" : "Checking Tourtois",
+      () => effects.installDesktop({ directory, url, key, signal }),
+    ).catch((cause: unknown) => {
+      if (signal.aborted || cause instanceof CleanupError) throw cause;
+      assertRunning();
+      ui.warn(
+        `Tourtois, the desktop, could not be built (${innermostError(cause).message}). Oyster is available for recovery; the desktop is not ready.`,
+        isNetworkFailure(innermostError(cause))
+          ? `Check your connection, stop this trial with Ctrl-C, then run \`${retry}\` to retry the desktop.`
+          : `Stop this trial with Ctrl-C, then run \`${retryWithLogs()}\` and report the desktop build error.`,
+      );
+      return "failed" as const;
+    });
+    const desktopReady = desktop === "ready";
+    const accessUrl = new URL("/api/installations/tourtois/grants", url).href;
+    if (desktop !== "ready" && desktop !== "failed")
+      ui.warn(
+        desktop === "approval-required"
+          ? "Tourtois needs Shell approval."
+          : desktop === "disabled"
+            ? "Tourtois is disabled."
+            : desktop === "deleted"
+              ? "Tourtois was removed."
+              : "Tourtois is unavailable; its shell entry did not become ready.",
+        desktop === "deleted"
+          ? `Sign in at ${url}/login, then open your Hello App at ${url}/apps/hello/. The desktop was not reinstalled.`
+          : `Sign in, then review App access at ${accessUrl}. Your saved installation and approvals were not changed.`,
+      );
+    const link = await setupTask(
+      desktopReady ? "Preparing desktop sign-in" : "Preparing recovery sign-in",
+      async () => {
+        const made = await effects.signInLink({ oysterUrl: url, key, signal });
+        closeLink = made.close;
+        signal.throwIfAborted();
+        if (values["no-open"] !== true && process.stdout.isTTY)
+          effects.open(made.url, () => {
+            if (signal.aborted) return;
+            ui.warn(
+              "The browser did not open.",
+              "Use the sign-in link printed here to open Oyster.",
+            );
+          });
+        return made;
+      },
+    ).catch((cause: unknown) => {
+      if (signal.aborted || cause instanceof CleanupError) throw cause;
+      assertRunning();
+      throw new TryError(
+        innermostError(cause).message,
+        `Sign-in could not be prepared. Run \`${retryWithLogs()}\` again; your saved project is unchanged.`,
+      );
+    });
+    assertRunning();
+    ui.note(
+      desktopReady ? "Oyster is running" : "Oyster needs desktop repair",
+      [
+        `Open (works once):  ${link.url}`,
+        `Oyster:             ${url}`,
+        `Owner key saved in: ${keyPath}`,
+        `Hello App source:   ${join(directory, "hello-app")}`,
+        `Sign in later by pasting that key at ${url}/login.`,
+        "Press Ctrl-C to stop.",
+      ],
+    );
+    let stopListener: ReturnType<typeof addAbortListener> | undefined;
+    try {
+      const requested = new Promise<void>((done) => {
+        stopListener = addAbortListener(signal, () => {
+          done();
+        });
+      });
+      const outcome = await Promise.race([
+        requested.then(() => "interrupted" as const),
+        watchedExit.then(() => "exited" as const),
+      ]);
+      if (outcome === "exited")
+        throw new TryError(
+          "Oyster stopped unexpectedly.",
+          `Read ${join(directory, logFile)}, then run \`${retry}\` again.`,
+        );
+    } finally {
+      stopListener?.[Symbol.dispose]();
+    }
+  } catch (cause) {
+    if (!isTryCancellation(cause, signal)) throw cause;
+    if (cause instanceof InstallationObservationError) ui.info(cause.message);
   } finally {
-    closeLink();
-    ui.step("Stopping Oyster");
-    await server.stop();
+    try {
+      const cleanup = async () => {
+        const outcomes = await Promise.allSettled([
+          Promise.resolve().then(() => closeLink?.()),
+          Promise.resolve().then(() => acquiredServer?.stop()),
+        ]);
+        if (outcomes.some((result) => result.status === "rejected"))
+          throw new TryError(
+            "Oyster cleanup did not complete.",
+            `Check ${join(directory, logFile)} and the local listener before running \`${retry}\` again.`,
+          );
+      };
+      if (acquiredServer !== undefined || closeLink !== undefined)
+        await timedTask(ui, "Stopping Oyster", cleanup);
+      else await cleanup();
+    } finally {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", interrupt);
+    }
   }
-  ui.outro("Stopped. Run the same command again to start it again.");
+  ui.outro(`Stopped. Restart with \`${retry}\`.`);
 }
 
 /** Whether `git` is available; Hello App packing reads its commit. */
-function gitAvailable(): boolean {
-  return spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
+async function gitAvailable(signal: AbortSignal): Promise<boolean> {
+  try {
+    await runGit(["--version"], process.cwd(), signal, process.env);
+    return true;
+  } catch (cause) {
+    if (cause instanceof CleanupError) throw cause;
+    signal.throwIfAborted();
+    return false;
+  }
 }

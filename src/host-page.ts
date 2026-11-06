@@ -10,11 +10,17 @@ import {
   CardContent,
 } from "@fungi.computer/caps/components/card";
 import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
+import {
+  permissionScreen,
+  type AppPermissionsViewData,
+} from "./apps/permissions.js";
+import { permissionCatalog } from "./apps/catalog.js";
 
 const docs = "https://docs.fungi.computer";
 
 /** Human-facing states only. API refusals keep their original wire format. */
 export type HostPageState =
+  | "permissions"
   | "root"
   | "empty"
   | "login"
@@ -28,6 +34,11 @@ export type HostPageState =
   | "desktop-missing";
 
 const copy = {
+  permissions: [
+    "Choose what this App can do.",
+    "Oyster · App permissions",
+    "Review the requested access. To decline, return to Apps without saving or confirming a change.",
+  ],
   root: [
     "Your Apps, all together.",
     "Oyster · App directory",
@@ -86,6 +97,12 @@ const copy = {
 } satisfies Record<HostPageState, readonly [string, string, string]>;
 
 const abilities = {
+  permissions: [
+    "You choose the access",
+    "Check the App and Release below.",
+    "Review each permission before saving.",
+    "Leave unchanged if you are unsure.",
+  ],
   root: [
     "Choose your next App",
     "Open an App from the directory.",
@@ -170,6 +187,10 @@ export type HostPageOptions = Readonly<{
   reset?: boolean;
   /** Only the single-use helper passes a key, in a POST field, never a URL. */
   signIn?: Readonly<{ action: string; key: string }>;
+  permissions?: Readonly<{
+    config: AppPermissionsViewData;
+    script: string;
+  }>;
 }>;
 
 function link(label: string, href: string, secondary = false): ReactNode {
@@ -211,6 +232,78 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
   const { state, signIn } = options;
   const content: ReactNode[] = [];
   const actions: ReactNode[] = [];
+  if (state === "permissions" && options.permissions) {
+    const { config } = options.permissions;
+    const screen = permissionScreen({
+      ...config.permissions,
+      resources: config.resources,
+      canEdit: config.canEdit,
+    });
+    content.push(
+      h("h2", null, `${config.appName} permissions`),
+      h(
+        "p",
+        { className: "detail" },
+        "App: ",
+        config.appId,
+        h("br"),
+        "Installation: ",
+        config.installationId,
+        h("br"),
+        "Release: ",
+        h("code", null, config.artifactDigest),
+      ),
+      h(
+        "div",
+        { id: "oyster-consent" },
+        h(
+          "p",
+          { role: "status" },
+          "Changes apply only after you save or confirm.",
+        ),
+        h(
+          "ul",
+          { className: "form-stack" },
+          ...config.permissions.declaredOperations.capabilities.map(
+            ({ capability }) =>
+              h(
+                "li",
+                { key: capability },
+                h(
+                  "strong",
+                  null,
+                  permissionCatalog[capability].label,
+                  permissionCatalog[capability].consent === "affordance"
+                    ? " · No approval required"
+                    : screen.pending.includes(capability)
+                      ? " · Needs review"
+                      : " · Approved",
+                ),
+                h("p", null, permissionCatalog[capability].description),
+                permissionCatalog[capability].warning
+                  ? h("p", null, permissionCatalog[capability].warning)
+                  : null,
+              ),
+          ),
+        ),
+        h(
+          "noscript",
+          null,
+          h(
+            "p",
+            null,
+            "JavaScript is needed to review and change permissions. No permissions have changed.",
+          ),
+        ),
+        h(
+          "div",
+          { className: "actions" },
+          link("Back to Apps", url("/"), true),
+        ),
+      ),
+    );
+    return { content, actions };
+  }
   if (state === "login" || state === "login-invalid") {
     content.push(
       h(
@@ -385,6 +478,7 @@ function illustration(
   const eyebrow = copy[state][1];
   const [ability, ...steps] = abilities[state];
   const keyArt = [
+    "permissions",
     "login",
     "login-invalid",
     "key-help",
@@ -543,6 +637,21 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
         ),
         assetUrl("host-page.js")
           ? h("script", { type: "module", src: assetUrl("host-page.js") })
+          : null,
+        options.permissions
+          ? h("script", {
+              type: "application/json",
+              id: "oyster-consent-config",
+              dangerouslySetInnerHTML: {
+                __html: JSON.stringify(options.permissions.config).replaceAll(
+                  "<",
+                  "\\u003c",
+                ),
+              },
+            })
+          : null,
+        options.permissions
+          ? h("script", { type: "module", src: options.permissions.script })
           : null,
       ),
     ),

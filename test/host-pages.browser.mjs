@@ -14,6 +14,7 @@ import { createOyster } from "../dist/host.js";
 import { ownerKeyAuth } from "../dist/auth.js";
 import { startSignInLink } from "../dist/standalone/sign-in-link.js";
 import { computerHost } from "./computer-host.fixture.mjs";
+import { homePageFixture } from "./home-page.fixture.mjs";
 
 const base = "http://127.0.0.1:8787";
 const key = "oooooooooooooooooooooooooooooooo";
@@ -21,6 +22,11 @@ const shots = resolve(
   process.env.OYSTER_HOST_PAGE_SHOTS ?? ".botanical/host-page-shots",
 );
 const cases = [
+  [
+    "permissions",
+    "/api/installations/context-probe/grants",
+    "Choose what this App can do.",
+  ],
   ["root", "/", "Your Apps, all together."],
   ["empty", "/", "A little room to grow."],
   ["login", "/login", "Welcome back."],
@@ -98,7 +104,10 @@ test(
                     ].includes(state)
                   ? authHost
                   : ownerHost;
-      const app = createOyster(host);
+      const app =
+        state === "shell-permissions"
+          ? await homePageFixture({ approved: false })
+          : createOyster(host);
       let helper;
       if (path === null) {
         helper = await startSignInLink({ oysterUrl: base, key });
@@ -150,9 +159,10 @@ test(
       return {
         context,
         page,
+        app,
         helper,
         close: async () => {
-          helper?.close();
+          await helper?.close();
           await context.close();
         },
       };
@@ -182,7 +192,11 @@ test(
               assert.equal(await page.locator(".ability-steps li").count(), 3);
               assert.ok(
                 await page
-                  .locator(".actions a, .actions button")
+                  .locator(
+                    state === "permissions"
+                      ? "#oyster-consent a"
+                      : ".actions a, .actions button",
+                  )
                   .first()
                   .isVisible(),
               );
@@ -225,6 +239,105 @@ test(
             }
           });
         }
+
+      for (const scheme of ["dark", "light"])
+        await t.test(
+          `Shell privilege stays explicit without JS in ${scheme}`,
+          async () => {
+            const session = await visit(
+              "shell-permissions",
+              "/api/installations/desktop/grants",
+              {
+                width: 390,
+                javascript: false,
+                scheme,
+              },
+            );
+            try {
+              const { page } = session;
+              assert.ok(
+                await page
+                  .getByText("Full access to your Team and every App", {
+                    exact: true,
+                  })
+                  .isVisible(),
+              );
+              assert.ok(
+                await page
+                  .getByText("Only pick a shell you trust.", { exact: true })
+                  .isVisible(),
+              );
+              assert.ok(
+                await page
+                  .getByText("Shell · Needs review", { exact: true })
+                  .isVisible(),
+              );
+              assert.ok(
+                await page
+                  .getByRole("link", { name: "Back to Apps", exact: true })
+                  .isVisible(),
+              );
+              await page.screenshot({
+                path: join(shots, `shell-permissions-no-js-${scheme}.png`),
+                fullPage: true,
+              });
+            } finally {
+              await session.close();
+            }
+          },
+        );
+
+      for (const mode of ["normal", "no-js", "css", "art"])
+        await t.test(
+          `permissions keep a keyboard exit and no grant mutation with ${mode}`,
+          async () => {
+            const path = "/api/installations/context-probe/grants";
+            const session = await visit("permissions", path, {
+              width: 390,
+              javascript: mode !== "no-js",
+              fail: mode,
+            });
+            try {
+              const { page, app } = session;
+              const before = await (
+                await app.request(path, {
+                  headers: { Accept: "application/json" },
+                })
+              ).json();
+              const leave = page.getByRole("link", {
+                name: "Back to Apps",
+                exact: true,
+              });
+              await leave.waitFor();
+              let focused = false;
+              for (let tabs = 0; tabs < 80; tabs++) {
+                await page.keyboard.press("Tab");
+                focused = await leave.evaluate(
+                  (element) => element === document.activeElement,
+                );
+                if (focused) break;
+              }
+              assert.ok(focused, "the exit is reachable by keyboard");
+              await page.screenshot({
+                path: join(shots, `permissions-${mode}.png`),
+                fullPage: true,
+              });
+              await page.keyboard.press("Enter");
+              await page.waitForURL(base + "/");
+              const after = await (
+                await app.request(path, {
+                  headers: { Accept: "application/json" },
+                })
+              ).json();
+              assert.deepEqual(
+                after.permissions.authority,
+                before.permissions.authority,
+              );
+            } finally {
+              await session.close();
+            }
+          },
+        );
 
       for (const mode of ["no-js", "css", "art"])
         await t.test(`login remains operable with ${mode}`, async () => {
@@ -378,7 +491,7 @@ test(
               assert.ok(cookie?.httpOnly);
               assert.equal(cookie.value.includes(key), false);
             } finally {
-              helper.close();
+              await helper.close();
               await realBrowser.close();
               server.closeAllConnections();
               await new Promise((done) => server.close(done));

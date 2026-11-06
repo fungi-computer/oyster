@@ -1,18 +1,12 @@
+import { CleanupError, stopProcessGroup } from "./process-group.js";
+import { addAbortListener } from "node:events";
 import { Buffer } from "node:buffer";
 import {
   appBackendPackageMainFields,
   createDefinitionEmission,
   type DefinitionEmission,
 } from "./definition-emission.js";
-function logEvent(operation: string, cause: unknown): void {
-  console.error(
-    JSON.stringify({
-      source: "app-publisher",
-      operation,
-      failureKind: cause instanceof Error ? "Error" : "NonErrorThrown",
-    }),
-  );
-}
+
 import {
   frozenSnapshotInstallArguments,
   packageScriptArguments,
@@ -37,8 +31,8 @@ import {
 import type { WorkspaceBuildStep } from "./build-step.js";
 import { readBundledHtml } from "./bundled-html.js";
 import { createHash, randomBytes } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createReadStream, mkdtempSync, realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createReadStream, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import {
   access,
   cp,
@@ -60,7 +54,6 @@ import {
   sep,
 } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { setTimeout as delay } from "node:timers/promises";
 
 import {
   parseArtifactRef,
@@ -126,20 +119,34 @@ async function sha256File(
   return parseSha256Digest(`sha256:${hash.digest("hex")}`);
 }
 
-function runGit(
+export class GitCommandError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number | null,
+  ) {
+    super(message);
+  }
+}
+
+export async function runGit(
   args: readonly string[],
   cwd: string,
   signal: AbortSignal,
   environment: NodeJS.ProcessEnv = repositoryEnvironment(),
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", [...args], {
-      cwd,
-      env: environment,
-      shell: false,
-      signal,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  signal.throwIfAborted();
+  const child = spawn("git", [...args], {
+    cwd,
+    env: environment,
+    shell: false,
+    detached: process.platform !== "win32",
+    signal,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stopping: Promise<void> | undefined;
+  const stop = () => (stopping ??= stopProcessGroup(child));
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  const completion = new Promise<Buffer>((resolve, reject) => {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let spawnError: Error | undefined;
@@ -156,14 +163,24 @@ function runGit(
       const detail = Buffer.concat(stderr).toString("utf8").trim();
       reject(
         spawnError ??
-          new Error(
+          new GitCommandError(
             detail.length > 0
               ? `git exited unsuccessfully: ${detail}`
               : `git exited unsuccessfully (${String(code)} ${String(terminationSignal)})`,
+            code,
           ),
       );
     });
+    listener = addAbortListener(signal, () => {
+      void stop().catch(reject);
+    });
   });
+  try {
+    return await completion;
+  } finally {
+    listener?.[Symbol.dispose]();
+    await stop();
+  }
 }
 
 function extractTar(
@@ -317,26 +334,58 @@ function scopedSourceCapture(
   return {
     capture: () =>
       Effect.acquireRelease(
-        Effect.sync(() =>
-          // Canonical, so every path derived from the scratch matches the
-          // realpaths pnpm reports (macOS tmpdir is a symlink).
-          realpathSync(mkdtempSync(join(tmpdir(), "app-publisher-"))),
-        ),
+        Effect.sync(() => {
+          const scratch = mkdtempSync(join(tmpdir(), "app-publisher-"));
+          try {
+            // Canonical paths also work when macOS tmpdir is a symlink.
+            return realpathSync(scratch);
+          } catch (cause) {
+            try {
+              rmSync(scratch, { recursive: true, force: true });
+            } catch (cleanupCause) {
+              throw new CleanupError("Source snapshot cleanup failed", {
+                cause: cleanupCause,
+              });
+            }
+            throw cause;
+          }
+        }),
         (workdir) =>
-          Effect.tryPromise({
-            try: () => rm(workdir, { recursive: true, force: true }),
-            catch: () => new Error("Local source cleanup failed"),
-          }).pipe(
-            Effect.catch((cause: unknown) => {
-              logEvent("services/app-publisher/src/local.ts:289", cause);
-              return Effect.void;
-            }),
-          ),
+          Effect.promise(async () => {
+            try {
+              await rm(workdir, { recursive: true, force: true });
+            } catch (cause) {
+              throw new CleanupError("Source snapshot cleanup failed", {
+                cause,
+              });
+            }
+          }),
       ).pipe(
         Effect.flatMap((workdir) =>
-          Effect.tryPromise({
-            try: (signal) => capture(workdir, signal),
-            catch: () => new Error(failureMessage),
+          Effect.callback<CapturedSource, Error>((resume, signal) => {
+            const pending = capture(workdir, signal);
+            pending.then(
+              (source) => {
+                resume(Effect.succeed(source));
+              },
+              (cause: unknown) => {
+                resume(
+                  cause instanceof CleanupError
+                    ? Effect.die(cause)
+                    : Effect.fail(new Error(failureMessage)),
+                );
+              },
+            );
+            // Callback interruption aborts signal, then awaits this cleanup.
+            // Git/tar must close before the enclosing scope removes scratch.
+            return Effect.promise(() =>
+              pending.then(
+                () => undefined,
+                (cause: unknown) => {
+                  if (cause instanceof CleanupError) throw cause;
+                },
+              ),
+            );
           }),
         ),
       ),
@@ -850,43 +899,6 @@ export function createFirstPartyAppSourceDistribution(options: {
   });
 }
 
-function htmlGroupExists(child: ChildProcess): boolean {
-  if (child.pid === undefined) return false;
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH")
-      return false;
-    throw error;
-  }
-}
-
-// Narrow adaptation of Caps' workbench-process process-group teardown. The
-// Effect finalizer waits for cleanup before the source snapshot can be removed.
-async function stopHtmlGroup(child: ChildProcess): Promise<void> {
-  if (!htmlGroupExists(child)) return;
-  const deadline = Date.now() + 5_000;
-  for (const [signal, until] of [
-    ["SIGTERM", deadline - 1_000],
-    ["SIGKILL", deadline],
-  ] as const) {
-    try {
-      if (child.pid !== undefined) process.kill(-child.pid, signal);
-    } catch (error) {
-      if (!(
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "ESRCH"
-      ))
-        throw error;
-    }
-    while (htmlGroupExists(child) && Date.now() < until) await delay(25);
-    if (!htmlGroupExists(child)) return;
-  }
-  throw new Error("HTML process group survived its five-second cleanup bound");
-}
-
 function runHtmlCommand(
   args: readonly string[],
   cwd: string,
@@ -934,7 +946,7 @@ function runHtmlCommand(
     }),
     ({ completion }) =>
       Effect.tryPromise({ try: () => completion, catch: (error) => error }),
-    ({ child }) => Effect.promise(() => stopHtmlGroup(child)),
+    ({ child }) => Effect.promise(() => stopProcessGroup(child)),
   );
 }
 
@@ -1038,15 +1050,17 @@ function rebuildViteSnapshot(
     const appDirectory = join(sourceSnapshotPath, html.directory);
     const dependencies = join(appDirectory, ".publisher-dependencies.mjs");
     const program = join(appDirectory, ".publisher-build.mjs");
-    yield* Effect.tryPromise({
-      try: async () => {
-        const { dependencyBuildProgram, htmlBuildProgram } =
-          await snapshotPrograms();
-        await writeFile(dependencies, dependencyBuildProgram, { flag: "wx" });
-        await writeFile(program, htmlBuildProgram, { flag: "wx" });
-      },
-      catch: (error) => error,
-    });
+    yield* Effect.uninterruptible(
+      Effect.tryPromise({
+        try: async () => {
+          const { dependencyBuildProgram, htmlBuildProgram } =
+            await snapshotPrograms();
+          await writeFile(dependencies, dependencyBuildProgram, { flag: "wx" });
+          await writeFile(program, htmlBuildProgram, { flag: "wx" });
+        },
+        catch: (error) => error,
+      }),
+    );
     // Keep the derived order and every diagnostic/emit check. Consecutive
     // projects share one warmed compiler; stylesheet steps stay separate.
     const groups: WorkspaceBuildStep[][] = [];
@@ -1284,11 +1298,13 @@ function rebuildNpmSnapshot(
     const globalConfig = join(home, "global.npmrc");
     env.npm_config_userconfig = userConfig;
     env.npm_config_globalconfig = globalConfig;
-    yield* Effect.tryPromise(async () => {
-      await mkdir(home, { recursive: true });
-      await writeFile(userConfig, "", { flag: "wx" });
-      await writeFile(globalConfig, "", { flag: "wx" });
-    });
+    yield* Effect.uninterruptible(
+      Effect.tryPromise(async () => {
+        await mkdir(home, { recursive: true });
+        await writeFile(userConfig, "", { flag: "wx" });
+        await writeFile(globalConfig, "", { flag: "wx" });
+      }),
+    );
     if (
       (yield* runHtmlCommand(
         ["--version"],
@@ -1309,10 +1325,12 @@ function rebuildNpmSnapshot(
       options.onOutput,
     );
     const program = join(sourceSnapshotPath, ".publisher-build.mjs");
-    yield* Effect.tryPromise(async () => {
-      const { htmlBuildProgram } = await snapshotPrograms();
-      await writeFile(program, htmlBuildProgram, { flag: "wx" });
-    });
+    yield* Effect.uninterruptible(
+      Effect.tryPromise(async () => {
+        const { htmlBuildProgram } = await snapshotPrograms();
+        await writeFile(program, htmlBuildProgram, { flag: "wx" });
+      }),
+    );
     yield* runHtmlCommand(
       [
         program,
@@ -1592,15 +1610,15 @@ export function createLocalBuildExecutor(
                     : new Error("Local snapshot build failed"),
               }),
             ({ context }) =>
-              Effect.tryPromise({
-                try: () => context.dispose(),
-                catch: () => new Error("Local build cleanup failed"),
-              }).pipe(
-                Effect.catch((cause: unknown) => {
-                  logEvent("services/app-publisher/src/local.ts:1262", cause);
-                  return Effect.void;
-                }),
-              ),
+              Effect.promise(async () => {
+                try {
+                  await context.dispose();
+                } catch (cause) {
+                  throw new CleanupError("Local compiler cleanup failed", {
+                    cause,
+                  });
+                }
+              }),
           );
     },
   };
@@ -1621,13 +1639,31 @@ export function createLocalBuildExecutor(
         });
         emissions.set(source, emission);
         const output = yield* compiler.build(source, recipe);
-        const declaration = yield* Effect.tryPromise({
-          try: (signal) => emission.declare(signal),
-          catch: (cause: unknown) =>
-            cause instanceof Error
-              ? cause
-              : new Error("App declaration emission failed", { cause }),
-        });
+        const declaration = yield* Effect.callback<AppDeclaration, Error>(
+          (resume, signal) => {
+            const pending = emission.declare(signal);
+            pending.then(
+              (value) => {
+                resume(Effect.succeed(value));
+              },
+              (cause: unknown) => {
+                resume(
+                  Effect.fail(
+                    cause instanceof Error
+                      ? cause
+                      : new Error("App declaration emission failed", { cause }),
+                  ),
+                );
+              },
+            );
+            return Effect.promise(() =>
+              pending.then(
+                () => undefined,
+                () => undefined,
+              ),
+            );
+          },
+        );
         declarations.set(source, declaration);
         return output;
       }),

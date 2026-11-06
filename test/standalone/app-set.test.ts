@@ -1835,3 +1835,111 @@ it("uses committed App metadata rather than roster recipes or dirty files", asyn
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it.each(["read", "commit"] as const)(
+  "cancels fresh approval at its HTTP %s boundary while retaining installation authority",
+  async (boundary) => {
+    const registry = starterRegistry();
+    const controller = new AbortController();
+    const handlerErrors: unknown[] = [];
+    const serve = async (
+      request: IncomingMessage,
+      response: ServerResponse,
+    ) => {
+      const input = new URL(request.url ?? "/", "http://127.0.0.1");
+      const body = await text(request);
+      const init: RequestInit = {
+        method: request.method,
+        headers: {
+          authorization: request.headers.authorization ?? "",
+          "Idempotency-Key": String(request.headers["idempotency-key"] ?? ""),
+        },
+        body: body || undefined,
+      };
+      if (
+        input.pathname.endsWith("/grants") &&
+        boundary === "read" &&
+        request.method === "GET"
+      ) {
+        controller.abort();
+        return;
+      }
+      const reply = registry.route(input, init);
+      if (
+        input.pathname.endsWith("/grants") &&
+        boundary === "commit" &&
+        request.method === "PUT"
+      ) {
+        // The real reducer has committed consent; loss of its HTTP reply is
+        // deliberately not interpreted as rollback or permission to replay.
+        controller.abort();
+        return;
+      }
+      response.writeHead(reply.status, Object.fromEntries(reply.headers));
+      response.end(new Uint8Array(await reply.arrayBuffer()));
+    };
+    const server = createServer((request, response) => {
+      void serve(request, response).catch((cause: unknown) => {
+        handlerErrors.push(cause);
+        response.writeHead(500).end();
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    try {
+      await once(server, "listening");
+      const address = Schema.decodeUnknownSync(
+        Schema.Struct({ port: Schema.Number }),
+      )(server.address());
+      const url = `http://127.0.0.1:${String(address.port)}`;
+      const operation = await installOnOyster({
+        url,
+        key: "key",
+        installationId: "tourtois",
+        release: builtRelease("app_tourtois"),
+      });
+      if (operation.state !== "succeeded")
+        throw new Error("Fresh fixture installation did not complete");
+      const before = registry.records.get("tourtois");
+      await expect(
+        approveChosenDashboard(operation, (method, path, body) => {
+          const init: RequestInit = {
+            method,
+            signal: controller.signal,
+            headers: {
+              Authorization: "Bearer key",
+              "Content-Type": "application/json",
+            },
+          };
+          if (body !== undefined) init.body = JSON.stringify(body);
+          return fetch(new URL(path, url), init);
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      const retained = registry.records.get("tourtois");
+      expect(retained?.status).toBe("enabled");
+      expect(retained?.release).toEqual(before?.release);
+      expect(registry.approvals).toHaveLength(boundary === "commit" ? 1 : 0);
+      const retainedVersion = retained?.authority.authorityVersion;
+      const noReplay = vi.fn(() =>
+        Promise.reject(new Error("Consent must not replay")),
+      );
+      await approveChosenDashboard(
+        { ...operation, creation: "replacement" },
+        noReplay,
+      );
+      expect(noReplay).not.toHaveBeenCalled();
+      expect(registry.records.get("tourtois")?.authority.authorityVersion).toBe(
+        retainedVersion,
+      );
+      expect(handlerErrors).toEqual([]);
+    } finally {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((cause) => {
+          if (cause) reject(cause);
+          else resolve();
+        }),
+      );
+    }
+  },
+);

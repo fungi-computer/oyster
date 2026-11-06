@@ -1437,19 +1437,18 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         return Response.json(config, {
           headers: { "Cache-Control": "no-store" },
         });
-      const encoded = JSON.stringify(config).replaceAll("<", "\\u003c");
-      return new Response(
-        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(config.appName)} permissions</title><link rel="stylesheet" href="${(await assets()).fonts.path}"><style>html,body{margin:0;min-height:100%;font-family:var(--font-sans);background:var(--color-base-100);color:var(--color-base-content)}</style><div id="oyster-consent"></div><script type="application/json" id="oyster-consent-config">${encoded}</script><script type="module" src="${(await assets()).grantConsent.path}"></script>`,
-        {
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy":
-              "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'self'",
-          },
-        },
+      const pageAssets = await assets();
+      const response = await hostPage({
+        state: "permissions",
+        title,
+        stylesheets: [pageAssets.loginFonts.path, pageAssets.styles.path],
+        permissions: { config, script: pageAssets.grantConsent.path },
+      });
+      response.headers.set(
+        "Content-Security-Policy",
+        "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'self'",
       );
+      return response;
     },
   );
 

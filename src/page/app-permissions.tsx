@@ -495,29 +495,7 @@ function ShellPermissionRow({
             }}
           >
             <Sigil name={column.sigil} size={20} />
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                gap: "var(--spacing-sm)",
-                minWidth: 0,
-              }}
-            >
-              <strong style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
-                {column.label}
-              </strong>
-              <span
-                title={column.description}
-                style={{
-                  color: "var(--stipe-fg-muted)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {column.description}
-              </span>
-            </div>
+            <strong>{column.label}</strong>
             <div
               style={{
                 display: "flex",
@@ -556,6 +534,7 @@ function ShellPermissionRow({
             fontSize: "var(--text-sm)",
           }}
         >
+          <span style={{ display: "block" }}>{column.description}</span>
           {column.warning}
         </p>
         {changed && (

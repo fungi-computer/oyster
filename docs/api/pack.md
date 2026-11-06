@@ -89,6 +89,7 @@ type PackOptions = Readonly<{
   recipe: AppPublisherCoreConfigInput["recipe"];
   packageStoreDirectory?: string;
   outDirectory: string;
+  signal?: AbortSignal;
 }>;
 ```
 
@@ -301,8 +302,8 @@ function installFromSource(input): Promise<Response>;
 Capture an Artifacts Git commit, build its Release, upload it to an Oyster, and
 install it, or switch an existing installation to it
 ([installRelease](#installrelease)). `waitMs` starts with the upload/observation
-phase after packing; a supplied caller signal retains its original lifetime
-through that phase.
+phase after packing; a supplied caller signal also interrupts packing and
+retains its original lifetime.
 
 #### Parameters
 

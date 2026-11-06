@@ -1,5 +1,39 @@
 # @fungi.computer/oyster
 
+## 0.13.1
+
+### Patch Changes
+
+- Changes since 0.13.0:
+
+  - fix(oyster): retain cleanup outcomes until their owning barrier
+  - fix(oyster): unwind try startup on cancellation
+  - fix(oyster): align packed stranger inventory with shipped files
+  - fix(oyster): offer live recovery routes after desktop removal
+  - fix(oyster): keep consent and recovery pages usable
+  - fix(oyster): preserve explicit package choices in retries
+  - fix(oyster): keep browser launch detached from trial lifetime
+  - fix(oyster): verify desktop readiness and report startup failures
+  - fix(oyster): return desktop readiness from its task
+  - fix(oyster): replace startup estimates with measured time
+  - fix(oyster): name sign-in preparation honestly
+  - fix(oyster): report timed startup and preserve failed trials
+  - fix(oyster): teach the first App edit loop
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/bird-dog@0.3.3
+  - @fungi.computer/lantern@0.4.1
+  - @fungi.computer/parakeet@0.8.2
+  - @fungi.computer/shiitake@0.11.1
+  - @fungi.computer/veil@0.6.1
+  - @fungi.computer/caps@0.7.1
+  - @fungi.computer/shiitake-extensions@0.6.6
+  - @fungi.computer/zookeeper@0.0.13
+
 ## 0.13.0
 
 ### Minor Changes
