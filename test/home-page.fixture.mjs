@@ -42,6 +42,7 @@ export async function homePageFixture({
   approved = true,
   pageScript = "// trusted root composition",
   shellCode = "export const mountShell = async () => () => {};",
+  shellChunks = [],
   computerId,
   ownerRoutes,
   uiCache,
@@ -85,6 +86,11 @@ export async function homePageFixture({
               "text/javascript; charset=utf-8",
               shellCode,
             ),
+            ...(await Promise.all(
+              shellChunks.map((path) =>
+                asset(path, "text/javascript; charset=utf-8", "export {};"),
+              ),
+            )),
           ],
         }),
       )

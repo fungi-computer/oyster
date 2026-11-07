@@ -123,6 +123,13 @@ class TryError extends Error {
   }
 }
 
+/** A desktop-only failure still permits sign-in for recovery. */
+class DesktopSetupError extends Error {
+  constructor(cause: unknown) {
+    super("Tourtois preparation failed.", { cause });
+  }
+}
+
 /**
  * Streaming logs and interactive progress cannot share a terminal, so
  * --verbose prints plain lines.
@@ -152,7 +159,7 @@ const networkErrorCodes: ReadonlySet<unknown> = new Set([
   "ENETUNREACH",
 ]);
 
-function isNetworkFailure(error: Error): boolean {
+function isNetworkFailure(error: Error): error is Error & { code: string } {
   return "code" in error && networkErrorCodes.has(error.code);
 }
 
@@ -339,6 +346,20 @@ function captureOutput(
   }
 }
 
+const npmFailureSchema = z.object({ error: z.object({ code: z.string() }) });
+
+function npmFailureCode(output: string): string | undefined {
+  try {
+    const parsed = npmFailureSchema.safeParse(JSON.parse(output));
+    return parsed.success ? parsed.data.error.code : undefined;
+  } catch (cause) {
+    if (!(cause instanceof SyntaxError)) throw cause;
+    // Lifecycle scripts can mix text into npm's JSON. The complete log remains
+    // available; unstructured output must retain the ordinary install failure.
+    return undefined;
+  }
+}
+
 async function runInstall(
   directory: string,
   manager: Manager,
@@ -359,14 +380,29 @@ async function runInstall(
     ]));
   const stop = () => awaitCleanup(beginStop());
   try {
-    child = spawn(manager, ["install"], {
-      cwd: directory,
-      detached: process.platform !== "win32",
-      signal,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
-    });
+    child = spawn(
+      manager,
+      manager === "npm" ? ["install", "--json"] : ["install"],
+      {
+        cwd: directory,
+        detached: process.platform !== "win32",
+        signal,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: process.platform === "win32",
+      },
+    );
     captureOutput(child, log, verbose);
+    // npm owns the diagnostic format. Bound this extra copy; the file receives
+    // all output even when lifecycle scripts exceed the diagnostic budget.
+    let diagnostic = "";
+    let diagnosticBytes = 0;
+    if (manager === "npm") {
+      child.stdout?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        diagnosticBytes += new TextEncoder().encode(chunk).byteLength;
+        diagnostic = diagnosticBytes <= 64 * 1024 ? diagnostic + chunk : "";
+      });
+    }
     const closed = new Promise<void>((done, fail) => {
       let failure: Error | undefined;
       child?.once("error", (cause) => {
@@ -375,8 +411,17 @@ async function runInstall(
       child?.once("close", (code) => {
         if (failure !== undefined) fail(failure);
         else if (code === 0) done();
-        else
-          fail(new Error(`${manager} install failed (exit ${String(code)}).`));
+        else {
+          const errorCode = npmFailureCode(diagnostic);
+          fail(
+            Object.assign(
+              new Error(
+                `${manager} install failed (${errorCode === undefined ? "" : `${errorCode}; `}exit ${String(code)}).`,
+              ),
+              { code: errorCode },
+            ),
+          );
+        }
       });
     });
     listener = addAbortListener(signal, () => {
@@ -721,8 +766,19 @@ export async function tryOyster(
         effects.installDependencies(directory, manager, verbose, signal),
       ).catch((cause: unknown) => {
         if (isTryCancellation(cause, signal)) throw cause;
+        const failure = innermostError(cause);
+        if (isNetworkFailure(failure))
+          throw new TryError(
+            `${manager} could not reach its package registry (${failure.code}).`,
+            `Keep this project. Check your connection and ${manager} registry/proxy settings; details are in ${join(directory, installLogFile)}. Then run \`${retry}\`. Dependencies will be retried; your key and files stay in place.`,
+          );
+        if ("code" in failure && failure.code === "ERESOLVE")
+          throw new TryError(
+            `${manager} could not resolve this project's dependencies (ERESOLVE).`,
+            `Keep this project. Check registry access and the dependency versions reported in ${join(directory, installLogFile)}, then run \`${retry}\`. Dependencies will be retried; your key and files stay in place.`,
+          );
         throw new TryError(
-          innermostError(cause).message,
+          failure.message,
           `Keep this project. Read ${join(directory, installLogFile)}, fix the reported cause, then run \`${retry}\`. Dependencies will be retried; your key and files stay in place.`,
         );
       });
@@ -769,31 +825,79 @@ export async function tryOyster(
         return result;
       });
     };
-    await setupTask("Installing the Hello App", async () => {
-      const status = await effects.installHello({
-        directory,
-        url,
-        key,
-        signal,
-      });
-      if (status < 200 || status >= 300)
-        throw new Error(
-          `Hello App installation returned HTTP ${String(status)}.`,
-        );
-    }).catch((cause: unknown) => {
-      if (signal.aborted || cause instanceof CleanupError) throw cause;
-      assertRunning();
-      throw new TryError(
-        innermostError(cause).message,
-        `Keep your Hello source. Run \`${retryWithLogs()}\` and report the install error if it repeats.`,
-      );
-    });
     const desktop = await setupTask(
-      fresh ? "Building Tourtois" : "Checking Tourtois",
-      () => effects.installDesktop({ directory, url, key, signal }),
+      fresh
+        ? "Installing Hello and building Tourtois"
+        : "Installing Hello and checking Tourtois",
+      async () => {
+        // The Apps have separate sources and installation identities. One
+        // progress display owns both; their cleanup must settle before the
+        // server can stop or sign-in can be offered.
+        const preparation = new AbortController();
+        const input = {
+          directory,
+          url,
+          key,
+          signal: AbortSignal.any([signal, preparation.signal]),
+        };
+        void watchedExit.then(() => {
+          preparation.abort();
+        });
+        const hello = async () => {
+          try {
+            input.signal.throwIfAborted();
+            const status = await effects.installHello(input);
+            if (status < 200 || status >= 300)
+              throw new Error(
+                `Hello App installation returned HTTP ${String(status)}.`,
+              );
+          } catch (cause) {
+            preparation.abort();
+            if (signal.aborted || cause instanceof CleanupError) throw cause;
+            assertRunning();
+            throw new TryError(
+              innermostError(cause).message,
+              `Keep your Hello source. Run \`${retryWithLogs()}\` and report the install error if it repeats.`,
+            );
+          }
+        };
+        const tourtois = async () => {
+          try {
+            input.signal.throwIfAborted();
+            return await effects.installDesktop(input);
+          } catch (cause) {
+            if (cause instanceof CleanupError) preparation.abort();
+            throw cause;
+          }
+        };
+        const [helloResult, desktopResult] = await Promise.allSettled([
+          hello(),
+          tourtois(),
+        ]);
+        // Cleanup failure must not be hidden by its sibling's cancellation.
+        for (const result of [helloResult, desktopResult])
+          if (
+            result.status === "rejected" &&
+            result.reason instanceof CleanupError
+          )
+            throw result.reason;
+        for (const result of [helloResult, desktopResult])
+          if (
+            signal.aborted &&
+            result.status === "rejected" &&
+            result.reason instanceof InstallationObservationError
+          )
+            throw result.reason;
+        signal.throwIfAborted();
+        if (helloResult.status === "rejected") throw helloResult.reason;
+        if (desktopResult.status === "rejected")
+          throw new DesktopSetupError(desktopResult.reason);
+        return desktopResult.value;
+      },
     ).catch((cause: unknown) => {
       if (signal.aborted || cause instanceof CleanupError) throw cause;
       assertRunning();
+      if (!(cause instanceof DesktopSetupError)) throw cause;
       ui.warn(
         `Tourtois, the desktop, could not be built (${innermostError(cause).message}). Oyster is available for recovery; the desktop is not ready.`,
         isNetworkFailure(innermostError(cause))

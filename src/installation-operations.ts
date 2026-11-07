@@ -952,7 +952,7 @@ export async function createInstallationOperations(
         // settlement wakes a waiter that re-reads pending and waits again.
         for (const requestId of settledInTick) wake(requestId);
         settledInTick.clear();
-        if (await watchdog.hasPendingWork())
+        if ((await watchdog.wakeState(Date.now())).pending)
           await ports.scheduleWake(Date.now());
         else {
           const due = nextRetentionWake();

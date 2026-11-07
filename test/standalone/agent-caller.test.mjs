@@ -2417,6 +2417,7 @@ for (const outcome of [
             (mail) => mail.address.agentId === child.agentId,
           );
           assert.ok(original);
+          for (const task of tasks) await task;
           const childState = states.get(child.agentId);
           const readReply = () =>
             Schema.decodeUnknownSync(PostRowSchema)(
@@ -2427,13 +2428,25 @@ for (const outcome of [
                 )
                 .one().value,
             );
-          assert.equal(readReply().state, "pending");
-          const mailRoom = (await hosts.get(child.agentId).shiitakeOptions())
-            .mailRoom;
+          const pending = readReply();
+          assert.equal(pending.state, "pending");
+          const retry = Schema.decodeUnknownSync(
+            Schema.Struct({
+              attempt_count: Schema.Number,
+              not_before: Schema.Number,
+            }),
+          )(
+            childState.storage.sql
+              .exec(
+                "SELECT attempt_count,not_before FROM watchdog_jobs WHERE job_id=?",
+                pending.jobId,
+              )
+              .one(),
+          );
           assert.equal(
-            await Effect.runPromise(mailRoom.nextWakeAt()),
-            readReply().nextAttemptAt,
-            "the shared mail owner retains Carrier's owed retry in its wake answer",
+            await childState.storage.getAlarm(),
+            retry.not_before,
+            "the native alarm retains Watchdog's owed Post retry",
           );
           directoryStorage.transactionSync(() => {
             createAgentDirectory(directoryStorage.sql).remove(
@@ -2447,8 +2460,7 @@ for (const outcome of [
             );
           });
           await childClient.close();
-          const pending = readReply();
-          assert.equal(pending.state, "pending");
+          assert.equal(readReply().state, "pending");
           const attemptsBeforeRetry = replyAttempts;
           const reopened = new Agent(childState, env);
           hosts.set(child.agentId, reopened);
@@ -2462,7 +2474,7 @@ for (const outcome of [
             }
             for (const task of tasks) await task;
           };
-          await wakeAt(pending.nextAttemptAt + 1);
+          await wakeAt(retry.not_before + 1);
           assert.equal(
             delivered.filter((mail) => mail.address.agentId === parent.agentId)
               .length,
@@ -2471,13 +2483,13 @@ for (const outcome of [
           assert.partialDeepStrictEqual(readReply(), {
             state: "dead",
             reason: "refused",
-            attempts: pending.attempts + 1,
+            attempts: retry.attempt_count + 1,
           });
-          await wakeAt(pending.nextAttemptAt + 60_000);
+          await wakeAt(retry.not_before + 60_000);
           assert.partialDeepStrictEqual(readReply(), {
             state: "dead",
             reason: "refused",
-            attempts: pending.attempts + 1,
+            attempts: retry.attempt_count + 1,
           });
           assert.equal(replyAttempts, attemptsBeforeRetry);
           assert.equal(parentModel.state.callCount, 0);

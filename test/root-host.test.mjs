@@ -437,6 +437,32 @@ test("App UI bytes come from the host's verified cache, filled by the first veri
   }
 });
 
+test("the home shell page preloads its Release's module chunks, never the shell entry", async () => {
+  const app = await homePageFixture({
+    shellModule: true,
+    shellChunks: ["/assets/chunk-a.js", "/assets/chunk-b.js"],
+  });
+  const page = await (
+    await app.request("https://oyster.test/apps/desktop/", {
+      headers: { "x-who": "owner" },
+    })
+  ).text();
+  const preloads = [
+    ...page.matchAll(/<link rel="modulepreload" href="([^"]+)">/gu),
+  ].map((match) => match[1]);
+  assert.deepEqual(preloads, [
+    "/ui/desktop/rel_desktop/assets/chunk-a.js",
+    "/ui/desktop/rel_desktop/assets/chunk-b.js",
+  ]);
+  // A visitor's framed App page loads no shell and preloads nothing.
+  const visitor = await (
+    await app.request("https://oyster.test/apps/desktop/", {
+      headers: { "x-who": "key" },
+    })
+  ).text();
+  assert.doesNotMatch(visitor, /modulepreload/u);
+});
+
 test("an App page learns apps.open only from its own Release declaration", async () => {
   for (const opens of [true, false]) {
     const app = await homePageFixture({ opens });

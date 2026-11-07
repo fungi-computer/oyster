@@ -98,8 +98,30 @@ test("native Oyster owner choices survive Workerd restart and edit without new c
     };
     await read(first, workers);
     await probe(first, "cloudflare-workers-ai", workers.model.modelId);
+    const catalog = await call(`/model-proof-models/${first}`);
+    assert.equal(catalog.status, 200, await catalog.clone().text());
+    assert.deepEqual(
+      (await catalog.json()).map(({ providerId, providerName, id }) => ({
+        providerId,
+        providerName,
+        id,
+      })),
+      [
+        {
+          providerId: workers.model.providerId,
+          providerName: "Workers AI",
+          id: workers.model.modelId,
+        },
+      ],
+    );
     await put(first, workers, 200);
     await put(second, gateway, 200);
+    const gatewayCatalog = await call(`/model-proof-models/${second}`);
+    assert.equal(gatewayCatalog.status, 200);
+    assert.equal(
+      (await gatewayCatalog.json())[0].providerName,
+      "Fungi Gateway",
+    );
     await host.restart();
     await read(first, workers);
     await read(second, gateway);
@@ -115,8 +137,30 @@ test("native Oyster owner choices survive Workerd restart and edit without new c
     await put(first, edited, 200);
     await read(second, gateway);
     await probe(first, "cloudflare-workers-ai", edited.model.modelId);
-    await put(second, { keySource: "byok", model: gateway.model }, 409, {
-      error: "unsupported_key_source",
+    const byok = {
+      keySource: "byok",
+      keyId: "model-proof-openai",
+      model: { providerId: "openai", modelId: "gpt-6-luna" },
+    };
+    await put(first, byok, 200);
+    const byokCatalog = await call(`/model-proof-models/${first}`);
+    assert.equal(byokCatalog.status, 200, await byokCatalog.clone().text());
+    assert.deepEqual(
+      (await byokCatalog.json()).map(({ providerId, providerName, id }) => ({
+        providerId,
+        providerName,
+        id,
+      })),
+      [
+        {
+          providerId: "openai",
+          providerName: "Your provider key",
+          id: "gpt-6-luna",
+        },
+      ],
+    );
+    await put(second, { keySource: "byok", model: gateway.model }, 400, {
+      error: "Invalid model choice",
     });
     await put(second, { keySource: "workers-ai", model: gateway.model }, 409, {
       error: "key_source_mismatch",

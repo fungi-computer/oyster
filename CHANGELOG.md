@@ -1,5 +1,63 @@
 # @fungi.computer/oyster
 
+## 0.14.0
+
+### Minor Changes
+
+- Changes since 0.13.1:
+
+  - fix(oyster): keep model-list lookup off the Pi root import
+  - fix(oyster): label BYOK model catalogs as provider keys
+  - fix(durability): give Watchdog delivery and timer readiness
+  - fix(oyster): isolate pnpm build qualification from unit tests
+  - fix(approvals): finish orphan recovery before native admission
+  - fix(oyster): reject CDP send failures after cleanup
+  - fix(oyster): retain CDP send failure cause
+  - fix(oyster): overlap local App preparation during try
+  - fix(oyster): retain expired browser leases for cleanup
+  - fix(oyster): settle CDP work on cancellation and closure
+  - fix(oyster): explain registry failures during try
+  - feat(grove): pick host-admitted Agent models through shared Session command
+  - fix(oyster): allow four standard-4 Computer containers
+  - perf(oyster): preload the home shell's module chunks with its page
+  - fix(grove): merge integration and restore composer model picker
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.7.2
+  - @fungi.computer/bird-dog@0.3.4
+  - @fungi.computer/carrier@0.2.2
+  - @fungi.computer/computer@0.6.2
+  - @fungi.computer/gills@0.2.2
+  - @fungi.computer/mycelium@0.3.5
+  - @fungi.computer/nacre@0.2.1
+  - @fungi.computer/parakeet@0.9.0
+  - @fungi.computer/shiitake-extensions@0.6.7
+  - @fungi.computer/shiitake@0.12.0
+  - @fungi.computer/veil@0.6.2
+  - @fungi.computer/watchdog@0.1.1
+  - @fungi.computer/braid@0.4.4
+  - @fungi.computer/darkroom@0.5.2
+  - @fungi.computer/workflows-wire@0.4.4
+  - @fungi.computer/seam@0.2.3
+  - @fungi.computer/puffball@0.5.2
+  - @fungi.computer/knapsack@0.4.6
+  - @fungi.computer/zookeeper@0.0.14
+  - @fungi.computer/forage@0.3.2
+  - @fungi.computer/computer-contract@0.0.11
+
 ## 0.13.1
 
 ### Patch Changes

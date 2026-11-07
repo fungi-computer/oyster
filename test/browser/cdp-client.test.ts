@@ -54,6 +54,9 @@ function fakePeer() {
       if (sessionId === undefined) message({ method, params });
       else message({ method, params, sessionId });
     },
+    failSocket: () => {
+      events.dispatchEvent(new Event("error"));
+    },
     closeSocket: () => {
       socket.close();
     },
@@ -111,6 +114,143 @@ describe("cdp-client wire protocol", () => {
     client.close();
   });
 
+  it("does not send a call whose signal is already aborted", async () => {
+    vi.useFakeTimers();
+    const peer = fakePeer();
+    const client = createCdpClient(peer.socket);
+    const controller = new AbortController();
+    controller.abort();
+    const result = client
+      .call(
+        "Input.insertText",
+        { text: "cancelled" },
+        {
+          signal: controller.signal,
+          timeoutMs: 10,
+        },
+      )
+      .catch((error: unknown) => error);
+    const timersAfterCall = vi.getTimerCount();
+    await vi.runAllTimersAsync();
+    expect(peer.sent).toEqual([]);
+    expect(timersAfterCall).toBe(0);
+    expect(await result).toMatchObject({
+      _tag: "CloudBrowserTimeout",
+      timeoutMs: 0,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts an outstanding call without waiting for its deadline", async () => {
+    vi.useFakeTimers();
+    const peer = fakePeer();
+    const client = createCdpClient(peer.socket);
+    const controller = new AbortController();
+    const pending = client.call(
+      "Page.enable",
+      {},
+      { signal: controller.signal },
+    );
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({
+      _tag: "CloudBrowserTimeout",
+      timeoutMs: 0,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    peer.answer({});
+    client.close();
+  });
+
+  it("removes the abort listener when a call times out", async () => {
+    vi.useFakeTimers();
+    const peer = fakePeer();
+    const client = createCdpClient(peer.socket);
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const result = client
+      .call(
+        "Page.enable",
+        {},
+        {
+          signal: controller.signal,
+          timeoutMs: 10,
+        },
+      )
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await result).toBeInstanceOf(CloudBrowserTimeout);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["remote close", "socket error", "client close"])(
+    "%s rejects calls and event waits immediately and stops subscriptions",
+    async (termination) => {
+      vi.useFakeTimers();
+      const peer = fakePeer();
+      // A local close must settle work without waiting for the peer's close event.
+      const client = createCdpClient({ ...peer.socket, close: vi.fn() });
+      const controller = new AbortController();
+      const remove = vi.spyOn(controller.signal, "removeEventListener");
+      const received = vi.fn();
+      client.on("Page.loadEventFired", received);
+      const call = client
+        .call("Page.enable", {}, { signal: controller.signal })
+        .catch((error: unknown) => error);
+      const event = client
+        .waitForEvent("Page.loadEventFired", { timeoutMs: 1000 })
+        .catch((error: unknown) => error);
+      if (termination === "remote close") peer.closeSocket();
+      else if (termination === "socket error") peer.failSocket();
+      else client.close();
+      const timersAfterTermination = vi.getTimerCount();
+      // Flush outstanding deadlines so a failing regression never hangs the suite.
+      await vi.runAllTimersAsync();
+      expect(await call).toBeInstanceOf(CloudBrowserUpstreamError);
+      expect(await event).toBeInstanceOf(CloudBrowserUpstreamError);
+      expect(timersAfterTermination).toBe(0);
+      expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+      client.on("Page.loadEventFired", received);
+      peer.emitEvent("Page.loadEventFired", {});
+      expect(received).not.toHaveBeenCalled();
+      const laterEvent = client
+        .waitForEvent("Page.loadEventFired", { timeoutMs: 1000 })
+        .catch((error: unknown) => error);
+      const laterCall = client
+        .call("Page.enable", {})
+        .catch((error: unknown) => error);
+      const timersAfterNewWork = vi.getTimerCount();
+      await vi.runAllTimersAsync();
+      expect(await laterEvent).toBeInstanceOf(CloudBrowserUpstreamError);
+      expect(await laterCall).toBeInstanceOf(CloudBrowserUpstreamError);
+      expect(timersAfterNewWork).toBe(0);
+      expect(peer.sent).toHaveLength(1);
+    },
+  );
+
+  it("releases call resources when sending throws", async () => {
+    vi.useFakeTimers();
+    const peer = fakePeer();
+    const cause = new Error("socket unavailable");
+    const client = createCdpClient({
+      ...peer.socket,
+      send: () => {
+        throw cause;
+      },
+    });
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const result = client.call(
+      "Page.enable",
+      {},
+      { signal: controller.signal },
+    );
+    await expect(result).rejects.toBeInstanceOf(CloudBrowserUpstreamError);
+    await expect(result).rejects.toHaveProperty("cause", cause);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
   it("resolves waitForEvent only for the matching method and session", async () => {
     const peer = fakePeer();
     const client = createCdpClient(peer.socket);
@@ -122,6 +262,24 @@ describe("cdp-client wire protocol", () => {
     peer.emitEvent("Page.otherEvent", { timestamp: 0 }, "cdp-session-1");
     peer.emitEvent("Page.loadEventFired", { timestamp: 1 }, "cdp-session-1");
     await expect(pending).resolves.toEqual({ timestamp: 1 });
+    client.close();
+  });
+
+  it("times out an event wait that never matches", async () => {
+    vi.useFakeTimers();
+    const peer = fakePeer();
+    const client = createCdpClient(peer.socket);
+    const pending = client.waitForEvent("Page.loadEventFired", {
+      timeoutMs: 10,
+    });
+    const assertion = expect(pending).rejects.toMatchObject({
+      _tag: "CloudBrowserTimeout",
+      op: "Page.loadEventFired",
+      timeoutMs: 10,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
     client.close();
   });
 

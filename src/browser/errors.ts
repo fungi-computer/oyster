@@ -28,6 +28,8 @@ export class CloudBrowserUpstreamError extends Data.TaggedError(
   readonly op: string;
   readonly status: number | null;
   readonly message: string;
+  /** Original transport failure retained for host diagnostics. */
+  readonly cause?: unknown;
 }> {}
 
 /** A call did not complete within its deadline. */

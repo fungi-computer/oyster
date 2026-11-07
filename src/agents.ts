@@ -606,6 +606,7 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
         const url = new URL(incoming.url);
         const path = url.pathname.slice(`/agents/${agentId}`.length);
         if (!(
+          (path === "/models" && incoming.method === "GET") ||
           path === "/acp" ||
           path === "/sessions" ||
           path.startsWith("/sessions/") ||

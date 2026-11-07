@@ -33,7 +33,7 @@
       "class_name": "ComputerDO",
       "image": "../../../packages/computer/Dockerfile",
       "instance_type": "standard-4",
-      "max_instances": 1,
+      "max_instances": 4,
       "rollout_active_grace_period": 0,
       "rollout_step_percentage": [100],
     },

@@ -304,3 +304,66 @@ test("a retried Oyster request after a member approval never claims or answers i
   assert.deepEqual(await home.submit(call), pending);
   assert.equal(ledger.get(pending.recordId).state, "approved");
 });
+
+test("a cold native Registry recovers every orphan claim beyond one batch without dispatch", async (t) => {
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const storage = fromNodeSqlite(database);
+  const context = { id: { name: "registry" }, storage };
+  const env = {
+    OYSTER_OWNER_KEY: "native-orphan-owner-secret-123456789",
+    OYSTER_ORIGIN: "https://oyster.test",
+    RELEASES: {},
+    INSTANCES: {
+      getByName: () => assert.fail("An orphan claim must not dispatch"),
+    },
+  };
+  const pin = { tenantId: "default", origin: env.OYSTER_ORIGIN };
+  const actor = { kind: "member", memberId: "owner" };
+  let registry = new OysterRegistry(context, env);
+  await registry.approvalList(pin, actor, {});
+  const ledger = new ApprovalLedger({
+    owner: storage,
+    home: { kind: "oyster", id: "default" },
+    now: Date.now,
+  });
+  const records = [];
+  for (let index = 0; index < 101; index += 1) {
+    const staged = await ledger.request({
+      requester: {
+        principalId: "owner",
+        agentId: null,
+        sessionId: null,
+        displayName: "Owner",
+      },
+      module: "oyster-app:notes",
+      operation: "saveNote",
+      access: "write",
+      reversibility: "reversible",
+      authorityFence: "generation-1",
+      idempotencyKey: `orphan-${index}`,
+      inputJson: '{"text":"interrupted write"}',
+    });
+    assert.equal(staged.kind, "record");
+    records.push(staged.record.recordId);
+    // Policy-approved calls can claim concurrently before the old isolate exits.
+    void ledger.applyInline(staged.record.recordId, {
+      recheck: () => new Promise(() => undefined),
+      dispatch: () =>
+        assert.fail("The stopped authority read never dispatches"),
+    });
+    assert.equal(ledger.get(staged.record.recordId).state, "claimed");
+  }
+  registry = new OysterRegistry(context, env);
+  await registry.approvalSetAutoApprove(pin, actor, {
+    scope: { agentId: null },
+    family: { module: null, access: "write" },
+    enabled: true,
+  });
+  for (const recordId of records) {
+    assert.equal(ledger.get(recordId).state, "outcome_unknown");
+    assert.equal(ledger.get(recordId).reason, "outcome-unknown");
+  }
+  await registry.alarm();
+  assert.equal(ledger.nextWakeAt(), null);
+});

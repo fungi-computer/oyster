@@ -62,8 +62,10 @@ export class OysterApprovalHome {
       "CREATE TABLE IF NOT EXISTS oyster_approval_targets (record_id TEXT PRIMARY KEY, target_json TEXT NOT NULL) STRICT",
     );
     this.ledger = this.createLedger();
-    // A new native home represents boot, not a live per-call ledger facade.
-    this.ledger.recoverClaims();
+    // A new native home represents boot, before any live call can claim work.
+    while (this.ledger.recoverClaims().length > 0) {
+      // Each bounded batch settles part of the finite orphan set.
+    }
   }
 
   private createLedger(persistIntent?: (record: ApprovalRecord) => undefined) {

@@ -50,7 +50,11 @@ export type LeaseRegistry = Readonly<{
   /** Turn a reservation into an open lease. */
   /** `openedAt` is when the provider session was requested: lifetime and billing start there. */
   register: (leaseId: string, owner: LeaseOwner, openedAt: number) => void;
-  /** Throws `CloudBrowserLeaseNotFound` for a wrong owner, unknown, or expired lease. */
+  /**
+   * Throws `CloudBrowserLeaseNotFound` for a wrong owner, unknown, or expired
+   * lease. Expired records remain until the browser owner releases them for
+   * provider cleanup and settlement.
+   */
   touch: (leaseId: string, owner: LeaseOwner) => void;
   release: (leaseId: string) => void;
   /** Leases past their idle timeout or max lifetime, for a reap sweep. */
@@ -126,10 +130,8 @@ export function createLeaseRegistry(
       const lease = leases.get(leaseId);
       if (lease === undefined) throw new CloudBrowserLeaseNotFound({ leaseId });
       const at = now();
-      if (isExpired(lease, at)) {
-        leases.delete(leaseId);
+      if (isExpired(lease, at))
         throw new CloudBrowserLeaseNotFound({ leaseId });
-      }
       if (!ownedBy(lease, owner))
         throw new CloudBrowserLeaseNotFound({ leaseId });
       if (lease.paused) throw new CloudBrowserLeasePaused({ leaseId });
@@ -139,10 +141,8 @@ export function createLeaseRegistry(
       const lease = leases.get(leaseId);
       if (lease === undefined) throw new CloudBrowserLeaseNotFound({ leaseId });
       const at = now();
-      if (isExpired(lease, at)) {
-        leases.delete(leaseId);
+      if (isExpired(lease, at))
         throw new CloudBrowserLeaseNotFound({ leaseId });
-      }
       if (lease.teamId !== teamId)
         throw new CloudBrowserLeaseNotFound({ leaseId });
       lease.lastActiveAt = at;

@@ -108,33 +108,32 @@ export async function createGitPushJournal(ports: GitPushJournalPorts) {
     }),
   };
   const scheduleNext = async () => {
-    const at = post.nextWake();
+    const time = now();
+    const state = await watchdog.wakeState(time);
+    const at = state.pending ? time : state.nextWakeAt;
     if (at !== null) await ports.scheduleWake(at);
   };
   const watchdog: WatchdogRuntime = await Watchdog.make({
     owner,
     isAlive: () => Promise.resolve(false),
-    execute: (job) => post.execute(job),
+    retryPolicy: (job) => post.retryPolicy(job),
+    execute: (job, signal, attempt) => post.execute(job, attempt, signal),
     wake: { recompute: scheduleNext },
   });
   const post = createPost({
     owner,
     routes,
     transactional: watchdog.transactional,
-    readJob: watchdog.read,
     now,
     scheduleWake: ports.scheduleWake,
   });
   let settling: Promise<void> | undefined;
   const drain = async () => {
-    let cursor: string | undefined;
-    do {
-      cursor = await post.enqueueDue(64, cursor);
-    } while (cursor !== undefined);
     try {
       for (let count = 0; count < 64; count += 1) {
+        const result = await watchdog.tick();
         if (
-          (await watchdog.tick()).status !== "settled" ||
+          (result.status !== "settled" && result.status !== "requeued") ||
           deliveringSync.size > 0
         )
           break;
@@ -264,6 +263,10 @@ export async function createGitPushJournal(ports: GitPushJournalPorts) {
       }));
     },
     /** The next retained delivery deadline, or null when no wake is needed. */
-    nextWake: () => post.nextWake(),
+    nextWake: () => {
+      const time = now();
+      const state = watchdog.transactional.wakeState(time);
+      return state.pending ? time : state.nextWakeAt;
+    },
   };
 }

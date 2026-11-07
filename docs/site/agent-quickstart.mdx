@@ -1,397 +1,152 @@
 ---
 title: Agent quick start
 description:
-  Hand this guide to a coding agent to install Oyster from npm, run it locally,
-  install an App, connect over MCP and deploy.
+  Run Oyster locally with one command, open Hello, then edit and restart.
+  Connect MCP, build another App or deploy when you are ready.
 ---
 
-You are an agent setting up Oyster for a person. Follow these steps in order.
-Run every command exactly as written, from the directory each step names.
-Compare its output with the expected output before you go on. When a step fails,
-read the "If it fails" notes under it before trying anything else.
+You are an agent setting up Oyster for a person. Start with a local desktop and
+one working App. You need **Node 24 or newer and Git**, an internet connection
+for the first install, and a browser to see the result. No Cloudflare account,
+Docker or payment is needed for this trial.
 
-Not sure Oyster fits the job?
-[Is Oyster for you?](https://docs.fungi.computer/is-oyster-for-you/) compares it
-with Cloudflare Workers Builds before you install anything.
+## 1. Start Oyster
 
-## Before you start
-
-- **Cloudflare plan:** SQLite-backed Durable Objects are available on Workers
-  Free; they do not by themselves require Paid. Cloudflare's SQLite-backed
-  Durable Objects limits list 30 seconds of CPU per request by default,
-  configurable to 5 minutes. See Cloudflare's
-  [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
-  and
-  [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
-- **Agent chat and AI Gateway:** By default, Agent chat uses the Workers AI
-  binding; it needs no separate provider key or Gateway setup. Prints uses your
-  account's default AI Gateway (created automatically); set `AI_GATEWAY_ID` to
-  use another. The routed models include `openai/gpt-image-2` and video IDs
-  `bytedance/seedance-2.0`, `bytedance/seedance-2.0-fast`,
-  `bytedance/seedance-2.0-mini`, `google/veo-3.1`, `google/veo-3.1-fast` and
-  `minimax/h3-max`.
-
-- **Deployment plan:** Step 7 needs Workers Paid because this deployment uses
-  Containers for the Computer image; Cloudflare lists Containers as available on
-  the
-  [Workers Paid plan](https://developers.cloudflare.com/containers/platform/).
-  SQLite-backed Durable Objects alone do not require Paid.
-
-## What Oyster is
-
-- Oyster hosts Apps on one Cloudflare Worker, or on celld, a Workers-compatible
-  runtime you host yourself.
-- Each App is an immutable Release built from an exact git commit. Its backend
-  runs in its own Durable Object with its own SQLite, and it gets only the
-  bindings it declares.
-- People use Apps in a browser. Agents call the same App methods over HTTP or
-  through one MCP endpoint, `/mcp`.
-
-## 1. Check prerequisites
-
-You need Node 24 or newer, pnpm 11 or newer, Git, curl and openssl. You do not
-need a Cloudflare account until step 7. Docker is needed only in step 7, where
-Wrangler builds the Computer's container image.
+In the directory where the person wants to keep their project, check the tools:
 
 ```sh
 node --version
-pnpm --version
 git --version
 ```
 
-Expected output: a `v24.` or later Node version, pnpm 11 or newer, then any
-`git version 2.x` line.
+Expect Node `v24` or newer and a Git version. If either is missing or Node is
+older, install it before continuing.
+
+Keep the next command running in a persistent terminal or your agent runtime's
+managed process session:
+
+```sh
+npx --yes @fungi.computer/oyster try --no-open
+```
+
+It creates `./my-oyster`, installs dependencies, starts Oyster on
+`http://127.0.0.1:8787`, installs Hello and builds Tourtois, the desktop, from
+its public source. `--no-open` lets you open the sign-in link yourself; omit it
+on a person's computer to open their browser automatically.
+
+On a fresh install, expect these phases, with timing and progress alongside:
+
+```text
+Creating my-oyster
+Installing dependencies with npm
+Starting Oyster
+Installing Hello and building Tourtois
+Preparing desktop sign-in
+Oyster is running
+```
+
+Then Oyster prints `Open (works once):` with a local sign-in URL, the Oyster
+address, and paths to the owner key and Hello source. The key is saved in
+`my-oyster/.oyster-owner`; it is never printed or put in the sign-in URL. Treat
+the one-time URL and the key as credentials: do not put them in reports.
+
+Keep this terminal running while you use the desktop. If there is no success or
+failure after five minutes, inspect the logs under `my-oyster/.oyster/` and
+report the last phase; do not silently leave a stalled process running.
 
 If it fails:
 
-- Wrong Node: install Node 24 with your version manager, for example
-  `mise use node@24` or `nvm install 24`.
-- No pnpm, or an older version: install pnpm 11 with `npm install -g pnpm@11`.
+- **Port in use:** leave that listener alone. Follow the suggested command with
+  another port, such as `--port 8788`, and use the address Oyster prints.
+- **Directory already has files:** choose a new directory with
+  `npx --yes @fungi.computer/oyster try another-oyster --no-open`. Do not delete
+  someone else's project.
+- **Install or startup error:** read the diagnostic and the log path it names.
+  Keep the project, fix the reported cause and rerun the same command. Oyster
+  preserves your key and source; `--verbose` shows install and server logs.
+- **Oyster needs desktop repair:** the host is available for recovery, but the
+  desktop is not ready. Follow the printed repair diagnostic and report it; this
+  is not a successful trial.
 
-## 2. Create a project
+## 2. Open Hello
 
-Make a new directory, install Oyster, its Computer and Wrangler, and copy the
-example Worker out of the package. The local pnpm policy allows esbuild and
-workerd to install their native binaries and disables unneeded optional
-dependency scripts. Write it before installing so neither command stops for
-unapproved build scripts:
+Open the printed one-time link in a browser on the same machine as Oyster. From
+the Tourtois launcher, choose **Hello**. Success means the App visibly reads
+**Hello from my first Oyster App**, without a loading or timeout overlay. An
+HTTP 200 alone does not prove that the desktop or App opened.
 
-```sh
-mkdir my-oyster
-cd my-oyster
-cat > pnpm-workspace.yaml <<'YAML'
-allowBuilds:
-  "@google/genai": false
-  "@mongodb-js/zstd": false
-  esbuild: true
-  exifreader: false
-  node-liblzma: false
-  protobufjs: false
-  workerd: true
-YAML
-pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0
-pnpm add -D wrangler
-cp node_modules/@fungi.computer/oyster/examples/standalone/worker.ts .
-cp node_modules/@fungi.computer/oyster/examples/standalone/wrangler.jsonc .
-```
+If the link has expired or was already used, open the printed Oyster address
+with `/login` appended and paste the key from `my-oyster/.oyster-owner` into the
+login form. If your agent cannot use a browser on that machine, give the person
+these steps and report that the visible check is still unverified.
 
-pnpm 11 holds back any version published in the last day, so a brand-new release
-may not be the one it installs. Run
-`pnpm ls @fungi.computer/oyster @fungi.computer/computer` to see which versions
-you got, and compare them with
-[Package versions in each Fungi release](https://docs.fungi.computer/reference/packages/#package-versions-in-each-fungi-release).
-To install a specific release, name its versions, as in
-[Upgrade Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/#upgrade-oyster).
+The local trial has no Computer, hosted git storage or Workers AI. Opening Hello
+does not prove a cloud deployment or a model reply.
 
-Expected output: pnpm lists the added package after each `add`, and `ls` now
-shows `node_modules`, `package.json`, `pnpm-workspace.yaml`, `worker.ts` and
-`wrangler.jsonc`.
+## 3. Stop, restart and edit
 
-Every later command runs from this `my-oyster` directory unless the step says
-otherwise.
-
-If it fails:
-
-- `ERR_PNPM_IGNORED_BUILDS`: check that the policy file above exists before
-  running `pnpm add`. If it names a new dependency not listed there, stop and
-  review that package before allowing its scripts; do not treat exit 1 as
-  success.
-- `ERR_PNPM_UNEXPECTED_STORE`: this directory was installed from a different
-  pnpm store than your current default. Run the same `pnpm add` again with
-  `--store-dir` set to the store the error says the dependencies are linked
-  from; do not delete `node_modules` to get past it.
-- `cp: cannot stat …/examples/standalone/…`: the install did not finish. Run
-  `pnpm add @fungi.computer/oyster @fungi.computer/computer react@^19.2.0 react-dom@^19.2.0`
-  again and read its first error.
-
-## 3. Run a local Oyster
-
-`worker.ts` and `wrangler.jsonc` are the whole Oyster. Run it under
-`wrangler dev` on your machine, without its Computer container. Oyster serves an
-HTTPS origin; `--local-upstream` presents your loopback requests to it at
-`https://oyster.test`. Choose an owner key and keep this terminal open:
+Press Ctrl-C in the terminal that owns this trial to stop it. In an agent
+runtime, stop your managed session and its children; do not kill processes by a
+shared name or port. From the **same parent directory** as step 1, restart:
 
 ```sh
-export OYSTER_OWNER_KEY=$(openssl rand -hex 24)
-export OYSTER_URL=http://127.0.0.1:8787
-echo "$OYSTER_OWNER_KEY" > .oyster-owner-key
-npx wrangler dev --local --enable-containers=false --ip 127.0.0.1 --port 8787 \
-  --local-upstream oyster.test --upstream-protocol https \
-  --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:https://oyster.test
+npx --yes @fungi.computer/oyster try my-oyster --no-open
 ```
 
-Expected output: warnings that the AI and Artifacts bindings reach remote
-resources, a bindings table listing `env.REGISTRY (OysterRegistry)`,
-`env.INSTANCES (StandaloneInstance)`, `env.COMPUTER (ComputerDO)` and the rest,
-then `Ready on http://127.0.0.1:8787`. Locally there is no Computer, git storage
-or Workers AI; steps 3 to 5 need none of them.
-
-Keep it running. Open a second terminal in `my-oyster`, set the same two
-variables there, and check that Oyster answers:
+Or, from **inside `my-oyster`**, run:
 
 ```sh
-export OYSTER_OWNER_KEY=$(cat .oyster-owner-key)
-export OYSTER_URL=http://127.0.0.1:8787
-curl -s -o /dev/null -w '%{http_code}\n' $OYSTER_URL/login
-curl -s -o /dev/null -w '%{http_code}\n' $OYSTER_URL/api/installations
-curl -s -H "Authorization: Bearer $OYSTER_OWNER_KEY" $OYSTER_URL/api/installations
+npx --yes @fungi.computer/oyster try . --no-open
 ```
 
-Expected output: `200`, then `401` (no key), then `[]` (no Apps installed yet).
+Use the directory and `--port` you chose if they differ. Expect
+`Restarting the Oyster in …`, then `Installing Hello and checking Tourtois`,
+followed by a new sign-in link. Your owner key and Hello source stay in place.
 
-If it fails:
-
-- `Address already in use`: another process holds port 8787. Pick another port
-  and use it in both `--port` and `OYSTER_URL`.
-- `curl` prints `000`: the server is not ready yet. Wait for the `Ready on`
-  line.
-- `401` with the key: the two terminals hold different keys. Set
-  `OYSTER_OWNER_KEY` from `.oyster-owner-key` in both.
-- An agent runtime that cannot keep a process in the foreground starts the same
-  command in the background with its output in a log, then waits until the
-  `/login` check prints `200`:
-
-  ```sh
-  npx wrangler dev --local --enable-containers=false --ip 127.0.0.1 --port 8787 \
-    --local-upstream oyster.test --upstream-protocol https \
-    --var OYSTER_OWNER_KEY:$OYSTER_OWNER_KEY --var OYSTER_ORIGIN:https://oyster.test \
-    > oyster-dev.log 2>&1 &
-  ```
-
-To stop the server, press Ctrl-C in its terminal. A background server runs as
-several processes (`npm exec`, `wrangler.js` and `workerd`); stop them all by
-ending `wrangler.js`, then check that `/login` prints `000`:
+To make the first edit, change the heading in
+`my-oyster/hello-app/bundle/index.html`. Keep the `main.js` script: it tells
+Oyster that the App is ready. Save it, then from the **parent directory** commit
+the change in the `hello-app` Git repository:
 
 ```sh
-pkill -f 'wrangler[.]js dev .*--port 8787'
+git -C my-oyster/hello-app add bundle/index.html
+git -C my-oyster/hello-app -c user.name="Oyster learner" \
+  -c user.email="oyster@example.invalid" commit -m "Edit Hello"
 ```
 
-## 4. Add an App
+Expect a commit summary with one changed file. This example supplies an identity
+for just this commit, so it also works on a machine without global Git settings.
+Use your own name and email if you prefer. Adjust `my-oyster` if you chose
+another project directory.
 
-An App is a git repository with a `package.json` that declares it under
-`fungi.app`. Make the smallest one, a single committed HTML page:
+Stop and restart Oyster as above. It builds committed source; saving or
+refreshing alone does not install an edit. Open the new sign-in link and choose
+Hello again to check the changed heading.
 
-```sh
-mkdir -p hello-app/bundle
-cat > hello-app/package.json <<'EOF'
-{
-  "name": "hello-app",
-  "private": true,
-  "fungi": { "app": { "displayName": "Hello", "capabilities": [] } }
-}
-EOF
-cat > hello-app/bundle/index.html <<'EOF'
-<!doctype html>
-<title>Hello</title>
-<h1>Hello from my first Oyster App</h1>
-EOF
-git -C hello-app init -q
-git -C hello-app add .
-git -C hello-app -c user.name=Oyster -c user.email=oyster@example.invalid \
-  commit -qm "Hello App"
-```
+The [build-an-App recipe](https://docs.fungi.computer/agents/build-an-app.md)
+has exact edit commands and the next App to build.
 
-Then pack that commit into a Release and install it as installation `hello` with
-`@fungi.computer/oyster/pack`:
+## After the local trial
 
-```sh
-cat > install-hello.mjs <<'EOF'
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import process from "node:process";
-import { installRelease, packRelease } from "@fungi.computer/oyster/pack";
+Stop here unless the person wants the next step. These are separate tasks:
 
-const source = resolve("hello-app");
-const commit = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], {
-  encoding: "utf8",
-}).trim();
-const out = await mkdtemp(join(tmpdir(), "oyster-hello-"));
-try {
-  await packRelease({
-    appId: "app_hello",
-    sourceDirectory: source,
-    sourceRevision: `git:${commit}`,
-    recipe: {
-      kind: "bundled-html",
-      entry: "bundle/index.html",
-      assets: {
-        maxManifestBytes: 65_536,
-        maxObjects: 16,
-        maxObjectBytes: 1_048_576,
-        maxTotalBytes: 4_194_304,
-      },
-      assetBase: "./",
-      backend: null,
-      maxOutputBytes: 4_194_304,
-    },
-    outDirectory: join(out, "release"),
-  });
-  const response = await installRelease({
-    directory: join(out, "release"),
-    url: process.env.OYSTER_URL,
-    key: process.env.OYSTER_OWNER_KEY,
-    installationId: "hello",
-  });
-  console.log(`installed hello: ${response.status} ${await response.text()}`);
-} finally {
-  await rm(out, { recursive: true, force: true });
-}
-EOF
-node install-hello.mjs
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $OYSTER_OWNER_KEY" $OYSTER_URL/apps/hello/
-```
+- **Connect MCP:** use the
+  [MCP guide](https://docs.fungi.computer/oyster/concepts/#connect-an-agent-over-mcp)
+  for the `/mcp` endpoint and authentication. For this trial, use the printed
+  local Oyster address and the owner key in `my-oyster/.oyster-owner`. Hello is
+  a static page; connecting MCP does not give it backend methods.
+- **Build another App:** follow the
+  [build-an-App recipe](https://docs.fungi.computer/agents/build-an-app.md),
+  then the [App guide](https://docs.fungi.computer/apps/) for backends and typed
+  methods.
+- **Deploy:** follow
+  [Run your own Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/#deploy-it).
+  That step needs your own Cloudflare account, paid resources and Docker for the
+  Computer image. Do it only when the person asks for hosting.
 
-Expected output: one line starting
-`installed hello: 201 {"installationId":"hello",` and containing
-`"status":"enabled"`, then `200`. Running `node install-hello.mjs` again prints
-`installed hello: 200`: the installation already exists, and Oyster switches it
-to the Release just packed.
-
-A person can open `$OYSTER_URL/login`, sign in with the owner key, and open
-Hello from the installation list at `$OYSTER_URL/`.
-
-If it fails:
-
-- `installed hello: 401`: `OYSTER_OWNER_KEY` in this terminal differs from the
-  server's. Set it from `.oyster-owner-key`.
-- `fetch failed` or `ECONNREFUSED`: the server from step 3 is not running.
-- The build reads committed files only. To install an edit, commit it in
-  `hello-app` and run `node install-hello.mjs` again; Oyster switches the
-  installation to the new Release and keeps its data.
-
-An App with a backend, typed methods and its own SQLite adds
-`fungi.backendDefinition` and a `backend` entry to its recipe. The
-[Notes example App](https://github.com/fungi-computer/oyster/tree/main/examples/notes-app)
-is one, and the Oyster README's "Pack an App" and "Build App Releases" sections
-describe the recipe.
-
-## 5. Connect over MCP
-
-`/mcp` serves every installed App to MCP clients through one `execute` tool, in
-which each App's methods are `env.<APP>`. The owner key signs in. For Claude
-Code:
-
-```sh
-claude mcp add --transport http oyster "$OYSTER_URL/mcp" \
-  --header "Authorization: Bearer $OYSTER_OWNER_KEY"
-```
-
-To check `/mcp` without an MCP client, open a session and list its tools:
-
-```sh
-MCP=(-H "Authorization: Bearer $OYSTER_OWNER_KEY" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream')
-SESSION=$(curl -s "${MCP[@]}" -D - -o /dev/null \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}' \
-  $OYSTER_URL/mcp | grep -i '^mcp-session-id' | cut -d' ' -f2 | tr -d '\r')
-curl -s "${MCP[@]}" -H "mcp-session-id: $SESSION" -H 'mcp-protocol-version: 2025-11-25' \
-  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' $OYSTER_URL/mcp
-curl -s "${MCP[@]}" -H "mcp-session-id: $SESSION" -H 'mcp-protocol-version: 2025-11-25' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' $OYSTER_URL/mcp
-```
-
-Expected output: the last command prints an `event: message` block whose `data:`
-line contains `"name":"execute"`.
-
-If it fails:
-
-- `SESSION` is empty: the `initialize` call was refused. Check the key as in
-  step 3.
-- The copied Worker already includes `POST /api/keys`. Use the owner key to
-  create a separate key for each agent; no extra Worker is needed.
-
-## 6. Add Git
-
-Git is already part of the host: people and agents `clone`, `fetch` and `push`
-App repositories with ordinary `git` at `/git/<installation>/<repo>.git`, with
-repositories in Cloudflare Artifacts. Artifacts runs only once the Worker is
-deployed in step 7. There, give each agent its own key:
-
-```sh
-curl -s -X POST -H "Authorization: Bearer $OYSTER_OWNER_KEY" \
-  -H 'content-type: application/json' \
-  -d '{"name":"morel","grants":[{"capability":"apps.use","targets":{"kind":"all"}}]}' \
-  $OYSTER_URL/api/keys
-```
-
-Expected output: JSON with a `plaintext` field starting `oyk_`. Oyster shows it
-once; that key signs in to `git` and to `/mcp`.
-
-## 7. Deploy to Cloudflare Workers
-
-This step needs a Cloudflare account on Workers Paid with Containers, Artifacts,
-Workers AI and Workflows enabled, and Docker running on this machine. Ask the
-person before you deploy anything.
-
-`wrangler.jsonc` names the Worker `oyster`, its R2 bucket `oyster-releases` and
-its Artifacts namespace `oyster`. The Worker's address is
-`https://oyster.<your-subdomain>.workers.dev`, or a custom domain:
-
-```sh
-npx wrangler login
-npx wrangler r2 bucket create oyster-releases
-export OYSTER_URL=https://oyster.<your-subdomain>.workers.dev
-npx wrangler deploy --var OYSTER_ORIGIN:$OYSTER_URL
-printf '%s' "$OYSTER_OWNER_KEY" | npx wrangler secret put OYSTER_OWNER_KEY
-```
-
-Expected output: `wrangler deploy` builds the Computer image, uploads it and
-prints the deployed `https://` URL, and `wrangler secret put` reports the secret
-uploaded.
-
-Then install Fungi's seven starter Apps, each built on this Oyster's Computer
-from its own repository:
-
-```sh
-npx oyster install-apps
-```
-
-Expected output: a `source recorded` line per App, `Building … on the Computer`
-and `Installed …` lines (two builds at a time, Tourtois first), a timing table,
-and `Installed 7 Apps`. Open `$OYSTER_URL/login` with the owner key to see the
-Tourtois desktop.
-
-To keep `OYSTER_ORIGIN` across later deploys, set `vars.OYSTER_ORIGIN` in
-`wrangler.jsonc`; every deploy replaces the Worker's variables.
-
-If it fails:
-
-- `R2 bucket … already exists`: use that bucket, or pick a new name and put it
-  in `wrangler.jsonc`.
-- A secret prompt on stdin: pipe the key as shown; never type it into a log.
-- Bindings or migrations refused: deploy the copied `wrangler.jsonc` unchanged
-  except for `vars` and the bucket name.
-- `docker` not found or not running: start Docker; Wrangler builds the Computer
-  image from `node_modules/@fungi.computer/computer/Dockerfile`.
-- A build `failed` in `install-apps`: run it again; finished Apps are kept and
-  replaced in place.
-
-## Where to go next
-
-- The Oyster README (`node_modules/@fungi.computer/oyster/README.md`) explains
-  the host, Apps, capabilities, MCP and the shell in depth.
-- Oyster is built from the other Fungi packages, each its own repository under
-  [github.com/fungi-computer](https://github.com/fungi-computer) and on npm as
-  `@fungi.computer/<name>`. The README's "Part of Fungi" section lists them.
+For manual setup, the ordinary
+[quickstart](https://docs.fungi.computer/oyster/quickstart/) keeps the Wrangler
+commands under **What it does under the hood**. The
+[Oyster concepts](https://docs.fungi.computer/oyster/concepts/) and
+[API reference](https://docs.fungi.computer/oyster/api/) cover custom hosts,
+packing Releases and Git integration.

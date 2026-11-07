@@ -439,13 +439,15 @@ it("rolls back the previous latest pin together with failed terminal compaction"
     });
     state.database.exec("DROP TRIGGER fail_pin_transfer");
     clock.mockReturnValue(Date.UTC(2026, 3, 2));
+    // Completion was decided before projection failed; reopen settles that result.
     const reopened = await state.make();
     await reopened.runtime.tick();
     await reopened.runtime.tick();
     expect(await reopened.port.read("pin-first", "notes")).toBeNull();
     expect(await reopened.port.read("pin-second", "notes")).toMatchObject({
-      state: "unconfirmed",
-      outcome: "interrupted",
+      state: "refused",
+      status: 409,
+      code: "fixture_refusal",
     });
     expect(state.executions()).toBe(2);
   } finally {
@@ -644,13 +646,14 @@ it("rolls back terminal compaction with Watchdog settlement and keeps pending re
     const provisional: unknown = JSON.parse(row.provisional_outcome);
     expect(provisional).toMatchObject({ state: "succeeded" });
     state.database.exec("DROP TRIGGER reject_terminal_compaction");
+    // Reopening projects the saved completion without running the installation again.
     const reopened = await state.make();
     await reopened.runtime.tick();
     expect(
       await reopened.port.read(admission.requestId, "notes"),
     ).toMatchObject({
-      state: "unconfirmed",
-      outcome: "interrupted",
+      state: "succeeded",
+      uiCheck: passedUiCheck,
     });
     expect(await reopened.port.load(admission.requestId)).toBeNull();
     expect(state.executions()).toBe(1);

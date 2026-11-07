@@ -375,8 +375,20 @@ await test("fresh dial releases a settled offline retry after a physical reopen"
         .get("post:offline-then-redial")?.value,
     );
     assert.equal(attempted.state, "pending");
-    assert.ok(attempted.attempts > 0);
-    assert.ok(attempted.nextAttemptAt > retryStartedAt);
+    const retry = Schema.decodeUnknownSync(
+      Schema.Struct({
+        attempt_count: Schema.Number,
+        not_before: Schema.Number,
+      }),
+    )(
+      database
+        .prepare(
+          "SELECT attempt_count,not_before FROM watchdog_jobs WHERE job_id=?",
+        )
+        .get(attempted.jobId),
+    );
+    assert.ok(retry.attempt_count > 0);
+    assert.ok(retry.not_before > retryStartedAt);
 
     database.close();
     database = new DatabaseSync(path);

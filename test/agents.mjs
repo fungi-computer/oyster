@@ -386,6 +386,36 @@ const readOnly = await capabilityFixture({
   adapters: capabilities,
   agents: adapter,
 });
+const modelSendOnly = await capabilityFixture({
+  capabilities: ["agent.send"],
+  adapters: capabilities,
+  agents: adapter,
+});
+const beforeModelReads = forwarded.length;
+const modelRefusal = await call(
+  "/agents/agent_1/models",
+  {},
+  "owner",
+  modelSendOnly.app,
+);
+assert.equal(modelRefusal.status, 403);
+assert.deepEqual(
+  await modelRefusal.json(),
+  { error: "Capability permission denied" },
+  "agent.send alone cannot read this Agent's model catalog",
+);
+assert.equal(forwarded.length, beforeModelReads);
+assert.equal(
+  (await call("/agents/agent_1/models", {}, "owner", readOnly.app)).status,
+  200,
+  "an App with agent.read can read this Agent's model catalog",
+);
+assert.equal(
+  (await call("/agents/agent_1/models")).status,
+  200,
+  "the owner can read the same catalog",
+);
+assert.deepEqual(forwarded.slice(-2), ["/models", "/models"]);
 assert.equal(
   (
     await call(

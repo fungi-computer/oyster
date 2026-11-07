@@ -940,21 +940,36 @@ unpinned Agent refuses. A stale revision returns 409, an unknown Agent returns
 
 ### Connect an Agent to a remote MCP server
 
-The owner connects any Streamable HTTP MCP server to one Agent. The Agent's
-codemode then sees its tools as `env.mcp.<name>.<tool>()`, beside the installed
-Apps; Knapsack's `mcpServers` connection owns the client. On a standalone Oyster
-the Agent's own Durable Object keeps the endpoint and an optional bearer token,
-and no route returns the token.
+Connect a Streamable HTTP MCP server once, then choose which Agents can use it.
+Each Agent's codemode sees its granted tools as `env.mcp.<name>.<tool>()`,
+beside the installed Apps. Oyster keeps credentials sealed on the owner side.
+Agents receive access without receiving tokens, and the API never returns stored
+secrets.
 
-`GET /api/agent-mcp-servers` lists every Agent with its servers (`serverId`,
-`name`, `url`, `hasBearer`). `POST /api/agent-mcp-servers/:agentId` with
-`{"name":"linear","url":"https://mcp.example.com/mcp","bearer":null}` connects
-one; the name is lowercase letters, digits and `_`, and the endpoint must be
-`https:` with no credentials or fragment. A repeated name or more than 16
-servers returns 409. `DELETE /api/agent-mcp-servers/:agentId/:serverId`
-disconnects one. These routes are owner-direct and reject an App installation
-header. A server that is down or refuses the token is left out of that run and
-the others stay available. OAuth sign-in is not offered yet.
+`GET /api/connections` returns the shared connections, their Agent grants, the
+available Agents and the OAuth `callbackUrl`. Create a connection with
+`POST /api/connections` and
+`{"name":"linear","url":"https://mcp.example.com/mcp","bearer":null}`. The name
+starts with a lowercase letter and contains up to 32 lowercase letters, digits
+or `_`. The endpoint must be `https:` with no credentials or fragment.
+
+Use `bearer:null` for an unauthenticated server, or set `bearer` to its static
+token. For OAuth, keep `bearer:null` and add `oauth:{}`. You can provide
+`clientId`, `clientSecret` and `scope` inside `oauth` when needed. Without a
+client ID, Oyster uses the server's dynamic client registration. The response
+contains `connectionId` and `authorizeUrl`. For OAuth, open `authorizeUrl` in
+your signed-in owner browser to finish connecting. If you register your own
+OAuth client, use the `callbackUrl` returned by `GET /api/connections`.
+
+A new connection grants no Agent access. Send
+`PUT /api/connections/:connectionId/agents/:agentId` with `{"access":"read"}`,
+`{"access":"all"}` or `{"access":["tool_name"]}` to grant or change access.
+`GET /api/connections/:connectionId/tools` lists the available tool names.
+`DELETE` on the Agent grant path removes only that Agent's access.
+`DELETE /api/connections/:connectionId` revokes the shared connection for every
+Agent. A repeated connection name or a grant beyond 16 connections per Agent
+returns 409. These routes are owner-direct and reject an App installation
+header.
 
 ### Give an Agent a browser
 

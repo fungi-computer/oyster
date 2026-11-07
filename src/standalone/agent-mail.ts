@@ -21,17 +21,9 @@ export function agentMail(
     if (post === undefined) throw new Error("Agent Post is not open");
     return post;
   };
-  const recover = async () => {
-    let cursor: string | undefined;
-    do {
-      cursor = await runtime().enqueueDue(64, cursor);
-    } while (cursor !== undefined);
-  };
   const drain = async () => {
-    await recover();
     if (tick === undefined) throw new Error("Agent Post lane is not open");
     await tick();
-    await mail.stageUndeliverableReplies();
   };
   const mail = new AgentMail({ ...options, post: runtime, drain });
   const host = {
@@ -43,28 +35,22 @@ export function agentMail(
           routes,
           owner: options.storage,
           transactional: owner.transactional,
-          readJob: owner.readJob,
           now: Date.now,
           scheduleWake: options.wake,
         });
         tick = owner.tickConcurrent;
-        return { execute: (job) => runtime().execute(job) };
+        return {
+          retryPolicy: (job) => runtime().retryPolicy(job),
+          execute: async (job, signal, attempt) => {
+            const decision = await runtime().execute(job, attempt, signal);
+            await mail.stageUndeliverableReplies();
+            return decision;
+          },
+        };
       },
     },
-    hostWork: [
-      {
-        pending: () => {
-          const nextWakeAt = runtime().nextWake();
-          return {
-            due: nextWakeAt !== null && nextWakeAt <= Date.now(),
-            nextWakeAt,
-          };
-        },
-        run: drain,
-      },
-    ],
   } satisfies Required<
-    Pick<CloudflareShiitakeOptions, "mailRoom" | "hostJobs" | "hostWork">
+    Pick<CloudflareShiitakeOptions, "mailRoom" | "hostJobs">
   >;
   return {
     host,

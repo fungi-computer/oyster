@@ -147,6 +147,69 @@ function browserOver(
 }
 
 describe("provider teardown stays owned until the provider confirms it", () => {
+  describe.each(["handoff", "member"] as const)("expiry through %s", (door) => {
+    it.each(["closed", "refused"] as const)(
+      "the next call reaps and settles once when the first DELETE is %s",
+      async (firstRelease) => {
+        let clock = 0;
+        const fake = provider({ releases: [firstRelease, "closed"] });
+        const settled: Parameters<BrowserMeter["settle"]>[0][] = [];
+        const meter: BrowserMeter = {
+          ...settlingMeter().meter,
+          settle: (input) => {
+            settled.push(input);
+            return Promise.resolve();
+          },
+        };
+        const browser = createBrowser(
+          {
+            sessions: fake.sessions,
+            quickReads: null,
+            meter: () => meter,
+            report: () => undefined,
+          },
+          {
+            maxConcurrentPerTeam: 1,
+            maxLifetimeMs: 60_000,
+            idleTimeoutMs: 30_000,
+            now: () => clock,
+          },
+        );
+        const { leaseId } = openSchema.parse(
+          await browser.call(owner, { kind: "open", url: null }, signal),
+        );
+        if (door === "member") browser.handoff(owner, leaseId);
+        clock = 30_001;
+        if (door === "handoff")
+          expect(() => {
+            browser.handoff(owner, leaseId);
+          }).toThrow(CloudBrowserLeaseNotFound);
+        else
+          await expect(
+            browser.member(owner.teamId, leaseId, { kind: "resume" }, signal),
+          ).rejects.toBeInstanceOf(CloudBrowserLeaseNotFound);
+
+        await expect(
+          browser.call(owner, { kind: "snapshot", leaseId }, signal),
+        ).rejects.toBeInstanceOf(CloudBrowserLeaseNotFound);
+        expect(fake.releaseCalls).toEqual(["provider-1"]);
+        expect(settled).toEqual([
+          { executionId: leaseId, elapsedMs: 30_001, maxMs: 60_000 },
+        ]);
+
+        // A later operation retries only the owed provider teardown and can
+        // use the freed Team slot, without settling the expired lease again.
+        await browser.call(owner, { kind: "open", url: null }, signal);
+        expect(fake.releaseCalls).toEqual(
+          firstRelease === "refused"
+            ? ["provider-1", "provider-1"]
+            : ["provider-1"],
+        );
+        expect(settled).toHaveLength(1);
+      },
+    );
+  });
+
   it("a refused DELETE ends the lease and its bill, and the next call retries the teardown", async () => {
     const fake = provider({ releases: ["refused", "closed"] });
     const { meter, settled } = settlingMeter();

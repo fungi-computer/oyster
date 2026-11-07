@@ -51,16 +51,26 @@ describe("cloud browser lease registry", () => {
     }).toThrow(CloudBrowserLeaseNotFound);
   });
 
-  it("reaps a lease past its idle timeout and refuses further access", () => {
-    let clock = 0;
-    const leases = registry(() => clock);
-    leases.register("lease-1", owner, 0);
-    clock = 6 * 60_000;
-    expect(leases.expired()).toEqual(["lease-1"]);
-    expect(() => {
-      leases.touch("lease-1", owner);
-    }).toThrow(CloudBrowserLeaseNotFound);
-  });
+  it.each(["agent", "member"] as const)(
+    "refuses expired %s access but retains the lease for cleanup",
+    (door) => {
+      let clock = 0;
+      const leases = registry(() => clock);
+      leases.register("lease-1", owner, 0);
+      clock = 6 * 60_000;
+      expect(leases.expired()).toEqual(["lease-1"]);
+      expect(() => {
+        if (door === "agent") leases.touch("lease-1", owner);
+        else leases.touchAsMember("lease-1", owner.teamId);
+      }).toThrow(CloudBrowserLeaseNotFound);
+      expect(leases.expired()).toEqual(["lease-1"]);
+      expect(leases.get("lease-1")?.openedAt).toBe(0);
+      expect(leases.count(owner.teamId)).toBe(1);
+      leases.release("lease-1");
+      expect(leases.expired()).toEqual([]);
+      expect(leases.count(owner.teamId)).toBe(0);
+    },
+  );
 
   it("reaps a lease past its max lifetime even if continuously active", () => {
     let clock = 0;

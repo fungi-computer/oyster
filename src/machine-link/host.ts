@@ -393,7 +393,7 @@ export class MachineLinkHost {
         ? recipientOffline
         : previousCustodyReceipt(raced);
     }
-    await this.options.scheduleWake(post.nextWake() ?? Date.now());
+    await this.options.scheduleWake(Date.now());
     if (socket === undefined) return recipientOffline;
     await this.publishDirectory(socket, deviceId);
     await this.drainCustody();
@@ -530,17 +530,24 @@ export class MachineLinkHost {
     const watchdog: WatchdogRuntime = await Watchdog.make({
       owner: this.owner,
       isAlive: () => Promise.resolve(false),
-      execute: (job) => {
+      retryPolicy: (job) => {
         const post = postRef.current;
         if (post === undefined)
           throw new Error("Carrier Post runtime is not initialized");
-        return post.execute(job);
+        return post.retryPolicy(job);
+      },
+      execute: (job, signal, attempt) => {
+        const post = postRef.current;
+        if (post === undefined)
+          throw new Error("Carrier Post runtime is not initialized");
+        return post.execute(job, attempt, signal);
       },
       wake: {
         recompute: async () => {
-          const at = postRef.current?.nextWake();
-          if (at !== null && at !== undefined)
-            await this.options.scheduleWake(at);
+          const now = Date.now();
+          const state = await watchdog.wakeState(now);
+          const at = state.pending ? now : state.nextWakeAt;
+          if (at !== null) await this.options.scheduleWake(at);
         },
       },
     });
@@ -548,7 +555,6 @@ export class MachineLinkHost {
       routes: this.custodyRoutes,
       owner: this.owner,
       transactional: watchdog.transactional,
-      readJob: watchdog.read,
       now: Date.now,
       scheduleWake: this.options.scheduleWake,
     });
@@ -565,16 +571,14 @@ export class MachineLinkHost {
   }
 
   private async drainCustody(): Promise<void> {
-    const { post, watchdog } = await this.custody();
-    let cursor: string | undefined;
-    do {
-      cursor = await post.enqueueDue(64, cursor);
-    } while (cursor !== undefined);
+    const { watchdog } = await this.custody();
     for (let count = 0; count < 64; count += 1) {
       const tick = await watchdog.tick();
-      if (tick.status !== "settled") break;
+      if (tick.status !== "settled" && tick.status !== "requeued") break;
     }
-    const at = post.nextWake();
+    const now = Date.now();
+    const state = await watchdog.wakeState(now);
+    const at = state.pending ? now : state.nextWakeAt;
     if (at !== null) await this.options.scheduleWake(at);
   }
 

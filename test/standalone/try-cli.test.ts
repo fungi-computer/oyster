@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
@@ -21,6 +22,7 @@ import {
   type TryEffects,
 } from "../../src/standalone/try-cli.js";
 import { CleanupError } from "../../src/build/process-group.js";
+import { InstallationObservationError } from "../../src/installation-client.js";
 import { startSignInLink } from "../../src/standalone/sign-in-link.js";
 
 let root: string;
@@ -58,7 +60,7 @@ function effects(overrides: Partial<TryEffects> = {}) {
         join(directory, "node_modules/wrangler/bin/wrangler.js"),
         "",
       );
-      return Promise.resolve();
+      return Promise.resolve(undefined);
     }),
     startServer: vi.fn(() =>
       Promise.resolve({ stop, exited: new Promise<number | null>(vi.fn()) }),
@@ -83,6 +85,32 @@ function effects(overrides: Partial<TryEffects> = {}) {
 }
 
 describe("oyster try", () => {
+  it("prepares Hello and Tourtois together before offering sign-in", async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const hello = Promise.withResolvers<number>();
+    const desktop = Promise.withResolvers<"ready">();
+    const fixture = effects({
+      installHello: () => {
+        entered.resolve(undefined);
+        return hello.promise;
+      },
+      installDesktop: vi.fn(() => desktop.promise),
+    });
+    const running = runTry([join(root, "parallel")], fixture.fake, plain().ui);
+    try {
+      await entered.promise;
+      expect(fixture.fake.installDesktop).toHaveBeenCalledOnce();
+      expect(fixture.fake.signInLink).not.toHaveBeenCalled();
+      hello.resolve(201);
+      await hello.promise;
+      expect(fixture.fake.signInLink).not.toHaveBeenCalled();
+    } finally {
+      hello.resolve(201);
+      desktop.resolve("ready");
+      await running;
+    }
+  });
+
   it("scaffolds once, then restarts the same Oyster with the same key", async () => {
     const directory = join(root, "my-oyster");
     const first = effects();
@@ -229,21 +257,47 @@ describe("oyster try", () => {
     }
   });
 
-  it("settles the current phase but refuses later setup after server death", async () => {
+  it("cancels both App preparations and refuses sign-in after server death", async () => {
     const exit = Promise.withResolvers<number | null>();
+    const helloEntered = Promise.withResolvers<undefined>();
+    const desktopEntered = Promise.withResolvers<undefined>();
+    const cleaned: string[] = [];
+    const waitForExit = async (name: string, signal: AbortSignal) => {
+      await new Promise<void>((done) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            done();
+          },
+          { once: true },
+        );
+      });
+      cleaned.push(name);
+      signal.throwIfAborted();
+    };
     const output = plain();
     const stop = vi.fn(() => Promise.resolve());
     const { fake } = effects({
       startServer: () => Promise.resolve({ stop, exited: exit.promise }),
-      installHello: () => {
-        exit.resolve(1);
-        return Promise.resolve(201);
+      installHello: async ({ signal }) => {
+        helloEntered.resolve(undefined);
+        await waitForExit("hello", signal);
+        return 201;
+      },
+      installDesktop: async ({ signal }) => {
+        desktopEntered.resolve(undefined);
+        await waitForExit("desktop", signal);
+        return "ready";
       },
     });
-    await expect(runTry([join(root, "dead")], fake, output.ui)).rejects.toThrow(
+    const running = runTry([join(root, "dead")], fake, output.ui);
+    const rejected = expect(running).rejects.toThrow(
       "Oyster stopped unexpectedly during setup",
     );
-    expect(fake.installDesktop).not.toHaveBeenCalled();
+    await Promise.all([helloEntered.promise, desktopEntered.promise]);
+    exit.resolve(1);
+    await rejected;
+    expect(cleaned.sort()).toEqual(["desktop", "hello"]);
     expect(fake.signInLink).not.toHaveBeenCalled();
     expect(output.text()).not.toContain("Oyster is running");
     expect(stop).toHaveBeenCalledOnce();
@@ -267,7 +321,7 @@ describe("oyster try", () => {
     await expect(
       runTry([join(root, "refused"), "--port", "19001"], fake, output.ui),
     ).rejects.toThrow("HTTP 403");
-    expect(fake.installDesktop).not.toHaveBeenCalled();
+    expect(fake.installDesktop).toHaveBeenCalledOnce();
     expect(output.text()).not.toContain("Oyster is running");
     expect(stop).toHaveBeenCalledOnce();
   });
@@ -294,8 +348,7 @@ describe("oyster try output", () => {
       "Creating plain",
       "Installing dependencies with",
       "Starting Oyster",
-      "Installing the Hello App",
-      "Building Tourtois",
+      "Installing Hello and building Tourtois",
       "Preparing desktop sign-in",
       "Oyster is running",
       "Stopped.",
@@ -354,6 +407,69 @@ describe("oyster try output", () => {
     );
   });
 
+  it("explains a real npm registry refusal and retains a retryable project", async () => {
+    const directory = join(root, "registry-refused");
+    mkdirSync(directory);
+    writeFileSync(join(directory, ".oyster-owner"), "retained-owner");
+    writeFileSync(join(directory, "notes.txt"), "keep me");
+    writeFileSync(
+      join(directory, "package.json"),
+      JSON.stringify({
+        private: true,
+        dependencies: { "@fungi.computer/oyster": "0.13.0" },
+      }),
+    );
+    const listener = createServer();
+    await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+    const address = z.object({ port: z.number() }).parse(listener.address());
+    await new Promise<void>((done, fail) =>
+      listener.close((error) => {
+        if (error) fail(error);
+        else done();
+      }),
+    );
+    vi.stubEnv(
+      "npm_config_registry",
+      `http://127.0.0.1:${String(address.port)}`,
+    );
+    vi.stubEnv("npm_config_cache", join(root, "npm-cache"));
+    vi.stubEnv("npm_config_userconfig", join(root, ".npmrc"));
+    vi.stubEnv("npm_config_fetch_retries", "0");
+    try {
+      const output = plain();
+      const failure = await tryOyster(
+        [directory, "--port", String(address.port), "--no-open"],
+        undefined,
+        output.ui,
+      ).catch((cause: unknown) => cause);
+      reportTryFailure(failure, output.ui);
+      expect(output.text()).toContain(
+        "npm could not reach its package registry (ECONNREFUSED).",
+      );
+      expect(output.text()).toContain(
+        "Check your connection and npm registry/proxy settings",
+      );
+      expect(output.text()).toContain(
+        `npx @fungi.computer/oyster try '${directory}' --port ${String(address.port)} --no-open`,
+      );
+      expect(output.text()).toContain("your key and files stay in place");
+      expect(await readFile(join(directory, ".oyster-owner"), "utf8")).toBe(
+        "retained-owner",
+      );
+      expect(await readFile(join(directory, "notes.txt"), "utf8")).toBe(
+        "keep me",
+      );
+      expect(await readdir(join(directory, ".oyster"))).toContain(
+        "install.pending",
+      );
+      expect(
+        await readFile(join(directory, ".oyster/install.log"), "utf8"),
+      ).toContain("ECONNREFUSED");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reports elapsed phases and clears its heartbeat on success and failure", async () => {
     vi.useFakeTimers();
     try {
@@ -368,10 +484,10 @@ describe("oyster try output", () => {
         runTry([join(root, "clock"), "--port", "12345"], fake.fake, output.ui),
       ).rejects.toThrow("packing refused");
       expect(output.text()).toContain(
-        "Installing the Hello App · 5.0s elapsed",
+        "Installing Hello and building Tourtois · 5.0s elapsed",
       );
       expect(output.text()).toContain(
-        "Installing the Hello App · failed after 5.1s",
+        "Installing Hello and building Tourtois · failed after 5.1s",
       );
       expect(output.text()).toContain("Stopping Oyster · done in");
       expect(vi.getTimerCount()).toBe(0);
@@ -485,6 +601,109 @@ describe("oyster try sign-in", () => {
 });
 
 describe("startup cancellation ownership", () => {
+  it.each(["hello", "desktop"])(
+    "keeps the unconfirmed installation receipt when cancelling %s",
+    async (phase) => {
+      const interrupted = () => {
+        fixture.controller.abort();
+        return Promise.reject(
+          new InstallationObservationError(`${phase}-receipt`),
+        );
+      };
+      const fixture = effects(
+        phase === "hello"
+          ? { installHello: interrupted }
+          : { installDesktop: interrupted },
+      );
+      const output = plain();
+      await runTry([join(root, "receipt")], fixture.fake, output.ui);
+      expect(output.text()).toContain(
+        `Installation outcome unconfirmed (${phase}-receipt)`,
+      );
+      expect(output.text().match(/Stopped\./gu)).toHaveLength(1);
+      expect(fixture.fake.signInLink).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "joins cancelled desktop cleanup after Hello fails (cleanup failure: %s)",
+    async (cleanupFailure) => {
+      const entered = Promise.withResolvers<undefined>();
+      const aborted = Promise.withResolvers<undefined>();
+      const released = Promise.withResolvers<undefined>();
+      const fixture = effects({
+        installHello: async () => {
+          await entered.promise;
+          throw new Error("Hello refused");
+        },
+        installDesktop: async ({ signal }) => {
+          const cancelled = new Promise<void>((done) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted.resolve(undefined);
+                done();
+              },
+              { once: true },
+            );
+          });
+          entered.resolve(undefined);
+          await cancelled;
+          await released.promise;
+          if (cleanupFailure)
+            throw new CleanupError("Desktop scratch cleanup failed");
+          signal.throwIfAborted();
+          return "ready";
+        },
+      });
+      const output = plain();
+      const running = runTry(
+        [join(root, "failed-hello")],
+        fixture.fake,
+        output.ui,
+      );
+      const rejected = expect(running).rejects.toThrow(
+        cleanupFailure ? "Desktop scratch cleanup failed" : "Hello refused",
+      );
+      await aborted.promise;
+      expect(fixture.stop).not.toHaveBeenCalled();
+      expect(fixture.fake.signInLink).not.toHaveBeenCalled();
+      released.resolve(undefined);
+      await rejected;
+      expect(fixture.stop).toHaveBeenCalledOnce();
+      expect(output.text()).not.toContain("Stopped.");
+      expect(output.text()).not.toContain("Oyster is running");
+    },
+  );
+
+  it("waits for desktop cleanup when interrupted after Hello has settled", async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const released = Promise.withResolvers<undefined>();
+    const fixture = effects({
+      installDesktop: async ({ signal }) => {
+        entered.resolve(undefined);
+        await released.promise;
+        signal.throwIfAborted();
+        return "ready";
+      },
+    });
+    const output = plain();
+    const running = runTry(
+      [join(root, "cancel-apps")],
+      fixture.fake,
+      output.ui,
+    );
+    await entered.promise;
+    fixture.controller.abort();
+    expect(fixture.stop).not.toHaveBeenCalled();
+    expect(output.text()).not.toContain("Stopped.");
+    released.resolve(undefined);
+    await running;
+    expect(fixture.stop).toHaveBeenCalledOnce();
+    expect(fixture.fake.signInLink).not.toHaveBeenCalled();
+    expect(output.text().match(/Stopped\./gu)).toHaveLength(1);
+  });
+
   it.each([false, true])(
     "cancels fresh scaffolding before its key is published (empty target: %s)",
     async (emptyTarget) => {

@@ -1019,7 +1019,7 @@ gill(
   title: string;
   state: "error";
   rows: readonly [];
-  reason?: "exec_isolation_required" | "params_required";
+  reason?: "disabled" | "exec_isolation_required" | "params_required";
   error: string;
   recovery?:   | {
      kind: "configure";
@@ -1078,7 +1078,7 @@ Invoke a Release-declared Gill in a fresh immutable frame.
 `Promise`\<[`InstanceResult`](host.md#instanceresult)\< \| \{ `viewId`:
 `string`; `title`: `string`; `state`: `"empty"`; `rows`: readonly \[\]; `next?`:
 `string`; \} \| \{ `viewId`: `string`; `title`: `string`; `state`: `"error"`;
-`rows`: readonly \[\]; `reason?`: `"exec_isolation_required"` \|
+`rows`: readonly \[\]; `reason?`: `"disabled"` \| `"exec_isolation_required"` \|
 `"params_required"`; `error`: `string`; `recovery?`: \| \{ `kind`:
 `"configure"`; `param`: `string`; \} \| \{ `kind`: `"open"`; \}; \} \| \{
 `viewId`: `string`; `title`: `string`; `state`: `"full"`; `rows`: readonly

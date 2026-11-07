@@ -15,12 +15,15 @@ await test("the sender's standalone AgentMail outbox authors one local offline r
     throw new Error("Agent Post runtime is not open");
   };
   const deliveredLocally = [];
+  let receiverCalls = 0;
+  let loseOfflineReceipt = true;
   try {
     const watchdog = await Watchdog.make({
       owner,
       concurrentLane: "post",
       isAlive: () => Promise.resolve(false),
-      execute: (job) => execute(job),
+      retryPolicy: (job) => executor.retryPolicy(job),
+      execute: (job, signal, attempt) => execute(job, signal, attempt),
       wake: { recompute: async () => undefined },
     });
     const hostRuntime = {
@@ -36,8 +39,10 @@ await test("the sender's standalone AgentMail outbox authors one local offline r
       namespace: {
         getByName: (agentId) => ({
           deliver: async () => {
-            if (agentId === "child")
+            if (agentId === "child") {
+              receiverCalls++;
               throw new Error("recipient transport unavailable");
+            }
             return "accepted";
           },
         }),
@@ -50,11 +55,15 @@ await test("the sender's standalone AgentMail outbox authors one local offline r
           key: reply.key,
           event: globalThis.structuredClone(reply),
         });
+        if (loseOfflineReceipt) {
+          loseOfflineReceipt = false;
+          throw new Error("Offline reply admitted but receipt lost");
+        }
         return "accepted";
       },
     });
     const executor = mail.host.hostJobs.open(hostRuntime);
-    execute = (job) => executor.execute(job);
+    execute = (job, signal, attempt) => executor.execute(job, signal, attempt);
     const sent = {
       key: "sender-outbox-request",
       from: {
@@ -74,9 +83,9 @@ await test("the sender's standalone AgentMail outbox authors one local offline r
       createdAt: now,
     };
     await assert.rejects(mail.deliver(sent));
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 1; attempt < 20; attempt += 1) {
       now += 300_001;
-      await mail.host.hostWork[0].run();
+      await watchdog.tickConcurrent();
     }
 
     const stored = owner.sql
@@ -89,6 +98,25 @@ await test("the sender's standalone AgentMail outbox authors one local offline r
     assert.equal(deadLetter.attempts, 20);
     assert.equal(deadLetter.state, "dead");
     assert.equal(deadLetter.reason, "exhausted");
+    assert.equal(receiverCalls, 20);
+    assert.equal(deliveredLocally.length, 1);
+    // The existing domain reply failed after admission; retain the exact work.
+    assert.equal(
+      owner.sql.exec("SELECT state FROM watchdog_jobs WHERE lane='post'").one()
+        .state,
+      "queued",
+    );
+    const reopened = await Watchdog.make({
+      owner,
+      concurrentLane: "post",
+      isAlive: () => Promise.resolve(false),
+      retryPolicy: (job) => executor.retryPolicy(job),
+      execute: (job, signal, attempt) => executor.execute(job, signal, attempt),
+      wake: { recompute: async () => undefined },
+    });
+    now += 300_001;
+    assert.equal((await reopened.tickConcurrent()).status, "settled");
+    assert.equal(receiverCalls, 20);
     assert.equal(deliveredLocally.length, 1);
     assert.equal(deliveredLocally[0]?.key, `${sent.key}:reply:0`);
     assert.equal(deliveredLocally[0]?.event.from.kind, "system");

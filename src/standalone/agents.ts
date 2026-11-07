@@ -166,6 +166,8 @@ import {
   createAiBindingFetch,
 } from "@earendil-works/pi-ai/api/cloudflare-ai-binding";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { agentModelListSchema } from "@fungi.computer/shiitake/model-list";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
 import {
@@ -912,6 +914,8 @@ export abstract class StandaloneAgentBase<
     request: Request,
   ): Promise<Response> | undefined {
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/models" && request.method === "GET")
+      return this.readAgentModels();
     if (pathname.startsWith("/cloud-browser/"))
       return standaloneBrowserLiveView(this.env.BROWSER, () => ({
         teamId: this.env.OYSTER_ORIGIN,
@@ -930,6 +934,41 @@ export abstract class StandaloneAgentBase<
         this.runtimeOwner().fetch(request),
       );
     return undefined;
+  }
+
+  private async readAgentModels(): Promise<Response> {
+    const pin = await this.policyDirectory();
+    const agentId = this.ctx.id.name;
+    if (
+      pin === null ||
+      agentId === undefined ||
+      !(await this.env.AGENT_DIRECTORY.getByName(pin.directoryName).has(
+        agentId,
+      ))
+    )
+      return new Response("Agent scope is unavailable", { status: 403 });
+    const choice = await this.readModelChoice();
+    // The same owner checks the chosen source before reporting it as available.
+    await this.sourceFor(choice);
+    const model = await selectAgentModel(choice);
+    return Response.json(
+      agentModelListSchema.parse([
+        {
+          providerId: choice.model.providerId,
+          providerName:
+            choice.keySource === "byok"
+              ? "Your provider key"
+              : choice.keySource === "workers-ai"
+                ? "Workers AI"
+                : "Fungi Gateway",
+          id: choice.model.modelId,
+          name: model.name,
+          reasoning: getSupportedThinkingLevels(model).filter(
+            (level) => level !== "off",
+          ),
+        },
+      ]),
+    );
   }
 
   protected override async closeShiitake(): Promise<void> {
@@ -1601,11 +1640,7 @@ export abstract class StandaloneAgentBase<
           this.archiveControl().assertOpen();
         },
       },
-      hostWork: [
-        ...this.mail().host.hostWork,
-        ...keeping.hostWork,
-        this.archiveControl().work,
-      ],
+      hostWork: [...keeping.hostWork, this.archiveControl().work],
     };
   }
 

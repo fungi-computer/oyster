@@ -64,8 +64,9 @@ it("hands Shiitake the Zookeeper patrol, which wakes only over the waterline", a
   await withProbe(
     () => databaseSize,
     ({ hostWork }) => {
-      expect(hostWork).toHaveLength(3);
-      const [, patrol] = hostWork ?? [];
+      // Delivery belongs to hostJobs; hostWork keeps the patrol and archive.
+      expect(hostWork).toHaveLength(2);
+      const [patrol] = hostWork ?? [];
       if (patrol === undefined) throw new Error("The Agent passes no patrol");
       expect(patrol.pending().nextWakeAt).toBeNull();
       databaseSize = 6_000_000_000;

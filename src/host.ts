@@ -1058,6 +1058,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     principal: TenantPrincipal,
   ) => {
     const url = new URL(context.req.url);
+    // A send/manage transport also matches GET requests. The Agent's model
+    // catalog is an agent.read projection, not a write-capability side door.
+    const agentModelRead =
+      context.req.method === "GET" &&
+      /^\/agents\/[^/]+\/models$/u.test(url.pathname);
     const candidates = capabilityRoutes.filter(
       (route) =>
         (route.method === "ANY" || route.method === context.req.method) &&
@@ -1098,6 +1103,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       principal,
     );
     for (const { capability, operation } of candidates) {
+      if (agentModelRead && capability.id !== "agent.read") continue;
       if (
         admits(facts, {
           kind: "capability-route",
@@ -1677,7 +1683,23 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       return Response.json(config, {
         headers: { "Cache-Control": "no-store", Vary: "Accept" },
       });
-    const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(installation.installationId)} · ${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${(await assets()).fonts.path}">`;
+    // The shell module imports its chunks a few levels deep; naming every
+    // digest-pinned chunk up front fetches them side by side instead.
+    const shellPreloads =
+      config.shellModuleUrl !== null && release.ui?.kind === "assets"
+        ? release.ui.build.assets
+            .filter(
+              (asset) =>
+                asset.contentType.startsWith("text/javascript") &&
+                asset.path !== shellModuleAssetPath,
+            )
+            .map(
+              (asset) =>
+                `<link rel="modulepreload" href="${escapeHtml(`${uiUrl.slice(0, -1)}${asset.path}`)}">`,
+            )
+            .join("")
+        : "";
+    const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(installation.installationId)} · ${escapeHtml(title)}</title>${tabIcon}<link rel="stylesheet" href="${(await assets()).fonts.path}">${shellPreloads}`;
     const tail = `<script type="application/json" id="oyster-config">${JSON.stringify(config).replaceAll("<", "\\u003c")}</script><script type="module" src="${(await assets()).page.path}"></script>`;
     // The home shell is trusted: the host's page script renders it in this
     // top-level document, and it mounts each App's sandboxed frame inside

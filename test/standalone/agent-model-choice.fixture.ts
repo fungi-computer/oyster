@@ -1,5 +1,6 @@
 import standalone, {
   StandaloneAgent as NativeAgent,
+  AgentDirectory as NativeAgentDirectory,
   type StandaloneEnv,
 } from "../../src/standalone/worker.js";
 import { AgentModelRefused } from "../../src/standalone/agent-model-choice.js";
@@ -8,6 +9,23 @@ import { standaloneTenancy } from "../../src/standalone/tenancy.js";
 import { oysterPrincipalIsOwner } from "../../src/authorization.js";
 
 export * from "../../src/standalone/worker.js";
+
+/** Catalog admission needs a validated key record, never a live provider secret. */
+export class AgentDirectory extends NativeAgentDirectory {
+  override modelKey(
+    keyId: string,
+  ): ReturnType<NativeAgentDirectory["modelKey"]> {
+    return keyId === "model-proof-openai"
+      ? Promise.resolve({
+          keyId,
+          provider: "openai",
+          label: "Proof key",
+          createdAt: 1,
+          validatedAt: 1,
+        })
+      : super.modelKey(keyId);
+  }
+}
 
 /** The real Agent with a proof-only read of its acquired model door. */
 export class StandaloneAgent extends NativeAgent {
@@ -81,6 +99,17 @@ export default {
       const id = url.pathname.slice("/model-proof/".length);
       const result = await env.MODEL_PROOF.getByName(id).probeModel();
       return Response.json(result, { status: "error" in result ? 409 : 200 });
+    }
+    if (url.pathname.startsWith("/model-proof-models/")) {
+      if (
+        request.headers.get("Authorization") !==
+        `Bearer ${env.OYSTER_OWNER_KEY}`
+      )
+        return new Response("Forbidden", { status: 403 });
+      const id = url.pathname.slice("/model-proof-models/".length);
+      return env.MODEL_PROOF.getByName(id).fetch(
+        new Request("https://agent.invalid/models"),
+      );
     }
     return standalone.fetch(request, env, context);
   },

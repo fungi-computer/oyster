@@ -115,7 +115,7 @@ export type CdpClient = Readonly<{
       signal?: AbortSignal;
     }>,
   ) => Promise<Json>;
-  /** Resolves on the next matching event, or times out. */
+  /** Resolves on the next matching event, or rejects on timeout or closure. */
   waitForEvent: (
     method: string,
     options: Readonly<{ sessionId?: string; timeoutMs: number }>,
@@ -139,12 +139,13 @@ type EventWaiter = Readonly<{
   method: string;
   sessionId: string | undefined;
   resolve: (value: Json) => void;
+  reject: (error: Error) => void;
 }>;
 
 /** Wrap one connected CDP socket with id-correlated calls and event waits. */
 export function createCdpClient(socket: CdpSocket): CdpClient {
   const pending = new Map<number, PendingCall>();
-  const waiters: EventWaiter[] = [];
+  const waiters = new Set<EventWaiter>();
   const subscribers = new Set<
     Readonly<{
       method: string;
@@ -154,14 +155,27 @@ export function createCdpClient(socket: CdpSocket): CdpClient {
   let nextRequestNumber = 1;
   let closed = false;
 
+  const terminate = (message: string) => {
+    if (closed) return;
+    closed = true;
+    const error = new CloudBrowserUpstreamError({
+      op: "cdp.socket",
+      status: null,
+      message,
+    });
+    for (const call of pending.values()) call.reject(error);
+    for (const waiter of waiters) waiter.reject(error);
+    subscribers.clear();
+  };
+
   socket.addEventListener("message", (event) => {
+    if (closed) return;
     const frame = readCdpMessage(event);
     if (frame.kind === "unreadable") return;
     const { message } = frame;
     if (message.id !== undefined) {
       const waiting = pending.get(message.id);
       if (waiting === undefined) return;
-      pending.delete(message.id);
       if (message.error !== undefined)
         waiting.reject(
           new CloudBrowserUpstreamError({
@@ -177,32 +191,21 @@ export function createCdpClient(socket: CdpSocket): CdpClient {
     for (const subscriber of subscribers)
       if (subscriber.method === message.method)
         subscriber.listener(message.params ?? null, message.sessionId);
-    for (let index = waiters.length - 1; index >= 0; index -= 1) {
-      const waiter = waiters[index];
+    for (const waiter of waiters) {
       if (
-        waiter?.method === message.method &&
+        waiter.method === message.method &&
         (waiter.sessionId === undefined ||
           waiter.sessionId === message.sessionId)
       ) {
-        waiters.splice(index, 1);
         waiter.resolve(message.params ?? null);
       }
     }
   });
   socket.addEventListener("close", () => {
-    closed = true;
-    for (const { reject } of pending.values())
-      reject(
-        new CloudBrowserUpstreamError({
-          op: "cdp.socket",
-          status: null,
-          message: "browser CDP socket closed",
-        }),
-      );
-    pending.clear();
+    terminate("browser CDP socket closed");
   });
   socket.addEventListener("error", () => {
-    closed = true;
+    terminate("browser CDP socket failed");
   });
 
   return {
@@ -218,72 +221,102 @@ export function createCdpClient(socket: CdpSocket): CdpClient {
           );
           return;
         }
+        if (options?.signal?.aborted) {
+          reject(new CloudBrowserTimeout({ op: method, timeoutMs: 0 }));
+          return;
+        }
         const requestNumber = nextRequestNumber;
         nextRequestNumber += 1;
         const timeoutMs = options?.timeoutMs ?? 15_000;
         const timer = setTimeout(() => {
-          pending.delete(requestNumber);
-          reject(new CloudBrowserTimeout({ op: method, timeoutMs }));
+          call.reject(new CloudBrowserTimeout({ op: method, timeoutMs }));
         }, timeoutMs);
         const onAbort = () => {
+          call.reject(new CloudBrowserTimeout({ op: method, timeoutMs: 0 }));
+        };
+        const cleanup = () => {
           pending.delete(requestNumber);
           clearTimeout(timer);
-          reject(new CloudBrowserTimeout({ op: method, timeoutMs: 0 }));
+          options?.signal?.removeEventListener("abort", onAbort);
         };
-        options?.signal?.addEventListener("abort", onAbort, { once: true });
-        pending.set(requestNumber, {
+        const call: PendingCall = {
           resolve: (value) => {
-            clearTimeout(timer);
-            options?.signal?.removeEventListener("abort", onAbort);
+            cleanup();
             resolve(value);
           },
           reject: (error) => {
-            clearTimeout(timer);
-            options?.signal?.removeEventListener("abort", onAbort);
+            cleanup();
             reject(error);
           },
-        });
+        };
+        pending.set(requestNumber, call);
+        options?.signal?.addEventListener("abort", onAbort, { once: true });
         const frame = { id: requestNumber, method, params };
-        socket.send(
-          JSON.stringify(
-            options?.sessionId === undefined
-              ? frame
-              : { ...frame, sessionId: options.sessionId },
-          ),
-        );
+        try {
+          socket.send(
+            JSON.stringify(
+              options?.sessionId === undefined
+                ? frame
+                : { ...frame, sessionId: options.sessionId },
+            ),
+          );
+        } catch (cause) {
+          cleanup();
+          throw new CloudBrowserUpstreamError({
+            op: method,
+            status: null,
+            message: "Could not send the browser CDP command",
+            cause,
+          });
+        }
       }),
     waitForEvent: (method, options) =>
       new Promise((resolve, reject) => {
+        if (closed) {
+          reject(
+            new CloudBrowserUpstreamError({
+              op: method,
+              status: null,
+              message: "browser CDP socket is closed",
+            }),
+          );
+          return;
+        }
+        const cleanup = () => {
+          waiters.delete(waiter);
+          clearTimeout(timer);
+        };
         const waiter: EventWaiter = {
           method,
           sessionId: options.sessionId,
           resolve: (value) => {
-            clearTimeout(timer);
+            cleanup();
             resolve(value);
+          },
+          reject: (error) => {
+            cleanup();
+            reject(error);
           },
         };
         const timer = setTimeout(() => {
-          const index = waiters.indexOf(waiter);
-          if (index >= 0) waiters.splice(index, 1);
-          reject(
+          waiter.reject(
             new CloudBrowserTimeout({
               op: method,
               timeoutMs: options.timeoutMs,
             }),
           );
         }, options.timeoutMs);
-        waiters.push(waiter);
+        waiters.add(waiter);
       }),
     on: (method, listener) => {
       const subscriber = { method, listener };
-      subscribers.add(subscriber);
+      if (!closed) subscribers.add(subscriber);
       return () => {
         subscribers.delete(subscriber);
       };
     },
     close: () => {
-      closed = true;
-      subscribers.clear();
+      terminate("browser CDP socket closed");
       socket.close();
     },
   };

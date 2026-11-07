@@ -96,7 +96,7 @@ The configured provider answered with a failure or is unreachable.
 #### Extends
 
 - `YieldableError`\<`this`\> & `object` & `Readonly`\<\{ `op`: `string`;
-  `status`: `number` \| `null`; `message`: `string`; \}\>
+  `status`: `number` \| `null`; `message`: `string`; `cause?`: `unknown`; \}\>
 
 #### Constructors
 
@@ -108,12 +108,13 @@ new CloudBrowserUpstreamError(args): CloudBrowserUpstreamError;
 
 ###### Parameters
 
-| Parameter      | Type                                                                     |
-| -------------- | ------------------------------------------------------------------------ |
-| `args`         | \{ `op`: `string`; `status`: `number` \| `null`; `message`: `string`; \} |
-| `args.op`      | `string`                                                                 |
-| `args.status`  | `number` \| `null`                                                       |
-| `args.message` | `string`                                                                 |
+| Parameter      | Type                                                                                          | Description                                               |
+| -------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `args`         | \{ `op`: `string`; `status`: `number` \| `null`; `message`: `string`; `cause?`: `unknown`; \} | -                                                         |
+| `args.op`      | `string`                                                                                      | -                                                         |
+| `args.status`  | `number` \| `null`                                                                            | -                                                         |
+| `args.message` | `string`                                                                                      | -                                                         |
+| `args.cause?`  | `unknown`                                                                                     | Original transport failure retained for host diagnostics. |
 
 ###### Returns
 
@@ -128,6 +129,8 @@ Data.TaggedError(
   readonly op: string;
   readonly status: number | null;
   readonly message: string;
+  / Original transport failure retained for host diagnostics. /
+  readonly cause?: unknown;
 }>.constructor
 ```
 
@@ -155,6 +158,20 @@ readonly status: number | null;
 
 ```ts
 Data.TaggedError("CloudBrowserUpstreamError").status;
+```
+
+##### cause?
+
+```ts
+optional cause?: unknown;
+```
+
+Original transport failure retained for host diagnostics.
+
+###### Inherited from
+
+```ts
+Data.TaggedError("CloudBrowserUpstreamError").cause;
 ```
 
 ##### message

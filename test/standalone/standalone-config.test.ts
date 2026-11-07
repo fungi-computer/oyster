@@ -5,6 +5,15 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 const configSchema = z.object({
+  containers: z
+    .array(
+      z.object({
+        class_name: z.string(),
+        instance_type: z.string(),
+        max_instances: z.number().int(),
+      }),
+    )
+    .optional(),
   durable_objects: z.object({
     bindings: z.array(z.object({ class_name: z.string() })),
   }),
@@ -77,6 +86,24 @@ describe("standalone Durable Object migrations", () => {
           ),
         ].sort(),
       );
+    });
+  }
+});
+
+describe("Cloudflare Computer container capacity", () => {
+  for (const path of [
+    "deploy/wrangler.jsonc",
+    "deploy/wrangler.contest.jsonc",
+    "examples/standalone/wrangler.jsonc",
+  ]) {
+    it(`${path} allows four standard-4 Computer containers`, () => {
+      const config = read(path);
+      expect(config.containers).toHaveLength(1);
+      expect(config.containers?.[0]).toMatchObject({
+        class_name: "ComputerDO",
+        instance_type: "standard-4",
+        max_instances: 4,
+      });
     });
   }
 });
