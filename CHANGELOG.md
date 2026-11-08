@@ -1,5 +1,33 @@
 # @fungi.computer/oyster
 
+## 0.14.1
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/mycelium@0.3.6
+  - @fungi.computer/shiitake@0.12.1
+  - @fungi.computer/watchdog@0.1.2
+  - @fungi.computer/braid@0.4.5
+  - @fungi.computer/knapsack@0.4.7
+  - @fungi.computer/shiitake-extensions@0.6.8
+  - @fungi.computer/veil@0.6.3
+  - @fungi.computer/parakeet@0.9.1
+  - @fungi.computer/zookeeper@0.0.15
+  - @fungi.computer/agar@0.7.3
+  - @fungi.computer/bird-dog@0.3.5
+  - @fungi.computer/carrier@0.2.3
+  - @fungi.computer/computer@0.6.3
+  - @fungi.computer/puffball@0.5.3
+  - @fungi.computer/workflows-wire@0.4.5
+  - @fungi.computer/computer-contract@0.0.12
+  - @fungi.computer/seam@0.2.4
+  - @fungi.computer/forage@0.3.3
+  - @fungi.computer/nacre@0.2.2
+  - @fungi.computer/darkroom@0.5.3
+
 ## 0.14.0
 
 ### Minor Changes
