@@ -613,25 +613,25 @@
   "docs": {
     "sigil": "oyster",
     "home": {
-      "lead": "Run your own Apps on Cloudflare Workers or your own server. Each App gets its own database, and you choose which version is live.",
+      "lead": "A desktop of Apps you run yourself, on Cloudflare or your own server. People open the Apps in a browser and agents call them over MCP; each App is built from a git commit with its own database.",
       "example": {
         "file": "home.ts",
-        "title": "Apply owner state",
-        "caption": "A disabled Instance refuses backend requests without resolving a Release."
+        "title": "Deploy the whole Oyster",
+        "caption": "Re-export the standalone host from worker.ts, then deploy it with Wrangler. `npx @fungi.computer/oyster try` runs the same Worker on your computer first."
       },
       "ladder": {
         "start": [
           {
             "title": "Quickstart",
             "href": "/quickstart/",
-            "description": "Run the first example and follow its host setup instructions."
+            "description": "Try Oyster on your computer with one command, then deploy it."
           }
         ],
         "tasks": [
           {
-            "title": "Core concepts",
+            "title": "Concepts",
             "href": "/concepts/",
-            "description": "Understand the package contract and host responsibilities."
+            "description": "What you get, deploying, connecting agents and building your own host."
           },
           {
             "title": "Examples",
@@ -643,7 +643,7 @@
           {
             "title": "API reference",
             "href": "/api/",
-            "description": "Browse the exported types, methods and schemas."
+            "description": "Choose a host layer, then its building blocks and low-level ports."
           },
           {
             "title": "Install",

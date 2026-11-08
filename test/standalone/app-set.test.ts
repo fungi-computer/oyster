@@ -47,6 +47,7 @@ import {
   standaloneAppSet,
   type StarterAppSource,
   type StarterApp,
+  noStarterBuildBackendMessage,
 } from "../../src/standalone/app-set.js";
 import { approveChosenDashboard } from "../../src/standalone/dashboard-approval.js";
 import {
@@ -293,6 +294,8 @@ function starterRegistry(
   };
   const route = (input: URL, init: RequestInit): Response => {
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer key");
+    if (input.pathname === "/api/build-backend")
+      return Response.json({ kind: "hosted" });
     if (input.pathname === "/api/installations") {
       if (init.method === "GET") return Response.json([...records.values()]);
       const body = Schema.decodeUnknownSync(
@@ -929,6 +932,33 @@ it.each(["refused", "unconfirmed"] as const)(
   },
 );
 
+it("refuses once, plainly, before seeding when the Oyster has no Computer to build on", async () => {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", (input: URL, init: RequestInit) => {
+    calls.push(`${init.method ?? "GET"} ${input.pathname}`);
+    return Promise.resolve(
+      input.pathname === "/api/build-backend"
+        ? Response.json({ kind: "no_backend" })
+        : new Response(null, { status: 500 }),
+    );
+  });
+  const published: string[] = [];
+  await expect(install(published)).rejects.toThrow(
+    noStarterBuildBackendMessage,
+  );
+  expect(published).toEqual([]);
+  expect(calls).toEqual(["GET /api/build-backend"]);
+});
+
+it("names the owner key when the Oyster refuses it", async () => {
+  vi.stubGlobal("fetch", () =>
+    Promise.resolve(new Response(null, { status: 401 })),
+  );
+  await expect(install([])).rejects.toThrow(
+    /refused the owner key.*OYSTER_OWNER_KEY/u,
+  );
+});
+
 it("publishes, builds on the Computer and installs each App's own Release, Tourtois first", async () => {
   const calls = oyster();
   const published: string[] = [];
@@ -950,7 +980,8 @@ it("publishes, builds on the Computer and installs each App's own Release, Tourt
   const installs = calls.filter((call) => call === "POST /api/installations");
   expect(installs).toHaveLength(standaloneAppSet.length);
   // Each App is installed only after its own build settled.
-  expect(calls.slice(0, 7)).toEqual([
+  expect(calls.slice(0, 8)).toEqual([
+    "GET /api/build-backend",
     "POST /api/builds",
     "GET /api/builds/build_0",
     "GET /api/builds/build_0",
@@ -1326,6 +1357,8 @@ it("cancels a build status read that hangs, within the build budget", async () =
   const reads: AbortSignal[] = [];
   const route = (input: URL, init: RequestInit): Response => {
     if (input.pathname === "/api/installations") return Response.json([]);
+    if (input.pathname === "/api/build-backend")
+      return Response.json({ kind: "hosted" });
     if (input.pathname === "/api/builds")
       return Response.json(
         { jobId: "build_0", status: "running", detail: null, release: null },
@@ -1579,7 +1612,8 @@ it("reads a build's status before its first idle wait", async () => {
   });
   // Every build is already done at its first read, so nothing ever idles.
   expect(calls).not.toContain("sleep");
-  expect(calls.slice(0, 4)).toEqual([
+  expect(calls.slice(0, 5)).toEqual([
+    "GET /api/build-backend",
     "POST /api/builds",
     "GET /api/builds/build_0",
     "POST /api/installations",

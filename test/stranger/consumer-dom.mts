@@ -223,9 +223,6 @@ export type DBootCapabilitySurface = typeof DBootCapability;
 import type * as DBootCapabilityRoute from "@fungi.computer/oyster/boot-capability/route";
 export type DBootCapabilityRouteSurface = typeof DBootCapabilityRoute;
 
-import type * as DAppBuilds from "@fungi.computer/oyster/app-builds";
-export type DAppBuildsSurface = typeof DAppBuilds;
-
 import type * as DBuildContract from "@fungi.computer/oyster/build-contract";
 export type DBuildContractSurface = typeof DBuildContract;
 
@@ -240,9 +237,6 @@ export type DSourceSurface = typeof DSource;
 
 import type * as DSourceTemplatePush from "@fungi.computer/oyster/source/template-push";
 export type DSourceTemplatePushSurface = typeof DSourceTemplatePush;
-
-import type * as DAppSources from "@fungi.computer/oyster/app-sources";
-export type DAppSourcesSurface = typeof DAppSources;
 
 import type * as DMedia from "@fungi.computer/oyster/media";
 export type DMediaSurface = typeof DMedia;

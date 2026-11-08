@@ -147,7 +147,7 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
       ],
     ],
   ]);
-  expect(container.textContent).toContain("Permissions saved.");
+  expect(container.textContent).toContain("Permissions saved");
   expect(
     container.querySelector('[aria-label="Shell not allowed"]'),
   ).not.toBeNull();
@@ -226,4 +226,63 @@ it("changing Apps never exposes the previous App's editable draft while the new 
   expect(container.querySelector<HTMLInputElement>("input")?.checked).toBe(
     false,
   );
+});
+
+it("lists each grant once under a sentence-case heading with a labelled switch and state in words", async () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const view = appPermissionPageSchema.parse({
+    storeGeneration: "generation",
+    installationId: "trellis",
+    appId: "app_trellis",
+    appName: "Trellis",
+    artifactDigest: digest,
+    canEdit: true,
+    resources: [],
+    permissions: {
+      authority: {
+        authorityVersion: 1,
+        declaredOperationsDigest: digest,
+        approvedGrants: [],
+        approval: null,
+      },
+      declaredOperations: {
+        artifactDigest: digest,
+        digest,
+        capabilities: [{ capability: "agent.send", operations: [] }],
+      },
+    },
+  });
+  const port: AppPermissionsPort = {
+    read: () => Promise.resolve(view),
+    submit: () => Promise.resolve("refused"),
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  onTestFinished(async () => {
+    await act(() => {
+      root.unmount();
+      return Promise.resolve();
+    });
+    container.remove();
+  });
+  await act(() => {
+    root.render(createElement(AppPermissionsView, { port, appKey: "trellis" }));
+    return Promise.resolve();
+  });
+  expect(
+    container.querySelector(".caps-permission-grid-title")?.textContent,
+  ).toBe("Trellis permissions");
+  expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+  expect(container.querySelector("tbody")?.textContent).toContain("Off");
+  const toggle = container.querySelector<HTMLInputElement>(
+    'input[aria-label="All Agents: Send messages to Agents"]',
+  );
+  if (toggle === null) throw new Error("Switch missing");
+  expect(toggle.closest(".caps-switch")).not.toBeNull();
+  await act(() => {
+    toggle.click();
+    return Promise.resolve();
+  });
+  expect(container.querySelector("tbody")?.textContent).toContain("On");
 });

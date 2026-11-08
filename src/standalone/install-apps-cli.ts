@@ -38,7 +38,7 @@ const usage =
   "Usage: oyster install-apps [--repositories <base URL>] [--ref <ref>] [--from <checkout>] [--concurrency 1-3] [--timings <file>]";
 
 const urlSource =
-  "OYSTER_URL is the address of your deployed Oyster Worker, such as https://oyster.<your-subdomain>.workers.dev (http://127.0.0.1:8787 for a local one). You set it when you deploy.";
+  "OYSTER_URL is the address of your deployed Oyster Worker, such as https://oyster.<your-subdomain>.workers.dev. You set it when you deploy. A local `oyster try` Oyster has no Computer, so it cannot build the starter Apps.";
 const keySource =
   "OYSTER_OWNER_KEY is the owner key you chose for that Oyster: export OYSTER_OWNER_KEY=$(openssl rand -hex 24), then store it with `wrangler secret put OYSTER_OWNER_KEY`.";
 

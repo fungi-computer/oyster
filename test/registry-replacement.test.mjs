@@ -1643,6 +1643,8 @@ test("install-apps immediately recovers all seven Apps after reset: Agents and S
     // Source publication and the external Computer are fixture boundaries.
     // Installation admission, execution, status and dashboard approval below
     // always reach the real host; no installation result is manufactured.
+    if (url.pathname === "/api/build-backend")
+      return globalThis.Response.json({ kind: "hosted" });
     if (url.pathname === "/api/builds" && request.method === "POST") {
       const { appId } = await request.json();
       assert.ok(releases.has(appId));

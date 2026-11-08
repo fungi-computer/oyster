@@ -1,5 +1,59 @@
 # @fungi.computer/oyster
 
+## 0.15.0
+
+### Minor Changes
+
+- Changes since 0.14.1:
+
+  - fix(oyster): report a starter App failure without a silent catch
+  - fix(oyster): oyster try fails fast on a Wrangler startup error
+  - fix(oyster): satisfy lint in try starter loop
+  - feat(oyster): oyster try builds the other starter Apps in the background
+  - fix(oyster): keep the build-backend read to the owner's own key
+  - fix(oyster): one App permissions grid with scope in its own column
+  - fix(oyster): group App permissions by scope and lead with what needs
+    approval
+  - feat(oyster): compose the App permissions page from Caps PermissionGrid
+  - fix(oyster): refuse install-apps plainly on an Oyster without a Computer
+  - refactor(oyster)!: stop exporting five standalone-internal entry points
+  - fix(docs): build oyster before its docs check
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.8.0
+  - @fungi.computer/caps@0.8.0
+  - @fungi.computer/computer@0.7.0
+  - @fungi.computer/mycelium@0.3.7
+  - @fungi.computer/shiitake@0.12.2
+  - @fungi.computer/sprite@0.2.1
+  - @fungi.computer/watchdog@0.1.3
+  - @fungi.computer/braid@0.4.6
+  - @fungi.computer/darkroom@0.5.4
+  - @fungi.computer/nacre@0.2.3
+  - @fungi.computer/parakeet@0.9.2
+  - @fungi.computer/workflows-wire@0.4.6
+  - @fungi.computer/knapsack@0.4.8
+  - @fungi.computer/shiitake-extensions@0.6.9
+  - @fungi.computer/veil@0.6.4
+  - @fungi.computer/zookeeper@0.0.16
+  - @fungi.computer/sprite-zdog@0.3.1
+  - @fungi.computer/lantern@0.4.2
+  - @fungi.computer/sigils@0.3.0
+  - @fungi.computer/bird-dog@0.3.6
+  - @fungi.computer/carrier@0.2.4
+  - @fungi.computer/puffball@0.5.4
+  - @fungi.computer/computer-contract@0.0.13
+  - @fungi.computer/seam@0.2.5
+  - @fungi.computer/forage@0.3.4
+
 ## 0.14.1
 
 ### Patch Changes

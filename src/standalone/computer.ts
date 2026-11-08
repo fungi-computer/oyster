@@ -542,9 +542,17 @@ export class ComputerDO
     return this.#preview;
   }
 
-  /** A read-only preflight over the maintained hosted-route selector. */
+  /**
+   * A read-only preflight over the maintained hosted-route selector. A
+   * platform container needs a container-enabled Durable Object: a Worker run
+   * without containers (`oyster try` runs Wrangler with
+   * `--enable-containers=false`) has no machine to build on.
+   */
   buildBackend(): OysterBuildBackend {
-    return this.hostedRoute() === undefined
+    const route = this.hostedRoute();
+    return route === undefined ||
+      (route.backing.kind === "platform-container" &&
+        this.state.container === undefined)
       ? { kind: "no_backend" }
       : { kind: "hosted" };
   }

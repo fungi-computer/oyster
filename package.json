@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -116,10 +116,6 @@
       "types": "./dist/standalone/worker.d.ts",
       "import": "./dist/standalone/worker.js"
     },
-    "./standalone/visitor-edge": {
-      "types": "./dist/standalone/visitor-edge.d.ts",
-      "import": "./dist/standalone/visitor-edge.js"
-    },
     "./standalone/app-set": {
       "types": "./dist/standalone/app-set.d.ts",
       "import": "./dist/standalone/app-set.js"
@@ -216,10 +212,6 @@
       "types": "./dist/build.d.ts",
       "import": "./dist/build.js"
     },
-    "./app-builds": {
-      "types": "./dist/app-builds.d.ts",
-      "import": "./dist/app-builds.js"
-    },
     "./build-contract": {
       "types": "./dist/build-contract.d.ts",
       "import": "./dist/build-contract.js"
@@ -239,14 +231,6 @@
     "./source/template-push": {
       "types": "./dist/source/template-push.d.ts",
       "import": "./dist/source/template-push.js"
-    },
-    "./app-sources": {
-      "types": "./dist/app-sources.d.ts",
-      "import": "./dist/app-sources.js"
-    },
-    "./catalog-frame": {
-      "types": "./dist/catalog-frame.d.ts",
-      "import": "./dist/catalog-frame.js"
     },
     "./media": {
       "types": "./dist/media.d.ts",
@@ -308,10 +292,6 @@
       "types": "./dist/page/app-permissions.d.ts",
       "import": "./dist/page/app-permissions.js"
     },
-    "./apps/permissions-port": {
-      "types": "./dist/page/app-permissions-port.d.ts",
-      "import": "./dist/page/app-permissions-port.js"
-    },
     "./keys": {
       "types": "./dist/keys.d.ts",
       "import": "./dist/keys.js"
@@ -324,13 +304,13 @@
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
     },
-    "./testing/workers-runtime": {
-      "types": "./dist/testing/workers-runtime.d.ts",
-      "import": "./dist/testing/workers-runtime.js"
-    },
     "./testing/worker": {
       "types": "./dist/testing/worker.d.ts",
       "import": "./dist/testing/worker.js"
+    },
+    "./testing/workers-runtime": {
+      "types": "./dist/testing/workers-runtime.d.ts",
+      "import": "./dist/testing/workers-runtime.js"
     },
     "./machine-link": {
       "types": "./dist/machine-link/index.d.ts",

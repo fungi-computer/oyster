@@ -16,7 +16,6 @@ export const appForkInputSchema = Schema.Struct({
     Schema.check(Schema.isMaxLength(63)),
   ),
 });
-export type AppForkInput = Schema.Schema.Type<typeof appForkInputSchema>;
 
 /** The closed result union `forkAppSource` already returns. */
 export const appForkResultSchema = Schema.Union([

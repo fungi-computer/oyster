@@ -62,6 +62,14 @@ export async function dispatchAppSourceBinding(
   return Schema.decodeUnknownSync(appForkResultSchema)(result);
 }
 
+/** The refusal a template-source Git exchange returns when this Oyster's
+ * git storage cannot serve it. */
+const templateSourceUnavailable = {
+  code: "source_unavailable",
+  error:
+    "This Oyster's git storage is unavailable, so it cannot hold App sources. Starter Apps need a deployed Oyster.",
+} as const;
+
 /** Operator-only: seed one App's editable source template (`install-apps.mjs`).
  * Each route declares the owner requirement (`authorization.ts`).
  * The operator `git push`es the projected source to
@@ -76,12 +84,19 @@ export function appSourceOwnerRoutes(
     ["GET", "POST"],
     "/api/apps/:appId/source.git/:suffix{info/refs|git-upload-pack|git-receive-pack}",
     owner("direct-or-app"),
-    (context) =>
-      registry().exchangeTemplateSource(
-        context.req.param("appId"),
-        context.req.param("suffix"),
-        context.req.raw,
-      ),
+    async (context) => {
+      try {
+        return await registry().exchangeTemplateSource(
+          context.req.param("appId"),
+          context.req.param("suffix"),
+          context.req.raw,
+        );
+      } catch {
+        // Git storage this Oyster cannot reach (a local `oyster try` has no
+        // Cloudflare Artifacts): a typed refusal Git prints, not a bare 500.
+        return Response.json(templateSourceUnavailable, { status: 503 });
+      }
+    },
   );
   routes.put(
     "/api/apps/:appId/source",

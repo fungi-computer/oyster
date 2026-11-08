@@ -51,10 +51,11 @@ edits against fresh facts for review; an unconfirmed write requires a fresh read
 rather than blindly repeating it. Saved resource identities missing from a
 directory remain visible and removable.
 
-`oyster/apps/permissions-port` binds the standalone view to the existing
-owner-direct `/api/installations/:id/grants` routes. The browser entry is
+`src/page/app-permissions-port.ts` binds the standalone view to the existing
+owner-direct `/api/installations/:id/grants` routes inside Oyster's own page; it
+is not a package entry. The `oyster/apps/permissions-view` browser entry is
 separate from the pure `oyster/apps` entry so Worker consumers need no DOM UI.
-These browser entries are host implementation, not published-App dependencies.
+It is host implementation, not a published-App dependency.
 
 On a fresh owner-direct installation, the host may attest its configured
 built-in Shell identity. Only then does install pre-grant the verified

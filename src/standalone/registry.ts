@@ -34,6 +34,7 @@ import {
   type OysterBuildStartResult,
   type OysterAppBuilds,
   type OysterBuildView,
+  type OysterBuildBackend,
 } from "../app-builds.js";
 import { buildJobsFromOlderOyster } from "../older-oyster-store.js";
 import type { TeamAppCandidateManifest } from "../build-contract.js";
@@ -620,6 +621,13 @@ export abstract class StandaloneRegistry
       repository,
     );
     return source === null ? null : { appId: source.appId };
+  }
+
+  /** Owner: whether this Oyster's Computer can run App builds, read
+   * without starting a machine. */
+  async buildBackend(): Promise<OysterBuildBackend> {
+    const env = this.#env;
+    return env.COMPUTER.getByName(env.OYSTER_COMPUTER_ID).buildBackend();
   }
 
   async readBuild(jobId: string): Promise<OysterBuildView | null> {

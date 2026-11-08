@@ -414,9 +414,6 @@ export type WStandaloneSurface = typeof WStandalone;
 import type * as WStandaloneMedia from "@fungi.computer/oyster/standalone/media";
 export type WStandaloneMediaSurface = typeof WStandaloneMedia;
 
-import type * as WCatalogFrame from "@fungi.computer/oyster/catalog-frame";
-export type WCatalogFrameSurface = typeof WCatalogFrame;
-
 import type * as WMachineLinkWorkers from "@fungi.computer/oyster/machine-link/workers";
 export type WMachineLinkWorkersSurface = typeof WMachineLinkWorkers;
 
@@ -471,14 +468,8 @@ export type WBuildEgressSurface = typeof WBuildEgress;
 import type * as WBuildJobs from "@fungi.computer/oyster/build-jobs";
 export type WBuildJobsSurface = typeof WBuildJobs;
 
-import type * as WAppBuilds from "@fungi.computer/oyster/app-builds";
-export type WAppBuildsSurface = typeof WAppBuilds;
-
 import type * as WSource from "@fungi.computer/oyster/source";
 export type WSourceSurface = typeof WSource;
-
-import type * as WAppSources from "@fungi.computer/oyster/app-sources";
-export type WAppSourcesSurface = typeof WAppSources;
 
 import type * as WMedia from "@fungi.computer/oyster/media";
 export type WMediaSurface = typeof WMedia;

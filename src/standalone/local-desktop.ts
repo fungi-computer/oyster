@@ -1,9 +1,9 @@
 import { CleanupError } from "../build/process-group.js";
-// The Tourtois desktop for a local Oyster. The standalone Oyster builds its
-// starter Apps on its own Computer, which a laptop does not have, so `oyster
-// try` builds Tourtois here from its public source with the ordinary local
-// packer and installs it as the home installation, approving its shell the
-// same way `install-apps` does.
+// The starter Apps for a local Oyster. The standalone Oyster builds its starter
+// Apps on its own Computer, which a laptop does not have, so `oyster try`
+// builds each App here from its public source with the ordinary local packer
+// and installs it; the Tourtois desktop is the home installation, and its shell
+// is approved the same way `install-apps` does.
 import { runGit } from "../build/local-build.js";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,8 +14,22 @@ import { installRelease, packRelease } from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { installationSchema } from "../apps/installation.js";
 import { approveChosenDashboard } from "./dashboard-approval.js";
+import { standaloneAppSet, type StarterApp } from "./app-set.js";
 
-const tourtoisRepository = "https://github.com/fungi-computer/tourtois.git";
+const repositoryUrl = (app: StarterApp) =>
+  `https://github.com/fungi-computer/${app.repository}.git`;
+
+/** The Tourtois desktop, which `oyster try` installs before anything else. */
+export const desktopApp = requireStarter("tourtois");
+
+function requireStarter(installationId: string): StarterApp {
+  const found = standaloneAppSet.find(
+    (app) => app.installationId === installationId,
+  );
+  if (found === undefined)
+    throw new Error(`${installationId} is not a starter App`);
+  return found;
+}
 
 const installationRowsSchema = z.array(installationSchema);
 export type DesktopReadiness =
@@ -23,6 +37,32 @@ export type DesktopReadiness =
 
 const git = async (cwd: string, args: readonly string[], signal: AbortSignal) =>
   new TextDecoder().decode(await runGit(args, cwd, signal, process.env)).trim();
+
+/** Whether an installation of this id is saved on the Oyster. Read-only. */
+export async function localStarterInstalled(
+  input: Readonly<{
+    url: string;
+    key: string;
+    installationId: string;
+    signal?: AbortSignal;
+  }>,
+): Promise<boolean> {
+  const request: RequestInit = {
+    headers: { Authorization: `Bearer ${input.key}` },
+  };
+  if (input.signal !== undefined) request.signal = input.signal;
+  const response = await fetch(
+    new URL("/api/installations", input.url),
+    request,
+  );
+  if (!response.ok)
+    throw new Error(
+      `Installation read failed (HTTP ${String(response.status)}).`,
+    );
+  return installationRowsSchema
+    .parse(await response.json())
+    .some((row) => row.installationId === input.installationId);
+}
 
 /** The host-owned entry decides whether the saved desktop may run. Read-only. */
 export async function localDesktopState(
@@ -56,26 +96,27 @@ export async function localDesktopState(
   return entry.status === 403 ? "approval-required" : "unavailable";
 }
 
-/** Build Tourtois from source on this machine and install it as `tourtois`. */
-export async function installLocalDesktop(
+/** Build one starter App from source on this machine and install it. */
+export async function installLocalStarter(
+  app: StarterApp,
   input: Readonly<{ url: string; key: string; signal?: AbortSignal }>,
 ): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  const scratch = await mkdtemp(join(tmpdir(), "oyster-tourtois-"));
+  const scratch = await mkdtemp(join(tmpdir(), `oyster-${app.repository}-`));
   try {
     const canonical = await realpath(scratch);
     signal.throwIfAborted();
-    const source = join(canonical, "tourtois");
+    const source = join(canonical, app.repository);
     await git(
       canonical,
-      ["clone", "--quiet", "--depth=1", tourtoisRepository, source],
+      ["clone", "--quiet", "--depth=1", repositoryUrl(app), source],
       signal,
     );
     const commit = await git(source, ["rev-parse", "HEAD"], signal);
     const release = join(scratch, "release");
     await packRelease({
-      appId: "app_tourtois",
+      appId: app.appId,
       sourceDirectory: source,
       sourceRevision: `git:${commit}`,
       recipe: appBuildRecipe(
@@ -103,15 +144,17 @@ export async function installLocalDesktop(
       directory: release,
       url: input.url,
       key: input.key,
-      installationId: "tourtois",
+      installationId: app.installationId,
       signal,
       onCompleted: async (operation) => {
-        if (operation.state === "succeeded")
+        if (operation.state === "succeeded" && app.dashboard === true)
           await approveChosenDashboard(operation, owner);
       },
     });
     if (!response.ok)
-      throw new Error(`Tourtois install failed (${String(response.status)})`);
+      throw new Error(
+        `${app.installationId} install failed (${String(response.status)})`,
+      );
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(
       (cause: unknown) => {

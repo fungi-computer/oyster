@@ -1,12 +1,15 @@
 // The first-run promise of `oyster try`: sign in, click Hello on the Tourtois
-// desktop, and the App's page is visible. Runs the real CLI from an installed
+// desktop, and the App's page is visible. Then the stranger's next step,
+// `oyster install-apps` against that local Oyster, refuses once in plain words
+// (it has no Computer to build on) instead of seven raw HTTP 500s. Runs the
+// real CLI from an installed
 // package (a packed tarball of this checkout, or the published spec), with a
 // fresh HOME and project, on a free loopback port.
 //
 //   OYSTER_TRY_PACKAGE=<tarball or npm spec> [OYSTER_TRY_SHOT=<png>] \
 //     pnpm run proof:try-hello
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -121,6 +124,30 @@ try {
     "the window shows no open error",
   );
   if (shot) await page.screenshot({ path: shot });
+  const installApps = spawnSync(
+    "npx",
+    ["-y", "--package", spec, "oyster", "install-apps"],
+    {
+      cwd: work,
+      env: {
+        ...process.env,
+        HOME: join(work, "home"),
+        CI: "1",
+        OYSTER_URL: origin,
+        OYSTER_OWNER_KEY: key,
+      },
+      encoding: "utf8",
+      timeout: 300_000,
+    },
+  );
+  const said = `${installApps.stdout}${installApps.stderr}`;
+  assert.equal(installApps.status, 1, `install-apps must refuse:\n${said}`);
+  assert.match(
+    said,
+    /no Computer to build the starter Apps/u,
+    `install-apps names the missing Computer:\n${said}`,
+  );
+  assert.doesNotMatch(said, /\b500\b|Internal Server Error/u, said);
 } finally {
   await browser?.close();
   stopGroup("SIGTERM");

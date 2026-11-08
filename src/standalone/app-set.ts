@@ -26,6 +26,11 @@ export type StarterApp = Readonly<{
   directory: string;
   /** Its own public source repository's name, the App at that repository's root. */
   repository: string;
+  /**
+   * What `oyster try` can do with it: `local` runs on a laptop; `needs-runtime`
+   * installs but needs a Computer runtime that a trial does not have.
+   */
+  trial: "local" | "needs-runtime";
 }>;
 
 export const standaloneAppSet: readonly StarterApp[] = [
@@ -35,44 +40,61 @@ export const standaloneAppSet: readonly StarterApp[] = [
     directory: "apps/tourtois",
     repository: "tourtois",
     appId: "app_tourtois",
+    trial: "local",
   },
   {
     installationId: "bonsai",
     directory: "apps/bonsai",
     repository: "bonsai",
     appId: "app_bonsai",
+    trial: "local",
   },
   {
     installationId: "shed",
     directory: "apps/shed",
     repository: "shed",
     appId: "app_shed",
+    trial: "needs-runtime",
   },
   {
     installationId: "inkcap",
     directory: "apps/inkcap",
     repository: "inkcap",
     appId: "app_inkcap",
+    trial: "local",
   },
   {
     installationId: "trellis",
     directory: "apps/trellis",
     repository: "trellis",
     appId: "app_trellis",
+    trial: "local",
   },
   {
     installationId: "prints",
     directory: "apps/prints",
     repository: "prints",
     appId: "app_prints",
+    trial: "local",
   },
   {
     installationId: "grove",
     directory: "apps/grove",
     repository: "grove",
     appId: "app_grove",
+    trial: "local",
   },
 ];
+
+/** The Apps `oyster try` installs after the desktop, in the order it reports them. */
+export const trialStarterOrder = [
+  "grove",
+  "prints",
+  "inkcap",
+  "trellis",
+  "bonsai",
+  "shed",
+] as const;
 
 /** The host's refusal of a store written by Oyster 0.2 or earlier. */
 const olderOysterStoreRefusal = Schema.Struct({
@@ -100,6 +122,47 @@ const buildSchema = Schema.Struct({
   /** Installed exactly as the host encoded it. */
   release: Schema.NullOr(Schema.Json),
 });
+/** The host's read of whether its Computer can build (`GET /api/build-backend`). */
+const buildBackendSchema = Schema.Struct({
+  kind: Schema.Literals(["hosted", "no_backend"]),
+});
+
+/** Where a stranger deploys an Oyster that can build the starter Apps. */
+const deployGuideUrl =
+  "https://docs.fungi.computer/guides/run-your-own-oyster/#deploy-it";
+
+/** The plain refusal for an Oyster without a Computer to build on. */
+export const noStarterBuildBackendMessage = `This Oyster has no Computer to build the starter Apps on, so none were installed. A local \`oyster try\` Oyster has none; it runs the Tourtois desktop and Apps you install yourself. Deploy Oyster to Cloudflare to install the seven starter Apps: ${deployGuideUrl}`;
+
+/** Ask the host whether its Computer can build before seeding anything, so
+ * an Oyster that cannot build fails once, plainly, instead of once per App. */
+async function requireStarterBuildBackend(
+  url: string,
+  read: () => Promise<Response>,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await read();
+  } catch (cause) {
+    throw new Error(
+      `Could not reach the Oyster at ${url}. Check OYSTER_URL and that the Oyster is running.`,
+      { cause },
+    );
+  }
+  if (response.status === 401 || response.status === 403)
+    throw new Error(
+      `The Oyster at ${url} refused the owner key (HTTP ${String(response.status)}). Check OYSTER_OWNER_KEY.`,
+    );
+  if (!response.ok)
+    throw new Error(
+      `The Oyster at ${url} did not report whether it can build Apps (HTTP ${String(response.status)}). Check that OYSTER_URL is an Oyster of this version.`,
+    );
+  const { kind } = Schema.decodeUnknownSync(buildBackendSchema)(
+    await response.json(),
+  );
+  if (kind === "no_backend") throw new Error(noStarterBuildBackendMessage);
+}
+
 /** The phases a Computer build reports in its success detail. */
 const computerPhasesSchema = Schema.fromJsonString(
   Schema.Struct({
@@ -259,6 +322,9 @@ export async function installStandaloneAppSet(
     if (signal !== undefined) init.signal = signal;
     return fetch(new URL(path, options.url), init);
   };
+  await requireStarterBuildBackend(options.url, () =>
+    owner("GET", "/api/build-backend"),
+  );
   const idle =
     options.idle ??
     ((ms: number, signal: AbortSignal) => sleep(ms, undefined, { signal }));

@@ -93,7 +93,7 @@ export const oysterBuildGitHost = "git.team.internal";
 export const oysterBuildReportHost = "build.team.internal";
 
 /** Where an App's source is cloned from. */
-export const oysterBuildLocationSchema = Schema.Union([
+const oysterBuildLocationSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("installation"),
     /** The installation whose Git holds the repository (Bonsai for a fork). */
@@ -112,18 +112,16 @@ export type OysterBuildLocation = Schema.Schema.Type<
 >;
 
 /** An App's registered build source: where it is cloned and its pinned recipe. */
-export const oysterBuildSourceSchema = Schema.Struct({
+const oysterBuildSourceSchema = Schema.Struct({
   appId: appIdSchema,
   location: oysterBuildLocationSchema,
   recipe: capturedPinnedRecipeSchema,
   buildRecipeDigest: sha256DigestSchema,
 });
-export type OysterBuildSource = Schema.Schema.Type<
-  typeof oysterBuildSourceSchema
->;
+type OysterBuildSource = Schema.Schema.Type<typeof oysterBuildSourceSchema>;
 
 /** Installation is a build outcome, never a pending consent/approval record. */
-export const oysterBuildInstallationSchema = Schema.Union([
+const oysterBuildInstallationSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("pending"),
     installationId: Schema.String,
@@ -156,15 +154,8 @@ export type OysterBuildView = Readonly<{
 }>;
 
 /** Known preflight refusals, before a job or Computer run exists. */
-export const oysterBuildStartReasonSchema = Schema.Literals([
-  "invalid_revision",
-  "no_source",
-  "not_template_seed",
-  "no_backend",
-]);
-export type OysterBuildStartReason = Schema.Schema.Type<
-  typeof oysterBuildStartReasonSchema
->;
+export type OysterBuildStartReason =
+  "invalid_revision" | "no_source" | "not_template_seed" | "no_backend";
 export const oysterBuildStartMessages = {
   invalid_revision:
     "Source revision must be git: followed by a full commit hash",

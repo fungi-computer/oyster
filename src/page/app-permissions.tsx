@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Disclosure } from "@fungi.computer/caps/components/disclosure";
+import { Alert } from "@fungi.computer/caps/components/alert";
 import { Button } from "@fungi.computer/caps/components/button";
 import { Card, CardContent } from "@fungi.computer/caps/components/card";
-import { Checkbox } from "@fungi.computer/caps/components/checkbox";
 import { DataList, DataRow } from "@fungi.computer/caps/components/data-list";
 import { Form, FormFooter } from "@fungi.computer/caps/components/field";
-import { IconCheckbox } from "@fungi.computer/caps/components/icon-checkbox";
-import { Status } from "@fungi.computer/caps/components/status";
+import { Switch } from "@fungi.computer/caps/components/switch";
+import { LoadingState } from "@fungi.computer/caps/blocks/loading-state";
 import {
-  Display,
-  ScreenCell,
-  ScreenCells,
-} from "@fungi.computer/caps/components/surface";
+  PermissionGrid,
+  type PermissionGridRow,
+} from "@fungi.computer/caps/blocks/permission-grid";
+import { Status } from "@fungi.computer/caps/components/status";
 import { Sigil } from "@fungi.computer/sigils";
 import { permissionCatalog } from "../apps/catalog.js";
 import {
@@ -22,6 +23,7 @@ import {
   type AppPermissionsPort,
   type AppPermissionsViewData,
   type PermissionColumn,
+  type PermissionScreen,
   type PermissionDraft,
   type PermissionEdit,
 } from "../apps/permissions.js";
@@ -35,6 +37,191 @@ export type AppPermissionsViewProps = Readonly<{
   onAccepted?: () => Promise<void>;
   onStateChange?: (state: PermissionLeaveState) => void;
 }>;
+
+const groupLabels = {
+  computers: "Computers",
+  agents: "Agents",
+  generation: "Generation",
+  bazaar: "Bazaar",
+  data: "Data",
+  workflows: "Workflows",
+  git: "Git",
+  channels: "Channels",
+  apps: "Apps",
+  shell: "Shell",
+  other: "Other",
+} as const;
+
+const gridHeadings = {
+  capability: "Permission",
+  state: "State",
+  scope: "Applies to",
+  control: "Change",
+} as const;
+
+type PermissionGroup = PermissionScreen["groups"][number];
+type GrantRowContext = Readonly<{
+  disabled: boolean;
+  describedBy: (capability: PermissionColumn["capability"]) => string;
+  edit: (change: PermissionEdit) => void;
+}>;
+
+/** "publishDraft" and "publish_draft" read as "Publish draft". */
+function methodLabel(operation: string): string {
+  const words = operation
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[._-]+/gu, " ")
+    .trim()
+    .toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** One grid row per grant: a label, its state in words and a labelled switch. */
+function grantRow(
+  context: GrantRowContext,
+  input: {
+    id: string;
+    capability: PermissionColumn["capability"];
+    sigil: PermissionColumn["sigil"];
+    label: string;
+    chip: string;
+    scopeName: string;
+    stateLabel?: string;
+    pending: boolean;
+    on: boolean;
+    locked: boolean;
+    onChange: (on: boolean) => void;
+  },
+): PermissionGridRow {
+  return {
+    id: input.id,
+    mark: <Sigil name={input.sigil} />,
+    label: input.label,
+    state: input.on ? "allowed" : "denied",
+    group: input.chip,
+    stateLabel: input.stateLabel ?? (input.on ? "On" : "Off"),
+    scope: input.scopeName,
+    control: (
+      <Switch
+        id={input.pending ? `grant-${input.id}` : undefined}
+        aria-label={`${input.scopeName}: ${input.label}`}
+        aria-describedby={context.describedBy(input.capability)}
+        checked={input.on}
+        disabled={context.disabled || input.locked}
+        onCheckedChange={input.onChange}
+      />
+    ),
+  };
+}
+
+/** The rows for one resource (or "all") of a scoped group. */
+function resourceRows(
+  context: GrantRowContext,
+  group: PermissionGroup,
+  resource: PermissionGroup["rows"][number],
+): PermissionGridRow[] {
+  const key =
+    resource.resource === "all"
+      ? "all"
+      : `${resource.resource.kind}:${resource.resource.id}`;
+  return resource.cells.flatMap((cell) => {
+    const column = group.columns.find(
+      (item) => item.capability === cell.capability,
+    );
+    if (column === undefined) return [];
+    const id = `${key}:${cell.capability}`;
+    return [
+      grantRow(context, {
+        id,
+        capability: cell.capability,
+        sigil: column.sigil,
+        label: column.label,
+        chip: groupLabels[group.id],
+        scopeName: resource.label,
+        stateLabel: cell.state === "via-all" ? "On for all" : undefined,
+        pending: column.pending && cell.state === "off",
+        on: cell.state !== "off",
+        locked: cell.state === "via-all",
+        onChange: (on) => {
+          context.edit(
+            resource.resource === "all"
+              ? { kind: "all", capability: cell.capability, on }
+              : {
+                  kind: "resource",
+                  capability: cell.capability,
+                  resource: resource.resource,
+                  on,
+                },
+          );
+        },
+      }),
+    ];
+  });
+}
+
+/** Switches and App-call operations, which apply to the App rather than a resource. */
+function appRows(
+  context: GrantRowContext,
+  group: PermissionGroup,
+): PermissionGridRow[] {
+  return [
+    ...group.switches.map((column) => {
+      const locked =
+        permissionCatalog[column.capability].consent === "affordance";
+      return grantRow(context, {
+        id: column.capability,
+        capability: column.capability,
+        sigil: column.sigil,
+        label: column.label,
+        chip: groupLabels[group.id],
+        scopeName: "This App",
+        stateLabel: locked ? "Always on" : undefined,
+        pending: column.pending && !column.on,
+        on: column.on,
+        locked,
+        onChange: (on) => {
+          context.edit({ kind: "switch", capability: column.capability, on });
+        },
+      });
+    }),
+    ...group.operations.map((operation) =>
+      grantRow(context, {
+        id: `${operation.capability}:${operation.operation}`,
+        capability: operation.capability,
+        sigil: permissionCatalog["apps.call"].sigil,
+        label: methodLabel(operation.operation),
+        chip: groupLabels[group.id],
+        scopeName: "Other Apps",
+        pending: false,
+        on: operation.on,
+        locked: false,
+        onChange: (on) => {
+          context.edit({
+            kind: "operation",
+            capability: operation.capability,
+            operation: operation.operation,
+            on,
+          });
+        },
+      }),
+    ),
+  ];
+}
+
+/** Every row of a group: its resources' grants, then the App's own switches. */
+function groupRows(
+  context: GrantRowContext,
+  group: PermissionGroup,
+): PermissionGridRow[] {
+  return [
+    ...group.rows
+      .filter((resource) =>
+        resource.cells.some((cell) => cell.state !== "via-all"),
+      )
+      .flatMap((resource) => resourceRows(context, group, resource)),
+    ...appRows(context, group),
+  ];
+}
 
 /** One editor; each App owns its draft and pending-request lifetime on reuse. */
 export function AppPermissionsView(props: AppPermissionsViewProps) {
@@ -54,10 +241,13 @@ function PermissionEditor({
   const [retired, setRetired] = useState(false);
   const [refreshNeeded, setRefreshNeeded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const asked = useRef<ReadonlySet<PermissionGroup["id"]> | null>(null);
+  const describeId = useId();
   const mounted = useRef(true);
-  const legendId = useId();
   const retire = useCallback(() => {
     setRetired(true);
     setUncertain(false);
@@ -104,7 +294,8 @@ function PermissionEditor({
       await onAccepted?.();
       if (!mounted.current) return;
       setRefreshNeeded(false);
-      setMessage("Permissions saved.");
+      setSaved(true);
+      setMessage("Permissions saved");
     } catch (cause) {
       console.error("App permissions surrounding-screen refresh failed", cause);
       if (!mounted.current) return;
@@ -129,6 +320,7 @@ function PermissionEditor({
     if (view === null || saving || retired || !view.canEdit) return;
     setSaving(true);
     setRefreshNeeded(false);
+    setSaved(false);
     setMessage(null);
     try {
       if (!uncertain) {
@@ -221,7 +413,11 @@ function PermissionEditor({
       </div>
     );
   if (view === null)
-    return <p role="status">{retired ? message : "Loading permissions…"}</p>;
+    return retired ? (
+      <p role="status">{message}</p>
+    ) : (
+      <LoadingState message="Loading permissions…" />
+    );
   const authority = {
     ...view.permissions.authority,
     approvedGrants: [...draft].flatMap(([capability, grant]) =>
@@ -257,9 +453,30 @@ function PermissionEditor({
   const pending = baseline.pending.filter(
     (capability) => capability !== "team.workbenchHost",
   );
+  const context: GrantRowContext = {
+    disabled,
+    describedBy: (capability) => `${describeId}-${capability}`,
+    edit,
+  };
+  const rowsOf = (items: readonly PermissionGroup[]) =>
+    items.flatMap((group) => groupRows(context, group));
+  const needsOk = (group: PermissionGroup) =>
+    [...group.columns, ...group.switches].some((column) =>
+      pending.some((item) => item === column.capability),
+    );
+  // The split is fixed on first sight, so rows never move under the cursor.
+  asked.current ??= new Set(groups.filter(needsOk).map((group) => group.id));
+  const askedIds = asked.current;
+  const first = rowsOf(
+    askedIds.size > 0 ? groups.filter((g) => askedIds.has(g.id)) : groups,
+  );
+  const later =
+    askedIds.size > 0 ? rowsOf(groups.filter((g) => !askedIds.has(g.id))) : [];
+  const showFooter =
+    (groups.length > 0 && !shellChanged) || uncertain || refreshNeeded;
   return (
     <Form
-      style={{ maxWidth: "46rem" }}
+      style={{ maxWidth: "var(--container-2xl)", marginInline: "auto" }}
       onSubmit={(event) => {
         event.preventDefault();
         void save();
@@ -267,12 +484,24 @@ function PermissionEditor({
     >
       {!screen.canEdit && <p>Only an owner can change these permissions.</p>}
       {pending.length > 0 && (
-        <p>
-          Needs approval:{" "}
-          {pending
-            .map((capability) => permissionCatalog[capability].label)
-            .join(", ")}
-        </p>
+        <Alert
+          tone="warning"
+          title={`${String(pending.length)} ${pending.length === 1 ? "permission needs" : "permissions need"} your OK`}
+          action={
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                document.querySelector<HTMLElement>('[id^="grant-"]')?.focus();
+              }}
+            >
+              Review
+            </Button>
+          }
+        >
+          Turn on what you want this App to do, then save.
+        </Alert>
       )}
       {shell !== undefined && (
         <ShellPermissionRow
@@ -298,137 +527,63 @@ function PermissionEditor({
           }}
         />
       )}
-      {groups.length > 0 && (
-        <Display size="sm" aria-label={`${view.appName} permissions`}>
-          <ScreenCells appearance="compact">
-            {groups.map((group) => (
-              <section key={group.id} aria-label={`${group.id} permissions`}>
-                <h3>{group.id}</h3>
-                {group.rows.map((row) => (
-                  <ScreenCell
-                    key={
-                      row.resource === "all"
-                        ? "all"
-                        : `${row.resource.kind}:${row.resource.id}`
-                    }
-                    appearance="compact"
-                    icon={
-                      <Sigil
-                        name={
-                          group.scope === "computer" ? "computer" : "listAgents"
-                        }
-                      />
-                    }
-                    legend={row.label}
-                  >
-                    {row.cells.map((cell) => {
-                      const column = group.columns.find(
-                        (item) => item.capability === cell.capability,
-                      );
-                      if (column === undefined) return null;
-                      return (
-                        <IconCheckbox
-                          key={cell.capability}
-                          appearance="compact"
-                          icon={<Sigil name={column.sigil} />}
-                          caption={column.caption}
-                          label={`${row.label}: ${column.label}`}
-                          aria-describedby={`${legendId}-${cell.capability}`}
-                          checked={cell.state !== "off"}
-                          disabled={disabled || cell.state === "via-all"}
-                          onChange={(event) => {
-                            edit(
-                              row.resource === "all"
-                                ? {
-                                    kind: "all",
-                                    capability: cell.capability,
-                                    on: event.target.checked,
-                                  }
-                                : {
-                                    kind: "resource",
-                                    capability: cell.capability,
-                                    resource: row.resource,
-                                    on: event.target.checked,
-                                  },
-                            );
-                          }}
-                        />
-                      );
-                    })}
-                  </ScreenCell>
-                ))}
-                {group.switches.map((column) => (
-                  <ScreenCell
-                    key={column.capability}
-                    appearance="compact"
-                    legend={column.label}
-                  >
-                    <IconCheckbox
-                      appearance="compact"
-                      icon={<Sigil name={column.sigil} />}
-                      caption={column.caption}
-                      label={column.label}
-                      aria-describedby={`${legendId}-${column.capability}`}
-                      checked={column.on}
-                      disabled={
-                        disabled ||
-                        permissionCatalog[column.capability].consent ===
-                          "affordance"
-                      }
-                      onChange={(event) => {
-                        edit({
-                          kind: "switch",
-                          capability: column.capability,
-                          on: event.target.checked,
-                        });
-                      }}
-                    />
-                  </ScreenCell>
-                ))}
-                {group.operations.map((operation) => (
-                  <label key={operation.operation}>
-                    <Checkbox
-                      checked={operation.on}
-                      disabled={disabled}
-                      onChange={(event) => {
-                        edit({
-                          kind: "operation",
-                          capability: operation.capability,
-                          operation: operation.operation,
-                          on: event.target.checked,
-                        });
-                      }}
-                    />
-                    {operation.operation}
-                  </label>
-                ))}
-                <dl>
-                  {[...group.columns, ...group.switches].map((column) => (
-                    <div
-                      key={column.capability}
-                      id={`${legendId}-${column.capability}`}
-                    >
-                      <dt>{column.label}</dt>
-                      <dd>
-                        {column.description}
-                        {column.warning !== null && <p>{column.warning}</p>}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            ))}
-          </ScreenCells>
-        </Display>
+      {first.length > 0 && (
+        <PermissionGrid
+          caption={
+            later.length > 0
+              ? `${view.appName} asks for`
+              : `${view.appName} permissions`
+          }
+          headings={gridHeadings}
+          rows={first}
+        />
       )}
+      {later.length > 0 && (
+        <Disclosure
+          open={otherOpen}
+          onOpenChange={setOtherOpen}
+          summary={`Other permissions · ${String(later.length)}`}
+        >
+          <PermissionGrid
+            caption="Already decided"
+            headings={gridHeadings}
+            rows={later}
+          />
+        </Disclosure>
+      )}
+      <div className="sr-only">
+        {groups
+          .flatMap((group) => [...group.columns, ...group.switches])
+          .map((column) => (
+            <p
+              key={column.capability}
+              id={`${describeId}-${column.capability}`}
+            >
+              {column.description}
+              {column.warning === null ? "" : ` ${column.warning}`}
+            </p>
+          ))}
+      </div>
       {screen.groups.length === 0 && <p>This App requests no permissions.</p>}
-      {message !== null && (
+      {message !== null && !showFooter && (
         <p role="status" aria-live="polite">
           {message}
         </p>
       )}
-      {((groups.length > 0 && !shellChanged) || uncertain || refreshNeeded) && (
+      {showFooter && (
         <FormFooter divider={false}>
+          {message !== null &&
+            (saved && !uncertain && !refreshNeeded ? (
+              <Status
+                role="status"
+                size="compact"
+                glyph="dot"
+                tone="success"
+                label={message}
+              />
+            ) : (
+              <span role="status">{message}</span>
+            ))}
           {refreshNeeded && (
             <Button
               type="button"
@@ -440,23 +595,19 @@ function PermissionEditor({
               Retry screen refresh
             </Button>
           )}
-          <Button
-            type="submit"
-            size="xs"
-            variant="outline"
-            disabled={
-              saving ||
-              retired ||
-              !screen.canEdit ||
-              (!uncertain && changes.length === 0)
-            }
-          >
-            {saving
-              ? "Saving…"
-              : uncertain
-                ? "Review current permissions"
-                : "Save permissions"}
-          </Button>
+          {(changes.length > 0 || saving || uncertain) && (
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={saving || retired || !screen.canEdit}
+            >
+              {saving
+                ? "Saving…"
+                : uncertain
+                  ? "Review current permissions"
+                  : "Save permissions"}
+            </Button>
+          )}
         </FormFooter>
       )}
     </Form>

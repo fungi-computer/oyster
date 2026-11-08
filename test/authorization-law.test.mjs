@@ -699,6 +699,7 @@ test("every host /api route's owner reach is classified", async () => {
     "DELETE /api/webhooks/:id direct",
     "GET|POST /api/apps/:appId/source.git/:suffix{info/refs|git-upload-pack|git-receive-pack} direct-or-app",
     "PUT /api/apps/:appId/source direct-or-app",
+    "GET /api/build-backend direct",
     "POST /api/builds direct-or-app",
     "GET /api/builds/:jobId direct-or-app",
     "GET /api/workbench/directory direct-or-app",

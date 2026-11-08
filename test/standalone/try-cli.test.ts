@@ -67,6 +67,7 @@ function effects(overrides: Partial<TryEffects> = {}) {
     ),
     installHello: vi.fn(() => Promise.resolve(201)),
     installDesktop: vi.fn(() => Promise.resolve("ready" as const)),
+    installStarter: vi.fn(() => Promise.resolve("installed" as const)),
     signInLink: vi.fn(() => {
       setImmediate(() => {
         controller.abort();
@@ -301,6 +302,65 @@ describe("oyster try", () => {
     expect(fake.signInLink).not.toHaveBeenCalled();
     expect(output.text()).not.toContain("Oyster is running");
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("builds the other starter Apps after the desktop, one line each, and keeps going past a failure", async () => {
+    const output = plain();
+    const installed: string[] = [];
+    let stopTrial = () => undefined;
+    const fixture = effects({
+      signInLink: vi.fn(() =>
+        Promise.resolve({
+          url: "http://127.0.0.1:1/once",
+          close: vi.fn(() => Promise.resolve()),
+        }),
+      ),
+      installStarter: vi.fn((app: { installationId: string }) => {
+        installed.push(app.installationId);
+        if (app.installationId === "trellis")
+          return Promise.reject(new Error("build exploded"));
+        if (app.installationId === "shed") stopTrial();
+        return Promise.resolve(
+          app.installationId === "prints"
+            ? ("already-installed" as const)
+            : ("installed" as const),
+        );
+      }),
+    });
+    stopTrial = () => {
+      fixture.controller.abort();
+    };
+    await runTry(
+      [join(root, "starters"), "--no-open"],
+      fixture.fake,
+      output.ui,
+    );
+    expect(installed).toEqual([
+      "grove",
+      "prints",
+      "inkcap",
+      "trellis",
+      "bonsai",
+      "shed",
+    ]);
+    const text = output.text();
+    expect(text).toContain("grove ready");
+    expect(text).toContain("prints already installed");
+    expect(text).toContain("trellis couldn't be installed: build exploded");
+    expect(text).toContain("bonsai ready");
+    expect(text).toContain(
+      "shed installed: needs a Computer runtime (see shed)",
+    );
+  });
+
+  it("installs no other starter App when the desktop is not ready", async () => {
+    const fixture = effects({
+      installDesktop: vi.fn(() =>
+        Promise.resolve("approval-required" as const),
+      ),
+    });
+    await runTry([join(root, "nodesk"), "--no-open"], fixture.fake, plain().ui);
+    expect(fixture.fake.installStarter).not.toHaveBeenCalled();
   });
 
   it("stops the server when installing the Hello App fails", async () => {

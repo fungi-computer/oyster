@@ -37,15 +37,22 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
-import { parseArgs } from "node:util";
+import { parseArgs, stripVTControlCharacters } from "node:util";
 import { Cli } from "@fungi.computer/lantern";
 import * as z from "zod";
 import { installHelloApp } from "./hello-app.js";
 import {
-  installLocalDesktop,
+  desktopApp,
+  installLocalStarter,
   localDesktopState,
+  localStarterInstalled,
   type DesktopReadiness,
 } from "./local-desktop.js";
+import {
+  standaloneAppSet,
+  trialStarterOrder,
+  type StarterApp,
+} from "./app-set.js";
 import { startSignInLink, type SignInLink } from "./sign-in-link.js";
 
 export const tryUsage =
@@ -211,6 +218,15 @@ export type TryEffects = Readonly<{
     key: string;
     signal: AbortSignal;
   }) => Promise<DesktopReadiness>;
+  /** Build and install one more starter App; resolves once it is installed. */
+  installStarter: (
+    app: StarterApp,
+    input: {
+      url: string;
+      key: string;
+      signal: AbortSignal;
+    },
+  ) => Promise<"installed" | "already-installed">;
   /** A one-time page that signs the owner in without the key in a URL. */
   signInLink: (input: {
     oysterUrl: string;
@@ -344,6 +360,29 @@ function captureOutput(
     stream?.pipe(log, { end: false });
     if (verbose) stream?.pipe(process.stderr, { end: false });
   }
+}
+
+/**
+ * Wrangler keeps running after a failed build, so a startup that will never
+ * answer is only visible in its output. Resolves with its first error line.
+ */
+class StartupFailure {
+  constructor(readonly line: string) {}
+}
+
+function firstWranglerError(child: ChildProcess): Promise<string> {
+  return new Promise<string>((found) => {
+    let seen = "";
+    for (const stream of [child.stdout, child.stderr])
+      stream?.setEncoding("utf8").on("data", (chunk: string) => {
+        seen = (seen + chunk).slice(-4096);
+        const line = stripVTControlCharacters(seen)
+          .split("\n")
+          .find((candidate) => candidate.includes("[ERROR]"));
+        if (line !== undefined)
+          found(line.slice(line.indexOf("[ERROR]") + "[ERROR]".length).trim());
+      });
+  });
 }
 
 const npmFailureSchema = z.object({ error: z.object({ code: z.string() }) });
@@ -533,6 +572,7 @@ function startWrangler(input: {
       },
     );
     captureOutput(child, logStream, input.verbose);
+    const startupError = firstWranglerError(child);
     const lifetime = new AbortController();
     const spawnError = new Promise<"spawn-error">((done) => {
       child.once("error", () => {
@@ -566,6 +606,7 @@ function startWrangler(input: {
     });
     try {
       const readiness = await Promise.race([
+        startupError.then((line) => new StartupFailure(line)),
         waitUntilReady(
           url,
           child,
@@ -577,11 +618,13 @@ function startWrangler(input: {
       input.signal.throwIfAborted();
       if (readiness !== "ready") {
         const diagnostic =
-          readiness === "spawn-error"
-            ? "Oyster could not launch its server process."
-            : readiness === "exited"
-              ? `Oyster stopped before readiness (${child.signalCode === null ? `exit ${String(child.exitCode)}` : `signal ${child.signalCode}`}).`
-              : "Oyster did not answer within 120 seconds.";
+          readiness instanceof StartupFailure
+            ? `Oyster could not start: ${readiness.line}`
+            : readiness === "spawn-error"
+              ? "Oyster could not launch its server process."
+              : readiness === "exited"
+                ? `Oyster stopped before readiness (${child.signalCode === null ? `exit ${String(child.exitCode)}` : `signal ${child.signalCode}`}).`
+                : "Oyster did not answer within 120 seconds.";
         await stop();
         throw new TryError(diagnostic, `Read ${log} for the server output.`);
       }
@@ -631,9 +674,20 @@ const realEffects: TryEffects = {
     process.env.PATH = `${join(directory, "node_modules", ".bin")}${delimiter}${process.env.PATH ?? ""}`;
     const saved = await localDesktopState(input);
     if (saved !== "missing") return saved;
-    await installLocalDesktop(input);
+    await installLocalStarter(desktopApp, input);
     const installed = await localDesktopState(input);
     return installed === "missing" ? "unavailable" : installed;
+  },
+  installStarter: async (app, input) => {
+    if (
+      await localStarterInstalled({
+        ...input,
+        installationId: app.installationId,
+      })
+    )
+      return "already-installed";
+    await installLocalStarter(app, input);
+    return "installed";
   },
   signInLink: startSignInLink,
   open: openBrowser,
@@ -957,6 +1011,54 @@ export async function tryOyster(
         "Press Ctrl-C to stop.",
       ],
     );
+    // The rest of the starter Apps build here, one at a time, while the desktop
+    // is already usable. Each reports one line; a failure never stops the rest.
+    const starters = trialStarterOrder.map((id) => {
+      const app = standaloneAppSet.find((item) => item.installationId === id);
+      if (app === undefined) throw new Error(`${id} is not a starter App`);
+      return app;
+    });
+    const trialAbort = new AbortController();
+    const trialSignal = AbortSignal.any([signal, trialAbort.signal]);
+    void watchedExit.then(() => {
+      trialAbort.abort();
+    });
+    const stopped = () => trialSignal.aborted;
+    // A stop interrupts the build in flight; that is not a failure to report.
+    const reportStarterFailure = (name: string, cause: unknown) => {
+      if (!stopped())
+        ui.warn(
+          `${name} couldn't be installed: ${innermostError(cause).message}`,
+          `Run \`${retry}\` again to retry it.`,
+        );
+    };
+    const background = desktopReady
+      ? (async () => {
+          ui.info(
+            `Getting ${String(starters.length)} more Apps ready in the background.`,
+          );
+          for (const app of starters) {
+            if (stopped()) return;
+            const name = app.installationId;
+            const settled = await effects
+              .installStarter(app, { url, key, signal: trialSignal })
+              .then(
+                (result) => ({ kind: "done" as const, result }),
+                (cause: unknown) => ({ kind: "failed" as const, cause }),
+              );
+            if (settled.kind === "failed")
+              reportStarterFailure(name, settled.cause);
+            else
+              ui.info(
+                app.trial === "needs-runtime"
+                  ? `${name} installed: needs a Computer runtime (see ${name})`
+                  : settled.result === "already-installed"
+                    ? `${name} already installed`
+                    : `${name} ready`,
+              );
+          }
+        })()
+      : Promise.resolve();
     let stopListener: ReturnType<typeof addAbortListener> | undefined;
     try {
       const requested = new Promise<void>((done) => {
@@ -975,6 +1077,8 @@ export async function tryOyster(
         );
     } finally {
       stopListener?.[Symbol.dispose]();
+      trialAbort.abort();
+      await background;
     }
   } catch (cause) {
     if (!isTryCancellation(cause, signal)) throw cause;

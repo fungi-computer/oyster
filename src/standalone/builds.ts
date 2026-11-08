@@ -6,6 +6,8 @@
  * metadata. Publishing an App's source (PUT /api/apps/:appId/source) instead
  * makes its template the build source at the returned seed revision.
  *
+ * - `GET /api/build-backend` reads whether this Oyster's Computer can build
+ *   at all, without starting a machine; installers ask before seeding.
  * - `POST /api/builds` starts a build of that source at one exact commit.
  * - `GET /api/builds/:jobId` reads it; `?log` reads its combined raw output.
  *   Both require the same owner admission. A finished build carries its
@@ -60,11 +62,15 @@ export function buildStartFailureReply(
 export function standaloneBuildRoutes(
   registryFor: () => Pick<
     StandaloneRegistry,
-    "startBuild" | "readBuild" | "readBuildLog"
+    "buildBackend" | "startBuild" | "readBuild" | "readBuildLog"
   >,
 ): Routes<OysterEnv> {
   const routes = routeTable<OysterEnv>();
   const owner = ownerRoute("direct-or-app");
+  // Only the owner's own installer asks; no App needs this read.
+  routes.get("/api/build-backend", ownerRoute("direct"), async () =>
+    Response.json(await registryFor().buildBackend()),
+  );
   routes.post("/api/builds", owner, async (context, { principal }) => {
     let input;
     try {

@@ -334,6 +334,7 @@ it("retains a failing build's complete combined output in its existing artifact 
   expect(completed.detail).toContain("?log");
   expect(f.store.objects.size).toBe(1);
   const routes = standaloneBuildRoutes(() => ({
+    buildBackend: () => Promise.resolve({ kind: "no_backend" }),
     startBuild: () => Promise.resolve({ kind: "refused", reason: "no_source" }),
     readBuild: (jobId) => Promise.resolve(f.reopen().read(jobId)),
     readBuildLog: (jobId) => f.reopen().readLog(jobId),
@@ -361,6 +362,16 @@ it("retains a failing build's complete combined output in its existing artifact 
   expect(refused.status).toBe(403);
   expect(await refused.text()).not.toContain(stderr.slice(0, 20));
   expect(await f.reopen().readLog("unknown")).toBeNull();
+  const backendUrl = "https://oyster.test/api/build-backend";
+  const backend = await served.request(backendUrl, {
+    headers: { member: "owner" },
+  });
+  expect(backend.status).toBe(200);
+  expect(await backend.json()).toEqual({ kind: "no_backend" });
+  const guestBackend = await served.request(backendUrl, {
+    headers: { member: "guest" },
+  });
+  expect(guestBackend.status).toBe(403);
 });
 
 it("allocates only for output received by a tiny build", () => {
