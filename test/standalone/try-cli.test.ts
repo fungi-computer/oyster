@@ -68,6 +68,8 @@ function effects(overrides: Partial<TryEffects> = {}) {
     installHello: vi.fn(() => Promise.resolve(201)),
     installDesktop: vi.fn(() => Promise.resolve("ready" as const)),
     installStarter: vi.fn(() => Promise.resolve("installed" as const)),
+    reportStarters: vi.fn(() => Promise.resolve()),
+    takeRetries: vi.fn((): Promise<readonly string[]> => Promise.resolve([])),
     modelSetup: vi.fn(() => Promise.resolve("ready" as const)),
     signInLink: vi.fn(() => {
       setImmediate(() => {
@@ -339,7 +341,7 @@ describe("oyster try", () => {
         installed.push(app.installationId);
         if (app.installationId === "trellis")
           return Promise.reject(new Error("build exploded"));
-        if (app.installationId === "shed") stopTrial();
+        if (app.installationId === "shed") setTimeout(stopTrial, 100);
         return Promise.resolve(
           app.installationId === "prints"
             ? ("already-installed" as const)
@@ -373,6 +375,67 @@ describe("oyster try", () => {
     );
   });
 
+  it("tells the desktop each App's state and retries a failed App when asked", async () => {
+    const attempts: string[] = [];
+    let stopTrial = () => undefined;
+    let asked = false;
+    const fixture = effects({
+      signInLink: vi.fn(() =>
+        Promise.resolve({
+          url: "http://127.0.0.1:1/once",
+          close: vi.fn(() => Promise.resolve()),
+        }),
+      ),
+      installStarter: vi.fn((app: { installationId: string }) => {
+        attempts.push(app.installationId);
+        if (app.installationId === "trellis" && attempts.length < 7)
+          return Promise.reject(new Error("build exploded"));
+        if (attempts.length === 7) setTimeout(stopTrial, 100);
+        return Promise.resolve("installed" as const);
+      }),
+      takeRetries: vi.fn(() => {
+        const ids = asked ? [] : ["trellis"];
+        asked = true;
+        return Promise.resolve(ids);
+      }),
+    });
+    stopTrial = () => {
+      fixture.controller.abort();
+    };
+    await runTry([join(root, "retry"), "--no-open"], fixture.fake, plain().ui);
+    expect(attempts).toEqual([
+      "grove",
+      "prints",
+      "inkcap",
+      "trellis",
+      "bonsai",
+      "shed",
+      "trellis",
+    ]);
+    const reports = vi
+      .mocked(fixture.fake.reportStarters)
+      .mock.calls.map(([, list]) =>
+        list.map((entry) => `${entry.installationId}:${entry.state}`),
+      );
+    expect(reports[0]).toEqual([
+      "grove:installing",
+      "prints:installing",
+      "inkcap:installing",
+      "trellis:installing",
+      "bonsai:installing",
+      "shed:installing",
+    ]);
+    expect(reports.some((list) => list.includes("trellis:failed"))).toBe(true);
+    expect(reports.at(-1)).toEqual(["shed:needs-runtime"]);
+    const failed = vi
+      .mocked(fixture.fake.reportStarters)
+      .mock.calls.flatMap(([, list]) => list)
+      .find((entry) => entry.state === "failed");
+    expect(failed?.reason).toEqual({
+      code: "build_failed",
+      message: "build exploded",
+    });
+  }, 15_000);
   it("says what to do when no model is connected, and stays quiet when one is", async () => {
     const missing = plain();
     await runTry(

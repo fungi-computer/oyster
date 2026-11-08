@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.19.0
+
+### Minor Changes
+
+- Changes since 0.18.3:
+
+  - fix(oyster): export the trial starter request type its functions take
+  - fix(oyster): report every starter App as getting ready from the start
+  - feat(oyster): oyster try reports starter App state to the desktop and
+    retries on ask
+
 ## 0.18.3
 
 ### Patch Changes

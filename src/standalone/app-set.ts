@@ -21,6 +21,8 @@ export type StarterApp = Readonly<{
   /** Selecting this configured dashboard approves its declared shell authority only. */
   dashboard?: true;
   installationId: string;
+  /** The name the desktop shows for it while it is being set up. */
+  displayName: string;
   appId: string;
   /** The App's directory in a Botanical checkout; its recipe is rooted there. */
   directory: string;
@@ -36,6 +38,7 @@ export type StarterApp = Readonly<{
 export const standaloneAppSet: readonly StarterApp[] = [
   {
     installationId: "tourtois",
+    displayName: "Tourtois",
     dashboard: true,
     directory: "apps/tourtois",
     repository: "tourtois",
@@ -44,6 +47,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "bonsai",
+    displayName: "Bonsai",
     directory: "apps/bonsai",
     repository: "bonsai",
     appId: "app_bonsai",
@@ -51,6 +55,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "shed",
+    displayName: "Shed",
     directory: "apps/shed",
     repository: "shed",
     appId: "app_shed",
@@ -58,6 +63,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "inkcap",
+    displayName: "Inkcap",
     directory: "apps/inkcap",
     repository: "inkcap",
     appId: "app_inkcap",
@@ -65,6 +71,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "trellis",
+    displayName: "Trellis",
     directory: "apps/trellis",
     repository: "trellis",
     appId: "app_trellis",
@@ -72,6 +79,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "prints",
+    displayName: "Prints",
     directory: "apps/prints",
     repository: "prints",
     appId: "app_prints",
@@ -79,6 +87,7 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
   {
     installationId: "grove",
+    displayName: "Grove",
     directory: "apps/grove",
     repository: "grove",
     appId: "app_grove",

@@ -55,6 +55,12 @@ import {
   type StarterApp,
 } from "./app-set.js";
 import { startSignInLink, type SignInLink } from "./sign-in-link.js";
+import {
+  reportTrialStarters,
+  takeTrialRetries,
+} from "./trial-starters-client.js";
+import type { InstallingApp } from "@fungi.computer/nacre/workbench-directory";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export const tryUsage =
   "Usage: oyster try [directory] [--port 8787] [--no-open] [--verbose] [--package <npm spec>]";
@@ -230,6 +236,17 @@ export type TryEffects = Readonly<{
       signal: AbortSignal;
     },
   ) => Promise<"installed" | "already-installed">;
+  /** Tell the Oyster which starter Apps are not ready yet. */
+  reportStarters: (
+    input: { url: string; key: string; signal: AbortSignal },
+    installing: readonly InstallingApp[],
+  ) => Promise<void>;
+  /** The Apps the desktop asked to retry; each ask is handed out once. */
+  takeRetries: (input: {
+    url: string;
+    key: string;
+    signal: AbortSignal;
+  }) => Promise<readonly string[]>;
   /** Whether a model is connected, so the start message can say what to do. */
   modelSetup: (input: {
     url: string;
@@ -488,6 +505,7 @@ async function runInstall(
   }
 }
 
+const retryPollMs = 3_000;
 const originFile = join(".oyster", "origin");
 
 /**
@@ -719,6 +737,9 @@ const realEffects: TryEffects = {
     await installLocalStarter(app, input);
     return "installed";
   },
+  reportStarters: (input, installing) =>
+    reportTrialStarters({ ...input, installing }),
+  takeRetries: takeTrialRetries,
   modelSetup: localModelSetup,
   signInLink: startSignInLink,
   open: openBrowser,
@@ -1066,38 +1087,104 @@ export async function tryOyster(
       trialAbort.abort();
     });
     const stopped = () => trialSignal.aborted;
-    // A stop interrupts the build in flight; that is not a failure to report.
-    const reportStarterFailure = (name: string, cause: unknown) => {
-      if (!stopped())
+    // What the desktop shows for each starter App that is not ready yet.
+    const pending = new Map<string, InstallingApp>();
+    const trial = { url, key, signal: trialSignal };
+    const publish = () =>
+      effects
+        .reportStarters(trial, [...pending.values()])
+        .then(undefined, (cause: unknown) => {
+          if (!stopped())
+            ui.warn(
+              `The desktop could not be told which Apps are installing (${innermostError(cause).message}).`,
+              "Installs continue; the desktop will not show their progress.",
+            );
+        });
+    const failureReason = (cause: unknown) => {
+      const failure = innermostError(cause);
+      return {
+        code: isNetworkFailure(failure)
+          ? ("network" as const)
+          : ("build_failed" as const),
+        message: failure.message.slice(0, 200) || "The build failed.",
+      };
+    };
+    const installOne = async (app: StarterApp) => {
+      const name = app.installationId;
+      pending.set(name, {
+        installationId: name,
+        displayName: app.displayName,
+        state: "installing",
+      });
+      await publish();
+      const settled = await effects.installStarter(app, trial).then(
+        (result) => ({ kind: "done" as const, result }),
+        (cause: unknown) => ({ kind: "failed" as const, cause }),
+      );
+      if (stopped()) return;
+      if (settled.kind === "failed") {
+        pending.set(name, {
+          installationId: name,
+          displayName: app.displayName,
+          state: "failed",
+          reason: failureReason(settled.cause),
+        });
         ui.warn(
-          `${name} couldn't be installed: ${innermostError(cause).message}`,
-          `Run \`${retry}\` again to retry it.`,
+          `${name} couldn't be installed: ${innermostError(settled.cause).message}`,
+          `Retry it from the desktop, or run \`${retry}\` again.`,
         );
+      } else if (app.trial === "needs-runtime") {
+        pending.set(name, {
+          installationId: name,
+          displayName: app.displayName,
+          state: "needs-runtime",
+        });
+        ui.info(`${name} installed: needs a Computer runtime (see ${name})`);
+      } else {
+        pending.delete(name);
+        ui.info(
+          settled.result === "already-installed"
+            ? `${name} already installed`
+            : `${name} ready`,
+        );
+      }
+      await publish();
     };
     const background = desktopReady
       ? (async () => {
           ui.info(
             `Getting ${String(starters.length)} more Apps ready in the background.`,
           );
+          // Every starter shows as getting ready from the start, so the
+          // launcher does not grow tile by tile.
+          for (const app of starters)
+            pending.set(app.installationId, {
+              installationId: app.installationId,
+              displayName: app.displayName,
+              state: "installing",
+            });
+          await publish();
           for (const app of starters) {
             if (stopped()) return;
-            const name = app.installationId;
-            const settled = await effects
-              .installStarter(app, { url, key, signal: trialSignal })
-              .then(
-                (result) => ({ kind: "done" as const, result }),
-                (cause: unknown) => ({ kind: "failed" as const, cause }),
-              );
-            if (settled.kind === "failed")
-              reportStarterFailure(name, settled.cause);
-            else
-              ui.info(
-                app.trial === "needs-runtime"
-                  ? `${name} installed: needs a Computer runtime (see ${name})`
-                  : settled.result === "already-installed"
-                    ? `${name} already installed`
-                    : `${name} ready`,
-              );
+            await installOne(app);
+          }
+          // Then answer the desktop's retry asks until the trial stops.
+          while (!stopped()) {
+            const waited = await sleep(retryPollMs, undefined, {
+              signal: trialSignal,
+            }).then(
+              () => true,
+              () => false,
+            );
+            if (!waited) return;
+            const asked = await effects.takeRetries(trial).then(
+              (ids) => ids,
+              (): readonly string[] => [],
+            );
+            for (const id of asked) {
+              const app = starters.find((item) => item.installationId === id);
+              if (app !== undefined && !stopped()) await installOne(app);
+            }
           }
         })()
       : Promise.resolve();
