@@ -70,6 +70,30 @@ export type DesktopReadiness =
 const git = async (cwd: string, args: readonly string[], signal: AbortSignal) =>
   new TextDecoder().decode(await runGit(args, cwd, signal, process.env)).trim();
 
+const setupFactsSchema = z.object({ models: z.enum(["ready", "missing"]) });
+
+/** Whether the Oyster has a model its Agents can answer with (`GET /api/setup`). Read-only. */
+export async function localModelSetup(
+  input: Readonly<{ url: string; key: string; signal?: AbortSignal }>,
+): Promise<"ready" | "missing" | "unknown"> {
+  const request: RequestInit = {
+    headers: { Authorization: `Bearer ${input.key}` },
+  };
+  if (input.signal !== undefined) request.signal = input.signal;
+  let response: Response;
+  try {
+    response = await fetch(new URL("/api/setup", input.url), request);
+  } catch (cause) {
+    // A stop is not "unknown"; any other read failure only means no message.
+    input.signal?.throwIfAborted();
+    console.error("The Oyster's setup could not be read", cause);
+    return "unknown";
+  }
+  if (!response.ok) return "unknown";
+  const parsed = setupFactsSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.models : "unknown";
+}
+
 /** Whether an installation of this id is saved on the Oyster. Read-only. */
 export async function localStarterInstalled(
   input: Readonly<{

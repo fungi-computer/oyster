@@ -68,6 +68,7 @@ function effects(overrides: Partial<TryEffects> = {}) {
     installHello: vi.fn(() => Promise.resolve(201)),
     installDesktop: vi.fn(() => Promise.resolve("ready" as const)),
     installStarter: vi.fn(() => Promise.resolve("installed" as const)),
+    modelSetup: vi.fn(() => Promise.resolve("ready" as const)),
     signInLink: vi.fn(() => {
       setImmediate(() => {
         controller.abort();
@@ -370,6 +371,28 @@ describe("oyster try", () => {
     expect(text).toContain(
       "shed installed: needs a Computer runtime (see shed)",
     );
+  });
+
+  it("says what to do when no model is connected, and stays quiet when one is", async () => {
+    const missing = plain();
+    await runTry(
+      [join(root, "no-model"), "--no-open"],
+      effects({ modelSetup: vi.fn(() => Promise.resolve("missing" as const)) })
+        .fake,
+      missing.ui,
+    );
+    expect(missing.text()).toContain("No model is connected yet");
+    expect(missing.text()).toContain("Keys, then Model keys");
+    expect(missing.text()).toContain(
+      "docs.fungi.computer/models/your-own-key/",
+    );
+    const ready = plain();
+    await runTry(
+      [join(root, "has-model"), "--no-open"],
+      effects().fake,
+      ready.ui,
+    );
+    expect(ready.text()).not.toContain("No model is connected");
   });
 
   it("installs no other starter App when the desktop is not ready", async () => {

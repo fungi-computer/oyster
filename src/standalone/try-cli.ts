@@ -47,6 +47,7 @@ import {
   localDesktopState,
   localStarterInstalled,
   type DesktopReadiness,
+  localModelSetup,
 } from "./local-desktop.js";
 import {
   standaloneAppSet,
@@ -83,6 +84,8 @@ const ownerKeyFile = ".oyster-owner";
 const logFile = join(".oyster", "wrangler.log");
 const installLogFile = join(".oyster", "install.log");
 const command = "npx @fungi.computer/oyster try";
+/** Where a stranger learns to add a model key. */
+const modelKeyGuideUrl = "https://docs.fungi.computer/models/your-own-key/";
 
 const pendingInstall = join(".oyster", "install.pending");
 const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -227,6 +230,12 @@ export type TryEffects = Readonly<{
       signal: AbortSignal;
     },
   ) => Promise<"installed" | "already-installed">;
+  /** Whether a model is connected, so the start message can say what to do. */
+  modelSetup: (input: {
+    url: string;
+    key: string;
+    signal: AbortSignal;
+  }) => Promise<"ready" | "missing" | "unknown">;
   /** A one-time page that signs the owner in without the key in a URL. */
   signInLink: (input: {
     oysterUrl: string;
@@ -710,6 +719,7 @@ const realEffects: TryEffects = {
     await installLocalStarter(app, input);
     return "installed";
   },
+  modelSetup: localModelSetup,
   signInLink: startSignInLink,
   open: openBrowser,
   portFree,
@@ -1037,6 +1047,12 @@ export async function tryOyster(
         "Press Ctrl-C to stop.",
       ],
     );
+    // Agents answer with a model; say up front, once, what to do when none is.
+    if ((await effects.modelSetup({ url, key, signal })) === "missing")
+      ui.warn(
+        "No model is connected yet, so Agents can't answer.",
+        `Open Oyster, choose Keys, then Model keys, and add a key. Guide: ${modelKeyGuideUrl}`,
+      );
     // The rest of the starter Apps build here, one at a time, while the desktop
     // is already usable. Each reports one line; a failure never stops the rest.
     const starters = trialStarterOrder.map((id) => {

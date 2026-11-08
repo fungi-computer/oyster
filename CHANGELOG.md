@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.18.2
+
+### Patch Changes
+
+- Changes since 0.18.1:
+
+  - fix(grove): model setup instead of a run failure; one inline failure line
+    (#380)
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.11.2
+
 ## 0.18.1
 
 ### Patch Changes

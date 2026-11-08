@@ -381,6 +381,60 @@ function observedModels(
   };
 }
 
+/** The refusal a run ends with when no model provider is connected, in the host's own failure wording. */
+const setupRequiredFailure =
+  "Model request failed (setup_required). Connect a model first.";
+
+/**
+ * A run with no connected model provider: end it at once with the typed setup
+ * failure. A transport error would read as an outage and be retried.
+ */
+function unconfiguredModels(model: Model<Api>): StandaloneModelSource {
+  return {
+    acquire: () => {
+      const failed = new WeakSet<AssistantMessage>();
+      return Promise.resolve({
+        model,
+        retryable: () => false,
+        failureReason: (message) =>
+          failed.has(message) ? setupRequiredFailure : undefined,
+        stream: () => {
+          const events = createAssistantMessageEventStream();
+          const terminal: AssistantMessage = {
+            role: "assistant",
+            content: [],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+            stopReason: "error",
+            errorMessage: setupRequiredFailure,
+            timestamp: Date.now(),
+          };
+          failed.add(terminal);
+          events.push({ type: "error", reason: "error", error: terminal });
+          events.end(terminal);
+          return events;
+        },
+        release: () => Promise.resolve(),
+      });
+    },
+  };
+}
+
 /**
  * Workers AI over the AI binding. Requests go through AI Gateway's
  * `workers-ai` passthrough on the binding, so no API token is needed.
@@ -955,6 +1009,9 @@ export abstract class StandaloneAgentBase<
     )
       return new Response("Agent scope is unavailable", { status: 403 });
     const choice = await this.readModelChoice();
+    // Offer only what can run: a model whose provider is not connected is not a choice.
+    if (choice.keySource === "workers-ai" && !cloudflareAccountReady(this.env))
+      return Response.json(agentModelListSchema.parse([]));
     // The same owner checks the chosen source before reporting it as available.
     await this.sourceFor(choice);
     const model = await selectAgentModel(choice);
@@ -1390,6 +1447,9 @@ export abstract class StandaloneAgentBase<
     }
     if (this.env.AI === undefined)
       throw new AgentModelRefused("key_not_connected");
+    // The AI binding is declared everywhere; only a Cloudflare account answers it.
+    if (!cloudflareAccountReady(this.env))
+      return unconfiguredModels(normalizeModel(modelChoice));
     let options: WorkersAiOptions = { model: modelChoice.id };
     if (this.env.OYSTER_AI_GATEWAY !== undefined)
       options = { ...options, gateway: this.env.OYSTER_AI_GATEWAY };
