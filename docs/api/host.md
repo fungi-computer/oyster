@@ -460,6 +460,7 @@ type OysterHost = Readonly<{
            computerId: string;
            name: string;
         }>;
+        installing?: readonly InstallingApp[];
      }>>;
      storage: Pick<AppStorageWire, "read" | "write" | "reset"> & Readonly<{
         events: Promise<Response>;

@@ -15,6 +15,7 @@ import {
   type AppSourceBindingEnv,
 } from "./app-source.js";
 import { standaloneBuildRoutes } from "./builds.js";
+import { trialStarterRoutes } from "./trial-starters.js";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { standaloneComputerFleetRoutes } from "./computer-fleet.js";
 import { standaloneWorkflowWebhookControls } from "./workflow-webhooks.js";
@@ -42,6 +43,7 @@ export function standaloneOwnerRoutes(
   const directory = () => agentDirectoryForScope(env, scope);
   const owned = appSourceOwnerRoutes(env, scope)
     .include(standaloneBuildRoutes(registry))
+    .include(trialStarterRoutes(registry))
     .include(standaloneComputerFleetRoutes(registry))
     .include(
       standaloneAgentComputerRoutes({

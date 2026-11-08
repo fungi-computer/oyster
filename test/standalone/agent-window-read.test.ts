@@ -87,6 +87,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
   const agents: OysterAgents = {
     list: () => Promise.resolve([fresh]),
     setArchived: notInTest,
+    ensureStarter: notInTest,
     fetch: (agentId, request) =>
       agentId === fresh.agentId ? agent.fetch(request) : Promise.resolve(null),
     policyRevision: () => Promise.resolve(null),

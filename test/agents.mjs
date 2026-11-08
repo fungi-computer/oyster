@@ -15,6 +15,7 @@ let avatarWrites = 0;
 // Simulates an Agent already pending from before owner-direct creation, or an
 // auto-approval that failed open; the "Allow App tools" control recovers it.
 let approvedPolicy = { status: "pending", revision: "agent_1:requested" };
+let starterOffers = 0;
 let inboxReads = 0;
 let revisionReads = 0;
 let inboxRevision = 3;
@@ -26,6 +27,11 @@ const adapter = {
         ? archived.has(agent.agentId)
         : !archived.has(agent.agentId),
     ),
+  ensureStarter: async (principal) => {
+    assert.deepEqual(principal, owner);
+    starterOffers += 1;
+    return "already-offered";
+  },
   setArchived: async (agentId, value, principal) => {
     assert.deepEqual(principal, owner);
     if (!agents.some((agent) => agent.agentId === agentId))
@@ -196,6 +202,11 @@ const created = await (await create("owner")).json();
 assert.equal(created.agentId, "agent_1");
 assert.equal((await (await create("owner")).json()).agentId, "agent_1");
 assert.deepEqual(await (await call("/agents", {}, "key")).json(), []);
+assert.equal(starterOffers, 0, "a key's read never offers the starter Agent");
+await (await call("/agents?archived=true")).json();
+assert.equal(starterOffers, 0, "the archived view never offers it");
+await (await call("/agents")).json();
+assert.equal(starterOffers, 1, "the owner's own read offers it");
 for (const path of [
   "/agents/agent_1/sessions",
   "/agents/agent_1/sessions/s/prompt",

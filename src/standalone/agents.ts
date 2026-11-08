@@ -195,6 +195,12 @@ import {
   createAgentAvatarStore,
   type AgentAvatarStore,
 } from "../agent-avatars.js";
+import {
+  createStarterLedger,
+  ensureStarterAgent,
+  type StarterLedgerRow,
+  type StarterLedgerStore,
+} from "../starter-agent.js";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
 import type { InvocationFrame } from "../invocation.js";
 import type { OysterJson } from "../host.js";
@@ -2438,6 +2444,24 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return id.ok && this.directory.read(this.grant(), id.value) !== null;
   }
 
+  private starterLedgerOwner: StarterLedgerStore | undefined;
+  private get starterLedger(): StarterLedgerStore {
+    return (this.starterLedgerOwner ??= createStarterLedger(
+      this.ctx.storage.sql,
+    ));
+  }
+  /** The starter Agent's one-row ledger and the Agent total it reads, for the owner's ensure. */
+  readStarter(): StarterLedgerRow | undefined {
+    return this.starterLedger.read();
+  }
+  recordStarter(row: StarterLedgerRow): void {
+    this.starterLedger.record(row);
+  }
+  /** Every Agent in the directory, archived ones included. */
+  agentTotal(): number {
+    return this.directory.list(this.grant()).length;
+  }
+
   /** Resolve the existing recorded creator for host-side owner admission. */
   readCreator(agentId: string): string | null {
     return this.directory.readCreator(this.grant(), agentId);
@@ -2795,6 +2819,39 @@ export function standaloneAgents(
     avatar: entry.avatar,
     sessionOperations: everyOperation,
   });
+  const created = async (
+    name: string,
+    requestId: string,
+    principal: TenantPrincipal,
+    actor: AgentPolicyActor,
+    avatar?: Avatar,
+  ) => {
+    const entry = await directory().create(
+      name,
+      requestId,
+      principal,
+      actor,
+      avatar,
+    );
+    await env.AGENTS.getByName(entry.agentId).usePolicyDirectory({
+      directoryName,
+      tenantId: scope?.tenantId ?? defaultTenant,
+    });
+    if (actor === "owner-direct" && entry.policyRevision !== null) {
+      // Best-effort: a stale membership lookup leaves the Agent pending
+      // rather than failing its creation. Grove's "Allow App tools"
+      // control recovers it through the same approval path.
+      await directory().approveAppToolPolicy(
+        entry.agentId,
+        principal,
+        "write",
+        entry.policyRevision,
+        actor,
+        scope?.tenantId ?? defaultTenant,
+      );
+    }
+    return toAgent(entry);
+  };
   return {
     list: async (options) => (await directory().list(options)).map(toAgent),
     setArchived: async (agentId, archived, principal) => {
@@ -2809,32 +2866,35 @@ export function standaloneAgents(
         return { error: "not_found" };
       return agent.setArchived(archived);
     },
-    create: async (name, requestId, principal, actor, avatar) => {
-      const entry = await directory().create(
-        name,
-        requestId,
-        principal,
-        actor,
-        avatar,
-      );
-      await env.AGENTS.getByName(entry.agentId).usePolicyDirectory({
-        directoryName,
-        tenantId: scope?.tenantId ?? defaultTenant,
+    create: created,
+    ensureStarter: (principal) => {
+      const owner = directory();
+      return ensureStarterAgent({
+        ledger: {
+          read: () => owner.readStarter(),
+          record: (row) => owner.recordStarter(row),
+        },
+        isOwner: () => oysterPrincipalIsOwner(principal),
+        agentCount: () => owner.agentTotal(),
+        // The ordinary create: the same Computer-less Agent, policy and approval any owner create gets.
+        create: async (request) => {
+          const agent = await created(
+            request.name,
+            request.requestId,
+            principal,
+            "owner-direct",
+          );
+          return { status: "created", agentId: agent.agentId };
+        },
+        report: (cause) => {
+          console.warn(
+            JSON.stringify({
+              event: "starter_agent_failed",
+              cause: String(cause),
+            }),
+          );
+        },
       });
-      if (actor === "owner-direct" && entry.policyRevision !== null) {
-        // Best-effort: a stale membership lookup leaves the Agent pending
-        // rather than failing its creation. Grove's "Allow App tools"
-        // control recovers it through the same approval path.
-        await directory().approveAppToolPolicy(
-          entry.agentId,
-          principal,
-          "write",
-          entry.policyRevision,
-          actor,
-          scope?.tenantId ?? defaultTenant,
-        );
-      }
-      return toAgent(entry);
     },
     rename: async (agentId, name, principal) => {
       const result = await directory().rename(agentId, name, principal);

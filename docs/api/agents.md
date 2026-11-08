@@ -199,6 +199,7 @@ type OysterAgents = Readonly<{
       )[];
     }>[]
   >;
+  ensureStarter: Promise<StarterOutcome>;
   setArchived: Promise<
     | Readonly<{
         archived: boolean;
@@ -475,6 +476,22 @@ type ModelKeySealInput = Readonly<{
 ```
 
 What the owner submits to seal one provider key.
+
+---
+
+### StarterOutcome
+
+```ts
+type StarterOutcome =
+  | "created"
+  | "already-offered"
+  | "team-not-empty"
+  | "unfunded"
+  | "not-owner"
+  | "failed";
+```
+
+How one offer of the starter Agent settled; only `created` made an Agent.
 
 ## Variables
 

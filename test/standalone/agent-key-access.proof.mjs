@@ -117,6 +117,7 @@ function sessionsOf(agentId) {
   return store;
 }
 const adapter = {
+  ensureStarter: async () => "already-offered",
   list: async () =>
     directory.map((agent) => ({
       agentId: agent.agentId,

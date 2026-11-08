@@ -37,6 +37,8 @@ import {
 import type { HostActor } from "@fungi.computer/puffball/app";
 import type { Avatar } from "@fungi.computer/sprite/avatar";
 import { agentAvatarSchema } from "./agent-avatars.js";
+import type { StarterOutcome } from "./starter-agent.js";
+export type { StarterOutcome };
 import { computerTargetParam } from "./computer-target.js";
 import type {
   AgentModelChoice,
@@ -191,6 +193,11 @@ export type OysterAgents = Readonly<{
   list(
     options?: Readonly<{ archived?: boolean }>,
   ): Promise<readonly OysterAgent[]>;
+  /**
+   * Offer the owner their starter Agent on an empty Team's first owner read;
+   * it creates through this host's ordinary `create` and never fails the read.
+   */
+  ensureStarter(principal: TenantPrincipal): Promise<StarterOutcome>;
   /** Owner-only HTTP transition; creator Agents use their own control tool. */
   setArchived(
     agentId: string,
@@ -519,20 +526,27 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .get("/agent-computers", owner("direct-or-app"), () =>
         Response.json(null),
       )
-      .get("/agents", agentCollection(), async (context, { reaches }) => {
-        const selected = context.req.query("archived");
-        if (
-          selected !== undefined &&
-          selected !== "true" &&
-          selected !== "false"
-        )
-          return refusal(400, "Choose a valid archive view");
-        const listed = await agents.list({ archived: selected === "true" });
-        const reached: OysterAgent[] = [];
-        for (const item of listed)
-          if (await reaches(item.agentId)) reached.push(item);
-        return Response.json(reached);
-      })
+      .get(
+        "/agents",
+        agentCollection(),
+        async (context, { reaches, everyAgent, authority }) => {
+          const selected = context.req.query("archived");
+          if (
+            selected !== undefined &&
+            selected !== "true" &&
+            selected !== "false"
+          )
+            return refusal(400, "Choose a valid archive view");
+          // The owner's own directory read is the starter Agent's one trigger.
+          if (everyAgent && authority.kind === "owner" && selected !== "true")
+            await agents.ensureStarter(authority.principal);
+          const listed = await agents.list({ archived: selected === "true" });
+          const reached: OysterAgent[] = [];
+          for (const item of listed)
+            if (await reaches(item.agentId)) reached.push(item);
+          return Response.json(reached);
+        },
+      )
       .put(
         "/agent-names/:agentId",
         owner("direct-or-app"),

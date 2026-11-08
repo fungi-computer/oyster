@@ -6,6 +6,9 @@ import {
   type OysterWorkerEnv,
 } from "../workers.js";
 import { installOrSelect, type OysterHost } from "../host.js";
+import type { OysterRootDirectory } from "../root-data.js";
+import type { InstallingApp } from "@fungi.computer/nacre/workbench-directory";
+import { createTrialStarters, pendingStarters } from "./trial-starters.js";
 import { installationOperationsPort } from "../installation-operations.js";
 import { tenantScope, type TenantScope, type TenantId } from "../tenant.js";
 import { artifactsOf, type OysterGitEnv } from "../workers-git.js";
@@ -139,6 +142,7 @@ export abstract class StandaloneRegistry
   #builds: Promise<OysterAppBuilds> | undefined;
   readonly #computers: ReturnType<typeof createFleetComputers>;
   readonly #fleetStorage: DurableObjectStorage;
+  readonly #trial: ReturnType<typeof createTrialStarters>;
 
   constructor(
     state: DurableObjectState,
@@ -149,12 +153,49 @@ export abstract class StandaloneRegistry
     this.#env = env;
     this.#git = git;
     this.#fleetStorage = state.storage;
+    this.#trial = createTrialStarters({
+      starters: {
+        read: () =>
+          state.storage.get<readonly InstallingApp[]>("trial.starters"),
+        write: (value) => state.storage.put("trial.starters", value),
+      },
+      retries: {
+        read: () => state.storage.get<readonly string[]>("trial.retries"),
+        write: (value) => state.storage.put("trial.retries", value),
+      },
+    });
     // Native hosts own infrastructure capacity. Standalone has no Team quota.
     this.#computers = createFleetComputers(state.storage, {
       limit: Number.MAX_SAFE_INTEGER,
       retryAfterSeconds: 30,
     });
     this.#computers.ensure();
+  }
+
+  /** Starter Apps a trial is still setting up, cleared once each is installed. */
+  override async directory(): Promise<OysterRootDirectory> {
+    const base = await super.directory();
+    const installing = pendingStarters(
+      await this.#trial.list(),
+      base.apps.flatMap((app) =>
+        app.installationId === null ? [] : [app.installationId],
+      ),
+    );
+    return installing.length === 0 ? base : { ...base, installing };
+  }
+  async reportTrialStarters(
+    installing: readonly InstallingApp[],
+  ): Promise<void> {
+    await this.#trial.report(installing);
+  }
+  trialStartersList() {
+    return this.#trial.list();
+  }
+  requestTrialRetry(installationId: string): Promise<boolean> {
+    return this.#trial.requestRetry(installationId);
+  }
+  takeTrialRetries() {
+    return this.#trial.takeRetries();
   }
 
   /** Whether installations or build jobs were written by Oyster 0.2 or earlier. */

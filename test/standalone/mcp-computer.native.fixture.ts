@@ -77,6 +77,7 @@ const proofAgents = (): OysterAgents => ({
   appToolPolicy: () => Promise.resolve(null),
   create: notInProof,
   setArchived: notInProof,
+  ensureStarter: notInProof,
   rename: notInProof,
   setAvatar: notInProof,
   readModelChoice: notInProof,

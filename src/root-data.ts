@@ -5,6 +5,7 @@ import {
 } from "@fungi.computer/puffball/app";
 import { createAppStorage } from "./app-storage.js";
 import type { InstallationStore, verifyRelease } from "./host.js";
+import type { InstallingApp } from "@fungi.computer/nacre/workbench-directory";
 import {
   addressKey,
   appDirectoryEntrySchema,
@@ -30,6 +31,8 @@ export type OysterRootDirectory = Readonly<{
   roles: OysterRootRoles;
   /** Fixed host-selected Computer context; metadata conveys no operation rights. */
   computer?: Readonly<{ computerId: string; name: string }>;
+  /** Trial starter Apps still being set up; the registry adds them. */
+  installing?: readonly InstallingApp[];
 }>;
 
 /** Existing installation, Release and SQLite owners supplied by the root. */

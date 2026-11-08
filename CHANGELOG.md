@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.17.0
+
+### Minor Changes
+
+- Changes since 0.16.0:
+
+  - feat(oyster): offer the owner their starter Shiitake on the standalone Agent
+    read
+  - fix(oyster): export the registry binding type the trial routes expose
+  - feat(tourtois): launcher tiles and cards for a trial's starter Apps
+  - feat(oyster): a trial reports starter App state to its Oyster
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.10.0
+  - @fungi.computer/nacre@0.4.0
+  - @fungi.computer/parakeet@0.11.0
+  - @fungi.computer/computer@0.8.1
+
 ## 0.16.0
 
 ### Minor Changes

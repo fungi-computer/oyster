@@ -24,11 +24,17 @@ export type StarterLedgerRow = Readonly<{
   at: number;
 }>;
 
-/** One row per Team, in the host's own SQLite. */
-export type StarterLedger = Readonly<{
+/** One row per Team in the host's own SQLite. */
+export type StarterLedgerStore = Readonly<{
   read(): StarterLedgerRow | undefined;
   /** First write wins; a later one is ignored. */
   record(row: StarterLedgerRow): void;
+}>;
+
+/** The ledger as the policy reads it; a host across an RPC awaits its store. */
+export type StarterLedger = Readonly<{
+  read(): StarterLedgerRow | undefined | Promise<StarterLedgerRow | undefined>;
+  record(row: StarterLedgerRow): void | Promise<void>;
 }>;
 
 /** The host's ordinary create, as the starter sees it. */
@@ -41,7 +47,7 @@ export type StarterAgentHost = Readonly<{
   /** Only the Team owner's read may trigger the starter. */
   isOwner(): boolean;
   /** Agents in the Team, archived ones included. */
-  agentCount(): number;
+  agentCount(): number | Promise<number>;
   /** The host's normal create, replayed by `requestId`; funding refusal is `unfunded`. */
   create(request: {
     name: string;
@@ -52,6 +58,7 @@ export type StarterAgentHost = Readonly<{
   now?(): number;
 }>;
 
+/** How one offer of the starter Agent settled; only `created` made an Agent. */
 export type StarterOutcome =
   | "created"
   | "already-offered"
@@ -70,7 +77,7 @@ const ledgerRowSchema = z.strictObject({
 /** Open the one-row ledger in the host's own SQLite. */
 export function createStarterLedger(
   sql: WatchdogSqliteOwner["sql"],
-): StarterLedger {
+): StarterLedgerStore {
   sql.exec(
     "CREATE TABLE IF NOT EXISTS starter_agent (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, outcome TEXT NOT NULL, agent_id TEXT, at INTEGER NOT NULL) STRICT",
   );
@@ -122,10 +129,10 @@ export function ensureStarterAgent(
 async function settle(host: StarterAgentHost): Promise<StarterOutcome> {
   try {
     if (!host.isOwner()) return "not-owner";
-    if (host.ledger.read() !== undefined) return "already-offered";
+    if ((await host.ledger.read()) !== undefined) return "already-offered";
     const at = (host.now ?? Date.now)();
-    if (host.agentCount() > 0) {
-      host.ledger.record({
+    if ((await host.agentCount()) > 0) {
+      await host.ledger.record({
         version: starterAgent.version,
         outcome: "team-not-empty",
         agentId: null,
@@ -138,7 +145,7 @@ async function settle(host: StarterAgentHost): Promise<StarterOutcome> {
       requestId: starterAgent.requestId,
     });
     if (result.status === "unfunded") return "unfunded";
-    host.ledger.record({
+    await host.ledger.record({
       version: starterAgent.version,
       outcome: "created",
       agentId: result.agentId,
