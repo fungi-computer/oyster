@@ -11,6 +11,7 @@ import {
   type ReadonlyTenancy,
 } from "../tenancy/index.js";
 import { ownerKey } from "../tenancy/owner-key.js";
+import { loopbackAliasLocation } from "../tenancy/registry-record.js";
 import { hosts } from "../tenancy/resolve.js";
 import { ownerOrKeyAuth } from "../auth.js";
 import type { OysterGitWorkerEnv } from "../workers-git.js";
@@ -164,7 +165,19 @@ export async function standaloneTenancyForRequest(
 ): Promise<StandaloneTenancy> {
   const configuredOrigin = tenantScope(defaultTenant, env.OYSTER_ORIGIN).origin;
   const requestOrigin = new URL(request.url).origin;
-  if (requestOrigin !== configuredOrigin)
+  if (requestOrigin !== configuredOrigin) {
+    // Another loopback name for this machine is the same Oyster.
+    const canonical = loopbackAliasLocation(
+      new URL(request.url),
+      configuredOrigin,
+    );
+    if (canonical !== null)
+      throw new HTTPException(307, {
+        res: new Response(null, {
+          status: 307,
+          headers: { Location: canonical, "Cache-Control": "no-store" },
+        }),
+      });
     throw new HTTPException(404, {
       res: Response.json(
         {
@@ -177,6 +190,7 @@ export async function standaloneTenancyForRequest(
         { status: 404 },
       ),
     });
+  }
   return standaloneTenancy(env);
 }
 

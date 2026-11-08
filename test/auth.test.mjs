@@ -41,6 +41,38 @@ test("neutral owner auth preserves explicit owner identity and bearer refusals",
   });
 });
 
+test("the session cookie drops Secure on loopback HTTP only", async () => {
+  const auth = ownerKeyAuth(key, ownerId);
+  assert.ok(auth.login);
+  // The session cookie and the returning marker follow one Secure rule.
+  const cookie = async (url) =>
+    (
+      await auth.login(
+        new Request(url, {
+          method: "POST",
+          body: new URLSearchParams({ key }),
+        }),
+      )
+    ).headers.getSetCookie();
+  for (const url of [
+    "http://127.0.0.1:8787/login",
+    "http://localhost:8787/login",
+    "http://[::1]:8787/login",
+  ])
+    for (const header of await cookie(url)) {
+      assert.match(header, /HttpOnly; SameSite=Strict; Max-Age=\d+$/u, url);
+      assert.doesNotMatch(header, /Secure/u, url);
+    }
+  for (const url of [
+    "https://oyster.test/login",
+    "https://127.0.0.1:8787/login",
+    "http://192.168.1.5:8787/login",
+    "http://oyster.example.test/login",
+  ])
+    for (const header of await cookie(url))
+      assert.match(header, /HttpOnly; Secure; SameSite=Strict/u, url);
+});
+
 test("neutral login keeps the digest cookie attributes and rotates with the key", async () => {
   const auth = ownerKeyAuth(key, ownerId);
   assert.ok(auth.login);

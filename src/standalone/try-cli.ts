@@ -479,6 +479,31 @@ async function runInstall(
   }
 }
 
+const originFile = join(".oyster", "origin");
+
+/**
+ * Local data belongs to the origin it was seeded for. A project made for
+ * another origin (an older `try` used https://oyster.test; another --port is
+ * another origin) cannot be served, so its trial data is reset. The owner key,
+ * Hello source and Git history are not data of the Oyster. Returns the origin
+ * the data was reset from, or null.
+ */
+async function reconcileOrigin(
+  directory: string,
+  origin: string,
+): Promise<string | null> {
+  const marker = join(directory, originFile);
+  const saved = (await exists(marker))
+    ? (await readFile(marker, "utf8")).trim()
+    : "https://oyster.test";
+  const state = join(directory, ".wrangler", "state");
+  const reset = saved !== origin && (await exists(state));
+  if (reset) await rm(state, { recursive: true, force: true });
+  await mkdir(join(directory, ".oyster"), { recursive: true });
+  await writeFile(marker, `${origin}\n`);
+  return reset ? saved : null;
+}
+
 function portFree(port: number): Promise<boolean> {
   return new Promise((done) => {
     const server = createServer();
@@ -554,14 +579,10 @@ function startWrangler(input: {
         "127.0.0.1",
         "--port",
         String(input.port),
-        "--local-upstream",
-        "oyster.test",
-        "--upstream-protocol",
-        "https",
         "--var",
         `OYSTER_OWNER_KEY:${input.key}`,
         "--var",
-        "OYSTER_ORIGIN:https://oyster.test",
+        `OYSTER_ORIGIN:${url}`,
       ],
       {
         cwd: input.directory,
@@ -839,6 +860,11 @@ export async function tryOyster(
       await rm(join(directory, pendingInstall));
     }
     const url = `http://127.0.0.1:${String(port)}`;
+    const resetFrom = await reconcileOrigin(directory, url);
+    if (resetFrom !== null)
+      ui.info(
+        `This project's local data was made for ${resetFrom}, so it was reset for ${url}. Your owner key and Hello source are unchanged; the Apps reinstall below.`,
+      );
     const server = await task("Starting Oyster", () =>
       (async () => {
         const resource = await effects.startServer({

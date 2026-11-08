@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { tenantIdSchema } from "@fungi.computer/oyster/tenant";
 import { describe, expect, it } from "vitest";
+import { loopbackAliasLocation } from "../../src/tenancy/registry-record.js";
 import { memoryRegistry } from "../../src/tenancy/registry.js";
 const owner = { provider: "issuer-a", subject: "same-subject" };
 const input = {
@@ -42,6 +43,27 @@ it.each([
   );
   expect(await registry.byHandle("alpha")).toBeNull();
   expect(await registry.byDomain("alpha.example.test")).toBeNull();
+});
+
+it.each([
+  ["http://127.0.0.1:8787", "127.0.0.1:8787"],
+  ["http://localhost:8787", "localhost:8787"],
+  ["http://[::1]:8787", "[::1]:8787"],
+])("admits plain HTTP only on loopback: %s", async (origin, domain) => {
+  const registry = memoryRegistry();
+  const tenant = await registry.create({ ...input, origin, domains: [domain] });
+  expect(tenant.origin).toBe(origin);
+});
+
+it.each([
+  "http://192.168.1.5:8787",
+  "http://alpha.example.test:8787",
+  "http://127.0.0.1.example.test",
+])("still refuses plain HTTP off loopback: %s", async (origin) => {
+  const registry = memoryRegistry();
+  await expect(
+    registry.create({ ...input, origin, domains: [new URL(origin).host] }),
+  ).rejects.toThrow("Tenant origin");
 });
 
 it("concurrent duplicate creates leave one atomic owner mapping", async () => {
@@ -104,4 +126,23 @@ it("does not reuse a removed membership revision", async () => {
   const current = await registry.memberById(recreated.id, memberId);
   if (current === null) throw new Error("Missing recreated membership");
   expect(current.membershipVersion).toBeGreaterThan(first.membershipVersion);
+});
+
+it.each([
+  ["http://localhost:8787/apps/x/?a=1", "http://127.0.0.1:8787/apps/x/?a=1"],
+  ["http://[::1]:8787/login", "http://127.0.0.1:8787/login"],
+])("sends a loopback alias to the canonical origin: %s", (request, to) => {
+  expect(loopbackAliasLocation(new URL(request), "http://127.0.0.1:8787")).toBe(
+    to,
+  );
+});
+
+it.each([
+  ["http://127.0.0.1:8787/login", "http://127.0.0.1:8787"],
+  ["http://localhost:9999/login", "http://127.0.0.1:8787"],
+  ["http://192.168.1.5:8787/login", "http://127.0.0.1:8787"],
+  ["http://localhost:8787/login", "https://oyster.test"],
+  ["https://localhost:8787/login", "http://127.0.0.1:8787"],
+])("does not redirect %s against %s", (request, canonical) => {
+  expect(loopbackAliasLocation(new URL(request), canonical)).toBeNull();
 });

@@ -82,8 +82,20 @@ test("a browser gets the accessible wrong-key form; machine login keeps its orig
   });
   assert.equal(signedIn.status, 303);
   assert.equal(signedIn.headers.get("Location"), "/");
+  // The app's default origin is http://localhost: loopback HTTP, no Secure.
   assert.match(
     signedIn.headers.get("Set-Cookie"),
+    /oyster_session=[^;]+; Path=\/; HttpOnly; SameSite=Strict/,
+  );
+  assert.doesNotMatch(signedIn.headers.get("Set-Cookie"), /Secure/);
+  const overHttps = await app.request("https://owner.example.test/login", {
+    method: "POST",
+    headers: documentHeaders,
+    body: new URLSearchParams({ key }),
+  });
+  assert.equal(overHttps.status, 303);
+  assert.match(
+    overHttps.headers.get("Set-Cookie"),
     /HttpOnly; Secure; SameSite=Strict/,
   );
 });

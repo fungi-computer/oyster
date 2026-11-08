@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.18.0
+
+### Minor Changes
+
+- Changes since 0.17.0:
+
+  - feat(oyster): another loopback name on the same port redirects to the
+    canonical origin
+  - fix(oyster): drop Secure on the owner session cookie for loopback HTTP only
+  - feat(oyster): admit an HTTP tenant origin on loopback; try serves its real
+    local origin
+
 ## 0.17.0
 
 ### Minor Changes

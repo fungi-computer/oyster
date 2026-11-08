@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import type { OysterAuth, OysterAuthResult } from "./host.js";
 import { presentedGitKey } from "./git-auth.js";
 import { sha256 } from "./release.js";
+import { isLoopbackHttp } from "./tenancy/registry-record.js";
 import type { OysterKeyStore } from "./keys.js";
 
 /** Cookie emitted by ownerKeyAuth, for composing credential-specific adapters. */
@@ -78,14 +79,17 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
         !(await constantTimeEqual(form.value.key, ownerKey))
       )
         return new Response("Wrong key", { status: 401 });
+      // Secure everywhere except loopback HTTP, where Safari would drop it and
+      // the traffic never leaves this machine.
+      const secure = isLoopbackHttp(new URL(request.url)) ? "" : " Secure;";
       const headers = new Headers({ Location: "/" });
       headers.append(
         "Set-Cookie",
-        `${ownerKeyCookieName}=${await sessionValue}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`,
+        `${ownerKeyCookieName}=${await sessionValue}; Path=/; HttpOnly;${secure} SameSite=Strict; Max-Age=2592000`,
       );
       headers.append(
         "Set-Cookie",
-        `${returningCookieName}=1; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+        `${returningCookieName}=1; Path=/; HttpOnly;${secure} SameSite=Strict; Max-Age=31536000`,
       );
       return new Response(null, { status: 303, headers });
     },

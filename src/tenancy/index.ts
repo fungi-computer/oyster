@@ -1,3 +1,4 @@
+import { isTenantOriginScheme } from "./registry-record.js";
 import { createOysterTenancy } from "./oyster.js";
 import type { MiddlewareHandler } from "hono";
 import { tenantScope, type TenantId, type TenantPrincipal } from "../tenant.js";
@@ -68,7 +69,7 @@ export function createTenancy(
     if (tenant === null || tenant.status === "deleting") return null;
     if (
       config.resolve.kind === "origin" &&
-      (url.protocol !== "https:" || !tenant.domains.includes(url.host))
+      (!isTenantOriginScheme(url) || !tenant.domains.includes(url.host))
     )
       return null;
     return tenant;

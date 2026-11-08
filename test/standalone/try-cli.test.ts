@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -175,6 +175,25 @@ describe("oyster try", () => {
     expect((await readFile(keyPath, "utf8")).trim()).toBe(key);
     expect(output.text()).not.toContain(key);
     expect(second.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets local data seeded for another origin and says so plainly", async () => {
+    const directory = join(root, "older");
+    await runTry([directory, "--no-open"], effects().fake, plain().ui);
+    // Data an older `try` seeded for https://oyster.test has no origin marker.
+    await rm(join(directory, ".oyster", "origin"));
+    mkdirSync(join(directory, ".wrangler", "state"), { recursive: true });
+    const output = plain();
+    await runTry([directory, "--no-open"], effects().fake, output.ui);
+    expect(output.text()).toContain(
+      "local data was made for https://oyster.test, so it was reset for http://127.0.0.1:8787",
+    );
+    expect(existsSync(join(directory, ".wrangler", "state"))).toBe(false);
+    const quiet = plain();
+    mkdirSync(join(directory, ".wrangler", "state"), { recursive: true });
+    await runTry([directory, "--no-open"], effects().fake, quiet.ui);
+    expect(quiet.text()).not.toContain("was reset");
+    expect(existsSync(join(directory, ".wrangler", "state"))).toBe(true);
   });
 
   it("restarts from inside the directory without naming it", async () => {

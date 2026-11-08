@@ -144,6 +144,36 @@ test("a mismatched first request cannot seed, and the corrected origin can admit
   }
 });
 
+test("another loopback name on the same port redirects to the canonical origin; anything else still refuses", async () => {
+  const env = {
+    OYSTER_ORIGIN: "http://127.0.0.1:8787",
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-origin-owner-key-24-characters",
+    TENANTS: { getByName: () => assert.fail("No registry read expected") },
+    KEYS: { getByName: () => assert.fail("No credential lookup expected") },
+  };
+  const refusal = (url) =>
+    standaloneTenancyForRequest(env, new globalThis.Request(url)).then(
+      () => assert.fail("The request must not be admitted"),
+      (cause) => cause.getResponse(),
+    );
+  const alias = await refusal("http://localhost:8787/apps/x/?a=1");
+  assert.equal(alias.status, 307);
+  assert.equal(
+    alias.headers.get("Location"),
+    "http://127.0.0.1:8787/apps/x/?a=1",
+  );
+  for (const url of [
+    "http://localhost:9999/login",
+    "http://192.168.1.5:8787/login",
+    "https://localhost:8787/login",
+  ]) {
+    const refused = await refusal(url);
+    assert.equal(refused.status, 404, url);
+    assert.equal((await refused.json()).code, "origin_mismatch");
+  }
+});
+
 test("a changed seed returns a typed refusal with the existing-data recovery", async () => {
   const probe = fixture();
   await probe.owner.seed(input);
