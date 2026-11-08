@@ -7,6 +7,8 @@ import type { OysterKeyStore } from "./keys.js";
 
 /** Cookie emitted by ownerKeyAuth, for composing credential-specific adapters. */
 export const ownerKeyCookieName = "oyster_session";
+/** Marks a browser that has signed in here before; it carries no authority. */
+export const returningCookieName = "oyster_returning";
 const loginFormSchema = Schema.Struct({ key: Schema.String });
 
 /** Compare two secrets through their fixed-length digests, in constant time. */
@@ -68,21 +70,24 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
       });
       if (fields === null)
         return new Response("Expected a sign-in form", { status: 400 });
-      const form = Schema.decodeUnknownOption(loginFormSchema)(
-        Object.fromEntries(fields),
-      );
+      const form = Schema.decodeUnknownOption(loginFormSchema)({
+        key: fields.get("key"),
+      });
       if (
         Option.isNone(form) ||
         !(await constantTimeEqual(form.value.key, ownerKey))
       )
         return new Response("Wrong key", { status: 401 });
-      return new Response(null, {
-        status: 303,
-        headers: {
-          Location: "/",
-          "Set-Cookie": `${ownerKeyCookieName}=${await sessionValue}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`,
-        },
-      });
+      const headers = new Headers({ Location: "/" });
+      headers.append(
+        "Set-Cookie",
+        `${ownerKeyCookieName}=${await sessionValue}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`,
+      );
+      headers.append(
+        "Set-Cookie",
+        `${returningCookieName}=1; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+      );
+      return new Response(null, { status: 303, headers });
     },
   };
 }

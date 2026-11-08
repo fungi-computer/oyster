@@ -64,6 +64,8 @@ import {
   computerPortRemovalOutputSchema,
   processListOutputSchema,
   processKillOutputSchema,
+  processLogsInputSchema,
+  processLogsOutputSchema,
   computerOperationResultSchema,
   mintComputerRequestId,
   processIdInputSchema,
@@ -157,6 +159,7 @@ export type StandaloneComputerResult =
   | z.output<typeof computerPortRemovalOutputSchema>
   | z.output<typeof processListOutputSchema>
   | z.output<typeof processKillOutputSchema>
+  | z.output<typeof processLogsOutputSchema>
   | z.output<typeof computerProcessSchema>
   | ComputerPorts["ports"][number]
   | z.output<typeof computerOperationResultSchema>
@@ -788,6 +791,11 @@ export class ComputerDO
             return { error: "conflict" };
           throw cause;
         }
+      case "processLogs":
+        return this.processLogsAfterAcceptance(
+          processLogsInputSchema.parse(input),
+          accept,
+        );
       case "processKill":
         return this.killProcessAfterAcceptance(
           processIdInputSchema.parse(input),
@@ -1107,6 +1115,20 @@ export function standaloneComputerCapabilities(
     if (!input.success) return context.json({ error: "invalid_input" }, 400);
     return Response.json(
       await computer().value(authority(principal), "processKill", input.data),
+    );
+  });
+  routes.get("/processes/logs", reach, async (context, { principal }) => {
+    const query = {
+      id: context.req.query("id"),
+      lines: context.req.query("lines"),
+    };
+    const input = processLogsInputSchema.safeParse({
+      id: query.id,
+      lines: query.lines === undefined ? undefined : Number(query.lines),
+    });
+    if (!input.success) return context.json({ error: "invalid_input" }, 400);
+    return Response.json(
+      await computer().value(authority(principal), "processLogs", input.data),
     );
   });
   routes.get("/terminal", reach, async (context, { principal }) => {

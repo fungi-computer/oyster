@@ -45,12 +45,15 @@ import {
 } from "../host.js";
 import type { TenantPrincipal } from "../tenant.js";
 import { normalizeFilePath } from "../files.js";
+import { cloudflareAccountReady } from "./cloudflare-account.js";
 import type { FileSource } from "../files.js";
 
 /** Bindings for Media generation into the standalone Oyster workspace. */
 export type OysterMediaEnv = Readonly<{
   /** Workers AI provider, admitted by this Worker. */
   AI: MediaAiPort;
+  /** This Worker's own origin; a loopback origin has no Cloudflare account. */
+  OYSTER_ORIGIN?: string | undefined;
   /** Darkroom's durable operation namespace. */
   MEDIA_OPERATION: MediaServiceHost["operations"];
   /** Native image decoding and bounded reference fitting. */
@@ -76,7 +79,7 @@ export function workersMedia(
     return context.json(
       Schema.decodeUnknownSync(mediaGenerationDescriptionSchema)({
         computerId,
-        canGenerate: true,
+        canGenerate: cloudflareAccountReady(env),
         models: await response.json(),
       }),
     );
@@ -100,6 +103,7 @@ export function workersMedia(
       )
     )
       return context.json(invalidRequest());
+    if (!cloudflareAccountReady(env)) return context.json(setupRequired());
     const response = await service(principal).request("http://media/generate", {
       method: "POST",
       signal: context.req.raw.signal,
@@ -171,6 +175,20 @@ export function workersMedia(
       routes,
     },
   ];
+}
+
+/** A missing provider or account is setup, not a failed generation. */
+function setupRequired() {
+  return {
+    kind: "failed",
+    failure: {
+      message: "Media generation needs an image provider",
+      stage: "admission",
+      code: "SETUP_REQUIRED",
+      need: "an image provider",
+      retryable: false,
+    },
+  };
 }
 
 function invalidRequest() {

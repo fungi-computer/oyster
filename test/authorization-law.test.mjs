@@ -733,6 +733,7 @@ test("every host /api route's owner reach is classified", async () => {
     "DELETE /api/connections/:connectionId/agents/:agentId direct",
     "DELETE /api/connections/:connectionId direct",
     "GET /api/model-keys direct",
+    "GET /api/setup direct",
     "POST /api/model-keys direct",
     "DELETE /api/model-keys/:keyId direct",
     "GET /api/workbench/directory direct-or-app",

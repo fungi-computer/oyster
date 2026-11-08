@@ -274,6 +274,13 @@ export type OysterAgents = Readonly<{
     | PendingAgentPolicy
     | Readonly<{ error: "not_found" | "revision_conflict" | "not_granted" }>
   >;
+  /**
+   * Whether a model and an image provider are connected, so an App can say so
+   * before it takes a prompt. Reads configuration; never reaches a provider.
+   */
+  setup(): Promise<
+    Readonly<{ models: "ready" | "missing"; media: "ready" | "missing" }>
+  >;
   /** The instance's sealed model keys, never their secrets. */
   modelKeys(): Promise<readonly ModelKeyRecord[]>;
   /** Validate with the provider, then seal one key; or an explicit refusal. */
@@ -861,6 +868,14 @@ export function modelKeyRoutes(agents: OysterAgents): Routes<OysterEnv> {
   return routes<OysterEnv>()
     .get("/api/model-keys", owner("direct"), async () =>
       Response.json({ keys: await agents.modelKeys() }),
+    )
+    .get("/api/setup", owner("direct"), async () =>
+      Response.json({
+        ...(await agents.setup()),
+        // Git and the terminal are read from the Computer, which reports them.
+        git: "unknown",
+        terminal: "unknown",
+      }),
     )
     .post("/api/model-keys", owner("direct"), async (context) => {
       const length = Number(context.req.header("content-length") ?? "0");

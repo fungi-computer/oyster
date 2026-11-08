@@ -192,6 +192,10 @@ Computer routes supplied by the host; execution stays in the Computer runtime.
 | `processes.methods.kill.kind`               | `"json"`            | `"json"`                    |
 | `processes.methods.kill.method`             | `"POST"`            | `"POST"`                    |
 | `processes.methods.kill.path`               | `"processes/kill"`  | `"processes/kill"`          |
+| `processes.methods.logs`                    | `object`            | -                           |
+| `processes.methods.logs.kind`               | `"json"`            | `"json"`                    |
+| `processes.methods.logs.method`             | `"GET"`             | `"GET"`                     |
+| `processes.methods.logs.path`               | `"processes/logs"`  | `"processes/logs"`          |
 | <a id="property-terminal"></a> `terminal`   | `object`            | -                           |
 | `terminal.id`                               | `string`            | `computerTerminal.id`       |
 | `terminal.version`                          | `number`            | `computerTerminal.version`  |

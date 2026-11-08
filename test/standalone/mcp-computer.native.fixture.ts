@@ -82,6 +82,7 @@ const proofAgents = (): OysterAgents => ({
   readModelChoice: notInProof,
   decodeModelChoice: notInProofSync,
   setModelChoice: notInProof,
+  setup: notInProof,
   modelKeys: notInProof,
   sealModelKey: notInProof,
   removeModelKey: notInProof,

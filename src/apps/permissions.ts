@@ -75,7 +75,14 @@ export function grantRequestFor(
   if (authority.declaredOperationsDigest !== facts.declaredOperations.digest)
     return { kind: "refused", code: "stale_authority" };
   const requested = [
-    ...new Set([...(request.agents ?? []), ...(request.computers ?? [])]),
+    ...new Set([
+      ...(request.agents ?? []),
+      ...(request.computers ?? []),
+      ...(request.git ?? []),
+      ...(request.workflows ?? []),
+      ...(request.events ?? []),
+      ...(request.generation ?? []),
+    ]),
   ];
   if (
     requested.some(

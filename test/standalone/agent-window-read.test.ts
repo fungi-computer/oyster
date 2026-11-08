@@ -98,6 +98,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
     readModelChoice: notInTest,
     decodeModelChoice: notInTestSync,
     setModelChoice: notInTest,
+    setup: notInTest,
     modelKeys: notInTest,
     sealModelKey: notInTest,
     removeModelKey: notInTest,

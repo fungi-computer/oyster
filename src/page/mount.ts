@@ -22,6 +22,8 @@ import * as Schema from "effect/Schema";
 import {
   AppError,
   createCapabilityRegistry,
+  type AppPermissions,
+  type AppSetup,
   type CapabilityDirectory,
 } from "@fungi.computer/agar";
 import { appStorage } from "@fungi.computer/agar/storage";
@@ -381,6 +383,10 @@ export type OysterAppConnectionOptions = Readonly<{
   appOpen?: OysterAppOpenRouting;
   openRequest?: AppHostLaunch["context"]["value"]["openRequest"];
   surfaceId?: string;
+  /** Host setup facts the App sees from its first message; absent on hosts with none. */
+  setup?: AppSetup | undefined;
+  /** Which declared rights this App holds, when the host can read its grants. */
+  permissions?: AppPermissions | undefined;
   reservedChords: readonly import("@fungi.computer/agar/host").AppHostReservedChord[];
   theme: string;
 }>;
@@ -493,6 +499,10 @@ async function openOysterApp(
           focus: { editing: false, surface: null },
           openRequest: options.openRequest ?? null,
           visibility: "visible",
+          ...(options.setup !== undefined && { setup: options.setup }),
+          ...(options.permissions !== undefined && {
+            permissions: options.permissions,
+          }),
         },
       },
       lifecycle: { version: 1, value: "connected" },

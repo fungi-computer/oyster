@@ -150,6 +150,8 @@ import {
   type VerifiedRelease,
 } from "./release.js";
 import { createGitDoor, type GitDoorTarget } from "./git.js";
+import { getCookie } from "hono/cookie";
+import { returningCookieName } from "./auth.js";
 import { buildGitPassPrefix, presentedGitKey } from "./git-auth.js";
 import { workflowGitPassPrefix } from "@fungi.computer/braid/runtime";
 import type { AdmittedGit } from "./git-admission.js";
@@ -947,7 +949,12 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     publicRoute("content-addressed host illustrations and layout"),
     (context) => hostPageAsset(new URL(context.req.url).pathname),
   );
-  table.get("/login", publicRoute("the sign-in form"), () => page("login"));
+  table.get("/login", publicRoute("the sign-in form"), (context) =>
+    page("login", {
+      returning: getCookie(context, returningCookieName) === "1",
+      usedLink: context.req.query("link") === "used",
+    }),
+  );
   table.get(
     "/login/key-help",
     publicRoute("owner key recovery instructions, without a reset"),

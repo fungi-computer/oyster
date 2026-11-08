@@ -29,11 +29,10 @@ const cases = [
   ],
   ["root", "/", "Your Apps, all together."],
   ["empty", "/", "A little room to grow."],
-  ["login", "/login", "Welcome back."],
+  ["login", "/login", "Welcome."],
   ["login-invalid", "/login", "That key didn’t open it."],
   ["key-help", "/login/key-help", "Let’s find your key."],
   ["signing-in", null, "Opening your Oyster…"],
-  ["link-expired", null, "This link has had its turn."],
   ["not-found", "/missing", "Nothing growing here."],
   ["server-error", "/apps/context-probe/", "That didn’t go through."],
   ["access-denied", "/apps/context-probe/", "This App is out of reach."],
@@ -95,13 +94,9 @@ test(
                       },
                     },
                   }
-                : [
-                      "login",
-                      "login-invalid",
-                      "key-help",
-                      "signing-in",
-                      "link-expired",
-                    ].includes(state)
+                : ["login", "login-invalid", "key-help", "signing-in"].includes(
+                      state,
+                    )
                   ? authHost
                   : ownerHost;
       const app =
@@ -111,7 +106,6 @@ test(
       let helper;
       if (path === null) {
         helper = await startSignInLink({ oysterUrl: base, key });
-        if (state === "link-expired") await fetch(helper.url);
       }
       await context.route("**/*", async (route) => {
         const request = route.request();

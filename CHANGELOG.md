@@ -1,5 +1,59 @@
 # @fungi.computer/oyster
 
+## 0.16.0
+
+### Minor Changes
+
+- Changes since 0.15.0:
+
+  - feat(oyster): starter-agent policy and its laws
+  - feat(agar): publish which declared rights an App holds, and sharpen error
+    copy
+  - fix(oyster): treat a host that names no origin as having its account
+  - fix(oyster): satisfy the typecheck and suppression budget for setup facts
+  - feat(oyster): tell every App up front whether a model and media are
+    connected
+  - feat(tourtois): one consent sheet lists git, workflow, event and generation
+    rights
+  - fix(oyster): read the sign-in key from the form without FormData iteration
+  - fix(oyster): tidy 404 caption and spacing on the sign-in pages
+  - fix(oyster): keep the ink-drawing intro on the sign-in and 404 pages
+  - fix(oyster): polish first-run sign-in and 404
+  - feat(oyster): first-run sign-in and 404 copy
+  - feat(computer): retain process output and serve the last lines
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.9.0
+  - @fungi.computer/caps@0.9.0
+  - @fungi.computer/computer-contract@0.1.0
+  - @fungi.computer/computer@0.8.0
+  - @fungi.computer/darkroom@0.5.5
+  - @fungi.computer/gills@0.3.0
+  - @fungi.computer/nacre@0.3.0
+  - @fungi.computer/parakeet@0.10.0
+  - @fungi.computer/sprite@0.2.2
+  - @fungi.computer/braid@0.4.7
+  - @fungi.computer/shiitake@0.12.3
+  - @fungi.computer/workflows-wire@0.4.7
+  - @fungi.computer/puffball@0.5.5
+  - @fungi.computer/shiitake-extensions@0.6.10
+  - @fungi.computer/sprite-zdog@0.3.2
+  - @fungi.computer/zookeeper@0.0.17
+  - @fungi.computer/forage@0.3.5
+  - @fungi.computer/mycelium@0.3.8
+  - @fungi.computer/knapsack@0.4.9
+  - @fungi.computer/veil@0.6.5
+
 ## 0.15.0
 
 ### Minor Changes

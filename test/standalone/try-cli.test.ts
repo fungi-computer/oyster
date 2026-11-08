@@ -653,7 +653,11 @@ describe("oyster try sign-in", () => {
       const html = await first.text();
       expect(html).toContain('action="http://127.0.0.1:8787/login"');
       expect(html).toContain("k".repeat(48));
-      expect((await fetch(link.url)).status).toBe(404);
+      const reused = await fetch(link.url, { redirect: "manual" });
+      expect(reused.status).toBe(302);
+      expect(reused.headers.get("Location")).toBe(
+        "http://127.0.0.1:8787/login?link=used",
+      );
     } finally {
       await link.close();
     }

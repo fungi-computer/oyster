@@ -115,6 +115,12 @@ test("Computer port and process mutations send the host wire body, not the bare 
       endedAt: 2,
       sync: "unknown",
     };
+    if (url.startsWith("/computer/processes/logs"))
+      return globalThis.Response.json({
+        process,
+        lines: ["built", "failed"],
+        truncated: false,
+      });
     return globalThis.Response.json(
       url === "/computer/processes/kill"
         ? { process, signalled: true }
@@ -160,6 +166,10 @@ test("Computer port and process mutations send the host wire body, not the bare 
     (await processes.kill("computer_process_proof")).signalled,
     true,
   );
+  assert.deepEqual((await processes.logs("computer_process_proof", 20)).lines, [
+    "built",
+    "failed",
+  ]);
   // Exactly the bodies Hub's routes and the Computer owner parse.
   assert.deepEqual(
     sent.map(({ url, method, body }) => [url, method, body]),
@@ -174,6 +184,11 @@ test("Computer port and process mutations send the host wire body, not the bare 
         { command: "node server.mjs", port: 8099 },
       ],
       ["/computer/processes/kill", "POST", { id: "computer_process_proof" }],
+      [
+        "/computer/processes/logs?id=computer_process_proof&lines=20",
+        "GET",
+        undefined,
+      ],
     ],
   );
 });

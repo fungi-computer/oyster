@@ -1,9 +1,31 @@
+import type { AppPermissionRequest } from "@fungi.computer/agar";
 import type { RequestShellAppAccess } from "@fungi.computer/nacre/shell-module";
 import type { WorkbenchDirectory } from "@fungi.computer/nacre/workbench-directory";
 import {
   grantRequestFor,
   appPermissionPageSchema,
 } from "../apps/permissions.js";
+
+/** The families beyond Agents and Computers, which the sheet lists in words. */
+function otherFamilies(input: AppPermissionRequest): AppPermissionRequest {
+  return {
+    git: input.git ?? [],
+    workflows: input.workflows ?? [],
+    events: input.events ?? [],
+    generation: input.generation ?? [],
+  };
+}
+
+function asksForAnything(input: AppPermissionRequest): boolean {
+  return [
+    input.agents,
+    input.computers,
+    input.git,
+    input.workflows,
+    input.events,
+    input.generation,
+  ].some((list) => list !== undefined && list.length > 0);
+}
 
 /**
  * Keep standalone consent in the Oyster host: the picked shell draws the
@@ -18,7 +40,8 @@ export function createShellAppAccess(
     const app = current.apps.find((row) => row.surfaceId === surfaceId);
     const installationId = app?.installationId ?? null;
     const customize = () => dialog.customize(installationId);
-    if (installationId === null) return customize();
+    // An empty request is the App asking to open its permissions.
+    if (installationId === null || !asksForAnything(input)) return customize();
     const path = `/api/installations/${encodeURIComponent(installationId)}/grants`;
     const response = await fetch(path, {
       headers: { Accept: "application/json" },
@@ -49,6 +72,7 @@ export function createShellAppAccess(
         appName: view.appName,
         agents: input.agents ?? [],
         computers: input.computers ?? [],
+        others: otherFamilies(input),
         refusal: {
           code: decision.code,
           message:
@@ -63,6 +87,7 @@ export function createShellAppAccess(
       appName: view.appName,
       agents: input.agents ?? [],
       computers: input.computers ?? [],
+      others: otherFamilies(input),
       allow: async () => {
         const saved = await fetch(path, {
           method: "PUT",

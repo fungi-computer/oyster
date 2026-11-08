@@ -206,7 +206,7 @@ for (const width of [1440, 390]) {
         });
         await page.getByRole("button", { name: "Request permission" }).click();
         await page
-          .getByRole("button", { name: "Allow", exact: true })
+          .getByRole("button", { name: "Approve", exact: true })
           .waitFor();
         await page.screenshot({
           path: `${shots}/allow-${commit}-dialog-${width}.png`,
@@ -215,7 +215,7 @@ for (const width of [1440, 390]) {
         if (commit === "missing-window") {
           assert.equal(
             await page
-              .getByRole("button", { name: "Allow", exact: true })
+              .getByRole("button", { name: "Approve", exact: true })
               .isDisabled(),
             true,
           );
@@ -230,7 +230,7 @@ for (const width of [1440, 390]) {
             .click();
         } else {
           await page
-            .getByRole("button", { name: "Allow", exact: true })
+            .getByRole("button", { name: "Approve", exact: true })
             .click();
         }
         if (commit !== "saved") {
@@ -252,7 +252,7 @@ for (const width of [1440, 390]) {
           });
           assert.equal(
             await page
-              .getByRole("button", { name: "Allow", exact: true })
+              .getByRole("button", { name: "Approve", exact: true })
               .count(),
             0,
           );
@@ -309,7 +309,7 @@ for (const width of [1440, 390]) {
         await page.locator("#outcome").filter({ hasText: "granted" }).waitFor();
         assert.equal(
           await page
-            .getByRole("button", { name: "Allow", exact: true })
+            .getByRole("button", { name: "Approve", exact: true })
             .count(),
           0,
         );

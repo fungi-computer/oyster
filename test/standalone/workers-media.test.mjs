@@ -42,6 +42,9 @@ const { createFrameBindingWire } =
   await import("@fungi.computer/oyster/testing");
 hooks.deregister();
 
+// A deployed Oyster; a loopback origin has no Cloudflare account behind its AI binding.
+const OYSTER_ORIGIN = "https://oyster.example";
+
 const generation = {
   requestId: "media_request_000000000000000000001",
   destination: { path: "/image.png" },
@@ -56,6 +59,7 @@ const generation = {
 async function mediaFixture() {
   const adapters = workersMedia(
     {
+      OYSTER_ORIGIN,
       AI: {
         run: () => assert.fail("describing media must not call a provider"),
       },
@@ -124,6 +128,7 @@ for (const filename of ["wrangler.jsonc", "wrangler.celld.jsonc"]) {
     let dispatches = 0;
     const adapters = workersMedia(
       {
+        OYSTER_ORIGIN,
         AI: {
           run: async () => {
             dispatches += 1;
@@ -217,7 +222,7 @@ for (const filename of ["wrangler.jsonc", "wrangler.celld.jsonc"]) {
     );
     const files = r2FileSource(bucket, "selected-computer/");
     const adapters = workersMedia(
-      { AI: ai, MEDIA_OPERATION: operations },
+      { AI: ai, OYSTER_ORIGIN, MEDIA_OPERATION: operations },
       { computerId: "computer-media", files },
     );
     const fixture = await capabilityFixture({
@@ -297,6 +302,7 @@ for (const [model, gateway] of [
     let seenOptions;
     const adapters = workersMedia(
       {
+        OYSTER_ORIGIN,
         AI: {
           run: async (_model, _input, options) => {
             seenOptions = options;
@@ -343,6 +349,7 @@ test("media preserves safe provider facts without a private marker in its respon
   let dispatches = 0;
   const adapters = workersMedia(
     {
+      OYSTER_ORIGIN,
       AI: {
         run: () => {
           dispatches++;
@@ -473,6 +480,7 @@ test("Prints references use the captured Computer through native MEDIA and saved
       },
       input: () => assert.fail("a bounded reference needs no resize"),
     },
+    OYSTER_ORIGIN,
     AI: {
       run: async (_model, input) => {
         dispatches += 1;
@@ -638,4 +646,37 @@ test("Prints references use the captured Computer through native MEDIA and saved
     assert.equal(refused.stage, "settings");
     assert.equal(dispatches, 1);
   });
+});
+
+test("a local trial has no account behind its AI binding, so generation reports setup, not a provider failure", async () => {
+  const adapters = workersMedia(
+    {
+      OYSTER_ORIGIN: "http://localhost:8787",
+      AI: { run: () => assert.fail("a trial must not reach the provider") },
+      MEDIA_OPERATION: {
+        getByName: () => assert.fail("a trial must not create an operation"),
+      },
+    },
+    { computerId: "computer-media", files: r2FileSource({}, "unused/") },
+  );
+  const fixture = await capabilityFixture({
+    capabilities: ["media.generation"],
+    adapters,
+  });
+  const headers = {
+    "X-Oyster-Installation": "capability-fixture",
+    "Content-Type": "application/json",
+  };
+  const response = await fixture.app.request("/media/generate", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(generation),
+  });
+  const outcome = await response.json();
+  assert.equal(outcome.kind, "failed");
+  assert.equal(outcome.failure.code, "SETUP_REQUIRED");
+  assert.equal(outcome.failure.need, "an image provider");
+  assert.equal(outcome.failure.retryable, false);
+  const described = await fixture.app.request("/media/describe", { headers });
+  assert.equal((await described.json()).canGenerate, false);
 });

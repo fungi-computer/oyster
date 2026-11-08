@@ -18,6 +18,16 @@ const ownerKeyCookieName: "oyster_session" = "oyster_session";
 
 Cookie emitted by ownerKeyAuth, for composing credential-specific adapters.
 
+---
+
+### returningCookieName
+
+```ts
+const returningCookieName: "oyster_returning" = "oyster_returning";
+```
+
+Marks a browser that has signed in here before; it carries no authority.
+
 ## Functions
 
 ### ownerKeyAuth()

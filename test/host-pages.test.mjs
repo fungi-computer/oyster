@@ -88,6 +88,38 @@ test("a browser gets the accessible wrong-key form; machine login keeps its orig
   );
 });
 
+test("the sign-in page welcomes a first visit, welcomes a returning browser back, and explains a used link", async () => {
+  const host = await computerHost(null, null);
+  const app = createOyster({ ...host, auth: ownerKeyAuth(key) });
+  const first = await (
+    await app.request("/login", { headers: documentHeaders })
+  ).text();
+  assert.match(first, /Welcome\./);
+  assert.doesNotMatch(first, /Welcome back/);
+  assert.doesNotMatch(first, /This link was already used/);
+  const signedIn = await app.request("/login", {
+    method: "POST",
+    headers: documentHeaders,
+    body: new URLSearchParams({ key }),
+  });
+  assert.match(signedIn.headers.get("Set-Cookie") ?? "", /oyster_returning=1/);
+  const returning = await (
+    await app.request("/login?link=used", {
+      headers: { ...documentHeaders, Cookie: "oyster_returning=1" },
+    })
+  ).text();
+  assert.match(returning, /Welcome back\./);
+  assert.match(
+    returning,
+    /This link was already used\. Paste the key from <code>\.oyster-owner<\/code>/,
+  );
+  const missing = await (
+    await app.request("/missing", { headers: documentHeaders })
+  ).text();
+  assert.match(missing, /Page not found/);
+  assert.doesNotMatch(missing, /We’ll reconnect/);
+});
+
 test("document 404s and failures are designed, while API and App asset bodies keep their contracts", async () => {
   const host = await computerHost(
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
@@ -211,16 +243,14 @@ test("the helper remains single-use, with a real manual POST and a key-free used
     assert.match(body, /action="http:\/\/127.0.0.1:8787\/login"/);
     assert.match(body, /type="submit"/);
     assert.ok(body.includes(key));
-    const second = await fetch(helper.url);
-    assert.equal(second.status, 404);
-    const expired = await second.text();
-    assert.match(expired, /This link has had its turn/);
-    assert.equal(expired.includes(key), false);
+    const second = await fetch(helper.url, { redirect: "manual" });
+    assert.equal(second.status, 302);
     assert.equal(
-      expired.includes(new globalThis.URL(helper.url).pathname),
-      false,
+      second.headers.get("Location"),
+      "http://127.0.0.1:8787/login?link=used",
     );
     assert.equal(second.headers.get("Cache-Control"), "no-store");
+    assert.equal((await second.text()).includes(key), false);
     assert.equal(
       (await fetch(new Request(helper.url, { method: "POST" }))).status,
       404,

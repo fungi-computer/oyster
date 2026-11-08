@@ -33,6 +33,7 @@ export const computerSlots = {
       start: { kind: "json", method: "POST", path: "processes/start" },
       list: { kind: "json", method: "GET", path: "processes" },
       kill: { kind: "json", method: "POST", path: "processes/kill" },
+      logs: { kind: "json", method: "GET", path: "processes/logs" },
     },
   },
   terminal: {

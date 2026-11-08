@@ -132,6 +132,8 @@ type OysterAppConnectionOptions = Readonly<{
   appOpen?: OysterAppOpenRouting;
   openRequest?: AppHostLaunch["context"]["value"]["openRequest"];
   surfaceId?: string;
+  setup?: AppSetup;
+  permissions?: AppPermissions;
   reservedChords: readonly AppHostReservedChord[];
   theme: string;
 }>;

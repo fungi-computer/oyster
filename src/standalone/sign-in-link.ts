@@ -1,6 +1,7 @@
 // A one-time sign-in link for `oyster try`. The owner key never goes in a URL:
 // the link opens a page served by this process that posts the key to the local
-// Oyster's own /login form, then the server forgets the link.
+// Oyster's own /login form, then the server forgets the key. The listener stays
+// up for the whole try session, so a reused link lands on /login with a note.
 import { awaitCleanup } from "../build/process-group.js";
 import { createHash, randomBytes } from "node:crypto";
 import { addAbortListener } from "node:events";
@@ -10,11 +11,10 @@ import { hostPage } from "../host-page.js";
 import { loadPageAssets } from "../page-assets.js";
 
 const addressSchema = z.object({ port: z.number() });
-const lifetimeMs = 10 * 60_000;
 
 export type SignInLink = Readonly<{ url: string; close: () => Promise<void> }>;
 
-/** Serve one single-use page that signs the owner in to `oysterUrl`. */
+/** Serve one single-use page that signs the owner in to `oysterUrl`, until closed. */
 export async function startSignInLink(
   input: Readonly<{ oysterUrl: string; key: string; signal?: AbortSignal }>,
 ): Promise<SignInLink> {
@@ -45,14 +45,10 @@ export async function startSignInLink(
       },
     })
   ).text();
-  const expired = await (
-    await hostPage({ ...pageOptions, state: "link-expired", status: 404 })
-  ).text();
   const notFound = await (
     await hostPage({ ...pageOptions, state: "not-found", status: 404 })
   ).text();
   signal.throwIfAborted();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
   const server = createServer((request, response) => {
     const headers = {
       "Content-Type": "text/html; charset=utf-8",
@@ -66,21 +62,23 @@ export async function startSignInLink(
       return;
     }
     if (used) {
-      response.writeHead(404, headers).end(expired);
+      response
+        .writeHead(302, {
+          ...headers,
+          Location: new URL("/login?link=used", input.oysterUrl).href,
+        })
+        .end();
       return;
     }
     used = true;
     response.writeHead(200, headers).end(page);
     page = "";
-    scheduleClose(1_000);
   });
   let closing: Promise<PromiseSettledResult<void>[]> | undefined;
   let abortListener: ReturnType<typeof addAbortListener> | undefined;
   const beginClose = () =>
     (closing ??= Promise.allSettled([
       (async () => {
-        for (const timer of timers) clearTimeout(timer);
-        timers.clear();
         page = "";
         abortListener?.[Symbol.dispose]();
         await new Promise<void>((resolve, reject) => {
@@ -97,13 +95,6 @@ export async function startSignInLink(
       })(),
     ]));
   const close = () => awaitCleanup(beginClose());
-  function scheduleClose(ms: number): void {
-    const timer = setTimeout(() => {
-      void beginClose();
-    }, ms);
-    timer.unref();
-    timers.add(timer);
-  }
   try {
     await new Promise<void>((done, fail) => {
       server.once("error", fail);
@@ -118,7 +109,6 @@ export async function startSignInLink(
     abortListener = addAbortListener(signal, () => {
       void beginClose();
     });
-    scheduleClose(lifetimeMs);
     const { port } = addressSchema.parse(server.address());
     return { url: `http://127.0.0.1:${String(port)}/${nonce}`, close };
   } catch (cause) {

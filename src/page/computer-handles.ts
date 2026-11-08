@@ -6,6 +6,7 @@ import {
   computerPortRemovalSchema,
   computerPortsResultSchema,
   computerProcessKillSchema,
+  computerProcessLogsSchema,
   computerProcessSchema,
   computerProcessesSchema,
   type ComputerProcessStart,
@@ -83,6 +84,12 @@ export class ComputerProcessesHandle
   async kill(id: string) {
     return Schema.decodeUnknownSync(computerProcessKillSchema)(
       await this.#call("kill", { id }),
+    );
+  }
+
+  async logs(id: string, lines?: number) {
+    return Schema.decodeUnknownSync(computerProcessLogsSchema)(
+      await this.#call("logs", lines === undefined ? { id } : { id, lines }),
     );
   }
 }

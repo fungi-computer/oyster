@@ -2043,6 +2043,10 @@ gill(
   title: string;
   state: "empty";
   rows: readonly [];
+  emptyText?: string;
+  action?: {
+     kind: "open";
+  };
   next?: string;
 }
   | {
@@ -2107,9 +2111,10 @@ Invoke a Release-declared Gill in a fresh immutable frame.
 ###### Returns
 
 `Promise`\<[`InstanceResult`](host.md#instanceresult)\< \| \{ `viewId`:
-`string`; `title`: `string`; `state`: `"empty"`; `rows`: readonly \[\]; `next?`:
-`string`; \} \| \{ `viewId`: `string`; `title`: `string`; `state`: `"error"`;
-`rows`: readonly \[\]; `reason?`: `"disabled"` \| `"exec_isolation_required"` \|
+`string`; `title`: `string`; `state`: `"empty"`; `rows`: readonly \[\];
+`emptyText?`: `string`; `action?`: \{ `kind`: `"open"`; \}; `next?`: `string`;
+\} \| \{ `viewId`: `string`; `title`: `string`; `state`: `"error"`; `rows`:
+readonly \[\]; `reason?`: `"disabled"` \| `"exec_isolation_required"` \|
 `"params_required"`; `error`: `string`; `recovery?`: \| \{ `kind`:
 `"configure"`; `param`: `string`; \} \| \{ `kind`: `"open"`; \}; \} \| \{
 `viewId`: `string`; `title`: `string`; `state`: `"full"`; `rows`: readonly

@@ -1,6 +1,8 @@
 import { createElement as h, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TradingCard } from "@fungi.computer/caps/components/trading-card";
+import { Alert } from "@fungi.computer/caps/components/alert";
+import { Status } from "@fungi.computer/caps/components/status";
 import { Button } from "@fungi.computer/caps/components/button";
 import { Input } from "@fungi.computer/caps/components/input";
 import {
@@ -27,7 +29,6 @@ export type HostPageState =
   | "login-invalid"
   | "key-help"
   | "signing-in"
-  | "link-expired"
   | "not-found"
   | "server-error"
   | "access-denied"
@@ -50,7 +51,7 @@ const copy = {
     "Your Oyster is running. Install an App to give it something to open.",
   ],
   login: [
-    "Welcome back.",
+    "Welcome.",
     "Your Oyster · sign in",
     "Use the owner key saved with this Oyster. It stays private; it never belongs in a shared link.",
   ],
@@ -69,14 +70,9 @@ const copy = {
     "One-time sign-in",
     "This private link signs you in on this computer. It works once. Continue to your Oyster below if it does not open automatically.",
   ],
-  "link-expired": [
-    "This link has had its turn.",
-    "One-time link · expired or already used",
-    "Start your local Oyster again with the same project directory to get a fresh link, or sign in with your saved owner key.",
-  ],
   "not-found": [
     "Nothing growing here.",
-    "404 · page not found",
+    "404",
     "This address doesn’t point to an available page. Your desktop is a good place to start again.",
   ],
   "server-error": [
@@ -139,12 +135,6 @@ const abilities = {
     "Continue below if it does not.",
     "Use your saved key if needed.",
   ],
-  "link-expired": [
-    "Get back into Oyster",
-    "Sign in with your saved key.",
-    "Or restart the same local trial.",
-    "Open the fresh link once.",
-  ],
   "not-found": [
     "Find an available page",
     "Return to your Oyster.",
@@ -185,6 +175,10 @@ export type HostPageOptions = Readonly<{
     accessHref?: string;
   }>[];
   reset?: boolean;
+  /** Login only: this browser has signed in to this Oyster before. */
+  returning?: boolean;
+  /** Login only: the visitor arrived through a one-time link that was already used. */
+  usedLink?: boolean;
   /** Only the single-use helper passes a key, in a POST field, never a URL. */
   signIn?: Readonly<{ action: string; key: string }>;
   permissions?: Readonly<{
@@ -316,6 +310,28 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
               "The key wasn’t accepted. Please check it and try again.",
             )
           : null,
+        state === "login" && options.usedLink === true
+          ? h(
+              Alert,
+              { tone: "warning", role: "status" },
+              h(
+                "div",
+                { className: "notice" },
+                h(Status, {
+                  glyph: "dot",
+                  tone: "warning",
+                  "aria-hidden": true,
+                }),
+                h(
+                  "span",
+                  null,
+                  "This link was already used. Paste the key from ",
+                  h("code", null, ".oyster-owner"),
+                  " in your Oyster project.",
+                ),
+              ),
+            )
+          : null,
         h("label", { htmlFor: "owner-key" }, "Owner key"),
         h(Input, {
           id: "owner-key",
@@ -326,11 +342,15 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
           placeholder: "Paste your owner key",
           "aria-invalid": state === "login-invalid" ? true : undefined,
         }),
-        h(
-          "p",
-          { className: "helper" },
-          "For a local trial: .oyster-owner in your Oyster project.",
-        ),
+        options.usedLink === true
+          ? null
+          : h(
+              "p",
+              { className: "helper field-hint" },
+              "For a local trial: ",
+              h("code", null, ".oyster-owner"),
+              " in your Oyster project.",
+            ),
         h(
           "div",
           { className: "actions" },
@@ -368,11 +388,6 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
     actions.push(
       link("Back to sign-in", url("/login")),
       link("Read recovery steps", `${docs}/guides/run-your-own-oyster`, true),
-    );
-  } else if (state === "link-expired") {
-    actions.push(
-      link("Sign in with my key", url("/login")),
-      link("Read restart steps", `${docs}/oyster-quickstart`, true),
     );
   } else if (
     state === "root" ||
@@ -483,7 +498,6 @@ function illustration(
     "login-invalid",
     "key-help",
     "signing-in",
-    "link-expired",
     "access-denied",
   ].includes(state);
   const art = keyArt
@@ -495,12 +509,12 @@ function illustration(
     name: keyArt
       ? "A little help"
       : art === "offline"
-        ? "We’ll reconnect"
+        ? "Page not found"
         : "Room to grow",
     stage: "OYSTER",
     stat: "✦",
     finish: "holo",
-    style: { aspectRatio: "5 / 7" },
+    style: { aspectRatio: "auto" },
     art: h(
       "div",
       {
@@ -525,7 +539,7 @@ function illustration(
       ),
       h("div", { className: "ink-live" }),
     ),
-    typeLine: eyebrow,
+    typeLine: state === "not-found" ? "Off the map" : eyebrow,
     move: {
       name: ability,
       children: h(
@@ -542,7 +556,11 @@ function illustration(
 /** One server-rendered Caps composition, usable without styles, art or JS. */
 export async function hostPage(options: HostPageOptions): Promise<Response> {
   const { state, title = "Oyster" } = options;
-  const [heading, eyebrow, description] = copy[state];
+  const [baseHeading, eyebrow, description] = copy[state];
+  const heading =
+    state === "login" && options.returning === true
+      ? "Welcome back."
+      : baseHeading;
   const url = (path: string) =>
     options.oysterUrl ? new URL(path, options.oysterUrl).href : path;
   // A failed decorative module must still leave the form and recovery readable.
@@ -622,11 +640,13 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
               { className: "helper" },
               state === "login" || state === "login-invalid"
                 ? "Your key is sent only to this Oyster."
-                : h(
-                    "a",
-                    { href: `${docs}/agents/index.md` },
-                    "Hand your LLM the setup guide →",
-                  ),
+                : state === "not-found"
+                  ? null
+                  : h(
+                      "a",
+                      { href: `${docs}/agents/index.md` },
+                      "Hand your LLM the setup guide →",
+                    ),
             ),
           ),
         ),

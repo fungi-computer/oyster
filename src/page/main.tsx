@@ -11,7 +11,14 @@ import {
 import { createGillClient } from "@fungi.computer/gills";
 import { createRoot } from "react-dom/client";
 import { Alert } from "@fungi.computer/caps/components/alert";
-import { AppError } from "@fungi.computer/agar";
+import {
+  AppError,
+  type AppPermissions,
+  type AppSetup,
+} from "@fungi.computer/agar";
+import { appRightStates } from "./app-rights.js";
+import { createOysterAppPermissionsPort } from "./app-permissions-port.js";
+import type { WorkbenchSetupPort } from "@fungi.computer/nacre/workbench";
 import { keyWire } from "@fungi.computer/ear-tag/keys";
 import { oysterKeyVocabulary } from "../keys.js";
 import {
@@ -332,6 +339,11 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
           // there, and it moves, clips and stacks with that window.
           options.container.appendChild(frame);
           let contextVersion = 1;
+          // Absent facts mean an older or simpler host; Apps read that as unknown.
+          let setupFacts = await readSetup(options.setup);
+          let rightStates = await readRights(childConfig.installationId);
+          // Set once the host connection exists; a permission answer republishes.
+          let republish: () => Promise<void> = () => Promise.resolve();
           // reconfigure moves this forward, so a later restore
           // (setVisibility) never resends the window's first open request.
           const launchTracker = createWindowLaunchTracker({
@@ -354,6 +366,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
             signal,
             surfaceId: launch.surfaceId,
             openRequest: launch.openRequest,
+            ...(setupFacts !== undefined && { setup: setupFacts }),
+            ...(rightStates !== undefined && { permissions: rightStates }),
             reservedChords: [],
             theme,
             handlers: {
@@ -368,10 +382,19 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                 Promise.reject(unavailable("file navigation")),
               openDesktopSettings: () =>
                 options.onDesktopSettings(launch.surfaceId),
-              requestAppPermissions: (input) =>
-                options.onPermissionRequest(input, {
+              ...(options.setup !== undefined && {
+                openSetup: options.setup.open,
+              }),
+              requestAppPermissions: async (input) => {
+                const outcome = await options.onPermissionRequest(input, {
                   computerId: launchTracker.current().computerId,
-                }),
+                });
+                // The answer changes which rights this App holds.
+                await republish().catch((cause: unknown) => {
+                  console.error("host_facts_publish_failed", cause);
+                });
+                return outcome;
+              },
               requestComputerChoice: () =>
                 options.events.onComputerChoice?.() ??
                 Promise.reject(unavailable("Computer choice")),
@@ -387,8 +410,39 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
               showToast: () => Promise.reject(unavailable("notifications")),
             },
           });
+          // Settings or a permission answer may have changed what is ready.
+          const closed = () => abort.signal.aborted;
+          const publishHostFacts = async (): Promise<void> => {
+            if (closed()) return;
+            const [setup, rights] = await Promise.all([
+              readSetup(options.setup),
+              readRights(childConfig.installationId),
+            ]);
+            if (closed()) return;
+            setupFacts = setup ?? setupFacts;
+            rightStates = rights ?? rightStates;
+            const target = launchTracker.current();
+            await host.updateContext({
+              version: ++contextVersion,
+              value: {
+                computerId: target.computerId,
+                focus: { editing: false, surface: null },
+                visibility: frame.hidden ? "hidden" : "visible",
+                openRequest: target.openRequest,
+                ...(setupFacts !== undefined && { setup: setupFacts }),
+                ...(rightStates !== undefined && { permissions: rightStates }),
+              },
+            });
+          };
+          republish = publishHostFacts;
+          const stopSetup = options.setup?.subscribe(() => {
+            void publishHostFacts().catch((cause: unknown) => {
+              console.error("host_facts_publish_failed", cause);
+            });
+          });
           return {
             dispose: () => {
+              stopSetup?.();
               abort.abort();
               host.dispose();
               frame.remove();
@@ -408,6 +462,10 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                   focus: { editing: false, surface: null },
                   visibility,
                   openRequest: target.openRequest,
+                  ...(setupFacts !== undefined && { setup: setupFacts }),
+                  ...(rightStates !== undefined && {
+                    permissions: rightStates,
+                  }),
                 },
               });
             },
@@ -428,6 +486,10 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                     focus: { editing: false, surface: null },
                     visibility: frame.hidden ? "hidden" : "visible",
                     openRequest: next.openRequest,
+                    ...(setupFacts !== undefined && { setup: setupFacts }),
+                    ...(rightStates !== undefined && {
+                      permissions: rightStates,
+                    }),
                   },
                 },
               });
@@ -493,3 +555,31 @@ start().catch((cause: unknown) => {
     />,
   );
 });
+
+/** Setup facts are a courtesy to the App; a host that cannot read them says nothing. */
+async function readSetup(
+  port: WorkbenchSetupPort | undefined,
+): Promise<AppSetup | undefined> {
+  if (port === undefined) return undefined;
+  try {
+    return await port.read();
+  } catch (cause) {
+    console.error("setup_facts_unavailable", cause);
+    return undefined;
+  }
+}
+
+const appPermissionsPort = createOysterAppPermissionsPort();
+
+/** This App's own grants as rights; a host that cannot read them says nothing. */
+async function readRights(
+  installationId: string,
+): Promise<AppPermissions | undefined> {
+  try {
+    const page = await appPermissionsPort.read(installationId);
+    return page === "unavailable" ? undefined : appRightStates(page);
+  } catch (cause) {
+    console.error("app_rights_unavailable", cause);
+    return undefined;
+  }
+}

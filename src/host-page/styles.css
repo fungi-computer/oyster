@@ -132,6 +132,25 @@ body {
   color: var(--color-error);
   font-size: 14px;
 }
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.form-stack input {
+  background: color-mix(
+    in oklch,
+    var(--color-base-content) 8%,
+    var(--color-base-100)
+  );
+}
+.form-stack .field-hint {
+  margin-top: -4px;
+}
+code {
+  font-family: var(--font-mono);
+}
 .ink-art {
   position: relative;
   aspect-ratio: 16/9;

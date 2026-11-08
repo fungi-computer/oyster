@@ -323,6 +323,12 @@ type OysterAgents = Readonly<{
         error: "not_found" | "revision_conflict" | "not_granted";
       }>
   >;
+  setup: Promise<
+    Readonly<{
+      models: "ready" | "missing";
+      media: "ready" | "missing";
+    }>
+  >;
   modelKeys: Promise<
     readonly Readonly<{
       keyId: string;

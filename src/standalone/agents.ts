@@ -165,6 +165,7 @@ import {
   CLOUDFLARE_GATEWAY_BINDING_AUTH_SENTINEL,
   createAiBindingFetch,
 } from "@earendil-works/pi-ai/api/cloudflare-ai-binding";
+import { cloudflareAccountReady } from "./cloudflare-account.js";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { agentModelListSchema } from "@fungi.computer/shiitake/model-list";
@@ -2864,6 +2865,16 @@ export function standaloneAgents(
       )
         return { error: "not_found" };
       return env.AGENTS.getByName(agentId).setModelChoice(choice);
+    },
+    setup: async () => {
+      const account = cloudflareAccountReady(env);
+      const gateway =
+        configuredProviderEgress(env).baseUrl("ai-gateway") !== null;
+      const stored = (await directory().listModelKeys()).length > 0;
+      return {
+        models: account || gateway || stored ? "ready" : "missing",
+        media: account ? "ready" : "missing",
+      };
     },
     modelKeys: () => directory().listModelKeys(),
     sealModelKey: (input) => directory().sealModelKey(input),
