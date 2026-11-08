@@ -1,5 +1,22 @@
 # @fungi.computer/oyster
 
+## 0.18.1
+
+### Patch Changes
+
+- Changes since 0.18.0:
+
+  - fix(oyster): let App frames write to the clipboard so Copy buttons work
+  - fix(oyster): oyster try installs starter Apps at this Oyster's release tag
+  - fix(hosts): an App's toast shows as a Caps notice in Oyster, Tourtois and
+    Hub (#351)
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.10.1
+  - @fungi.computer/nacre@0.4.1
+  - @fungi.computer/parakeet@0.11.1
+
 ## 0.18.0
 
 ### Minor Changes

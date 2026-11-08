@@ -319,6 +319,10 @@ test("host browser actions save exact bytes and copy text from an opaque App cli
         .evaluate((element) => element.allowFullscreen),
       true,
     );
+    assert.equal(
+      await page.locator("#oyster-app").evaluate((element) => element.allow),
+      "clipboard-write",
+    );
     await frame
       .getByRole("button", { name: "Fullscreen", exact: true })
       .click();

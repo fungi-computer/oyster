@@ -333,6 +333,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
           frame.sandbox.value = appSandbox;
           // A frame permission, not a relaxation of the App's sandbox.
           frame.allowFullscreen = true;
+          // Delegate Copy buttons to the App's opaque-origin frame; reading stays off.
+          frame.allow = "clipboard-write";
           // connectOysterApp navigates the frame once it hears the App.
           frame.title = options.title ?? childConfig.appId;
           // The window's slot is the frame's only home: the shell sizes it
@@ -407,7 +409,8 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                 options.events.onStatusItems?.(items) ?? Promise.resolve(),
               reportAgentSessionSelection:
                 options.events.onAgentSessionSelection,
-              showToast: () => Promise.reject(unavailable("notifications")),
+              showToast: (toast) =>
+                options.events.onToast?.(toast) ?? Promise.resolve(),
             },
           });
           // Settings or a permission answer may have changed what is ready.

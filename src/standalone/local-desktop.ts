@@ -5,7 +5,7 @@ import { CleanupError } from "../build/process-group.js";
 // and installs it; the Tourtois desktop is the home installation, and its shell
 // is approved the same way `install-apps` does.
 import { runGit } from "../build/local-build.js";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "effect/Schema";
@@ -18,6 +18,38 @@ import { standaloneAppSet, type StarterApp } from "./app-set.js";
 
 const repositoryUrl = (app: StarterApp) =>
   `https://github.com/fungi-computer/${app.repository}.git`;
+
+const versionManifest = z.object({ version: z.string().min(1) });
+
+/**
+ * The release tag the App repositories carry for this Oyster: `v<version>`.
+ * An Oyster at X gets the App versions that were released with X, never the
+ * repository's newest commit.
+ */
+export async function starterReleaseTag(): Promise<string> {
+  const { version } = versionManifest.parse(
+    JSON.parse(
+      await readFile(join(import.meta.dirname, "../../package.json"), "utf8"),
+    ),
+  );
+  return `v${version}`;
+}
+
+/** The git arguments that fetch one starter App at its release tag. */
+export function starterCloneArguments(
+  app: StarterApp,
+  tag: string,
+  destination: string,
+): readonly string[] {
+  return [
+    "clone",
+    "--quiet",
+    "--depth=1",
+    `--branch=${tag}`,
+    repositoryUrl(app),
+    destination,
+  ];
+}
 
 /** The Tourtois desktop, which `oyster try` installs before anything else. */
 export const desktopApp = requireStarter("tourtois");
@@ -108,10 +140,14 @@ export async function installLocalStarter(
     const canonical = await realpath(scratch);
     signal.throwIfAborted();
     const source = join(canonical, app.repository);
-    await git(
-      canonical,
-      ["clone", "--quiet", "--depth=1", repositoryUrl(app), source],
-      signal,
+    const tag = await starterReleaseTag();
+    await git(canonical, starterCloneArguments(app, tag, source), signal).catch(
+      (cause: unknown) => {
+        throw new Error(
+          `${app.installationId} has no release ${tag} to install; it is published with each Oyster release.`,
+          { cause },
+        );
+      },
     );
     const commit = await git(source, ["rev-parse", "HEAD"], signal);
     const release = join(scratch, "release");

@@ -1715,7 +1715,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     return new Response(
       config.workbench
         ? `${head}<style>html,body,#oyster-shell{margin:0;height:100%}body{font-family:var(--font-sans)}</style><div id="oyster-shell"></div>${tail}`
-        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" allowfullscreen title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
+        : `${head}<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style><iframe id="oyster-app" sandbox="${appSandbox}" allow="clipboard-write" allowfullscreen title="${escapeHtml(installation.installationId)}"></iframe>${tail}`,
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",

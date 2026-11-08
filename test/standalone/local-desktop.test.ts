@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { localDesktopState } from "../../src/standalone/local-desktop.js";
+import {
+  localDesktopState,
+  starterCloneArguments,
+  starterReleaseTag,
+} from "../../src/standalone/local-desktop.js";
+import { standaloneAppSet } from "../../src/standalone/app-set.js";
 import { approvedInstallation } from "../../src/testing/installation.js";
 import { declaration, release } from "../apps-fixture.js";
 
@@ -67,4 +72,19 @@ it("only treats a successful empty registry read as missing", async () => {
   await expect(localDesktopState(input)).rejects.toThrow("HTTP 403");
   await expect(localDesktopState(input)).rejects.toThrow();
   expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("pins each starter App to the release tag of this Oyster's version", async () => {
+  const tag = await starterReleaseTag();
+  expect(tag).toMatch(/^v\d+\.\d+\.\d+/u);
+  const grove = standaloneAppSet.find((app) => app.installationId === "grove");
+  if (grove === undefined) throw new Error("grove is a starter App");
+  expect(starterCloneArguments(grove, tag, "/scratch/grove")).toEqual([
+    "clone",
+    "--quiet",
+    "--depth=1",
+    `--branch=${tag}`,
+    "https://github.com/fungi-computer/grove.git",
+    "/scratch/grove",
+  ]);
 });
