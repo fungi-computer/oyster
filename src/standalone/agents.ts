@@ -157,6 +157,7 @@ import {
   agentModelChoice,
   agentModelChoiceSchema,
   AgentModelRefused,
+  resolveDefaultChoice,
   selectAgentModel,
   type AgentModelChoice,
   type AgentModelRefusal,
@@ -1338,16 +1339,34 @@ export abstract class StandaloneAgentBase<
   }
 
   private choice() {
-    return agentModelChoice(this.ctx.storage, async (choice) => {
-      await this.admitKey(choice);
-      if (
-        choice.keySource === "ai-gateway" &&
-        configuredProviderEgress(this.env).baseUrl("ai-gateway") === null
-      )
-        throw new AgentModelRefused("key_not_connected");
-      if (choice.keySource === "workers-ai" && this.env.AI === undefined)
-        throw new AgentModelRefused("key_not_connected");
-    });
+    return agentModelChoice(
+      this.ctx.storage,
+      async (choice) => {
+        await this.admitKey(choice);
+        if (
+          choice.keySource === "ai-gateway" &&
+          configuredProviderEgress(this.env).baseUrl("ai-gateway") === null
+        )
+          throw new AgentModelRefused("key_not_connected");
+        if (choice.keySource === "workers-ai" && this.env.AI === undefined)
+          throw new AgentModelRefused("key_not_connected");
+      },
+      async () => {
+        const pin = await this.policyDirectory();
+        return resolveDefaultChoice({
+          workersAi:
+            this.env.AI !== undefined && cloudflareAccountReady(this.env),
+          gateway:
+            configuredProviderEgress(this.env).baseUrl("ai-gateway") !== null,
+          keys:
+            pin === null
+              ? []
+              : await this.env.AGENT_DIRECTORY.getByName(
+                  pin.directoryName,
+                ).listModelKeys(),
+        });
+      },
+    );
   }
 
   /** Secret-free default of this Agent; stored separately from Session history. */

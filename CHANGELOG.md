@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.18.3
+
+### Patch Changes
+
+- Changes since 0.18.2:
+
+  - fix(oyster): an Agent with no saved model runs on a connected provider
+    (#384)
+
 ## 0.18.2
 
 ### Patch Changes

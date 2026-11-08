@@ -58,6 +58,47 @@ async function byokCatalog(
     .getModels();
 }
 
+/**
+ * An Agent with no saved choice runs on a model its host can reach, chosen when
+ * it runs: Workers AI where a Cloudflare account answers, then the Fungi
+ * gateway, then the first stored provider key's catalog default. A key added
+ * later just works; one removed moves the default on. Nothing is saved, so an
+ * Agent's own choice always wins.
+ */
+export async function resolveDefaultChoice(
+  ready: Readonly<{
+    workersAi: boolean;
+    gateway: boolean;
+    keys: readonly Readonly<{ keyId: string; provider: string }>[];
+  }>,
+): Promise<AgentModelChoice> {
+  if (ready.workersAi) return defaultChoice;
+  if (ready.gateway)
+    return {
+      keySource: "ai-gateway",
+      model: { providerId: "openai", modelId: "openai/gpt-6-luna" },
+    };
+  for (const { keyId, provider } of ready.keys) {
+    if (
+      provider !== "anthropic" &&
+      provider !== "openai" &&
+      provider !== "openrouter"
+    )
+      continue;
+    const catalog = await byokCatalog(provider);
+    const model =
+      catalog.find((entry) => "default" in entry && entry.default === true) ??
+      catalog[0];
+    if (model !== undefined)
+      return {
+        keySource: "byok",
+        keyId,
+        model: { providerId: provider, modelId: model.id },
+      };
+  }
+  return defaultChoice;
+}
+
 /** Read the maintained Pi catalog; never accept a model from a different egress. */
 export async function selectAgentModel(
   choice: AgentModelChoice,
@@ -103,12 +144,14 @@ export function agentModelChoice(
     put(key: string, value: AgentModelChoice): Promise<void>;
   }>,
   admit: (choice: AgentModelChoice) => void | Promise<void>,
+  fallback: () => Promise<AgentModelChoice> = () =>
+    Promise.resolve(defaultChoice),
 ) {
   return {
     async read(): Promise<AgentModelChoice> {
       const stored = await storage.get(key);
       return stored === undefined
-        ? defaultChoice
+        ? fallback()
         : Schema.decodeUnknownSync(agentModelChoiceSchema, {
             onExcessProperty: "error",
           })(stored);
