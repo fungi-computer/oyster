@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.19.5
+
+### Patch Changes
+
+- Changes since 0.19.4:
+
+  - Tourtois: retain the provider control scroll position
+  - Tourtois: focus setup controls instead of the scroll column
+  - Tourtois: give image setup a Caps primary action
+  - Tourtois: make every keys destination explicit at the host boundary
+  - Tourtois: open model and image setup at their own sections
+
 ## 0.19.4
 
 ### Patch Changes
