@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.19.24
+
+### Patch Changes
+
+- Changes since 0.19.23:
+
+  - Trellis: polish the complete first-use workflow
+  - Prints: keep populated phone actions on one row
+  - Prints: keep image setup guidance host neutral
+  - Prints: finish first-run guidance and recovery polish
+  - Caps: keep phone window commands and controls together
+
+- Updated dependencies
+  - @fungi.computer/caps@0.10.2
+  - @fungi.computer/parakeet@0.11.6
+
 ## 0.19.23
 
 ### Patch Changes
