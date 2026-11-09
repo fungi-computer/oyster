@@ -1,5 +1,15 @@
 # @fungi.computer/oyster
 
+## 0.19.20
+
+### Patch Changes
+
+- Changes since 0.19.19:
+
+  - Shed: offer only project-free trial starters
+  - Shed: keep starter guidance accurate and concise
+  - Shed: explain commands and offer a project-free starter
+
 ## 0.19.19
 
 ### Patch Changes
