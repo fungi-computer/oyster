@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.3
+
+### Patch Changes
+
+- Changes since 0.19.2:
+
+  - Inkcap: preserve typing and save the live document
+
 ## 0.19.2
 
 ### Patch Changes
