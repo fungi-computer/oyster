@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.19.19
+
+### Patch Changes
+
+- Changes since 0.19.18:
+
+  - Prints: retain Caps invitation hierarchy without nested frames
+  - Prints: lead missing-model setup with uploads
+
 ## 0.19.18
 
 ### Patch Changes
