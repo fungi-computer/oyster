@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.19.23
+
+### Patch Changes
+
+- Changes since 0.19.22:
+
+  - Shed: make inventory waits and retries consistent
+  - Shed: complete command guidance and output recovery
+
 ## 0.19.22
 
 ### Patch Changes
