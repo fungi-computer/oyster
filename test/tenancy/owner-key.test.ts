@@ -23,24 +23,30 @@ async function fixture() {
 }
 
 describe("owner key admission", () => {
-  it("uses the stored canonical owner identity and the selected tenant lookup", async () => {
-    const { tenant, adapter, memberId, get } = await fixture();
-    await expect(
-      adapter.authenticate(
-        new Request(tenant.origin, {
-          headers: { Authorization: `Bearer ${key}` },
-        }),
-        tenant,
-      ),
-    ).resolves.toEqual({
-      kind: "principal",
-      principal: {
-        actor: { kind: "member", memberId },
-        role: "owner",
-      },
-    });
-    expect(get).toHaveBeenCalledWith(tenant.id);
-  });
+  it.each([
+    ["Bearer", `Bearer ${key}`],
+    ["Git Basic", `Basic ${btoa(`oyster:${key}`)}`],
+  ])(
+    "uses the stored canonical owner identity for %s",
+    async (_scheme, authorization) => {
+      const { tenant, adapter, memberId, get } = await fixture();
+      await expect(
+        adapter.authenticate(
+          new Request(tenant.origin, {
+            headers: { Authorization: authorization },
+          }),
+          tenant,
+        ),
+      ).resolves.toEqual({
+        kind: "principal",
+        principal: {
+          actor: { kind: "member", memberId },
+          role: "owner",
+        },
+      });
+      expect(get).toHaveBeenCalledWith(tenant.id);
+    },
+  );
 });
 
 it("uses Oyster's digest cookie, refuses rotation and invalid recognized cookies", async () => {
@@ -79,19 +85,27 @@ it("uses Oyster's digest cookie, refuses rotation and invalid recognized cookies
     ),
   ).resolves.toEqual({ kind: "refused", status: 401 });
 });
-it("does not turn a stored non-owner member into an owner", async () => {
-  const { tenant, adapter, get } = await fixture();
-  get.mockResolvedValue({ key, memberId: "not-a-current-owner" });
-  await expect(
-    adapter.authenticate(
-      new Request(tenant.origin, {
-        headers: { Authorization: `Bearer ${key}` },
-      }),
-      tenant,
-    ),
-  ).resolves.toEqual({ kind: "refused", status: 403 });
-});
-it("passes absent and unrelated bearer credentials but stops an invalid owner cookie", async () => {
+it.each(["Bearer", "Basic"])(
+  "does not turn a stored non-owner member into an owner via %s",
+  async (scheme) => {
+    const { tenant, adapter, get } = await fixture();
+    get.mockResolvedValue({ key, memberId: "not-a-current-owner" });
+    await expect(
+      adapter.authenticate(
+        new Request(tenant.origin, {
+          headers: {
+            Authorization:
+              scheme === "Basic"
+                ? `Basic ${btoa(`oyster:${key}`)}`
+                : `Bearer ${key}`,
+          },
+        }),
+        tenant,
+      ),
+    ).resolves.toEqual({ kind: "refused", status: 403 });
+  },
+);
+it("passes absent and unrelated credentials but stops an invalid owner cookie", async () => {
   const { tenant, adapter, get } = await fixture();
   await expect(
     adapter.authenticate(new Request(tenant.origin), tenant),
@@ -105,6 +119,18 @@ it("passes absent and unrelated bearer credentials but stops an invalid owner co
       tenant,
     ),
   ).resolves.toEqual({ kind: "pass" });
+  for (const authorization of [
+    `Basic ${btoa("oyster:other-adapter-token")}`,
+    "Basic %%%",
+  ])
+    await expect(
+      adapter.authenticate(
+        new Request(tenant.origin, {
+          headers: { Authorization: authorization },
+        }),
+        tenant,
+      ),
+    ).resolves.toEqual({ kind: "pass" });
   await expect(
     adapter.authenticate(
       new Request(tenant.origin, { headers: { Cookie: "oyster_session=" } }),

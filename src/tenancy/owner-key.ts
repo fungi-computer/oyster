@@ -65,9 +65,11 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
     async authenticate(request, tenant) {
       const cookies = parse(request.headers.get("Cookie") ?? "");
       const recognizedCookie = Object.hasOwn(cookies, ownerKeyCookieName);
-      const bearer =
-        request.headers.get("Authorization")?.startsWith("Bearer ") === true;
-      if (!recognizedCookie && !bearer) return { kind: "pass" };
+      const authorization = request.headers.get("Authorization");
+      const credential =
+        authorization?.startsWith("Bearer ") === true ||
+        authorization?.startsWith("Basic ") === true;
+      if (!recognizedCookie && !credential) return { kind: "pass" };
       const record = await options.keys.get(tenant.id);
       if (record === null)
         return recognizedCookie

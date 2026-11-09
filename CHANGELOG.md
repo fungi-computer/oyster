@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.15
+
+### Patch Changes
+
+- Changes since 0.19.14:
+
+  - fix(oyster): admit owner Git credentials in standalone tenancy
+
 ## 0.19.14
 
 ### Patch Changes

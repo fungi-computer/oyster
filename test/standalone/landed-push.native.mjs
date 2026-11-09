@@ -1,9 +1,10 @@
 import process from "node:process";
 import { log, error } from "node:console";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -33,6 +34,7 @@ import { appBackend } from "../../../../apps/bonsai/backend/methods.ts";
 import { publishSource } from "@fungi.computer/oyster/pack";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
 import packageMetadata from "../../../../apps/bonsai/package.json" with { type: "json" };
+import { gitCommands } from "../../../../apps/bonsai/web/git-commands.ts";
 
 // Turbo builds the Oyster dependency closure before this proof runs.
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -205,6 +207,65 @@ try {
   assert.ok(
     provider.requests.some((request) => request.includes("git-receive-pack")),
     "Owner push never reached native Git",
+  );
+  // Use the standalone admission chain that `oyster try` runs, not only the
+  // lower-level Git fixture. Execute Bonsai's literal Copy values in a shell.
+  const copied = `${work}/copied`;
+  await mkdir(copied);
+  await writeFile(`${copied}/.oyster-owner`, key, { mode: 0o600 });
+  await call("bonsai", "repos.create", { name: "copied-proof" });
+  const copiedRemote = `${origin}/git/bonsai/copied-proof.git`;
+  const seededCopy = await push(key, copiedRemote);
+  assert.equal(seededCopy.status, 0, seededCopy.output);
+  const commands = gitCommands(copiedRemote, "main");
+  const copiedCommand = async (command) => {
+    const child = spawn("sh", ["-c", command], {
+      cwd: copied,
+      env: {
+        ...gitEnvironment,
+        OYSTER_OWNER_KEY: "",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => (output += chunk));
+    child.stderr.on("data", (chunk) => (output += chunk));
+    const [status] = await once(child, "close");
+    assert.equal(status, 0, redact(output));
+  };
+  await copiedCommand(commands.clone);
+  assert.equal(
+    await readFile(`${copied}/copied-proof/hello.txt`, "utf8"),
+    "hello\n",
+  );
+  await writeFile(
+    `${copied}/copied-proof/copied.txt`,
+    "Pushed with Bonsai's command\n",
+  );
+  git("-C", `${copied}/copied-proof`, "add", "copied.txt");
+  git(
+    "-C",
+    `${copied}/copied-proof`,
+    "-c",
+    "user.name=Owner",
+    "-c",
+    "user.email=owner@test.invalid",
+    "commit",
+    "-qm",
+    "Copy command proof",
+  );
+  await copiedCommand(`${commands.key}\ncd copied-proof\n${commands.push}`);
+  const copiedHead = git("-C", `${copied}/copied-proof`, "rev-parse", "HEAD");
+  const copiedDetail = await call("bonsai", "repos.get", {
+    repo: "copied-proof",
+  });
+  assert.ok(
+    copiedDetail.refs.some((ref) => ref.hash === copiedHead),
+    "Bonsai's copied push reaches the native repository",
+  );
+  log(
+    "PASS Bonsai literal copied clone and push through standalone Git admission",
   );
   const createdKey = await globalThis.fetch(`${origin}/api/keys`, {
     method: "POST",
