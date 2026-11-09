@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.19.10
+
+### Patch Changes
+
+- Changes since 0.19.9:
+
+  - Grove: leave the welcome as the desktop primary action
+  - Grove: explain the empty desktop inbox
+
 ## 0.19.9
 
 ### Patch Changes
