@@ -20,7 +20,32 @@ export const BACKEND_CONSTRUCTION_FACET = "candidate";
  * authority are never copied. A unique Loader ID isolates candidate globals.
  * No invocation frame or guestEnv factory is accepted.
  */
-export async function checkBackendConstruction<FacetClass>(
+export function checkBackendConstruction<FacetClass>(
+  ctx: Pick<AppInstanceContext<FacetClass>, "facets">,
+  loader: AppInstanceLoader<FacetClass> | undefined,
+  artifact: Backend,
+  limits: GuestLimits,
+  priorStateSchema: Instance["stateSchema"],
+): Promise<void> {
+  // One disposable facet per host: overlapping probes would delete each
+  // other's candidate ("Facet was deleted."), so each waits for the last.
+  const previous = probesInFlight.get(ctx.facets) ?? Promise.resolve();
+  const probe = previous.then(() =>
+    constructOnce(ctx, loader, artifact, limits, priorStateSchema),
+  );
+  probesInFlight.set(
+    ctx.facets,
+    probe.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return probe;
+}
+
+const probesInFlight = new WeakMap<object, Promise<void>>();
+
+async function constructOnce<FacetClass>(
   ctx: Pick<AppInstanceContext<FacetClass>, "facets">,
   loader: AppInstanceLoader<FacetClass> | undefined,
   artifact: Backend,

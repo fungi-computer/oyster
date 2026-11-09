@@ -17,6 +17,7 @@ import { installRelease } from "../dist/pack.js";
 import { parseRelease, sha256 } from "../dist/host.js";
 import { artifactsProvider } from "./artifacts-provider.fixture.mjs";
 import { grantDeclaredAppCapabilities } from "./standalone/owner-grants.fixture.mjs";
+import { gitCommands } from "../../../apps/bonsai/web/git-commands.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceRevision = `git:${execFileSync("git", ["rev-parse", "HEAD"], {
@@ -242,6 +243,28 @@ try {
     assert.equal((await git(source, owner, ...args)).status, 0);
   const pushed = await git(source, owner, "push", remote, "main");
   assert.equal(pushed.status, 0, pushed.output);
+
+  // Bonsai's Copy action reads .oyster-owner inside Git's credential helper.
+  // Execute that exact command, with neither an auth header nor a key in argv.
+  const copied = `${work}/copied`;
+  await mkdir(copied);
+  await writeFile(`${copied}/.oyster-owner`, key, { mode: 0o600 });
+  const clone = spawn("sh", ["-c", gitCommands(remote, "main").clone], {
+    cwd: copied,
+    env: { ...gitEnvironment, OYSTER_OWNER_KEY: "" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let cloneOutput = "";
+  clone.stdout.on("data", (chunk) => (cloneOutput += chunk));
+  clone.stderr.on("data", (chunk) => (cloneOutput += chunk));
+  const [cloneStatus] = await once(clone, "close");
+  assert.equal(cloneStatus, 0, redact(cloneOutput));
+  assert.equal(
+    (
+      await git(`${copied}/pond`, owner, "log", "-1", "--format=%s")
+    ).output.trim(),
+    "Plant the pond",
+  );
 
   // 6. A named key is never a member: git push refuses it on its role alone,
   // whatever its own App grants are.

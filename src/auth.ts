@@ -25,8 +25,8 @@ async function constantTimeEqual(a: string, b: string): Promise<boolean> {
 }
 
 /**
- * Single-owner sign-in: a bearer token or a session cookie holding the
- * owner key's digest. The key itself is never stored in the browser.
+ * Single-owner sign-in: a bearer token, a Git Basic-auth password, or a session
+ * cookie holding the owner key's digest. The key is never stored in the browser.
  */
 export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
   if (ownerKey.length < 24)
@@ -49,6 +49,13 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
         return (await constantTimeEqual(authorization.slice(7), ownerKey))
           ? owner
           : { kind: "refused", status: 401 };
+      if (authorization?.startsWith("Basic ") === true) {
+        const presented = presentedGitKey(request);
+        return presented.kind === "key" &&
+          (await constantTimeEqual(presented.value, ownerKey))
+          ? owner
+          : { kind: "refused", status: 401 };
+      }
       const cookie = (request.headers.get("Cookie") ?? "")
         .split(";")
         .map((part) => part.trim())

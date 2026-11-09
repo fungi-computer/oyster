@@ -129,8 +129,21 @@ try {
     assert.equal(result.requestedSyncFailure, syncFailure);
     assert.equal(result.failure, fail ? "backend_construction_failed" : null);
   }
+  const concurrent = await globalThis.fetch(`${origin}/concurrent`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  const concurrentRaw = await concurrent.text();
+  await writeFile(`${work}/concurrent-response.json`, concurrentRaw);
+  assert.equal(concurrent.status, 200, concurrentRaw);
+  assert.deepEqual(
+    z
+      .object({ failures: z.array(z.string().nullable()) })
+      .parse(JSON.parse(concurrentRaw)).failures,
+    [null, null, null],
+    "Overlapping probes on one host must each construct",
+  );
   console.log(
-    "Native construction-copy PASS: seed, isolation, denial, refusal and empty reopen",
+    "Native construction-copy PASS: seed, isolation, denial, refusal, empty reopen and overlapping probes",
   );
   console.log(`Disposable evidence: ${work}`);
 } finally {

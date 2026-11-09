@@ -36,8 +36,8 @@ Marks a browser that has signed in here before; it carries no authority.
 function ownerKeyAuth(ownerKey, ownerId?): OysterAuth;
 ```
 
-Single-owner sign-in: a bearer token or a session cookie holding the owner key's
-digest. The key itself is never stored in the browser.
+Single-owner sign-in: a bearer token, a Git Basic-auth password, or a session
+cookie holding the owner key's digest. The key is never stored in the browser.
 
 #### Parameters
 

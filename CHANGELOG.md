@@ -1,5 +1,15 @@
 # @fungi.computer/oyster
 
+## 0.19.4
+
+### Patch Changes
+
+- Changes since 0.19.3:
+
+  - fix(oyster): run one App boot probe at a time per host, and repin celld onto
+    40dc731d
+  - fix(oyster): accept the owner key through Git Basic auth
+
 ## 0.19.3
 
 ### Patch Changes

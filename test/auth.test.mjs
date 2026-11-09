@@ -6,7 +6,7 @@ import {
   ownerOrKeyAuth,
 } from "../dist/auth.js";
 
-const { Request, URLSearchParams } = globalThis;
+const { Request, URLSearchParams, btoa } = globalThis;
 
 const key = "fixture-owner-key-1234567890"; //gitleaks:allow
 const ownerId = "canonical-stored-owner";
@@ -39,6 +39,46 @@ test("neutral owner auth preserves explicit owner identity and bearer refusals",
     kind: "refused",
     status: 401,
   });
+});
+
+test("Git's Basic password admits the owner without consulting issued keys", async () => {
+  const auth = ownerOrKeyAuth(key, ownerId, () => {
+    throw new Error("The owner key must not reach the issued-key store");
+  });
+  for (const username of ["oyster", "git"]) {
+    assert.deepEqual(
+      await auth.authenticate(
+        new Request(`${origin}/git/bonsai/pond.git/info/refs`, {
+          headers: { Authorization: `Basic ${btoa(`${username}:${key}`)}` },
+        }),
+      ),
+      {
+        kind: "admitted",
+        principal: {
+          actor: { kind: "member", memberId: ownerId },
+          role: "owner",
+        },
+      },
+    );
+  }
+});
+
+test("Basic auth refuses malformed credentials and a wrong owner password", async () => {
+  const auth = ownerKeyAuth(key, ownerId);
+  for (const authorization of [
+    "Basic %%%",
+    `Basic ${btoa("oyster")}`,
+    `Basic ${btoa("oyster:")}`,
+    `Basic ${btoa(`oyster:${key}x`)}`,
+    `Basic ${btoa(`${key}:wrong`)}`,
+  ]) {
+    assert.deepEqual(
+      await auth.authenticate(
+        new Request(origin, { headers: { Authorization: authorization } }),
+      ),
+      { kind: "refused", status: 401 },
+    );
+  }
 });
 
 test("the session cookie drops Secure on loopback HTTP only", async () => {

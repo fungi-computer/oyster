@@ -26,6 +26,7 @@ export class RecoverySentinel extends DurableObject {
 export class RecoverySupervisor extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === "/concurrent") return await this.concurrent();
     const fail = url.searchParams.get("fail") === "1";
     const syncFailure = url.searchParams.get("sync") === "1";
     this.ctx.storage.sql.exec(
@@ -105,6 +106,44 @@ export class RecoverySupervisor extends DurableObject {
     });
   }
 }
+
+// Staging 2026-11-09: two Teams provisioning at once sent overlapping boot
+// probes to one host DO; each deleted the other's disposable facet ("Facet was
+// deleted.") and both Teams lost their default Apps.
+RecoverySupervisor.prototype.concurrent = async function concurrent() {
+  const code = `export class SlowProbe {
+    constructor(ctx) {
+      ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS boot(x)");
+      ctx.blockConcurrencyWhile(() => new Promise((resolve) => setTimeout(resolve, 200)));
+    }
+  }`;
+  const failures = await Promise.all(
+    [0, 1, 2].map(async () => {
+      try {
+        await checkBackendConstruction(
+          this.ctx,
+          this.env.LOADER,
+          {
+            release,
+            digest: release.artifact.artifactDigest,
+            backend: {
+              compatibilityDate: "2026-09-04",
+              exportName: "SlowProbe",
+              runtime: { kind: "durable-facet", stateSchema: 1 },
+              code,
+            },
+          },
+          guestLimits(),
+          null,
+        );
+        return null;
+      } catch (cause) {
+        return cause.code ?? "unexpected";
+      }
+    }),
+  );
+  return Response.json({ failures });
+};
 
 export default {
   async fetch(request, env) {
