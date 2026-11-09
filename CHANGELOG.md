@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.19.25
+
+### Patch Changes
+
+- Changes since 0.19.24:
+
+  - Tourtois: pulse pending loaders with reduced motion
+  - Caps: pulse pending loaders with reduced motion
+
+- Updated dependencies
+  - @fungi.computer/caps@0.10.3
+  - @fungi.computer/parakeet@0.11.7
+
 ## 0.19.24
 
 ### Patch Changes
