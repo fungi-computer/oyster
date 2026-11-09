@@ -1,5 +1,30 @@
 # @fungi.computer/oyster
 
+## 0.19.6
+
+### Patch Changes
+
+- Changes since 0.19.5:
+
+  - Tourtois: present image setup with Caps steps and form actions
+  - Tourtois: offer the image provider from the Keys page too
+  - Tourtois: name and explain the Cloudflare image provider path
+  - Tourtois: preserve and forward trial installation retry controls
+  - Tourtois: name Computers consistently in settings navigation
+  - Shed: point runtime setup to the Computers settings entry
+  - Trellis: explain when a workflow needs no inputs
+  - Trellis: keep initially collapsed panes out of the layout
+  - Trellis: collapse the palette when a populated draft finishes loading
+  - Trellis: make templates easier to edit, publish and run
+  - Prints: keep image setup reachable after it opens
+  - Maosaico: keep initially collapsed panes out of the layout
+  - Nacre: reject undeclared shell settings result fields
+  - Nacre: preserve and forward trial installation retry controls
+
+- Updated dependencies
+  - @fungi.computer/nacre@0.4.3
+  - @fungi.computer/caps@0.10.1
+
 ## 0.19.5
 
 ### Patch Changes
