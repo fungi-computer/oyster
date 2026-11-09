@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.13
+
+### Patch Changes
+
+- Changes since 0.19.12:
+
+  - fix(oyster): mount the trial desktop and supply its local runtime
+
 ## 0.19.12
 
 ### Patch Changes

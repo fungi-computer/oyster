@@ -34,9 +34,10 @@ in the launcher; the page it opens reads **Hello from my first Oyster App**.
 
 Once the desktop is up, `try` keeps building the other starter Apps from their
 public sources in the background, one at a time, and prints a line for each:
-Grove, Prints, Inkcap, Trellis and Bonsai run fully on your computer; Shed
-installs but needs a Computer runtime that a trial does not have. Running `try`
-again leaves installed Apps untouched.
+Grove, Prints, Inkcap, Trellis and Bonsai run fully on your computer. Truffle,
+installed with Oyster, attaches the trial’s `computer/` folder so Shed can run
+commands when the local sandbox is available. Running `try` again leaves
+installed Apps untouched.
 
 The owner key is saved in `my-oyster/.oyster-owner` and never printed. Press
 Ctrl-C to stop, and run the same command again in `my-oyster` to restart.

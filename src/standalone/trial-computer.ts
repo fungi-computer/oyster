@@ -14,7 +14,7 @@ class TrialComputerUnavailable extends Error {
   readonly code = "no_runtime";
   constructor() {
     super(
-      "Install the Truffle local runtime and make fungi-local-computer available on PATH, then restart oyster try.",
+      "The Truffle local runtime could not start. Check its installation and local sandbox, then restart oyster try.",
     );
     this.name = "TrialComputerUnavailable";
   }
@@ -31,11 +31,10 @@ export async function startTrialComputer(input: {
   await mkdir(folder, { recursive: true });
   input.signal.throwIfAborted();
   const child = spawn(
-    process.env.FUNGI_LOCAL_COMPUTER ?? "fungi-local-computer",
+    process.env.FUNGI_LOCAL_COMPUTER ??
+      join(input.directory, "node_modules", ".bin", "fungi-local-computer"),
     ["attach"],
-    {
-      stdio: ["pipe", "pipe", "ignore"],
-    },
+    { stdio: ["pipe", "pipe", "ignore"] },
   );
   const online = Promise.withResolvers<undefined>();
   const closed = Promise.withResolvers<undefined>();

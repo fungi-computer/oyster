@@ -287,6 +287,7 @@ function projectManifest(own: OwnManifest, spec: string | undefined): string {
     "@fungi.computer/oyster": spec ?? own.version,
     "@fungi.computer/computer":
       own.dependencies["@fungi.computer/computer"] ?? "latest",
+    "@fungi.computer/truffle": "latest",
     react: "^19.2.0",
     "react-dom": "^19.2.0",
     // Building the desktop here needs this exact pnpm, whatever the caller uses.

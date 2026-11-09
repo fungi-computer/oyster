@@ -68,7 +68,7 @@ it("rejects a runtime refusal without exposing its diagnostic output", async () 
     `process.stderr.write('test-owner-key'); process.stdout.write('{"kind":"no_runtime"}\\n');`,
   );
   await expect(startTrialComputer(input)).rejects.toThrow(
-    /Install the Truffle local runtime/,
+    /The Truffle local runtime could not start/,
   );
 });
 
@@ -101,4 +101,23 @@ it("refuses malformed runtime status instead of reporting readiness", async () =
   await expect(startTrialComputer(input)).rejects.toMatchObject({
     code: "no_runtime",
   });
+});
+
+it("starts the runtime installed in the trial project without a global command", async () => {
+  const input = await fixture();
+  vi.stubEnv("FUNGI_LOCAL_COMPUTER", undefined);
+  const binaries = join(input.directory, "node_modules", ".bin");
+  await mkdir(binaries, { recursive: true });
+  await writeFile(
+    join(binaries, "fungi-local-computer"),
+    `#!/usr/bin/env node
+for await (const chunk of process.stdin) void chunk;
+const timer = setInterval(() => {}, 1000);
+process.on('SIGTERM', () => clearInterval(timer));
+process.stdout.write('{"kind":"online"}\\n');
+`,
+    { mode: 0o700 },
+  );
+  const runtime = await startTrialComputer(input);
+  await runtime.stop();
 });

@@ -181,6 +181,7 @@ describe("oyster try", () => {
       expect.arrayContaining([
         "@fungi.computer/oyster",
         "@fungi.computer/computer",
+        "@fungi.computer/truffle",
         "react",
         "react-dom",
         "wrangler",
