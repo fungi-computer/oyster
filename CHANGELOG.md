@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.19.9
+
+### Patch Changes
+
+- Changes since 0.19.8:
+
+  - Grove: show one central model setup notice
+  - Parakeet: show one central model setup notice
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.11.5
+
 ## 0.19.8
 
 ### Patch Changes
