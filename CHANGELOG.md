@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.19.22
+
+### Patch Changes
+
+- Changes since 0.19.21:
+
+  - Tourtois: use a statement callback for widget retry
+  - Tourtois: pass typed checks and record the next release notes
+  - Tourtois: keep one first action when the launcher is empty
+  - Tourtois: complete Tourtois and Grove first-run guidance
+  - Grove: pass typed checks and record the next release notes
+  - Grove: complete Tourtois and Grove first-run guidance
+
 ## 0.19.21
 
 ### Patch Changes
