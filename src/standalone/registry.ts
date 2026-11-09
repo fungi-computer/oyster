@@ -63,6 +63,7 @@ export type StandaloneRegistryEnv = OysterWorkerEnv &
   OysterGitEnv &
   Readonly<{
     OYSTER_COMPUTER_ID: string;
+    OYSTER_COMPUTER_BACKEND?: "local";
     COMPUTER: DurableObjectNamespace<ComputerDO>;
   }>;
 
@@ -220,11 +221,13 @@ export abstract class StandaloneRegistry
           created = this.#computers.create(
             { kind: "owner", id: memberId },
             input.request,
-            [
-              hostId === undefined
-                ? { kind: "platform-container" }
-                : { kind: "on-box-vm", hostId },
-            ],
+            this.#env.OYSTER_COMPUTER_BACKEND === "local"
+              ? []
+              : [
+                  hostId === undefined
+                    ? { kind: "platform-container" }
+                    : { kind: "on-box-vm", hostId },
+                ],
           ).computer;
         } catch (cause) {
           if (cause instanceof ComputerInventoryError)
@@ -304,7 +307,7 @@ export abstract class StandaloneRegistry
         return computer;
       }
       case "state":
-        if (this.#computers.read(input.computerId) === null) return null;
+        if (!this.ownsComputer(input.computerId)) return null;
         return this.#env.COMPUTER.getByName(
           input.computerId,
         ).readHostedComputerState({
@@ -314,7 +317,7 @@ export abstract class StandaloneRegistry
           provenance: { actor: memberId },
         });
       case "start":
-        if (this.#computers.read(input.computerId) === null) return null;
+        if (!this.ownsComputer(input.computerId)) return null;
         return this.#env.COMPUTER.getByName(
           input.computerId,
         ).startHostedComputer({

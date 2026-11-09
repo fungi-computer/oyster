@@ -70,6 +70,9 @@ function effects(overrides: Partial<TryEffects> = {}) {
     installStarter: vi.fn(() => Promise.resolve("installed" as const)),
     reportStarters: vi.fn(() => Promise.resolve()),
     takeRetries: vi.fn((): Promise<readonly string[]> => Promise.resolve([])),
+    startComputer: vi.fn(() =>
+      Promise.resolve({ stop: vi.fn(() => Promise.resolve()) }),
+    ),
     modelSetup: vi.fn(() => Promise.resolve("ready" as const)),
     signInLink: vi.fn(() => {
       setImmediate(() => {
@@ -89,6 +92,55 @@ function effects(overrides: Partial<TryEffects> = {}) {
 }
 
 describe("oyster try", () => {
+  it("starts one Computer and stops it before the Oyster server", async () => {
+    const stopped: string[] = [];
+    const fixture = effects({
+      startComputer: vi.fn(() =>
+        Promise.resolve({
+          stop: () => {
+            stopped.push("computer");
+            return Promise.resolve();
+          },
+        }),
+      ),
+      startServer: vi.fn(() =>
+        Promise.resolve({
+          stop: () => {
+            stopped.push("server");
+            return Promise.resolve();
+          },
+          exited: new Promise<number | null>(() => undefined),
+        }),
+      ),
+    });
+    await runTry(
+      [join(root, "computer"), "--no-open"],
+      fixture.fake,
+      plain().ui,
+    );
+    expect(fixture.fake.startComputer).toHaveBeenCalledOnce();
+    expect(stopped).toEqual(["computer", "server"]);
+  });
+
+  it("keeps Oyster usable and explains a refused sandbox startup", async () => {
+    const fixture = effects({
+      startComputer: vi.fn(() =>
+        Promise.reject(new Error("Workspace sandbox unavailable")),
+      ),
+    });
+    const output = plain();
+    await runTry(
+      [join(root, "no-runtime"), "--no-open"],
+      fixture.fake,
+      output.ui,
+    );
+    expect(output.text()).toContain(
+      "The Computer runtime is unavailable (Workspace sandbox unavailable)",
+    );
+    expect(fixture.fake.installDesktop).toHaveBeenCalledOnce();
+    expect(fixture.stop).toHaveBeenCalledOnce();
+  });
+
   it("prepares Hello and Tourtois together before offering sign-in", async () => {
     const entered = Promise.withResolvers<undefined>();
     const hello = Promise.withResolvers<number>();
@@ -370,9 +422,7 @@ describe("oyster try", () => {
     expect(text).toContain("prints already installed");
     expect(text).toContain("trellis couldn't be installed: build exploded");
     expect(text).toContain("bonsai ready");
-    expect(text).toContain(
-      "shed installed: needs a Computer runtime (see shed)",
-    );
+    expect(text).toContain("shed ready");
   });
 
   it("tells the desktop each App's state and retries a failed App when asked", async () => {
@@ -426,7 +476,7 @@ describe("oyster try", () => {
       "shed:installing",
     ]);
     expect(reports.some((list) => list.includes("trellis:failed"))).toBe(true);
-    expect(reports.at(-1)).toEqual(["shed:needs-runtime"]);
+    expect(reports.at(-1)).toEqual([]);
     const failed = vi
       .mocked(fixture.fake.reportStarters)
       .mock.calls.flatMap(([, list]) => list)

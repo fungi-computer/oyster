@@ -1,3 +1,4 @@
+import type { AppSetup } from "@fungi.computer/agar";
 import {
   defaultTenant,
   implicitTenancy,
@@ -1237,6 +1238,11 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
     env: Env,
     scope: TenantScope,
   ) => NonNullable<OysterHost["permissionResources"]>;
+  /** Read the selected Computer's live runtime facts for the owner setup surface. */
+  computerSetup?: (
+    env: Env,
+    scope: TenantScope,
+  ) => Promise<Pick<AppSetup, "terminal" | "terminalReason">>;
   /** Host-owned fleet control, admitted on every invocation by its durable owner. */
   computerControl?: (
     env: Env,
@@ -1719,11 +1725,13 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   if (options.buildGitPass !== undefined)
     gitOptions = { ...gitOptions, buildGitPass: options.buildGitPass };
   const git = oysterWorkerGit(env, gitOptions);
+  const computerSetup = options.computerSetup;
   const ownerRoutes = oysterGitOwnerRoutes(
     env,
     scope,
     options.ownerRoutes?.(env, scope),
     agents,
+    computerSetup === undefined ? undefined : () => computerSetup(env, scope),
   );
   let host: OysterGitWorkerHost = {
     ...base,
@@ -1758,13 +1766,14 @@ export function oysterGitOwnerRoutes(
   scope: TenantScope,
   hostOwnerRoutes: Routes<OysterEnv> | undefined,
   agents: OysterAgents | undefined,
+  computerSetup?: () => Promise<Pick<AppSetup, "terminal" | "terminalReason">>,
 ): Routes<OysterEnv> {
   const ownerRoutes = gitAdminRoutes(env, scope);
   if (hostOwnerRoutes !== undefined) ownerRoutes.include(hostOwnerRoutes);
   if (agents !== undefined) {
     ownerRoutes.include(agentApprovalRoutes(agents));
     ownerRoutes.include(connectionRoutes(agents));
-    ownerRoutes.include(modelKeyRoutes(agents));
+    ownerRoutes.include(modelKeyRoutes(agents, computerSetup));
   }
   return ownerRoutes;
 }

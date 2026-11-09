@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.19.6",
+  "version": "0.19.7",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
   "type": "module",
@@ -434,9 +434,9 @@
     "jose": "6.2.11",
     "mime": "4.1.0",
     "oauth4webapi": "3.8.8",
+    "parse5": "8.0.1",
     "path-to-regexp": "8.4.2",
     "strip-ansi": "7.2.0",
-    "parse5": "8.0.1",
     "zod": "4.4.3"
   },
   "devDependencies": {

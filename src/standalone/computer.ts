@@ -39,6 +39,7 @@ import {
 import {
   ComputerDO as NativeComputerDO,
   ComputerOperationConflictError,
+  ComputerBackendUnavailableError,
   type AttachedBackend,
   type ComputerEnv,
   type ComputerFilesRpc,
@@ -131,6 +132,8 @@ export type StandaloneComputerEnv = ComputerEnv &
   Pick<OysterWorkerEnv, "RELEASES"> &
   Readonly<{
     OYSTER_COMPUTER_ID: string;
+    /** Local trials offer attached machines rather than hosted containers. */
+    OYSTER_COMPUTER_BACKEND?: "local";
     COMPUTER: DurableObjectNamespace<ComputerDO>;
     /** The registry owns installations and this Computer's App build jobs. */
     REGISTRY: DurableObjectNamespace<StandaloneRegistry>;
@@ -151,7 +154,7 @@ export type StandaloneComputerResult =
       encoding: "base64";
       truncated: boolean;
     }>
-  | Readonly<{ error: "conflict" }>
+  | Readonly<{ error: "conflict" | "no_runtime" }>
   | z.output<typeof writeOutputSchema>
   | z.output<typeof mkdirOutputSchema>
   | z.output<typeof computerPortsOutputSchema>
@@ -190,7 +193,7 @@ const processStartHttpBody = processStartInputSchema.omit({
 const processStartReply = z.lazy(() =>
   z.union([
     computerProcessSchema,
-    z.strictObject({ error: z.literal("conflict") }),
+    z.strictObject({ error: z.enum(["conflict", "no_runtime"]) }),
   ]),
 );
 const bindingWrite = writeInputSchema.extend({
@@ -467,10 +470,34 @@ export class ComputerDO
   /** An admitted fleet control starts exactly this Computer's hosted backend. */
   async startHostedComputer(authority: ComputerGrant) {
     this.#accept(authority, "start");
+    if (this.previewBindings.OYSTER_COMPUTER_BACKEND === "local") {
+      const state = await this.#fleetLifecycle().readComputerState();
+      return state.state === "running"
+        ? state
+        : { error: "no_runtime" as const };
+    }
     return this.#fleetLifecycle().startHostedComputer(async (_backing, run) => {
       this.#accept(authority, "start");
       await run();
     });
+  }
+
+  /** Runtime facts for the host's owner-admitted setup read. */
+  runtimeSetup() {
+    const backends = this.describeBackends();
+    if (
+      backends.some(
+        (backend) => backend.kind === "local" && backend.status === "online",
+      )
+    )
+      return { terminal: "exec-only" as const };
+    if (backends.some((backend) => backend.kind !== "local"))
+      return { terminal: "ready" as const };
+    return {
+      terminal: "missing" as const,
+      terminalReason:
+        "No Computer runtime is connected. Restart oyster try on a machine with a supported Workspace sandbox.",
+    };
   }
 
   /** Observe an admitted fleet Computer without starting its backend. */
@@ -702,11 +729,17 @@ export class ComputerDO
     const owner = createFleetBacking(this.state.storage);
     owner.ensure();
     const hostId = this.bindings.COMPUTER_VM_DEFAULT_HOST;
-    this.#backends = owner.computerCreated(this.#id(), [
-      hostId === undefined
-        ? { kind: "platform-container" }
-        : { kind: "on-box-vm", hostId },
-    ]).backends;
+    this.#backends = owner
+      .computerCreated(this.#id(), [
+        hostId === undefined
+          ? { kind: "platform-container" }
+          : { kind: "on-box-vm", hostId },
+      ])
+      .backends.filter(
+        (backend) =>
+          this.previewBindings.OYSTER_COMPUTER_BACKEND !== "local" ||
+          backend.kind === "local",
+      );
     return this.#backends;
   }
 
@@ -784,6 +817,8 @@ export class ComputerDO
             executionContext,
           );
         } catch (cause) {
+          if (cause instanceof ComputerBackendUnavailableError)
+            return { error: "no_runtime" };
           if (
             cause instanceof ComputerOperationConflictError ||
             cause instanceof ComputerPortConflictError
@@ -1107,7 +1142,10 @@ export function standaloneComputerCapabilities(
         }),
       ),
     );
-    return Response.json(result, { status: "error" in result ? 409 : 200 });
+    return Response.json(result, {
+      status:
+        "error" in result ? (result.error === "no_runtime" ? 503 : 409) : 200,
+    });
   });
   // The host wire body is `{ id }`, as on Hub; it is parsed here.
   routes.post("/processes/kill", reach, async (context, { principal }) => {

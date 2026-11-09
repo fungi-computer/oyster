@@ -570,7 +570,7 @@ Host-owned direct approval under the admitted owner; never an App capability.
 ### modelKeyRoutes()
 
 ```ts
-function modelKeyRoutes(agents): Routes<OysterEnv>;
+function modelKeyRoutes(agents, computerSetup?): Routes<OysterEnv>;
 ```
 
 Host-owned model-key custody for the owner directly. A key goes in once and
@@ -578,9 +578,10 @@ never comes back out; listings carry provider, label and times only.
 
 #### Parameters
 
-| Parameter | Type                            |
-| --------- | ------------------------------- |
-| `agents`  | [`OysterAgents`](#oysteragents) |
+| Parameter        | Type                                                                                                                                                                                                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents`         | [`OysterAgents`](#oysteragents)                                                                                                                                                                                                                             |
+| `computerSetup?` | () => `Promise`\<`Pick`\<`Readonly`\<\{ `models`: `SetupState`; `media`: `SetupState`; `git`: `SetupState`; `terminal`: `"unknown"` \| `"ready"` \| `"missing"` \| `"exec-only"`; `terminalReason?`: `string`; \}\>, `"terminal"` \| `"terminalReason"`\>\> |
 
 #### Returns
 

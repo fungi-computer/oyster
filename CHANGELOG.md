@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.19.7
+
+### Patch Changes
+
+- Changes since 0.19.6:
+
+  - fix(oyster): attach trial Computers through the runtime CLI
+  - fix(oyster): run trial Computers in a workspace sandbox
+  - fix(oyster): run trial Computers in a workspace sandbox
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.9.1
+  - @fungi.computer/computer@0.8.2
+  - @fungi.computer/nacre@0.4.4
+  - @fungi.computer/braid@0.4.8
+  - @fungi.computer/darkroom@0.5.6
+  - @fungi.computer/parakeet@0.11.4
+  - @fungi.computer/shiitake@0.12.4
+  - @fungi.computer/workflows-wire@0.4.8
+  - @fungi.computer/shiitake-extensions@0.6.11
+  - @fungi.computer/zookeeper@0.0.18
+
 ## 0.19.6
 
 ### Patch Changes

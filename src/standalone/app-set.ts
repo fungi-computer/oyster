@@ -30,7 +30,7 @@ export type StarterApp = Readonly<{
   repository: string;
   /**
    * What `oyster try` can do with it: `local` runs on a laptop; `needs-runtime`
-   * installs but needs a Computer runtime that a trial does not have.
+   * also needs the trial Computer runtime to have started successfully.
    */
   trial: "local" | "needs-runtime";
 }>;

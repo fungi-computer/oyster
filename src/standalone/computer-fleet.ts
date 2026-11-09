@@ -77,6 +77,7 @@ function fleetStatus(
       case "invalid":
       case "not_enabled":
         return 400;
+      case "no_runtime":
       case "partial_init":
         return 503;
       default:

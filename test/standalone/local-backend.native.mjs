@@ -15,16 +15,20 @@
 //  4. Detach closes the live socket and the host rejects a signed redial.
 //
 // Run: node test/standalone/local-backend.native.mjs
+import { startTrialComputer } from "../../dist/standalone/trial-computer.js";
 import { nativeMcpConnector } from "../native-mcp-client.fixture.mjs";
 import assert from "node:assert/strict";
+import { TextEncoder } from "node:util";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import console from "node:console";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
+import { installOnOyster } from "../../dist/installation-client.js";
 import { createServer as createTlsServer } from "node:https";
 import { createRequire } from "node:module";
 import tls from "node:tls";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -34,7 +38,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import process from "node:process";
@@ -68,9 +72,7 @@ const { createProxyMiddleware } = createRequire(
 const root = fileURLToPath(new URL("../../", import.meta.url));
 await mkdir(join(root, ".botanical"), { recursive: true });
 const work = await mkdtemp(join(root, ".botanical/local-backend-"));
-const folder = await realpath(
-  await mkdtemp(join(tmpdir(), "fungi-oyster-local-backend-")),
-);
+const folder = await realpath(await mkdtemp(join(work, "computer-")));
 const credentialPath = join(work, "credentials.json");
 const key = randomBytes(24).toString("hex");
 const freePort = async () => {
@@ -139,13 +141,14 @@ await writeFile(
   join(work, "wrangler.json"),
   JSON.stringify({
     name: "oyster-local-backend-proof",
-    main: join(root, "test/standalone/mcp-fleet.native.fixture.ts"),
+    main: join(root, "test/standalone/local-backend.native.fixture.ts"),
     compatibility_date: "2026-09-04",
     compatibility_flags: ["nodejs_compat"],
     vars: {
       OYSTER_OWNER_KEY: key,
       OYSTER_ORIGIN: origin,
       OYSTER_COMPUTER_ID: "workspace",
+      OYSTER_COMPUTER_BACKEND: "local",
     },
     worker_loaders: [{ binding: "LOADER" }],
     r2_buckets: [{ binding: "RELEASES", bucket_name: "local-backend-proof" }],
@@ -199,14 +202,16 @@ async function until(label, check, timeoutMs = 60_000) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-const ownerFetch = (path, init = {}) =>
-  fetch(`${direct}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-  });
+const ownerFetch = (path, init = {}) => {
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+  };
+  if (path.startsWith("/computer/")) {
+    headers["X-Oyster-Installation"] = "probe";
+  }
+  return fetch(`${direct}${path}`, { ...init, headers });
+};
 
 /** One owner MCP execute call; the returned value is the code's JSON result. */
 async function execute(code) {
@@ -279,6 +284,41 @@ try {
     await delay(250);
   }
 
+  // The actual try owner attaches the configured workspace without inventing
+  // an inventory creation receipt, and owns a single daemon through shutdown.
+  const trialDirectory = join(work, "trial");
+  const runtimeCli = fileURLToPath(
+    new URL("../../../../runtimes/local/dist/computer-cli.js", import.meta.url),
+  );
+  await chmod(runtimeCli, 0o755);
+  process.env.FUNGI_LOCAL_COMPUTER = runtimeCli;
+  process.env.NODE_EXTRA_CA_CERTS = certPath;
+  const trial = await startTrialComputer({
+    directory: trialDirectory,
+    url: origin,
+    key,
+    signal: new AbortController().signal,
+  });
+  try {
+    await stat(join(trialDirectory, "computer"));
+    const state = await ownerFetch("/api/computers/workspace/start", {
+      method: "POST",
+    });
+    assert.equal(state.status, 200, await state.clone().text());
+    assert.deepEqual(await state.json(), { state: "running" });
+    const setup = await ownerFetch("/api/setup");
+    assert.equal((await setup.json()).terminal, "exec-only");
+  } finally {
+    await trial.stop();
+  }
+  const setupWithoutRuntime = await ownerFetch("/api/setup");
+  const unavailable = await setupWithoutRuntime.json();
+  assert.equal(unavailable.terminal, "missing");
+  assert.ok(unavailable.terminalReason.length > 0);
+  console.log(
+    "PASS trial attaches workspace, reports exec-only, and stops its runtime",
+  );
+
   // The owner creates and selects the Computer through the ordinary controls.
   const created = await ownerFetch("/api/computers", {
     method: "POST",
@@ -297,6 +337,71 @@ try {
     origin: direct,
     name: "Oyster local backend",
   })(key);
+  const persist = async (bytes) => {
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const artifactRef = `artifact:sha256-${digest.slice(7)}`;
+    const stored = await fetch(
+      `${direct}/api/artifacts/${artifactRef}?digest=${digest}`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${key}` },
+        body: bytes,
+      },
+    );
+    assert.equal(stored.status, 204, await stored.text());
+    return { artifactRef, digest, byteLength: bytes.length };
+  };
+  const page = new TextEncoder().encode("<!doctype html><title>Probe</title>");
+  const build = await persist(
+    new TextEncoder().encode(
+      JSON.stringify({
+        format: "fungi-app-v1",
+        ui: {
+          ...(await persist(page)),
+          version: "probe",
+          mediaType: "text/html; charset=utf-8",
+        },
+        declaration: {
+          capabilities: ["computer.execute"],
+          handlers: [],
+          roles: [],
+        },
+      }),
+    ),
+  );
+  const installed = await installOnOyster({
+    url: direct,
+    key,
+    installationId: "probe",
+    release: {
+      appId: "app_probe",
+      releaseId: "rel_probe",
+      artifact: {
+        artifactRef: build.artifactRef,
+        artifactDigest: build.digest,
+        provenance: {
+          sourceRevision: `git:${"a".repeat(40)}`,
+          sourceTreeDigest: build.digest,
+          buildRecipeDigest: build.digest,
+        },
+      },
+    },
+  });
+  assert.equal(installed.state, "succeeded", JSON.stringify(installed));
+  assert.equal(installed.creation, "fresh");
+
+  const noRuntime = await ownerFetch(`/computer/processes/start`, {
+    method: "POST",
+    body: JSON.stringify({
+      command: "echo hello",
+      requestId: "missing-runtime-proof",
+    }),
+  });
+  assert.equal(noRuntime.status, 503);
+  assert.deepEqual(await noRuntime.json(), { error: "no_runtime" });
+  console.log(
+    "PASS process start without runtime is no_runtime, not an exited receipt",
+  );
   const backends = async () =>
     (
       await execute(
@@ -413,6 +518,34 @@ try {
     async () =>
       (await backends()).find(({ id }) => id === backendId)?.status ===
       "online",
+  );
+
+  const startProcess = async (command, requestId) => {
+    const response = await ownerFetch(`/computer/processes/start`, {
+      method: "POST",
+      body: JSON.stringify({ command, requestId }),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    const receipt = await response.json();
+    return until("process exit", async () => {
+      const response = await ownerFetch(
+        `/computer/processes/logs?id=${receipt.id}`,
+      );
+      assert.equal(response.status, 200);
+      const logs = await response.json();
+      return logs.process.state === "exited" ? logs : undefined;
+    });
+  };
+  const hello = await startProcess("echo hello", "hello-proof");
+  assert.equal(hello.process.exitCode, 0);
+  assert.ok(hello.lines.includes("hello"));
+  const denied = await startProcess("touch ~/x", "outside-proof");
+  assert.equal(denied.process.exitCode, 1);
+  const inside = await startProcess("touch ./x", "inside-proof");
+  assert.equal(inside.process.exitCode, 0);
+  assert.equal(await inFolder("x"), true);
+  console.log(
+    "PASS Processes: echo hello exits 0; touch ~/x fails; touch ./x succeeds",
   );
 
   // 2. Two directions, and a command that runs here, in the folder.

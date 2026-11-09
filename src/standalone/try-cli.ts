@@ -12,6 +12,7 @@
 // is quiet by default; install and server output go to files under .oyster/
 // and --verbose streams them instead. Piped output or CI gets plain lines.
 import { spawn, type ChildProcess } from "node:child_process";
+import { startTrialComputer } from "./trial-computer.js";
 import { randomBytes } from "node:crypto";
 import { addAbortListener } from "node:events";
 import { finished } from "node:stream/promises";
@@ -198,6 +199,7 @@ type OwnManifest = z.infer<typeof ownManifestSchema>;
 
 /** The injectable effects of `oyster try`; tests replace them. */
 export type TryEffects = Readonly<{
+  startComputer: typeof startTrialComputer;
   /** Install the scaffolded project's dependencies. */
   installDependencies: (
     directory: string,
@@ -610,6 +612,8 @@ function startWrangler(input: {
         `OYSTER_OWNER_KEY:${input.key}`,
         "--var",
         `OYSTER_ORIGIN:${url}`,
+        "--var",
+        "OYSTER_COMPUTER_BACKEND:local",
       ],
       {
         cwd: input.directory,
@@ -741,6 +745,7 @@ const realEffects: TryEffects = {
     reportTrialStarters({ ...input, installing }),
   takeRetries: takeTrialRetries,
   modelSetup: localModelSetup,
+  startComputer: startTrialComputer,
   signInLink: startSignInLink,
   open: openBrowser,
   portFree,
@@ -797,6 +802,8 @@ export async function tryOyster(
   process.on("SIGTERM", interrupt);
   let acquiredServer:
     Awaited<ReturnType<TryEffects["startServer"]>> | undefined;
+  let closeComputer: (() => Promise<void>) | undefined;
+  let computerReady = false;
   let closeLink: (() => Promise<void>) | undefined;
   try {
     if (
@@ -936,6 +943,24 @@ export async function tryOyster(
         return result;
       });
     };
+    await setupTask("Starting the local Computer", async () => {
+      try {
+        const computer = await effects.startComputer({
+          directory,
+          url,
+          key,
+          signal,
+        });
+        closeComputer = () => computer.stop();
+        computerReady = true;
+      } catch (cause) {
+        if (signal.aborted) throw cause;
+        ui.warn(
+          `The Computer runtime is unavailable (${innermostError(cause).message}).`,
+          "Files remain available. Fix the runtime and restart oyster try to run commands.",
+        );
+      }
+    });
     const desktop = await setupTask(
       fresh
         ? "Installing Hello and building Tourtois"
@@ -1133,7 +1158,7 @@ export async function tryOyster(
           `${name} couldn't be installed: ${innermostError(settled.cause).message}`,
           `Retry it from the desktop, or run \`${retry}\` again.`,
         );
-      } else if (app.trial === "needs-runtime") {
+      } else if (app.trial === "needs-runtime" && !computerReady) {
         pending.set(name, {
           installationId: name,
           displayName: app.displayName,
@@ -1215,10 +1240,16 @@ export async function tryOyster(
   } finally {
     try {
       const cleanup = async () => {
-        const outcomes = await Promise.allSettled([
-          Promise.resolve().then(() => closeLink?.()),
-          Promise.resolve().then(() => acquiredServer?.stop()),
+        const computerStopped = await Promise.allSettled([
+          Promise.resolve().then(() => closeComputer?.()),
         ]);
+        const outcomes = [
+          ...computerStopped,
+          ...(await Promise.allSettled([
+            Promise.resolve().then(() => closeLink?.()),
+            Promise.resolve().then(() => acquiredServer?.stop()),
+          ])),
+        ];
         if (outcomes.some((result) => result.status === "rejected"))
           throw new TryError(
             "Oyster cleanup did not complete.",

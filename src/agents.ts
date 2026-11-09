@@ -1,3 +1,4 @@
+import type { AppSetup } from "@fungi.computer/agar";
 /**
  * Agents for Apps on a standalone Oyster: one adapter shape and the routes
  * the App page calls. Apps reach agents through Agar's `agent.list`,
@@ -878,7 +879,10 @@ const modelKeyRefusalStatus = {
  * Host-owned model-key custody for the owner directly. A key goes in once and
  * never comes back out; listings carry provider, label and times only.
  */
-export function modelKeyRoutes(agents: OysterAgents): Routes<OysterEnv> {
+export function modelKeyRoutes(
+  agents: OysterAgents,
+  computerSetup?: () => Promise<Pick<AppSetup, "terminal" | "terminalReason">>,
+): Routes<OysterEnv> {
   return routes<OysterEnv>()
     .get("/api/model-keys", owner("direct"), async () =>
       Response.json({ keys: await agents.modelKeys() }),
@@ -889,6 +893,7 @@ export function modelKeyRoutes(agents: OysterAgents): Routes<OysterEnv> {
         // Git and the terminal are read from the Computer, which reports them.
         git: "unknown",
         terminal: "unknown",
+        ...(await computerSetup?.()),
       }),
     )
     .post("/api/model-keys", owner("direct"), async (context) => {

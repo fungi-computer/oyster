@@ -142,6 +142,10 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
 
     homeInstallationId: (env) => env.OYSTER_HOME_INSTALLATION,
     agents: standaloneAgents,
+    computerSetup: async (env, scope) => {
+      const id = await tenantRegistry(env, scope).selectedComputer();
+      return env.COMPUTER.getByName(id).runtimeSetup();
+    },
     permissionResources: (env, scope) =>
       standalonePermissionResources(
         {
