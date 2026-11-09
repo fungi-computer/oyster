@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.19.17
+
+### Patch Changes
+
+- Changes since 0.19.16:
+
+  - Bonsai: write the first issue in the file editor
+  - Bonsai: keep phone clone popover inside viewport
+  - Bonsai: make issue navigation callback explicit
+  - Bonsai: give empty issues a repository next step
+  - Grove: give empty model setup the conversation space
+
 ## 0.19.16
 
 ### Patch Changes
