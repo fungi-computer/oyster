@@ -63,6 +63,7 @@ export const gateRequestSchema = z.lazy(() =>
     }),
     z.strictObject({ kind: z.literal("list-tools") }),
     z.strictObject({ kind: z.literal("backend") }),
+    z.strictObject({ kind: z.literal("background") }),
   ]),
 );
 /** One decoded method, route, binding or catalog admission request. */
@@ -364,28 +365,46 @@ export function admits(
       if (installation.instanceId === null) return refusal("unavailable");
       if (facts.access?.level === "read") return refusal("level_too_low");
       return { kind: "admitted", grants: admittedBindings(facts) };
+    case "background":
     case "method": {
-      const metadata = methodMetadata(facts, request.name);
+      const call =
+        request.kind === "background"
+          ? {
+              name: facts.declaration.backend?.sync?.method,
+              input: {},
+              resource: undefined,
+            }
+          : request;
+      if (call.name === undefined) return refusal("not_declared");
+      const metadata = methodMetadata(facts, call.name);
       if (metadata.kind === "refused") return metadata;
       const { method } = metadata;
+      if (request.kind === "background" && method.effect !== "write")
+        return refusal("not_declared");
       // The maintained JSON-Schema compiler can reject unsupported declared schemas.
       // Return the typed input refusal; never leak compiler diagnostics or throw from admission.
       try {
-        const input = appMethodSchemas({ methods: { [request.name]: method } })[
-          request.name
+        const input = appMethodSchemas({ methods: { [call.name]: method } })[
+          call.name
         ]?.input;
-        if (!input?.safeParse(request.input).success)
+        if (!input?.safeParse(call.input).success)
           return refusal("invalid_input");
         if (
-          new TextEncoder().encode(JSON.stringify(request.input)).byteLength >
+          new TextEncoder().encode(JSON.stringify(call.input)).byteLength >
           64 * 1024
         )
           return refusal("invalid_input");
       } catch {
         return refusal("invalid_input");
       }
-      const grantDenied = methodGrantRefusal(facts, method, request.resource);
-      if (grantDenied !== null) return grantDenied;
+      // A continuation declares the union of all possible write requirements.
+      // Replay claims each sealed origin separately before capability effects;
+      // an unapproved, unrelated origin must not prevent an approved job running.
+      // The binding ceiling below still contains only current owner approvals.
+      if (request.kind === "method") {
+        const grantDenied = methodGrantRefusal(facts, method, call.resource);
+        if (grantDenied !== null) return grantDenied;
+      }
       return {
         kind: "admitted",
         grants: admittedBindings(facts, method),

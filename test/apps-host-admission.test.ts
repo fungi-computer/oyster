@@ -1548,7 +1548,7 @@ it("the exact host filter excludes an unapproved write origin on a valid nonsync
   });
 });
 
-it("capability revocation refuses the whole replay while the continuation superset law remains", async () => {
+it("replays an approved origin without requiring another queued write's capability", async () => {
   const f = await fixture(true, true, true, true);
   const installed = await f.install();
   await f.approveReadOnly();
@@ -1567,9 +1567,29 @@ it("capability revocation refuses the whole replay while the continuation supers
     status: "accepted",
     more: false,
   });
-  expect(f.calls).toHaveLength(0);
-  expect(f.refusals).toHaveLength(1);
-  expect(f.refusals[0]?.grants).toEqual([]);
+  expect(f.refusals).toEqual([]);
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0]).toMatchObject({
+    subject: {
+      method: { name: "continueWrite", effect: "write" },
+      replay: { admitted: ["write"] },
+    },
+    grants: [
+      { binding: "COMPUTER", operations: ["read"] },
+      { binding: "BACKGROUND", operations: ["admit"] },
+    ],
+  });
+  // Ordinary calls still require every capability; only a host replay may
+  // claim a freshly admitted origin before using its approved binding ceiling.
+  expect(
+    (
+      await f.app.request("/apps/notes/methods/continueWrite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      })
+    ).status,
+  ).toBe(403);
 });
 
 it(

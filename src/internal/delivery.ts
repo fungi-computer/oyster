@@ -155,12 +155,7 @@ export async function deliverBackground(
       )
         return { kind: "refused", code: "denied" };
       const gate = await hostGateFacts(host, installation, release, principal);
-      const verdict = admits(gate, {
-        kind: "method",
-        name: method,
-        input: {},
-        via: "ui",
-      });
+      const verdict = admits(gate, { kind: "background" });
       if (verdict.kind === "refused") {
         switch (verdict.code) {
           case "unavailable":

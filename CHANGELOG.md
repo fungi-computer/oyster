@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.21
+
+### Patch Changes
+
+- Changes since 0.19.20:
+
+  - fix(oyster): replay approved writes without unrelated permissions
+
 ## 0.19.20
 
 ### Patch Changes
