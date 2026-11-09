@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.19.8
+
+### Patch Changes
+
+- Changes since 0.19.7:
+
+  - Shed: frame command output and show history exit results
+  - Shed: make Processes the main surface for command-only Computers
+
 ## 0.19.7
 
 ### Patch Changes
