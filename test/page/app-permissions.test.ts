@@ -110,6 +110,11 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
   ).not.toBeNull();
   await click("Revoke");
   expect(container.textContent).toContain("Revoke Shell access?");
+  expect(
+    [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Allow all 1",
+    )?.disabled,
+  ).toBe(true);
   expect(submissions).toHaveLength(0);
   await click("Cancel");
   expect(container.textContent).not.toContain("Revoke Shell access?");
@@ -286,3 +291,123 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
   });
   expect(container.querySelector("tbody")?.textContent).toContain("On");
 });
+
+it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
+  "Allow all saves the pending Grove grants once and only confirms acceptance: %s",
+  async (outcome) => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    let view = appPermissionPageSchema.parse({
+      storeGeneration: "generation",
+      installationId: "grove",
+      appId: "app_grove",
+      appName: "Grove",
+      artifactDigest: digest,
+      canEdit: outcome !== "viewer",
+      resources: [],
+      permissions: {
+        authority: {
+          authorityVersion: 1,
+          declaredOperationsDigest: digest,
+          approvedGrants: [],
+          approval: null,
+        },
+        declaredOperations: {
+          artifactDigest: digest,
+          digest,
+          capabilities: [
+            { capability: "approvals", operations: [] },
+            { capability: "apps.open", operations: [] },
+            { capability: "channels.personal.manage", operations: [] },
+            { capability: "channels.read", operations: [] },
+          ],
+        },
+      },
+    });
+    const submissions: Parameters<AppPermissionsPort["submit"]>[] = [];
+    const port: AppPermissionsPort = {
+      read: () => Promise.resolve(view),
+      submit: (...args) => {
+        submissions.push(args);
+        if (outcome === "accepted") {
+          view = appPermissionPageSchema.parse({
+            ...view,
+            permissions: {
+              ...view.permissions,
+              authority: {
+                ...view.permissions.authority,
+                authorityVersion: 2,
+                approvedGrants: args[2].flatMap(({ capability, grant }) =>
+                  grant === null
+                    ? []
+                    : [{ capability, capabilityApproved: true, ...grant }],
+                ),
+              },
+            },
+          });
+        }
+        return Promise.resolve(outcome === "viewer" ? "refused" : outcome);
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    onTestFinished(async () => {
+      await act(() => {
+        root.unmount();
+        return Promise.resolve();
+      });
+      container.remove();
+    });
+    await act(() => {
+      root.render(createElement(AppPermissionsView, { port, appKey: "grove" }));
+      return Promise.resolve();
+    });
+    const allow = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Allow all 3",
+    );
+    if (outcome === "viewer") {
+      expect(allow).toBeUndefined();
+      expect(submissions).toHaveLength(0);
+      return;
+    }
+    expect(allow).toBeDefined();
+    await act(() => {
+      allow?.click();
+      return Promise.resolve();
+    });
+    expect(submissions).toEqual([
+      [
+        "grove",
+        {
+          storeGeneration: "generation",
+          authorityVersion: 1,
+          artifactDigest: digest,
+        },
+        ["approvals", "channels.personal.manage", "channels.read"].map(
+          (capability) => ({
+            capability,
+            grant: { operations: [], resources: "tenant-scope" },
+          }),
+        ),
+      ],
+    ]);
+    if (outcome === "accepted") {
+      expect(container.textContent).not.toContain("Allow all 3");
+      expect(
+        container.querySelectorAll("input:checked:not(:disabled)"),
+      ).toHaveLength(3);
+      expect(document.body.textContent).toContain(
+        "Grove can now review approvals, manage personal channels, and read channels.",
+      );
+    } else {
+      expect(document.body.textContent).not.toContain("Grove can now");
+      expect(container.textContent).toContain(
+        outcome === "refused"
+          ? "was refused"
+          : outcome === "stale"
+            ? "Current permissions loaded"
+            : "could not be confirmed",
+      );
+    }
+  },
+);

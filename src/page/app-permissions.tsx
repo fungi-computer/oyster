@@ -11,6 +11,7 @@ import {
   PermissionGrid,
   type PermissionGridRow,
 } from "@fungi.computer/caps/blocks/permission-grid";
+import { Toaster, toast } from "@fungi.computer/caps/components/toaster";
 import { Status } from "@fungi.computer/caps/components/status";
 import { Sigil } from "@fungi.computer/sigils";
 import { permissionCatalog } from "../apps/catalog.js";
@@ -315,7 +316,10 @@ function PermissionEditor({
     }
   }
 
-  async function save() {
+  async function save(
+    nextDraft: PermissionDraft = draft,
+    confirmation?: string,
+  ) {
     const isMounted = () => mounted.current;
     if (view === null || saving || retired || !view.canEdit) return;
     setSaving(true);
@@ -331,7 +335,7 @@ function PermissionEditor({
             authorityVersion: view.permissions.authority.authorityVersion,
             artifactDigest: view.artifactDigest,
           },
-          changes,
+          planGrantChange(view.permissions.authority, nextDraft),
         );
         if (!isMounted()) return;
         if (result === "unavailable") {
@@ -363,6 +367,8 @@ function PermissionEditor({
           setView(next);
           setDraft(draftOf(next.permissions.authority));
           setUncertain(false);
+          if (confirmation !== undefined)
+            toast.success(confirmation, { toasterId: describeId });
           await refreshAfterAcceptance();
           return;
         }
@@ -376,7 +382,7 @@ function PermissionEditor({
       setView(next);
       setDraft(
         rebaseDraft(
-          draft,
+          nextDraft,
           view.permissions.authority,
           next.permissions.authority,
         ),
@@ -482,25 +488,56 @@ function PermissionEditor({
         void save();
       }}
     >
+      <Toaster id={describeId} />
       {!screen.canEdit && <p>Only an owner can change these permissions.</p>}
       {pending.length > 0 && (
         <Alert
           tone="warning"
           title={`${String(pending.length)} ${pending.length === 1 ? "permission needs" : "permissions need"} your OK`}
           action={
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => {
-                document.querySelector<HTMLElement>('[id^="grant-"]')?.focus();
-              }}
-            >
-              Review
-            </Button>
+            screen.canEdit ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="primary"
+                disabled={disabled || shellChanged}
+                onClick={() => {
+                  const allowed = new Map(draft);
+                  for (const capability of pending) {
+                    const declared =
+                      view.permissions.declaredOperations.capabilities.find(
+                        (row) => row.capability === capability,
+                      );
+                    if (declared === undefined) continue;
+                    const resources = allowed.get(capability)?.resources;
+                    allowed.set(capability, {
+                      operations: declared.operations,
+                      resources:
+                        resources !== undefined && resources.length > 0
+                          ? resources
+                          : "tenant-scope",
+                    });
+                  }
+                  setDraft(allowed);
+                  const abilities = new Intl.ListFormat("en", {
+                    style: "long",
+                    type: "conjunction",
+                  }).format(
+                    pending.map((capability) => {
+                      const label = permissionCatalog[capability].label;
+                      return label.charAt(0).toLowerCase() + label.slice(1);
+                    }),
+                  );
+                  void save(allowed, `${view.appName} can now ${abilities}.`);
+                }}
+              >
+                Allow all {pending.length}
+              </Button>
+            ) : undefined
           }
         >
-          Turn on what you want this App to do, then save.
+          Allow all requested permissions, or choose individually below and
+          save.
         </Alert>
       )}
       {shell !== undefined && (

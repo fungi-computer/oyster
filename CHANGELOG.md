@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.19.26
+
+### Patch Changes
+
+- Changes since 0.19.25:
+
+  - fix(oyster): make allow-all permissions the primary action
+  - fix(oyster): allow pending App permissions in one click
+
 ## 0.19.25
 
 ### Patch Changes
