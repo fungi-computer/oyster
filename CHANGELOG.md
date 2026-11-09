@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.18
+
+### Patch Changes
+
+- Changes since 0.19.17:
+
+  - Tourtois: lead with the launcher and compact actionable inbox
+
 ## 0.19.17
 
 ### Patch Changes
