@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.16
+
+### Patch Changes
+
+- Changes since 0.19.15:
+
+  - Trellis: retain publication status and expose phone panes
+
 ## 0.19.15
 
 ### Patch Changes
