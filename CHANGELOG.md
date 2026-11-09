@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.12
+
+### Patch Changes
+
+- Changes since 0.19.11:
+
+  - Prints: restore editable starters and an upload action
+
 ## 0.19.11
 
 ### Patch Changes
