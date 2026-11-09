@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.14
+
+### Patch Changes
+
+- Changes since 0.19.13:
+
+  - fix(oyster): let two trials start at once without an inspector port clash
+
 ## 0.19.13
 
 ### Patch Changes

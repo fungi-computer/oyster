@@ -571,6 +571,36 @@ async function waitUntilReady(
   return signal.aborted ? "exited" : "timeout";
 }
 
+/**
+ * `wrangler dev` for one local Oyster. The devtools inspector takes a port the
+ * kernel assigns (0): wrangler's default probes 9229 upward and binds it later,
+ * so two Oysters (or any wrangler dev) starting together could both pick the
+ * same port and one failed with "Address already in use".
+ */
+export function wranglerDevArguments(input: {
+  port: number;
+  key: string;
+}): readonly string[] {
+  const url = `http://127.0.0.1:${String(input.port)}`;
+  return [
+    "dev",
+    "--local",
+    "--enable-containers=false",
+    "--ip",
+    "127.0.0.1",
+    "--port",
+    String(input.port),
+    "--inspector-port",
+    "0",
+    "--var",
+    `OYSTER_OWNER_KEY:${input.key}`,
+    "--var",
+    `OYSTER_ORIGIN:${url}`,
+    "--var",
+    "OYSTER_COMPUTER_BACKEND:local",
+  ];
+}
+
 function startWrangler(input: {
   directory: string;
   port: number;
@@ -600,22 +630,7 @@ function startWrangler(input: {
     const url = `http://127.0.0.1:${String(input.port)}`;
     const child = spawn(
       process.execPath,
-      [
-        wrangler,
-        "dev",
-        "--local",
-        "--enable-containers=false",
-        "--ip",
-        "127.0.0.1",
-        "--port",
-        String(input.port),
-        "--var",
-        `OYSTER_OWNER_KEY:${input.key}`,
-        "--var",
-        `OYSTER_ORIGIN:${url}`,
-        "--var",
-        "OYSTER_COMPUTER_BACKEND:local",
-      ],
+      [wrangler, ...wranglerDevArguments({ port: input.port, key: input.key })],
       {
         cwd: input.directory,
         detached: process.platform !== "win32",

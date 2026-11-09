@@ -19,6 +19,7 @@ import {
   detectManager,
   reportTryFailure,
   tryOyster,
+  wranglerDevArguments,
   type TryEffects,
 } from "../../src/standalone/try-cli.js";
 import { CleanupError } from "../../src/build/process-group.js";
@@ -1086,5 +1087,19 @@ describe("startup cancellation ownership", () => {
     await link.close();
     await link.close();
     await expect(fetch(link.url)).rejects.toThrow();
+  });
+});
+
+describe("wranglerDevArguments", () => {
+  it("lets the kernel choose the inspector port, so concurrent Oysters cannot collide", () => {
+    const args = wranglerDevArguments({ port: 8787, key: "owner-key" });
+    expect(
+      args.slice(
+        args.indexOf("--inspector-port"),
+        args.indexOf("--inspector-port") + 2,
+      ),
+    ).toEqual(["--inspector-port", "0"]);
+    expect(args).toContain("OYSTER_ORIGIN:http://127.0.0.1:8787");
+    expect(args).toContain("OYSTER_OWNER_KEY:owner-key");
   });
 });
