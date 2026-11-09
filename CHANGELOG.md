@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.19.2
+
+### Patch Changes
+
+- Changes since 0.19.1:
+
+  - Tourtois: remove temporary avatar capture script
+  - Tourtois: hide Edit avatar where the host backs no avatar Settings
+  - Tourtois: match starter Apps by the launcher's real item ids
+  - Inkcap: suggested names create files at once and Save flushes live text
+  - Trellis: report the library in the footer and drop the redundant All runs
+    crumb (#390)
+  - Prints: deliver setup facts and fixes to every App (#393)
+  - Parakeet: deliver setup facts and fixes to every App (#393)
+  - Nacre: deliver setup facts and fixes to every App (#393)
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/nacre@0.4.2
+  - @fungi.computer/parakeet@0.11.3
+
 ## 0.19.1
 
 ### Patch Changes
