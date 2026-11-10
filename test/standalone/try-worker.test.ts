@@ -35,11 +35,20 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
         name: "trial-worker-fixture",
         main: "worker.js",
         compatibility_date: "2026-09-04",
+        // The trial's Git storage, bound as the scaffolded wrangler.jsonc binds it.
+        artifacts: [{ binding: "ARTIFACTS", namespace: "oyster" }],
       }),
     );
     await writeFile(
       join(directory, "worker.js"),
-      `export default { fetch(request, env) { return Response.json({ admitted: request.headers.get('Authorization') === 'Bearer ' + env.OYSTER_OWNER_KEY, origin: env.OYSTER_ORIGIN, backend: env.OYSTER_COMPUTER_BACKEND }); } };`,
+      [
+        `export default { async fetch(request, env) {`,
+        // Bonsai's first repository and Trellis's library start here; a
+        // remote-only Artifacts binding refuses it ("needs to be run remotely").
+        `  if (new URL(request.url).pathname === '/git') { const created = await env.ARTIFACTS.create('trial-probe', { setDefaultBranch: 'main' }); const repo = await env.ARTIFACTS.get('trial-probe'); return Response.json({ created: created.name, branch: (await repo.info()).defaultBranch }); }`,
+        `  return Response.json({ admitted: request.headers.get('Authorization') === 'Bearer ' + env.OYSTER_OWNER_KEY, origin: env.OYSTER_ORIGIN, backend: env.OYSTER_COMPUTER_BACKEND });`,
+        `} };`,
+      ].join("\n"),
     );
     await createTrialOwner(directory, "synthetic-owner");
     await prepareTrialPrivateState(directory);
@@ -63,6 +72,12 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
         })
       ).json(),
     ).toEqual({ admitted: true, origin: url, backend: "local" });
+    // Git storage runs in Wrangler's local simulator: a trial needs no Cloudflare account.
+    expect(
+      await (
+        await fetch(`${url}/git`, { signal: AbortSignal.timeout(15_000) })
+      ).json(),
+    ).toEqual({ created: "trial-probe", branch: "main" });
     expect(await worker.inspectorUrl).toBeUndefined();
     expect(worker.config.bindings?.OYSTER_OWNER_KEY?.type).toBe("secret_text");
     expect(worker.config.dev.server?.hostname).toBe("127.0.0.1");

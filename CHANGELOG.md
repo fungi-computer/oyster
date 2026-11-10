@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.20.3
+
+### Patch Changes
+
+- Changes since 0.20.2:
+
+  - fix(oyster): run trial Git storage in Wrangler's local simulator
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.8.3
+  - @fungi.computer/darkroom@0.5.7
+
 ## 0.20.2
 
 ### Patch Changes

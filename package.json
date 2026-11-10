@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.20.2",
+  "version": "0.20.3",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -449,7 +449,7 @@
     "path-to-regexp": "8.4.2",
     "strip-ansi": "7.2.0",
     "zod": "4.4.3",
-    "wrangler": "4.156.2"
+    "wrangler": "4.159.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
