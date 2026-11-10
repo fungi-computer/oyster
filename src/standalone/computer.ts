@@ -496,7 +496,7 @@ export class ComputerDO
     return {
       terminal: "missing" as const,
       terminalReason:
-        "No Computer runtime is connected. Restart oyster try on a machine with a supported Workspace sandbox.",
+        "The local command runner is not connected. Restart oyster try in your terminal.",
     };
   }
 

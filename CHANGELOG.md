@@ -1,5 +1,22 @@
 # @fungi.computer/oyster
 
+## 0.19.27
+
+### Patch Changes
+
+- Changes since 0.19.26:
+
+  - fix(oyster): refresh locked runtime tags during trial upgrades
+  - fix(bonsai): complete first-use flow with Inkcap
+  - fix(shed): start the trial command runner on macOS
+  - fix(oyster): retain cleanup cause alongside startup diagnosis
+  - fix(oyster): upgrade generated trial projects before restart
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.10.4
+  - @fungi.computer/parakeet@0.11.8
+
 ## 0.19.26
 
 ### Patch Changes

@@ -17,6 +17,7 @@ import * as z from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   detectManager,
+  installTryDependencies,
   reportTryFailure,
   tryOyster,
   wranglerDevArguments,
@@ -232,6 +233,49 @@ describe("oyster try", () => {
     expect((await readFile(keyPath, "utf8")).trim()).toBe(key);
     expect(output.text()).not.toContain(key);
     expect(second.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("upgrades an older trial before starting while preserving owner and app source", async () => {
+    const directory = join(root, "upgrade");
+    await runTry([directory, "--no-open"], effects().fake, plain().ui);
+    const key = await readFile(join(directory, ".oyster-owner"), "utf8");
+    const manifest = await readFile(join(directory, "package.json"), "utf8");
+    const worker = await readFile(join(directory, "worker.ts"), "utf8");
+    const config = await readFile(join(directory, "wrangler.jsonc"), "utf8");
+    writeFileSync(
+      join(directory, "package.json"),
+      '{"dependencies":{"@fungi.computer/oyster":"0.17.0"}}',
+    );
+    writeFileSync(join(directory, "worker.ts"), "// older generated worker");
+    writeFileSync(join(directory, "wrangler.jsonc"), "{}");
+    mkdirSync(join(directory, "hello-app"));
+    writeFileSync(join(directory, "hello-app", "user.ts"), "// my edits");
+    const next = effects({
+      startServer: vi.fn(async () => {
+        expect(await readFile(join(directory, "package.json"), "utf8")).toBe(
+          manifest,
+        );
+        expect(await readFile(join(directory, "worker.ts"), "utf8")).toBe(
+          worker,
+        );
+        expect(await readFile(join(directory, "wrangler.jsonc"), "utf8")).toBe(
+          config,
+        );
+        return {
+          stop: () => Promise.resolve(),
+          exited: new Promise<number | null>(() => undefined),
+        };
+      }),
+    });
+    await runTry([directory, "--no-open"], next.fake, plain().ui);
+    expect(next.fake.installDependencies).toHaveBeenCalledOnce();
+    expect(await readFile(join(directory, ".oyster-owner"), "utf8")).toBe(key);
+    expect(
+      await readFile(join(directory, "hello-app", "user.ts"), "utf8"),
+    ).toBe("// my edits");
+    const unchanged = effects();
+    await runTry([directory, "--no-open"], unchanged.fake, plain().ui);
+    expect(unchanged.fake.installDependencies).not.toHaveBeenCalled();
   });
 
   it("resets local data seeded for another origin and says so plainly", async () => {
@@ -654,9 +698,24 @@ describe("oyster try output", () => {
     vi.stubEnv("npm_config_fetch_retries", "0");
     try {
       const output = plain();
-      const failure = await tryOyster(
+      const fixture = effects({
+        installDependencies: async (project, manager, verbose, signal) => {
+          // Source manifests carry workspace:*; npm receives resolved versions
+          // in the published package. Exercise its real network failure with
+          // the smallest published dependency, after the CLI refreshes files.
+          writeFileSync(
+            join(project, "package.json"),
+            JSON.stringify({
+              private: true,
+              dependencies: { "@fungi.computer/oyster": "0.13.0" },
+            }),
+          );
+          await installTryDependencies(project, manager, verbose, signal);
+        },
+      });
+      const failure = await runTry(
         [directory, "--port", String(address.port), "--no-open"],
-        undefined,
+        fixture.fake,
         output.ui,
       ).catch((cause: unknown) => cause);
       reportTryFailure(failure, output.ui);

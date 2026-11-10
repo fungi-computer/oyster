@@ -1,16 +1,44 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
-import { watch } from "node:fs";
+import { watch, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { tryOyster } from "../../src/standalone/try-cli.js";
 
 let directory: string;
 const executable = process.execPath;
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "oyster-server-failure-"));
+  // Let the real CLI write its current generated files, stopping at install.
+  const controller = new AbortController();
+  const unexpected = () => {
+    throw new Error("fixture went beyond installation");
+  };
+  await tryOyster(
+    [directory, "--no-open"],
+    {
+      installDependencies: () => {
+        controller.abort();
+        return Promise.resolve();
+      },
+      portFree: () => Promise.resolve(true),
+      startServer: unexpected,
+      installHello: unexpected,
+      installDesktop: unexpected,
+      installStarter: unexpected,
+      reportStarters: unexpected,
+      takeRetries: unexpected,
+      startComputer: unexpected,
+      modelSetup: unexpected,
+      signInLink: unexpected,
+      open: unexpected,
+    },
+    new Cli({ brand: "fungi", output: new PassThrough(), interactive: false }),
+    controller.signal,
+  );
+  await rm(join(directory, ".oyster/install.pending"));
   await mkdir(join(directory, "node_modules/wrangler/bin"), {
     recursive: true,
   });
@@ -91,5 +119,58 @@ it("preserves an early log-stream failure through cancellation and child cleanup
     watcher.close();
     controller.abort();
     await running;
+  }
+});
+
+it("retains the startup diagnosis when signaling its own child group is refused", async () => {
+  await writeFile(
+    join(directory, "node_modules/wrangler/bin/wrangler.js"),
+    'require("node:fs").writeFileSync("worker.pid", String(process.pid)); console.error("[ERROR] Tenant origin must be HTTPS"); setInterval(() => {}, 1000);',
+  );
+  const kill = process.kill.bind(process);
+  let ownedGroup: number | undefined;
+  const stopOwnedGroup = () => {
+    if (ownedGroup === undefined) return;
+    try {
+      kill(ownedGroup, "SIGKILL");
+    } catch (cause) {
+      if (!(
+        cause instanceof Error &&
+        "code" in cause &&
+        cause.code === "ESRCH"
+      ))
+        throw cause;
+    }
+  };
+  const refused = vi
+    .spyOn(process, "kill")
+    .mockImplementation((pid, signal) => {
+      if (
+        signal === 0 &&
+        existsSync(join(directory, "worker.pid")) &&
+        pid === -Number(readFileSync(join(directory, "worker.pid"), "utf8"))
+      ) {
+        ownedGroup = pid;
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      }
+      return kill(pid, signal);
+    });
+  try {
+    await expect(
+      tryOyster(
+        [directory, "--port", "18983", "--no-open"],
+        undefined,
+        new Cli({
+          brand: "fungi",
+          output: new PassThrough(),
+          interactive: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      /Tenant origin must be HTTPS.*Cleanup also failed: kill EPERM/u,
+    );
+  } finally {
+    refused.mockRestore();
+    stopOwnedGroup();
   }
 });

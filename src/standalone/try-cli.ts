@@ -3,7 +3,7 @@
 // config this package ships, plus a package.json), installs it with the
 // caller's package manager, runs `wrangler dev` locally, installs the Hello
 // App and opens the browser. Running it again in the same directory restarts
-// the server without scaffolding again.
+// the server after refreshing the generated project files and dependencies.
 //
 //   npx @fungi.computer/oyster try [directory] [--port 8787] [--no-open] [--verbose]
 //
@@ -25,7 +25,6 @@ import {
 import { InstallationObservationError } from "../installation-client.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import {
-  copyFile,
   mkdir,
   mkdtemp,
   rename,
@@ -71,7 +70,8 @@ const tryHelp = `${tryUsage}
 Creates ./my-oyster (or <directory>) with a local Oyster, installs it, starts it
 on http://127.0.0.1:<port> and installs a Hello App from <directory>/hello-app,
 a git repository you can edit. Commit an edit and run this again, from inside
-that directory or by naming it, to restart and reinstall without scaffolding.
+that directory or by naming it, to restart with the current Oyster. Generated
+configuration is refreshed; your app source and owner key are kept.
 Press Ctrl-C to stop.
 
 Options:
@@ -161,7 +161,9 @@ export function createTryCli(args: readonly string[]): Cli {
 function innermostError(cause: unknown): Error {
   let current = cause instanceof Error ? cause : new Error(String(cause));
   for (let depth = 0; depth < 10; depth += 1) {
-    if (!(current.cause instanceof Error)) break;
+    // An aggregate has multiple causes; its summary preserves both failures.
+    if (current instanceof AggregateError || !(current.cause instanceof Error))
+      break;
     current = current.cause;
   }
   return current;
@@ -337,6 +339,39 @@ async function exists(path: string) {
   );
 }
 
+/** Refresh only try-owned configuration; app sources and owner custody stay put. */
+async function refreshProject(
+  directory: string,
+  own: OwnManifest,
+  spec: string | undefined,
+  manager: Manager,
+  signal: AbortSignal,
+): Promise<void> {
+  const examples = join(import.meta.dirname, "../../examples/standalone");
+  const files = new Map<string, string>([
+    ["worker.ts", await readFile(join(examples, "worker.ts"), "utf8")],
+    [
+      "wrangler.jsonc",
+      await readFile(join(examples, "wrangler.jsonc"), "utf8"),
+    ],
+    ["package.json", projectManifest(own, spec)],
+  ]);
+  if (manager === "pnpm") files.set("pnpm-workspace.yaml", pnpmWorkspace);
+  for (const [name, content] of files) {
+    signal.throwIfAborted();
+    const path = join(directory, name);
+    if ((await exists(path)) && (await readFile(path, "utf8")) === content)
+      continue;
+    // Mark before the first change, so an interrupted refresh/install is retried.
+    await mkdir(join(directory, ".oyster"), { recursive: true });
+    await writeFile(
+      join(directory, pendingInstall),
+      "Dependencies have not finished installing.\n",
+    );
+    await writeFile(path, content);
+  }
+}
+
 async function scaffold(
   directory: string,
   own: OwnManifest,
@@ -348,14 +383,7 @@ async function scaffold(
   await mkdir(dirname(directory), { recursive: true });
   const stage = await mkdtemp(join(dirname(directory), ".oyster-try-"));
   try {
-    const examples = join(import.meta.dirname, "../../examples/standalone");
-    for (const name of ["worker.ts", "wrangler.jsonc"]) {
-      signal.throwIfAborted();
-      await copyFile(join(examples, name), join(stage, name));
-    }
-    await writeFile(join(stage, "package.json"), projectManifest(own, spec));
-    if (manager === "pnpm")
-      await writeFile(join(stage, "pnpm-workspace.yaml"), pnpmWorkspace);
+    await refreshProject(stage, own, spec, manager, signal);
     await writeFile(
       join(stage, ".gitignore"),
       ".oyster/\n.wrangler/\nnode_modules/\n.oyster-owner\n",
@@ -428,7 +456,7 @@ function npmFailureCode(output: string): string | undefined {
   }
 }
 
-async function runInstall(
+export async function installTryDependencies(
   directory: string,
   manager: Manager,
   verbose: boolean,
@@ -450,7 +478,11 @@ async function runInstall(
   try {
     child = spawn(
       manager,
-      manager === "npm" ? ["install", "--json"] : ["install"],
+      // Refresh tag dependencies such as Truffle too: install alone can retain
+      // their old locked version even after Oyster itself is upgraded.
+      manager === "npm"
+        ? ["update", "--no-save", "--json"]
+        : ["update", "--no-save"],
       {
         cwd: directory,
         detached: process.platform !== "win32",
@@ -484,7 +516,7 @@ async function runInstall(
           fail(
             Object.assign(
               new Error(
-                `${manager} install failed (${errorCode === undefined ? "" : `${errorCode}; `}exit ${String(code)}).`,
+                `${manager} update failed (${errorCode === undefined ? "" : `${errorCode}; `}exit ${String(code)}).`,
               ),
               { code: errorCode },
             ),
@@ -693,12 +725,19 @@ function startWrangler(input: {
               : readiness === "exited"
                 ? `Oyster stopped before readiness (${child.signalCode === null ? `exit ${String(child.exitCode)}` : `signal ${child.signalCode}`}).`
                 : "Oyster did not answer within 120 seconds.";
-        await stop();
         throw new TryError(diagnostic, `Read ${log} for the server output.`);
       }
       return { stop, exited };
     } catch (cause) {
-      await stop();
+      try {
+        await stop();
+      } catch (cleanup) {
+        throw new AggregateError(
+          [cause, cleanup],
+          `${innermostError(cause).message} Cleanup also failed: ${innermostError(cleanup).message}`,
+          { cause: cleanup },
+        );
+      }
       throw cause;
     }
   })();
@@ -735,7 +774,7 @@ function isTryCancellation(cause: unknown, signal: AbortSignal): boolean {
 }
 
 const realEffects: TryEffects = {
-  installDependencies: runInstall,
+  installDependencies: installTryDependencies,
   startServer: startWrangler,
   installHello: installHelloApp,
   installDesktop: async ({ directory, ...input }) => {
@@ -877,6 +916,18 @@ export async function tryOyster(
     } else {
       key = (await readFile(keyPath, "utf8")).trim();
       ui.info(`Restarting the Oyster in ${directory}`);
+      const manager = (await exists(join(directory, "pnpm-workspace.yaml")))
+        ? "pnpm"
+        : "npm";
+      await task("Refreshing Oyster project", async () =>
+        refreshProject(
+          directory,
+          await ownManifest(),
+          values.package,
+          manager,
+          signal,
+        ),
+      );
     }
     if (
       fresh ||

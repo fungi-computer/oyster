@@ -4,18 +4,22 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { chromium, expect } from "playwright/test";
 
-const artifacts = resolve(".botanical/first-issue");
+// Stay outside the Oyster package so npx resolves the requested published binary.
+const artifacts = fileURLToPath(
+  new URL("../../../../.botanical/first-issue/", import.meta.url),
+);
 await mkdir(artifacts, { recursive: true });
 const work = await mkdtemp(join(artifacts, "try-"));
 // Keep the trial's Git operations separate from the enclosing source checkout.
 execFileSync("git", ["init", "--quiet", work]);
-let spec = process.env.OYSTER_TRY_PACKAGE;
+const published = process.env.OYSTER_TRY_PACKAGE;
+let spec = published;
 if (!spec) {
   execFileSync("pnpm", ["pack", "--pack-destination", work], { stdio: "pipe" });
   const tarball = (await readdir(work)).find((name) => name.endsWith(".tgz"));
@@ -29,6 +33,8 @@ await new Promise((done) => probe.close(done));
 const child = spawn(
   "npx",
   [
+    "--prefix",
+    work,
     "-y",
     "--package",
     spec,
@@ -38,8 +44,7 @@ const child = spawn(
     "--port",
     String(port),
     "--no-open",
-    "--package",
-    spec,
+    ...(published ? [] : ["--package", spec]),
   ],
   { cwd: work, detached: true, stdio: ["ignore", "pipe", "pipe"] },
 );
@@ -146,10 +151,35 @@ try {
   });
   await editor.press("ControlOrMeta+End");
   await page.keyboard.insertText("\nFirst issue browser proof.\n");
+  await expect(
+    inkcap.getByRole("button", { name: "Save", exact: true }),
+  ).toBeEnabled();
   await editor.press("ControlOrMeta+s");
   await expect(page.getByText(/^Synced ·/u).first()).toBeVisible({
     timeout: 60_000,
   });
+  // Issues also shows pending saved text; prove the edit reached Git itself.
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.post(
+          `http://127.0.0.1:${port}/apps/bonsai/methods/issues.read`,
+          { data: { repo: "notes", ref: "refs/heads/main" } },
+        );
+        if (!response.ok()) return false;
+        const committed = await response.json();
+        return (
+          committed.files?.["general/01-first-issue.md"]?.includes(
+            "First issue browser proof.",
+          ) === true
+        );
+      },
+      {
+        timeout: 60_000,
+        message: "The edited first issue must be committed in Git",
+      },
+    )
+    .toBe(true);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.screenshot({ path: join(artifacts, `synced-${width}.png`) });
