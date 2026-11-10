@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   agentModelChoice,
   resolveDefaultChoice,
+  supportedAgentModels,
+  selectAgentModel,
 } from "../../src/standalone/agent-model-choice.js";
 
 const none = { workersAi: false, gateway: false, keys: [] } as const;
@@ -106,5 +108,28 @@ describe("agentModelChoice default", () => {
       () => resolveDefaultChoice({ ...none, gateway: true }),
     ).read();
     expect(kept).toEqual(saved);
+  });
+});
+
+it("offers Pi-supported Cloudflare models ordered by their combined price", async () => {
+  const models = await supportedAgentModels("cloudflare-workers-ai");
+  expect(models.length).toBeGreaterThan(0);
+  const first = models[0];
+  if (first === undefined) throw new Error("No Cloudflare models");
+  for (const model of models) {
+    expect(model.input + model.output).toBeGreaterThanOrEqual(
+      first.input + first.output,
+    );
+  }
+  const selected = await selectAgentModel({
+    keySource: "byok",
+    keyId: "fixture",
+    model: { providerId: "cloudflare-workers-ai", modelId: first.id },
+  });
+  expect(first).toEqual({
+    id: selected.id,
+    name: selected.name,
+    input: selected.cost.input,
+    output: selected.cost.output,
   });
 });

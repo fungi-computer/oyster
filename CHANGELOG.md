@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.32
+
+### Patch Changes
+
+- Changes since 0.19.31:
+
+  - fix(grove): offer supported model choices and clarify setup
+
 ## 0.19.31
 
 ### Patch Changes

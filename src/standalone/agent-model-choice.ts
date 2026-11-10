@@ -60,6 +60,31 @@ async function byokCatalog(
     .getModels();
 }
 
+/** A supported model and Pi's USD prices per million tokens, without credentials. */
+export type SupportedAgentModel = Readonly<{
+  id: string;
+  name: string;
+  input: number;
+  output: number;
+}>;
+
+/** Settings and selection share Pi's catalog; cheapest combined token rate first. */
+export async function supportedAgentModels(
+  provider: "anthropic" | "openai" | "openrouter" | "cloudflare-workers-ai",
+): Promise<readonly SupportedAgentModel[]> {
+  return (await byokCatalog(provider))
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      input: model.cost.input,
+      output: model.cost.output,
+    }))
+    .sort(
+      (a, b) =>
+        a.input + a.output - b.input - b.output || a.id.localeCompare(b.id),
+    );
+}
+
 /**
  * An Agent with no saved choice runs on a model its host can reach, chosen when
  * it runs: Workers AI where a Cloudflare account answers, then the Fungi

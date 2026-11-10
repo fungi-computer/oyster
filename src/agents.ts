@@ -42,6 +42,7 @@ import { agentAvatarSchema } from "./agent-avatars.js";
 import type { StarterOutcome } from "./starter-agent.js";
 export type { StarterOutcome };
 import { computerTargetParam } from "./computer-target.js";
+import { supportedAgentModels } from "./standalone/agent-model-choice.js";
 import type {
   AgentModelChoice,
   AgentModelRefusal,
@@ -800,7 +801,23 @@ export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
             choice: await agents.readModelChoice(item.agentId),
           })),
         );
-        return Response.json({ agents: rows });
+        const keys = await agents.modelKeys();
+        const providers = [...new Set(keys.map((key) => key.provider))];
+        const catalogs = Object.fromEntries(
+          await Promise.all(
+            providers
+              .filter((provider) => provider !== "openai-compatible")
+              .map(
+                async (provider) =>
+                  [provider, await supportedAgentModels(provider)] as const,
+              ),
+          ),
+        );
+        return Response.json({
+          agents: rows,
+          catalogs,
+          models: (await agents.setup()).models,
+        });
       })
       .get("/api/agent-models/:agentId", owner("direct"), async (context) => {
         const agentId = context.req.param("agentId");

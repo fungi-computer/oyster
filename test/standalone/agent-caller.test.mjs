@@ -694,6 +694,13 @@ test("standalone owner attaches fleet and configured Computers without an App, r
         assert.ok(!persistedText.includes(secretKey));
         assert.deepEqual(JSON.parse(persistedText), choice);
         const overview = await (await send("/api/agent-models", "GET")).json();
+        assert.equal(overview.models, "ready");
+        assert.ok(
+          overview.catalogs.openai.some(
+            (model) => model.id === choice.model.modelId,
+          ),
+        );
+        assert.ok(!JSON.stringify(overview).includes(secretKey));
         assert.deepEqual(
           overview.agents.find(({ agentId }) => agentId === byokAgent.agentId),
           { agentId: byokAgent.agentId, name: "Key agent", choice },
