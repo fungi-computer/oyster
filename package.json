@@ -1,8 +1,18 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.19.29",
+  "version": "0.19.30",
   "author": "Levi <levi@technomancy.dev>",
-  "description": "Run your own Apps on Cloudflare Workers or celld: installable App Releases, each with its own Durable Object, SQLite database and declared bindings",
+  "description": "Self-hosted Apps for people and AI agents, with a local trial and deployment to your Cloudflare account.",
+  "homepage": "https://docs.fungi.computer/oyster",
+  "keywords": [
+    "fungi",
+    "apps",
+    "ai-agents",
+    "self-hosted",
+    "cloudflare",
+    "workers",
+    "local-development"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

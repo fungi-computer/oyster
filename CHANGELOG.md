@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.30
+
+### Patch Changes
+
+- Changes since 0.19.29:
+
+  - fix(packages): describe Fungi npm entry points
+
 ## 0.19.29
 
 ### Patch Changes
