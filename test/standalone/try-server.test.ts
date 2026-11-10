@@ -1,4 +1,11 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { watch, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +49,11 @@ beforeEach(async () => {
   await mkdir(join(directory, "node_modules/wrangler/bin"), {
     recursive: true,
   });
+  await mkdir(join(directory, "node_modules/@fungi.computer"));
+  await symlink(
+    join(import.meta.dirname, "../../node_modules/@fungi.computer/computer"),
+    join(directory, "node_modules/@fungi.computer/computer"),
+  );
   await writeFile(join(directory, ".oyster-owner"), "test-owner");
 });
 afterEach(async () => {

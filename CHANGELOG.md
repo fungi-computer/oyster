@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.19.31
+
+### Patch Changes
+
+- Changes since 0.19.30:
+
+  - fix(oyster): resolve native trial custody types and fixtures
+  - fix(oyster): provision private trial model-key custody
+
+- Updated dependencies
+  - @fungi.computer/sigils@0.3.1
+  - @fungi.computer/caps@0.10.4
+  - @fungi.computer/parakeet@0.11.9
+
 ## 0.19.30
 
 ### Patch Changes

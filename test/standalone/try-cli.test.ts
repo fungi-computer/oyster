@@ -11,6 +11,10 @@ import { readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import type { Buffer } from "node:buffer";
+import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
+import * as native from "wrangler";
+import { createCredentialSealer } from "@fungi.computer/veil/credential-store";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
 import * as z from "zod";
@@ -21,6 +25,7 @@ import {
   reportTryFailure,
   tryOyster,
   wranglerDevArguments,
+  prepareTryModelKeyCustody,
   type TryEffects,
 } from "../../src/standalone/try-cli.js";
 import { CleanupError } from "../../src/build/process-group.js";
@@ -1160,5 +1165,141 @@ describe("wranglerDevArguments", () => {
     ).toEqual(["--inspector-port", "0"]);
     expect(args).toContain("OYSTER_ORIGIN:http://127.0.0.1:8787");
     expect(args).toContain("OYSTER_OWNER_KEY:owner-key");
+  });
+});
+
+describe("trial model-key custody", () => {
+  const configuredKey = encodeBase64Url(new Uint8Array(32).fill(7));
+  const otherKey = encodeBase64Url(new Uint8Array(32).fill(9));
+
+  function project() {
+    writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+    writeFileSync(
+      join(root, "wrangler.jsonc"),
+      '{"name":"custody-proof","compatibility_date":"2026-09-04","vars":{"PUBLIC":"public value"}}\n',
+    );
+    writeFileSync(join(root, ".oyster-owner"), "fixture-owner");
+  }
+
+  function bindings() {
+    const config = native.unstable_readConfig({
+      config: join(root, "wrangler.jsonc"),
+    });
+    return native.unstable_getVarsForDev(
+      config.userConfigPath,
+      undefined,
+      config.vars,
+      undefined,
+      true,
+      config.secrets,
+    );
+  }
+
+  function key() {
+    const value = bindings().OYSTER_CREDENTIAL_KEY;
+    if (value?.type !== "secret_text" && value?.type !== "plain_text")
+      throw new Error("Missing native secret binding");
+    return value.value;
+  }
+
+  it("keeps a separate master key readable after restarting an existing trial", async () => {
+    project();
+    await prepareTryModelKeyCustody(root);
+    const first = key();
+    expect(
+      first === (await readFile(join(root, ".oyster-owner"), "utf8")).trim(),
+    ).toBe(false);
+    const envelope = await createCredentialSealer(
+      { activeKeyId: "instance", keys: { instance: first } },
+      "restart-proof",
+    ).seal([], "model-token-fixture");
+    const before = await readFile(join(root, ".env.local"), "utf8");
+    await prepareTryModelKeyCustody(root);
+    expect((await readFile(join(root, ".env.local"), "utf8")) === before).toBe(
+      true,
+    );
+    expect(statSync(join(root, ".env.local")).mode & 0o777).toBe(0o600);
+    expect(
+      await createCredentialSealer(
+        { activeKeyId: "instance", keys: { instance: key() } },
+        "restart-proof",
+      ).open([], envelope),
+    ).toBe("model-token-fixture");
+    expect(await readFile(join(root, ".gitignore"), "utf8")).toContain(
+      "/.env.local",
+    );
+  });
+
+  it.each([".dev.vars", ".env", ".env.local"])(
+    "preserves a configured key and native bindings in %s",
+    async (file) => {
+      project();
+      if (file === ".dev.vars")
+        writeFileSync(
+          join(root, ".env.local"),
+          `OYSTER_CREDENTIAL_KEY=${otherKey}\n`,
+        );
+      const before = `# existing local settings\nOYSTER_CREDENTIAL_KEY="${configuredKey}"\nOTHER_SECRET='unchanged value'\n`;
+      writeFileSync(join(root, file), before);
+      await prepareTryModelKeyCustody(root);
+      expect(key() === configuredKey).toBe(true);
+      expect((await readFile(join(root, file), "utf8")) === before).toBe(true);
+      expect(bindings().OTHER_SECRET).toEqual({
+        type: "secret_text",
+        value: "unchanged value",
+      });
+      expect(bindings().PUBLIC).toEqual({
+        type: "plain_text",
+        value: "public value",
+      });
+      expect(statSync(join(root, file)).mode & 0o777).toBe(0o600);
+      const ignore = await readFile(join(root, ".gitignore"), "utf8");
+      expect(ignore).toContain("/.dev.vars");
+      expect(ignore).toContain("/.env\n");
+    },
+  );
+
+  it("adds only the missing binding to an existing native vars file", async () => {
+    project();
+    const before = "# literal native secret\nOTHER_SECRET='literal $VALUE'\n";
+    writeFileSync(join(root, ".dev.vars"), before);
+    await prepareTryModelKeyCustody(root);
+    expect(
+      (await readFile(join(root, ".dev.vars"), "utf8")).startsWith(before),
+    ).toBe(true);
+    expect(bindings().OTHER_SECRET).toEqual({
+      type: "secret_text",
+      value: "literal $VALUE",
+    });
+    expect(bindings().OYSTER_CREDENTIAL_KEY?.type).toBe("secret_text");
+  });
+
+  it("refuses an invalid existing key without replacement or secret-bearing errors", async () => {
+    project();
+    const before = "OYSTER_CREDENTIAL_KEY=invalid-private-fixture\n";
+    writeFileSync(join(root, ".dev.vars"), before);
+    await expect(prepareTryModelKeyCustody(root)).rejects.toThrow(
+      "This Oyster could not prepare private model-key storage.",
+    );
+    expect((await readFile(join(root, ".dev.vars"), "utf8")) === before).toBe(
+      true,
+    );
+  });
+
+  it("refuses when native dotenv loading is disabled, then retains the generated key", async () => {
+    project();
+    vi.stubEnv("CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV", "false");
+    try {
+      await expect(prepareTryModelKeyCustody(root)).rejects.toThrow(
+        "This Oyster could not prepare private model-key storage.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const before = await readFile(join(root, ".env.local"), "utf8");
+    await prepareTryModelKeyCustody(root);
+    expect((await readFile(join(root, ".env.local"), "utf8")) === before).toBe(
+      true,
+    );
   });
 });

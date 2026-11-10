@@ -14,6 +14,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { startTrialComputer } from "./trial-computer.js";
 import { randomBytes } from "node:crypto";
+import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
 import { addAbortListener } from "node:events";
 import { finished } from "node:stream/promises";
 import { runGit } from "../build/local-build.js";
@@ -25,6 +26,8 @@ import {
 import { InstallationObservationError } from "../installation-client.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import {
+  appendFile,
+  chmod,
   mkdir,
   mkdtemp,
   rename,
@@ -35,6 +38,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:net";
+import { createCredentialSealer } from "@fungi.computer/veil/credential-store";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs, stripVTControlCharacters } from "node:util";
@@ -633,6 +637,70 @@ export function wranglerDevArguments(input: {
   ];
 }
 
+/** Provision the trial's separate encryption key through Wrangler's native secrets. */
+export async function prepareTryModelKeyCustody(
+  directory: string,
+): Promise<void> {
+  try {
+    const native = await import("wrangler");
+    const resolveKey = () => {
+      const config = native.unstable_readConfig({
+        config: join(directory, "wrangler.jsonc"),
+      });
+      const binding = native.unstable_getVarsForDev(
+        config.userConfigPath,
+        undefined,
+        config.vars,
+        undefined,
+        true,
+        config.secrets,
+      ).OYSTER_CREDENTIAL_KEY;
+      if (binding === undefined) return undefined;
+      if (binding.type !== "secret_text" && binding.type !== "plain_text")
+        throw new Error("Invalid credential-key binding");
+      return binding.value;
+    };
+    const validate = async (key: string) => {
+      await createCredentialSealer(
+        { activeKeyId: "instance", keys: { instance: key } },
+        "fungi.oyster.credentials.v1",
+      ).seal([], "Oyster credential custody check");
+    };
+    const secretFiles = [".dev.vars", ".env", ".env.local"];
+    const ignored =
+      "\n# Local Oyster secrets\n/.dev.vars\n/.env\n/.env.local\n";
+    const ignorePath = join(directory, ".gitignore");
+    const before = (await exists(ignorePath))
+      ? await readFile(ignorePath, "utf8")
+      : "";
+    if (!before.includes(ignored)) await appendFile(ignorePath, ignored);
+    for (const name of secretFiles) {
+      const path = join(directory, name);
+      if (await exists(path)) await chmod(path, 0o600);
+    }
+    const existing = resolveKey();
+    if (existing !== undefined) {
+      await validate(existing);
+      return;
+    }
+    const key = encodeBase64Url(randomBytes(32));
+    const path = join(
+      directory,
+      (await exists(join(directory, ".dev.vars"))) ? ".dev.vars" : ".env.local",
+    );
+    await appendFile(path, `\nOYSTER_CREDENTIAL_KEY=${key}\n`, { mode: 0o600 });
+    await chmod(path, 0o600);
+    const provisioned = resolveKey();
+    if (provisioned !== key) throw new Error("Credential key was not loaded");
+    await validate(provisioned);
+  } catch {
+    throw new TryError(
+      "This Oyster could not prepare private model-key storage.",
+      "Check the local secret files and Wrangler environment settings, then restart the Oyster. Existing keys were not replaced.",
+    );
+  }
+}
+
 function startWrangler(input: {
   directory: string;
   port: number;
@@ -654,6 +722,7 @@ function startWrangler(input: {
         `wrangler is not installed in ${input.directory}.`,
         `Run \`npm install\` there, then run \`${retryCommand(input.directory, input.port)}\` again.`,
       );
+    await prepareTryModelKeyCustody(input.directory);
     await mkdir(join(input.directory, ".oyster"), { recursive: true });
     const log = join(input.directory, logFile);
     input.signal.throwIfAborted();
