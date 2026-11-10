@@ -4,6 +4,7 @@ import {
   resolveDefaultChoice,
   supportedAgentModels,
   selectAgentModel,
+  agentModelSupportsTools,
 } from "../../src/standalone/agent-model-choice.js";
 
 const none = { workersAi: false, gateway: false, keys: [] } as const;
@@ -111,15 +112,16 @@ describe("agentModelChoice default", () => {
   });
 });
 
-it("offers Pi-supported Cloudflare models ordered by their combined price", async () => {
+it("offers the full catalog with tool models first and price ordering within each group", async () => {
   const models = await supportedAgentModels("cloudflare-workers-ai");
   expect(models.length).toBeGreaterThan(0);
   const first = models[0];
   if (first === undefined) throw new Error("No Cloudflare models");
   for (const model of models) {
-    expect(model.input + model.output).toBeGreaterThanOrEqual(
-      first.input + first.output,
-    );
+    if (model.tools)
+      expect(model.input + model.output).toBeGreaterThanOrEqual(
+        first.input + first.output,
+      );
   }
   const selected = await selectAgentModel({
     keySource: "byok",
@@ -131,5 +133,24 @@ it("offers Pi-supported Cloudflare models ordered by their combined price", asyn
     name: selected.name,
     input: selected.cost.input,
     output: selected.cost.output,
+    tools: agentModelSupportsTools(selected),
   });
+});
+
+it("keeps Granite available as chat only, never as an Agent default", async () => {
+  const models = await supportedAgentModels("cloudflare-workers-ai");
+  expect(
+    models.find((model) => model.id === "@cf/ibm-granite/granite-4.0-h-micro"),
+  ).toMatchObject({ tools: false });
+  const firstChat = models.findIndex((model) => !model.tools);
+  expect(firstChat).toBeGreaterThan(0);
+  expect(models.slice(firstChat).every((model) => !model.tools)).toBe(true);
+  expect(models[0]?.id).toBe("@cf/deepseek-ai/deepseek-v4-flash-0731");
+  const choice = await resolveDefaultChoice({
+    ...none,
+    keys: [{ keyId: "cf", provider: "cloudflare-workers-ai" }],
+  });
+  expect(models.find((model) => model.id === choice.model.modelId)?.tools).toBe(
+    true,
+  );
 });

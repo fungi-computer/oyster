@@ -60,15 +60,49 @@ async function byokCatalog(
     .getModels();
 }
 
+/**
+ * Pi 1.3's Model/getModels contract has no tool-calling flag (reasoning and
+ * supportsStrictMode are not capability flags). Until it does, keep this small
+ * Agent shortlist beside the existing catalog, never copy names or prices.
+ * DeepSeek passed Grove's write/read proof on 2026-11-10; Granite failed its
+ * first execute call. Kimi is the existing Workers AI Agent default. The other
+ * entries are the providers' tool-capable Sonnet/Luna choices:
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+ * https://platform.openai.com/docs/guides/function-calling
+ * OpenRouter exposes that same Luna model. Other entries remain selectable as chat only;
+ * this is an admission policy for Agents, not a claim they cannot chat.
+ * Replace this fallback when Pi exposes its source's tool-calling flag.
+ */
+export function agentModelSupportsTools(
+  model: Pick<Model<Api>, "provider" | "id">,
+): boolean {
+  switch (model.provider) {
+    case "cloudflare-workers-ai":
+      return (
+        model.id === "@cf/deepseek-ai/deepseek-v4-flash-0731" ||
+        model.id === "@cf/moonshotai/kimi-k2.6"
+      );
+    case "anthropic":
+      return model.id === "claude-sonnet-4-6";
+    case "openai":
+      return model.id === "gpt-6-luna" || model.id === "openai/gpt-6-luna";
+    case "openrouter":
+      return model.id === "openai/gpt-6-luna";
+    default:
+      return false;
+  }
+}
+
 /** A supported model and Pi's USD prices per million tokens, without credentials. */
 export type SupportedAgentModel = Readonly<{
   id: string;
   name: string;
   input: number;
   output: number;
+  tools: boolean;
 }>;
 
-/** Settings and selection share Pi's catalog; cheapest combined token rate first. */
+/** Pi's full catalog: verified tools first, then chat only; each group by price. */
 export async function supportedAgentModels(
   provider: "anthropic" | "openai" | "openrouter" | "cloudflare-workers-ai",
 ): Promise<readonly SupportedAgentModel[]> {
@@ -78,10 +112,13 @@ export async function supportedAgentModels(
       name: model.name,
       input: model.cost.input,
       output: model.cost.output,
+      tools: agentModelSupportsTools(model),
     }))
     .sort(
       (a, b) =>
-        a.input + a.output - b.input - b.output || a.id.localeCompare(b.id),
+        Number(b.tools) - Number(a.tools) ||
+        a.input + a.output - b.input - b.output ||
+        a.id.localeCompare(b.id),
     );
 }
 
@@ -113,7 +150,9 @@ export async function resolveDefaultChoice(
       provider !== "cloudflare-workers-ai"
     )
       continue;
-    const catalog = await byokCatalog(provider);
+    const catalog = (await byokCatalog(provider)).filter(
+      agentModelSupportsTools,
+    );
     const model =
       catalog.find((entry) => "default" in entry && entry.default === true) ??
       catalog[0];

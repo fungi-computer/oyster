@@ -157,6 +157,7 @@ import {
   agentModelChoice,
   agentModelChoiceSchema,
   AgentModelRefused,
+  agentModelSupportsTools,
   resolveDefaultChoice,
   selectAgentModel,
   type AgentModelChoice,
@@ -387,18 +388,20 @@ const setupRequiredFailure =
   "Model request failed (setup_required). Connect a model first.";
 
 /**
- * A run with no connected model provider: end it at once with the typed setup
- * failure. A transport error would read as an outage and be retried.
+ * A run refused before contacting the model: end with the host’s stable reason.
+ * A transport error would read as an outage and be retried.
  */
-function unconfiguredModels(model: Model<Api>): StandaloneModelSource {
+function refusedModels(
+  model: Model<Api>,
+  reason: string,
+): StandaloneModelSource {
   return {
     acquire: () => {
       const failed = new WeakSet<AssistantMessage>();
       return Promise.resolve({
         model,
         retryable: () => false,
-        failureReason: (message) =>
-          failed.has(message) ? setupRequiredFailure : undefined,
+        failureReason: (message) => (failed.has(message) ? reason : undefined),
         stream: () => {
           const events = createAssistantMessageEventStream();
           const terminal: AssistantMessage = {
@@ -422,7 +425,7 @@ function unconfiguredModels(model: Model<Api>): StandaloneModelSource {
               },
             },
             stopReason: "error",
-            errorMessage: setupRequiredFailure,
+            errorMessage: reason,
             timestamp: Date.now(),
           };
           failed.add(terminal);
@@ -1417,6 +1420,13 @@ export abstract class StandaloneAgentBase<
     choice: AgentModelChoice,
   ): Promise<StandaloneModelSource> {
     const modelChoice = await selectAgentModel(choice);
+    // Saved choices remain readable, but an Agent needs tools. Stop before a
+    // provider request instead of letting a chat-only choice fail opaquely.
+    if (!agentModelSupportsTools(modelChoice))
+      return refusedModels(
+        normalizeModel(modelChoice),
+        "Model request failed (tools_unsupported). Pick a model marked tools.",
+      );
     if (choice.keySource === "byok" && choice.keyId !== undefined) {
       await this.admitKey(choice);
       const directory = await this.keyDirectory();
@@ -1479,7 +1489,7 @@ export abstract class StandaloneAgentBase<
       throw new AgentModelRefused("key_not_connected");
     // The AI binding is declared everywhere; only a Cloudflare account answers it.
     if (!cloudflareAccountReady(this.env))
-      return unconfiguredModels(normalizeModel(modelChoice));
+      return refusedModels(normalizeModel(modelChoice), setupRequiredFailure);
     let options: WorkersAiOptions = { model: modelChoice.id };
     if (this.env.OYSTER_AI_GATEWAY !== undefined)
       options = { ...options, gateway: this.env.OYSTER_AI_GATEWAY };

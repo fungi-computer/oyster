@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.20.1
+
+### Patch Changes
+
+- Changes since 0.20.0:
+
+  - fix(tourtois): keep chat-only catalog models selectable
+  - fix(tourtois): explain saved models unavailable for tools
+  - fix(grove): keep tool-limited models out of agent choices
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.11.12
+
 ## 0.20.0
 
 ### Minor Changes
