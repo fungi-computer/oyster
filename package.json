@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.19.32",
+  "version": "0.19.33",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Self-hosted Apps for people and AI agents, with a local trial and deployment to your Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",

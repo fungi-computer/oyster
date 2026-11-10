@@ -1,7 +1,7 @@
 // `oyster try`: one command from nothing to a running local Oyster with a
 // Hello App. It scaffolds a small project (the standalone worker and wrangler
 // config this package ships, plus a package.json), installs it with the
-// caller's package manager, runs `wrangler dev` locally, installs the Hello
+// caller's package manager, starts Wrangler’s local runtime, installs the Hello
 // App and opens the browser. Running it again in the same directory restarts
 // the server after refreshing the generated project files and dependencies.
 //
@@ -13,6 +13,11 @@
 // and --verbose streams them instead. Piped output or CI gets plain lines.
 import { spawn, type ChildProcess } from "node:child_process";
 import { startTrialComputer } from "./trial-computer.js";
+import {
+  createTrialOwner,
+  prepareTrialPrivateState,
+  prepareTrialSecretFile,
+} from "./try-custody.js";
 import { randomBytes } from "node:crypto";
 import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
 import { addAbortListener } from "node:events";
@@ -92,6 +97,8 @@ Options:
 const localBuildPnpmVersion = "11.24.0";
 const requiredNodeMajor = 24;
 const ownerKeyFile = ".oyster-owner";
+const trialWorkerFile =
+  "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js";
 const logFile = join(".oyster", "wrangler.log");
 const installLogFile = join(".oyster", "install.log");
 const command = "npx @fungi.computer/oyster try";
@@ -388,17 +395,12 @@ async function scaffold(
   const stage = await mkdtemp(join(dirname(directory), ".oyster-try-"));
   try {
     await refreshProject(stage, own, spec, manager, signal);
-    await writeFile(
-      join(stage, ".gitignore"),
-      ".oyster/\n.wrangler/\nnode_modules/\n.oyster-owner\n",
-    );
+    await writeFile(join(stage, ".gitignore"), "node_modules/\n");
     const key = Array.from(randomBytes(24), (byte) =>
       byte.toString(16).padStart(2, "0"),
     ).join("");
-    await writeFile(join(stage, ownerKeyFile), key + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    });
+    await createTrialOwner(stage, key);
+    await prepareTrialPrivateState(stage);
     signal.throwIfAborted();
     await rename(stage, directory);
     return key;
@@ -607,41 +609,12 @@ async function waitUntilReady(
   return signal.aborted ? "exited" : "timeout";
 }
 
-/**
- * `wrangler dev` for one local Oyster. The devtools inspector takes a port the
- * kernel assigns (0): wrangler's default probes 9229 upward and binds it later,
- * so two Oysters (or any wrangler dev) starting together could both pick the
- * same port and one failed with "Address already in use".
- */
-export function wranglerDevArguments(input: {
-  port: number;
-  key: string;
-}): readonly string[] {
-  const url = `http://127.0.0.1:${String(input.port)}`;
-  return [
-    "dev",
-    "--local",
-    "--enable-containers=false",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(input.port),
-    "--inspector-port",
-    "0",
-    "--var",
-    `OYSTER_OWNER_KEY:${input.key}`,
-    "--var",
-    `OYSTER_ORIGIN:${url}`,
-    "--var",
-    "OYSTER_COMPUTER_BACKEND:local",
-  ];
-}
-
 /** Provision the trial's separate encryption key through Wrangler's native secrets. */
 export async function prepareTryModelKeyCustody(
   directory: string,
 ): Promise<void> {
   try {
+    await prepareTrialPrivateState(directory);
     const native = await import("wrangler");
     const resolveKey = () => {
       const config = native.unstable_readConfig({
@@ -666,25 +639,13 @@ export async function prepareTryModelKeyCustody(
         "fungi.oyster.credentials.v1",
       ).seal([], "Oyster credential custody check");
     };
-    const secretFiles = [".dev.vars", ".env", ".env.local"];
-    const ignored =
-      "\n# Local Oyster secrets\n/.dev.vars\n/.env\n/.env.local\n";
-    const ignorePath = join(directory, ".gitignore");
-    const before = (await exists(ignorePath))
-      ? await readFile(ignorePath, "utf8")
-      : "";
-    if (!before.includes(ignored)) await appendFile(ignorePath, ignored);
-    for (const name of secretFiles) {
-      const path = join(directory, name);
-      if (await exists(path)) await chmod(path, 0o600);
-    }
     const existing = resolveKey();
     if (existing !== undefined) {
       await validate(existing);
       return;
     }
     const key = encodeBase64Url(randomBytes(32));
-    const path = join(
+    const path = await prepareTrialSecretFile(
       directory,
       (await exists(join(directory, ".dev.vars"))) ? ".dev.vars" : ".env.local",
     );
@@ -710,16 +671,10 @@ function startWrangler(input: {
 }) {
   return (async () => {
     input.signal.throwIfAborted();
-    const wrangler = join(
-      input.directory,
-      "node_modules",
-      "wrangler",
-      "bin",
-      "wrangler.js",
-    );
-    if (!(await exists(wrangler)))
+    const workerHost = join(input.directory, trialWorkerFile);
+    if (!(await exists(workerHost)))
       throw new TryError(
-        `wrangler is not installed in ${input.directory}.`,
+        `The local Oyster worker is not installed in ${input.directory}.`,
         `Run \`npm install\` there, then run \`${retryCommand(input.directory, input.port)}\` again.`,
       );
     await prepareTryModelKeyCustody(input.directory);
@@ -729,26 +684,31 @@ function startWrangler(input: {
     const logStream = createWriteStream(log);
     const logClosed = Promise.allSettled([finished(logStream)]);
     const url = `http://127.0.0.1:${String(input.port)}`;
-    const child = spawn(
-      process.execPath,
-      [wrangler, ...wranglerDevArguments({ port: input.port, key: input.key })],
-      {
-        cwd: input.directory,
-        detached: process.platform !== "win32",
-        signal: input.signal,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-      },
-    );
+    const child = spawn(process.execPath, [workerHost], {
+      cwd: input.directory,
+      detached: process.platform !== "win32",
+      signal: input.signal,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+    });
     captureOutput(child, logStream, input.verbose);
     const startupError = firstWranglerError(child);
     const lifetime = new AbortController();
     const spawnError = new Promise<"spawn-error">((done) => {
-      child.once("error", () => {
+      const failed = () => {
         done("spawn-error");
         lifetime.abort();
-      });
+      };
+      child.once("error", failed);
+      child.stdin.once("error", failed);
     });
+    child.stdin.end(
+      JSON.stringify({
+        directory: input.directory,
+        port: input.port,
+        key: input.key,
+      }),
+    );
     const exited = new Promise<number | null>((done) => {
       child.on("close", (code) => {
         lifetime.abort();
@@ -983,6 +943,7 @@ export async function tryOyster(
         scaffold(directory, own, values.package, manager, signal),
       );
     } else {
+      await prepareTrialPrivateState(directory);
       key = (await readFile(keyPath, "utf8")).trim();
       ui.info(`Restarting the Oyster in ${directory}`);
       const manager = (await exists(join(directory, "pnpm-workspace.yaml")))
@@ -1001,7 +962,7 @@ export async function tryOyster(
     if (
       fresh ||
       (await exists(join(directory, pendingInstall))) ||
-      !(await exists(join(directory, "node_modules/wrangler/bin/wrangler.js")))
+      !(await exists(join(directory, trialWorkerFile)))
     ) {
       const manager = (await exists(join(directory, "pnpm-workspace.yaml")))
         ? "pnpm"

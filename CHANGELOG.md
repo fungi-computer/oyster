@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.33
+
+### Patch Changes
+
+- Changes since 0.19.32:
+
+  - fix(oyster): isolate trial credentials from local computers
+
 ## 0.19.32
 
 ### Patch Changes

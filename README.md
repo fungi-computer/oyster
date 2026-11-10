@@ -39,7 +39,9 @@ installed with Oyster, attaches the trial’s `computer/` folder so Shed can run
 commands when the local sandbox is available. Running `try` again leaves
 installed Apps untouched.
 
-The owner key is saved in `my-oyster/.oyster-owner` and never printed. Press
+The owner key is readable through `my-oyster/.oyster-owner` and never printed.
+Private trial files live under `~/.config/fungi/oyster-trials/`; the project
+keeps links to them so every trial’s Computer stays outside that storage. Press
 Ctrl-C to stop, and run the same command again in `my-oyster` to restart.
 `--port <number>` picks another port, `--no-open` keeps the browser closed, and
 `--verbose` streams the install and server logs that otherwise go to
@@ -47,9 +49,11 @@ Ctrl-C to stop, and run the same command again in `my-oyster` to restart.
 
 `try` makes an ordinary project, with nothing hidden: Oyster, its Computer,
 React and Wrangler as dependencies, the package's example `worker.ts` and
-`wrangler.jsonc`, and `wrangler dev`. It then builds Tourtois, packs the Hello
-App with `packRelease` and installs it with `installRelease`. The Hello source
-stays in `my-oyster/hello-app` as a git repository you can edit.
+`wrangler.jsonc`, and Wrangler’s local Worker runtime with its debugger
+disabled. The trial’s credentials and local stores are hidden from its Computer.
+It then builds Tourtois, packs the Hello App with `packRelease` and installs it
+with `installRelease`. The Hello source stays in `my-oyster/hello-app` as a git
+repository you can edit.
 
 Locally there is no Computer, git storage or Workers AI, so `try` builds the
 starter Apps on your machine instead of on an Oyster Computer. The

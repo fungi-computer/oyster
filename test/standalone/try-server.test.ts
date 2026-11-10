@@ -7,7 +7,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { watch, existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { fileURLToPath, URL } from "node:url";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
@@ -15,9 +15,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { tryOyster } from "../../src/standalone/try-cli.js";
 
 let directory: string;
+let home: string;
 const executable = process.execPath;
 beforeEach(async () => {
-  directory = await mkdtemp(join(tmpdir(), "oyster-server-failure-"));
+  const scratch = fileURLToPath(new URL("../../.botanical/", import.meta.url));
+  await mkdir(scratch, { recursive: true });
+  directory = await mkdtemp(join(scratch, "oyster-server-failure-"));
+  home = await mkdtemp(join(scratch, "oyster-server-home-"));
+  vi.stubEnv("HOME", home);
   // Let the real CLI write its current generated files, stopping at install.
   const controller = new AbortController();
   const unexpected = () => {
@@ -49,7 +54,10 @@ beforeEach(async () => {
   await mkdir(join(directory, "node_modules/wrangler/bin"), {
     recursive: true,
   });
-  await mkdir(join(directory, "node_modules/@fungi.computer"));
+  await mkdir(
+    join(directory, "node_modules/@fungi.computer/oyster/dist/standalone"),
+    { recursive: true },
+  );
   await symlink(
     join(import.meta.dirname, "../../node_modules/@fungi.computer/computer"),
     join(directory, "node_modules/@fungi.computer/computer"),
@@ -57,17 +65,27 @@ beforeEach(async () => {
   await writeFile(join(directory, ".oyster-owner"), "test-owner");
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
   process.execPath = executable;
   await rm(directory, { recursive: true, force: true });
+  await rm(home, { recursive: true, force: true });
 });
 it.each(["signal", "exit", "spawn-error"] as const)(
   "reports real child %s before readiness without waiting for timeout",
   async (kind) => {
     await writeFile(
-      join(directory, "node_modules/wrangler/bin/wrangler.js"),
+      join(
+        directory,
+        "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js",
+      ),
       kind === "signal"
         ? 'process.kill(process.pid, "SIGTERM");'
-        : "process.exit(7);",
+        : `let text = ''; process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { text += chunk; });
+process.stdin.on('end', () => {
+  const input = JSON.parse(text);
+  process.exit(process.argv.length === 2 && input.key === 'test-owner' && input.port === 18983 ? 7 : 8);
+});`,
     );
     if (kind === "spawn-error")
       process.execPath = join(directory, "missing-node");
@@ -91,7 +109,10 @@ it.each(["signal", "exit", "spawn-error"] as const)(
 it("preserves an early log-stream failure through cancellation and child cleanup", async () => {
   await mkdir(join(directory, ".oyster/wrangler.log"), { recursive: true });
   await writeFile(
-    join(directory, "node_modules/wrangler/bin/wrangler.js"),
+    join(
+      directory,
+      "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js",
+    ),
     'require("node:fs").writeFileSync("child.pid", String(process.pid)); setInterval(() => {}, 1000);',
   );
   const entered = Promise.withResolvers<undefined>();
@@ -136,7 +157,10 @@ it("preserves an early log-stream failure through cancellation and child cleanup
 
 it("retains the startup diagnosis when signaling its own child group is refused", async () => {
   await writeFile(
-    join(directory, "node_modules/wrangler/bin/wrangler.js"),
+    join(
+      directory,
+      "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js",
+    ),
     'require("node:fs").writeFileSync("worker.pid", String(process.pid)); console.error("[ERROR] Tenant origin must be HTTPS"); setInterval(() => {}, 1000);',
   );
   const kill = process.kill.bind(process);

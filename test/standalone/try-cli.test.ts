@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { fileURLToPath, URL } from "node:url";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import type { Buffer } from "node:buffer";
@@ -24,7 +24,6 @@ import {
   installTryDependencies,
   reportTryFailure,
   tryOyster,
-  wranglerDevArguments,
   prepareTryModelKeyCustody,
   type TryEffects,
 } from "../../src/standalone/try-cli.js";
@@ -33,8 +32,13 @@ import { InstallationObservationError } from "../../src/installation-client.js";
 import { startSignInLink } from "../../src/standalone/sign-in-link.js";
 
 let root: string;
+let home: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "oyster-try-test-"));
+  const scratch = fileURLToPath(new URL("../../.botanical/", import.meta.url));
+  mkdirSync(scratch, { recursive: true });
+  root = mkdtempSync(join(scratch, "oyster-try-test-"));
+  home = mkdtempSync(join(scratch, "oyster-try-home-"));
+  vi.stubEnv("HOME", home);
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -60,11 +64,17 @@ function effects(overrides: Partial<TryEffects> = {}) {
   const stop = vi.fn(() => Promise.resolve());
   const fake = {
     installDependencies: vi.fn((directory: string) => {
-      mkdirSync(join(directory, "node_modules/wrangler/bin"), {
-        recursive: true,
-      });
+      mkdirSync(
+        join(directory, "node_modules/@fungi.computer/oyster/dist/standalone"),
+        {
+          recursive: true,
+        },
+      );
       writeFileSync(
-        join(directory, "node_modules/wrangler/bin/wrangler.js"),
+        join(
+          directory,
+          "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js",
+        ),
         "",
       );
       return Promise.resolve(undefined);
@@ -640,11 +650,17 @@ describe("oyster try output", () => {
     expect(text).not.toContain("delete ");
     const key = await readFile(join(directory, ".oyster-owner"), "utf8");
     writeFileSync(join(directory, "my-notes.txt"), "keep me");
-    mkdirSync(join(directory, "node_modules/wrangler/bin"), {
-      recursive: true,
-    });
+    mkdirSync(
+      join(directory, "node_modules/@fungi.computer/oyster/dist/standalone"),
+      {
+        recursive: true,
+      },
+    );
     writeFileSync(
-      join(directory, "node_modules/wrangler/bin/wrangler.js"),
+      join(
+        directory,
+        "node_modules/@fungi.computer/oyster/dist/standalone/try-worker.js",
+      ),
       "partial install",
     );
     const retry = effects();
@@ -748,6 +764,7 @@ describe("oyster try output", () => {
       ).toContain("ECONNREFUSED");
     } finally {
       vi.unstubAllEnvs();
+      vi.stubEnv("HOME", home);
     }
   });
 
@@ -1154,20 +1171,6 @@ describe("startup cancellation ownership", () => {
   });
 });
 
-describe("wranglerDevArguments", () => {
-  it("lets the kernel choose the inspector port, so concurrent Oysters cannot collide", () => {
-    const args = wranglerDevArguments({ port: 8787, key: "owner-key" });
-    expect(
-      args.slice(
-        args.indexOf("--inspector-port"),
-        args.indexOf("--inspector-port") + 2,
-      ),
-    ).toEqual(["--inspector-port", "0"]);
-    expect(args).toContain("OYSTER_ORIGIN:http://127.0.0.1:8787");
-    expect(args).toContain("OYSTER_OWNER_KEY:owner-key");
-  });
-});
-
 describe("trial model-key custody", () => {
   const configuredKey = encodeBase64Url(new Uint8Array(32).fill(7));
   const otherKey = encodeBase64Url(new Uint8Array(32).fill(9));
@@ -1295,6 +1298,7 @@ describe("trial model-key custody", () => {
       );
     } finally {
       vi.unstubAllEnvs();
+      vi.stubEnv("HOME", home);
     }
     const before = await readFile(join(root, ".env.local"), "utf8");
     await prepareTryModelKeyCustody(root);
