@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.19.34
+
+### Patch Changes
+
+- Changes since 0.19.33:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Bonsai release.
+  - Updated starter Apps for the Inkcap release.
+  - Updated starter Apps for the Trellis release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+  - @fungi.computer/caps@0.10.5
+  - @fungi.computer/parakeet@0.11.10
+
 ## 0.19.33
 
 ### Patch Changes
