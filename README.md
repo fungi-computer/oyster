@@ -1,6 +1,11 @@
-# Oyster (`@fungi.computer/oyster`)
+# Oyster by Fungi (`@fungi.computer/oyster`)
 
-Oyster is a desktop of Apps you run yourself: a git platform, agents, a
+Fungi is an open-source workspace for AI agents: Apps that people and agents
+both use, Computers that keep their files, and permissions the system checks.
+Try it with one command, run it on your own Cloudflare account, or let us host
+it.
+
+Oyster by Fungi is a desktop of Apps you run yourself: a git platform, agents, a
 terminal, an editor, workflows and image generation. People open the Apps in a
 browser, and agents call the same Apps over MCP. Every App is built from an
 exact git commit and runs in its own sandbox with its own database, and you

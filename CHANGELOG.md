@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.20.0
+
+### Minor Changes
+
+- Changes since 0.19.34:
+
+  - feat(marketing): use the approved Fungi pitch and published trial media
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/shiitake@0.13.0
+  - @fungi.computer/parakeet@0.11.11
+  - @fungi.computer/shiitake-extensions@0.6.12
+  - @fungi.computer/zookeeper@0.0.19
+
 ## 0.19.34
 
 ### Patch Changes
