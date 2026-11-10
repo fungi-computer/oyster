@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.20.2
+
+### Patch Changes
+
+- Changes since 0.20.1:
+
+  - perf(oyster): build trial starters in two bounded slots
+  - perf(oyster): reuse the trial package store
+
 ## 0.20.1
 
 ### Patch Changes

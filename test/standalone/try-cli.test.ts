@@ -109,6 +109,125 @@ function effects(overrides: Partial<TryEffects> = {}) {
 }
 
 describe("oyster try", () => {
+  it("shares one private package store across the desktop and starter builds of each trial", async () => {
+    const stores: string[] = [];
+    for (const name of ["first", "second"]) {
+      const directory = join(root, name);
+      const received: string[] = [];
+      const fixture = effects({
+        installDesktop: (input) => {
+          received.push(input.packageStoreDirectory);
+          return Promise.resolve("ready" as const);
+        },
+        installStarter: (_app, input) => {
+          received.push(input.packageStoreDirectory);
+          return Promise.resolve("installed" as const);
+        },
+      });
+      await runTry([directory, "--no-open"], fixture.fake, plain().ui);
+      const store = join(directory, ".oyster", "package-store");
+      expect(received).toEqual(Array<string>(7).fill(store));
+      stores.push(store);
+    }
+    expect(stores[0]).not.toBe(stores[1]);
+  });
+
+  it("keeps at most two starter builds in flight and fills a freed slot", async () => {
+    const permits = new Map(
+      ["grove", "prints", "inkcap", "trellis", "bonsai", "shed"].map(
+        (id) => [id, Promise.withResolvers<"installed">()] as const,
+      ),
+    );
+    const first = Promise.withResolvers<undefined>();
+    const third = Promise.withResolvers<undefined>();
+    const complete = Promise.withResolvers<undefined>();
+    const started: string[] = [];
+    let active = 0;
+    let peak = 0;
+    let finished = 0;
+    const fixture = effects({
+      signInLink: () =>
+        Promise.resolve({
+          url: "http://127.0.0.1:1/once",
+          close: () => Promise.resolve(),
+        }),
+      installStarter: async (app) => {
+        started.push(app.installationId);
+        active += 1;
+        peak = Math.max(peak, active);
+        if (started.length === 1) first.resolve(undefined);
+        if (started.length === 3) third.resolve(undefined);
+        const permit = permits.get(app.installationId);
+        if (permit === undefined) throw new Error("Unexpected starter App");
+        const result = await permit.promise;
+        active -= 1;
+        if (++finished === 6) complete.resolve(undefined);
+        return result;
+      },
+    });
+    const running = runTry(
+      [join(root, "slots"), "--no-open"],
+      fixture.fake,
+      plain().ui,
+    );
+    try {
+      await first.promise;
+      await new Promise<void>((done) => setImmediate(done));
+      expect(started).toEqual(["grove", "prints"]);
+      permits.get("grove")?.resolve("installed");
+      await third.promise;
+      expect(started).toEqual(["grove", "prints", "inkcap"]);
+      expect(active).toBe(2);
+    } finally {
+      for (const permit of permits.values()) permit.resolve("installed");
+      await complete.promise;
+      await new Promise<void>((done) => setImmediate(done));
+      fixture.controller.abort();
+      await running;
+    }
+    expect(peak).toBe(2);
+  });
+
+  it("publishes concurrent starter progress in order without overlapping writes", async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let calls = 0;
+    let active = 0;
+    let peak = 0;
+    const fixture = effects({
+      signInLink: () =>
+        Promise.resolve({
+          url: "http://127.0.0.1:1/once",
+          close: () => Promise.resolve(),
+        }),
+      reportStarters: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        if (++calls === 2) {
+          entered.resolve(undefined);
+          await release.promise;
+        }
+        active -= 1;
+      },
+    });
+    const running = runTry(
+      [join(root, "reports"), "--no-open"],
+      fixture.fake,
+      plain().ui,
+    );
+    try {
+      await entered.promise;
+      await new Promise<void>((done) => setImmediate(done));
+      expect(peak).toBe(1);
+    } finally {
+      release.resolve(undefined);
+      await new Promise<void>((done) => setImmediate(done));
+      fixture.controller.abort();
+      await running;
+    }
+    expect(peak).toBe(1);
+  });
+
   it("starts one Computer and stops it before the Oyster server", async () => {
     const stopped: string[] = [];
     const fixture = effects({

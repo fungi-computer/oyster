@@ -238,6 +238,7 @@ export type TryEffects = Readonly<{
   /** Prepare Tourtois without changing an existing installation or its approval. */
   installDesktop: (input: {
     directory: string;
+    packageStoreDirectory: string;
     url: string;
     key: string;
     signal: AbortSignal;
@@ -248,6 +249,7 @@ export type TryEffects = Readonly<{
     input: {
       url: string;
       key: string;
+      packageStoreDirectory: string;
       signal: AbortSignal;
     },
   ) => Promise<"installed" | "already-installed">;
@@ -1058,6 +1060,7 @@ export async function tryOyster(
         );
       }
     });
+    const packageStoreDirectory = join(directory, ".oyster", "package-store");
     const desktop = await setupTask(
       fresh
         ? "Installing Hello and building Tourtois"
@@ -1069,6 +1072,7 @@ export async function tryOyster(
         const preparation = new AbortController();
         const input = {
           directory,
+          packageStoreDirectory,
           url,
           key,
           signal: AbortSignal.any([signal, preparation.signal]),
@@ -1196,7 +1200,7 @@ export async function tryOyster(
         "No model is connected yet, so Agents can't answer.",
         `Open Oyster, choose Keys, then Model keys, and add a key. Guide: ${modelKeyGuideUrl}`,
       );
-    // The rest of the starter Apps build here, one at a time, while the desktop
+    // The rest of the starter Apps build here, two at a time, while the desktop
     // is already usable. Each reports one line; a failure never stops the rest.
     const starters = trialStarterOrder.map((id) => {
       const app = standaloneAppSet.find((item) => item.installationId === id);
@@ -1211,10 +1215,13 @@ export async function tryOyster(
     const stopped = () => trialSignal.aborted;
     // What the desktop shows for each starter App that is not ready yet.
     const pending = new Map<string, InstallingApp>();
-    const trial = { url, key, signal: trialSignal };
-    const publish = () =>
-      effects
-        .reportStarters(trial, [...pending.values()])
+    const trial = { url, key, packageStoreDirectory, signal: trialSignal };
+    let publishing = Promise.resolve();
+    const publish = () => {
+      const installing = [...pending.values()];
+      // Concurrent builds still publish their state transitions in order.
+      publishing = publishing
+        .then(() => effects.reportStarters(trial, installing))
         .then(undefined, (cause: unknown) => {
           if (!stopped())
             ui.warn(
@@ -1222,6 +1229,8 @@ export async function tryOyster(
               "Installs continue; the desktop will not show their progress.",
             );
         });
+      return publishing;
+    };
     const failureReason = (cause: unknown) => {
       const failure = innermostError(cause);
       return {
@@ -1286,10 +1295,20 @@ export async function tryOyster(
               state: "installing",
             });
           await publish();
-          for (const app of starters) {
-            if (stopped()) return;
-            await installOne(app);
-          }
+          let next = 0;
+          const installNext = async () => {
+            while (!stopped()) {
+              const app = starters[next++];
+              if (app === undefined) return;
+              await installOne(app);
+            }
+          };
+          const installs = await Promise.allSettled([
+            installNext(),
+            installNext(),
+          ]);
+          for (const result of installs)
+            if (result.status === "rejected") throw result.reason;
           // Then answer the desktop's retry asks until the trial stops.
           while (!stopped()) {
             const waited = await sleep(retryPollMs, undefined, {

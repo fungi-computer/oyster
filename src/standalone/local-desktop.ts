@@ -155,7 +155,12 @@ export async function localDesktopState(
 /** Build one starter App from source on this machine and install it. */
 export async function installLocalStarter(
   app: StarterApp,
-  input: Readonly<{ url: string; key: string; signal?: AbortSignal }>,
+  input: Readonly<{
+    url: string;
+    key: string;
+    packageStoreDirectory: string;
+    signal?: AbortSignal;
+  }>,
 ): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
   signal.throwIfAborted();
@@ -179,6 +184,7 @@ export async function installLocalStarter(
       appId: app.appId,
       sourceDirectory: source,
       sourceRevision: `git:${commit}`,
+      packageStoreDirectory: input.packageStoreDirectory,
       recipe: appBuildRecipe(
         readBuildManifest(
           await git(source, ["show", `${commit}:package.json`], signal),
