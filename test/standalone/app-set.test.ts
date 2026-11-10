@@ -378,6 +378,7 @@ function starterRegistry(
           installationId,
           appId: current.appId,
           appName: installationId,
+          appCalls: [],
           artifactDigest: current.release.artifact.artifactDigest,
           canEdit: true,
           resources: [],

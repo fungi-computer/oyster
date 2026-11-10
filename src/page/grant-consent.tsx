@@ -53,7 +53,7 @@ createRoot(root).render(
   framed ? (
     <main style={{ display: "flow-root" }}>{editor}</main>
   ) : (
-    <div>
+    <div style={{ maxWidth: "var(--container-2xl)", marginInline: "auto" }}>
       {editor}
       <Button asChild variant="outline">
         <a href="/">Back to Apps</a>

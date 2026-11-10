@@ -1443,7 +1443,18 @@ export abstract class StandaloneAgentBase<
       };
       if (choice.model.reasoning !== undefined)
         streamOptions.reasoning = choice.model.reasoning;
-      return observedModels(normalizeModel(modelChoice), streamOptions);
+      const configuration = await directory.modelKeyBaseUrl(keyId);
+      if ("error" in configuration)
+        throw new AgentModelRefused(
+          configuration.error === "key_removed"
+            ? "key_removed"
+            : "key_not_connected",
+        );
+      const { baseUrl } = configuration;
+      return observedModels(
+        normalizeModel({ ...modelChoice, baseUrl }),
+        streamOptions,
+      );
     }
     if (choice.keySource === "ai-gateway") {
       const egress = configuredProviderEgress(this.env);
@@ -1849,6 +1860,19 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
 
   listModelKeys(): Promise<readonly ModelKeyRecord[]> {
     return this.modelKeys().list();
+  }
+
+  async modelKeyBaseUrl(
+    keyId: string,
+  ): Promise<
+    Readonly<{ baseUrl: string }> | Readonly<{ error: ModelKeyRefusal }>
+  > {
+    try {
+      return { baseUrl: await this.modelKeys().baseUrl(keyId) };
+    } catch (error) {
+      if (error instanceof ModelKeyRefused) return { error: error.reason };
+      throw error;
+    }
   }
 
   modelKey(keyId: string): Promise<ModelKeyRecord | null> {

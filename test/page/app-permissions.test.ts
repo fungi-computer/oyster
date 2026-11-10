@@ -18,6 +18,7 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
     installationId: "desktop",
     appId: "app_tourtois",
     appName: "Tourtois",
+    appCalls: [],
     artifactDigest: digest,
     canEdit: true,
     resources: [],
@@ -166,6 +167,7 @@ it("changing Apps never exposes the previous App's editable draft while the new 
       installationId,
       appId: "app_probe",
       appName: installationId,
+      appCalls: [],
       artifactDigest: digest,
       canEdit: true,
       resources: [],
@@ -240,6 +242,23 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
     installationId: "trellis",
     appId: "app_trellis",
     appName: "Trellis",
+    appCalls: [
+      {
+        operation: "route:apps.call:app_bonsai:files.read",
+        method: "files.read",
+        targetName: "Bonsai",
+      },
+      {
+        operation: "route:apps.call:app_missing:files.save",
+        method: "files.save",
+        targetName: "App app_missing",
+      },
+      {
+        operation: "route:apps.call:app_other:files.save",
+        method: "files.save",
+        targetName: "App app_other",
+      },
+    ],
     artifactDigest: digest,
     canEdit: true,
     resources: [],
@@ -253,13 +272,29 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
       declaredOperations: {
         artifactDigest: digest,
         digest,
-        capabilities: [{ capability: "agent.send", operations: [] }],
+        capabilities: [
+          { capability: "agent.send", operations: [] },
+          {
+            capability: "apps.call",
+            operations: [
+              "route:apps.call:app_bonsai:files.read",
+              "route:apps.call:app_missing:files.save",
+              "route:apps.call:app_other:files.save",
+              "route:app.methods:exportProject",
+              "route:app.methods:archiveProject",
+            ],
+          },
+        ],
       },
     },
   });
+  const submitted: Parameters<AppPermissionsPort["submit"]>[] = [];
   const port: AppPermissionsPort = {
     read: () => Promise.resolve(view),
-    submit: () => Promise.resolve("refused"),
+    submit: (...args) => {
+      submitted.push(args);
+      return Promise.resolve("refused");
+    },
   };
   const container = document.createElement("div");
   document.body.append(container);
@@ -278,7 +313,7 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
   expect(
     container.querySelector(".caps-permission-grid-title")?.textContent,
   ).toBe("Trellis permissions");
-  expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+  expect(container.querySelectorAll("tbody tr")).toHaveLength(7);
   expect(container.querySelector("tbody")?.textContent).toContain("Off");
   const toggle = container.querySelector<HTMLInputElement>(
     'input[aria-label="All Agents: Send messages to Agents"]',
@@ -290,6 +325,37 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
     return Promise.resolve();
   });
   expect(container.querySelector("tbody")?.textContent).toContain("On");
+  expect(container.textContent).not.toContain("route:apps");
+  expect(container.textContent).toContain("Read files");
+  expect(container.textContent).toContain("App app_missing");
+  expect(container.textContent).toContain("App app_other");
+  expect(container.textContent).toContain("route:app.methods:exportProject");
+  expect(container.textContent).toContain("route:app.methods:archiveProject");
+  const readFiles = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Bonsai: Read files"]',
+  );
+  if (readFiles === null) throw new Error("Bonsai call switch missing");
+  await act(() => {
+    readFiles.click();
+    return Promise.resolve();
+  });
+  const save = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save permissions",
+  );
+  if (save === undefined) throw new Error("Save permissions missing");
+  await act(() => {
+    save.click();
+    return Promise.resolve();
+  });
+  expect(
+    submitted[0]?.[2].find((change) => change.capability === "apps.call"),
+  ).toEqual({
+    capability: "apps.call",
+    grant: {
+      resources: "tenant-scope",
+      operations: ["route:apps.call:app_bonsai:files.read"],
+    },
+  });
 });
 
 it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
@@ -301,6 +367,7 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
       installationId: "grove",
       appId: "app_grove",
       appName: "Grove",
+      appCalls: [],
       artifactDigest: digest,
       canEdit: outcome !== "viewer",
       resources: [],

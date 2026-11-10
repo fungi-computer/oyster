@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { normalizeModel, streamModel } from "@fungi.computer/mule/effect";
+import { selectAgentModel } from "../../src/standalone/agent-model-choice.js";
 import type { StoredCredential } from "@fungi.computer/veil/credential-store";
 import {
   createModelKeyVault,
+  createInstanceCredentialStore,
   ModelKeyRefused,
   type ModelKeyStorage,
 } from "../../src/standalone/model-key-vault.js";
@@ -69,6 +72,134 @@ describe("instance model-key vault", () => {
     const listed = await vault.list();
     expect(listed).toEqual([record]);
     expect(JSON.stringify(listed)).not.toContain(apiKey);
+  });
+
+  it("requires Cloudflare’s account, seals both fields and confines requests to that account", async () => {
+    const storage = memory();
+    const upstream = provider(200);
+    const vault = createModelKeyVault({
+      storage,
+      credentialKey,
+      fetch: upstream.fetch,
+    });
+    const accountId = "a".repeat(32);
+    const cloudflare = {
+      provider: "cloudflare-workers-ai",
+      label: "My Cloudflare",
+      apiKey,
+    };
+    await expect(vault.seal(cloudflare)).rejects.toMatchObject({
+      reason: "invalid_key",
+    });
+    await expect(
+      vault.seal({ ...cloudflare, accountId: "../other" }),
+    ).rejects.toMatchObject({ reason: "invalid_key" });
+    expect(upstream.calls).toHaveLength(0);
+    const record = await vault.seal({ ...cloudflare, accountId });
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`;
+    expect(upstream.calls[0]?.url).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/models/search?per_page=1`,
+    );
+    expect(storage.dump()).not.toContain(apiKey);
+    expect(storage.dump()).not.toContain(accountId);
+    expect(JSON.stringify(await vault.list())).not.toContain(accountId);
+    expect(await vault.baseUrl(record.keyId)).toBe(baseUrl);
+    await vault.send(
+      record.keyId,
+      new Request(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: "Bearer caller-key" },
+        body: "{}",
+      }),
+    );
+    expect(upstream.calls[1]?.headers.get("authorization")).toBe(
+      `Bearer ${apiKey}`,
+    );
+    await expect(
+      vault.send(
+        record.keyId,
+        new Request(
+          `https://api.cloudflare.com/client/v4/accounts/${"b".repeat(32)}/ai/v1/chat/completions`,
+          { method: "POST", body: "{}" },
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "target_denied" });
+    expect(upstream.calls).toHaveLength(2);
+    await vault.remove(record.keyId);
+    await expect(vault.baseUrl(record.keyId)).rejects.toMatchObject({
+      reason: "key_removed",
+    });
+  });
+
+  it("streams a Pi Cloudflare catalog model through the account-confined vault", async () => {
+    const accountId = "a".repeat(32);
+    const requests: Request[] = [];
+    const vault = createModelKeyVault({
+      storage: memory(),
+      credentialKey,
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.method === "GET")
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        return Promise.resolve(
+          new Response(
+            'data: {"id":"reply","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\ndata: {"id":"reply","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        );
+      },
+    });
+    const key = await vault.seal({
+      provider: "cloudflare-workers-ai",
+      label: "Cloudflare",
+      accountId,
+      apiKey,
+    });
+    const model = await selectAgentModel({
+      keySource: "byok",
+      keyId: key.keyId,
+      model: {
+        providerId: "cloudflare-workers-ai",
+        modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      },
+    });
+    const source = { ...model, baseUrl: await vault.baseUrl(key.keyId) };
+    const stream = await streamModel(
+      normalizeModel(source),
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      {
+        apiKey: "oyster-model-key",
+        fetch: (input, init) => vault.send(key.keyId, new Request(input, init)),
+      },
+    );
+    const reply = await stream.result();
+    expect(reply.stopReason).toBe("stop");
+    expect(reply.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "Hello" }),
+    );
+    expect(requests[1]?.url).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`,
+    );
+    expect(requests[1]?.headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+  });
+
+  it("does not expose a malformed sealed configuration through decoding errors", async () => {
+    const storage = memory();
+    const credentials = createInstanceCredentialStore({
+      storage,
+      credentialKey,
+    });
+    const record = await credentials.put({
+      kind: "model-key/cloudflare-workers-ai",
+      label: "Broken",
+      secret: `malformed-${apiKey}`,
+    });
+    const vault = createModelKeyVault({ storage, credentialKey });
+    await expect(vault.baseUrl(record.credentialId)).rejects.toMatchObject({
+      reason: "custody_unavailable",
+      message: "custody_unavailable",
+    });
   });
 
   it("refuses a rejected key and stores nothing", async () => {

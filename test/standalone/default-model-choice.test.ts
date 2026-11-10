@@ -44,6 +44,30 @@ describe("resolveDefaultChoice", () => {
     expect(choice.model.modelId.length).toBeGreaterThan(0);
   });
 
+  it("uses a stored Cloudflare key in a local trial and accepts its catalog choice", async () => {
+    const choice = await resolveDefaultChoice({
+      ...none,
+      keys: [{ keyId: "cf", provider: "cloudflare-workers-ai" }],
+    });
+    expect(choice).toMatchObject({
+      keySource: "byok",
+      keyId: "cf",
+      model: { providerId: "cloudflare-workers-ai" },
+    });
+    const saved: unknown[] = [];
+    await agentModelChoice(
+      {
+        get: () => Promise.resolve(undefined),
+        put: (_key, value) => {
+          saved.push(value);
+          return Promise.resolve();
+        },
+      },
+      () => undefined,
+    ).set(choice);
+    expect(saved).toEqual([choice]);
+  });
+
   it("falls back to the unreachable Workers AI default with nothing connected", async () => {
     expect((await resolveDefaultChoice(none)).keySource).toBe("workers-ai");
   });

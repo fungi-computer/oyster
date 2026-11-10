@@ -330,23 +330,9 @@ type OysterAgents = Readonly<{
       media: "ready" | "missing";
     }>
   >;
-  modelKeys: Promise<
-    readonly Readonly<{
-      keyId: string;
-      provider: ModelKeyProvider;
-      label: string;
-      createdAt: number;
-      validatedAt: number;
-    }>[]
-  >;
+  modelKeys: Promise<readonly ModelKeyRecord[]>;
   sealModelKey: Promise<
-    | Readonly<{
-        keyId: string;
-        provider: ModelKeyProvider;
-        label: string;
-        createdAt: number;
-        validatedAt: number;
-      }>
+    | ModelKeyRecord
     | Readonly<{
         error: ModelKeyRefusal;
       }>
@@ -465,6 +451,22 @@ Why a key could not be stored or used; stable, secret-free.
 
 ---
 
+### ModelKeyRecord
+
+```ts
+type ModelKeyRecord = Omit<HostedModelKeyRecord, "provider"> & object;
+```
+
+Standalone custody also accepts an owner’s Cloudflare account and token.
+
+#### Type Declaration
+
+| Name       | Type                                                                |
+| ---------- | ------------------------------------------------------------------- |
+| `provider` | `HostedModelKeyRecord`\[`"provider"`\] \| `"cloudflare-workers-ai"` |
+
+---
+
 ### ModelKeySealInput
 
 ```ts
@@ -472,6 +474,7 @@ type ModelKeySealInput = Readonly<{
   provider: string;
   label: string;
   apiKey: string;
+  accountId?: string;
 }>;
 ```
 

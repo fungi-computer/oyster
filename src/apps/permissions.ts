@@ -493,6 +493,13 @@ export const appPermissionPageSchema = z.strictObject({
   installationId: z.string(),
   appId: z.string(),
   appName: z.string(),
+  appCalls: z.array(
+    z.strictObject({
+      operation: z.string(),
+      method: z.string(),
+      targetName: z.string(),
+    }),
+  ),
   artifactDigest: ownerCodec(sha256DigestSchema),
   permissions: appPermissionsWireSchema,
   canEdit: z.boolean(),

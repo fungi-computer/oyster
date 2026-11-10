@@ -26,6 +26,7 @@ readonly read(appKey): Promise<
   installationId: string;
   appId: string;
   appName: string;
+  appCalls: object[];
   artifactDigest: Sha256Digest;
   permissions: {
      authority: {
@@ -139,8 +140,8 @@ and the available resources.
 ###### Returns
 
 `Promise`\< \| `"unavailable"` \| \{ `storeGeneration`: `string`;
-`installationId`: `string`; `appId`: `string`; `appName`: `string`;
-`artifactDigest`: `Sha256Digest`; `permissions`: \{ `authority`: \{
+`installationId`: `string`; `appId`: `string`; `appName`: `string`; `appCalls`:
+`object`[]; `artifactDigest`: `Sha256Digest`; `permissions`: \{ `authority`: \{
 `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`;
 `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \|
 `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
@@ -1556,6 +1557,11 @@ const appPermissionPageSchema: ZodObject<{
   installationId: ZodString;
   appId: ZodString;
   appName: ZodString;
+  appCalls: ZodArray<ZodObject<{
+     operation: ZodString;
+     method: ZodString;
+     targetName: ZodString;
+  }, $strict>>;
   artifactDigest: ZodPipe<ZodUnknown, ZodTransform<Sha256Digest, unknown>>;
   permissions: ZodObject<{
      authority: ZodObject<{

@@ -44,6 +44,7 @@ export async function homePageFixture({
   shellCode = "export const mountShell = async () => () => {};",
   shellChunks = [],
   computerId,
+  calls,
   ownerRoutes,
   uiCache,
   onArtifactRead = () => undefined,
@@ -101,15 +102,18 @@ export async function homePageFixture({
     byteLength: bytes.length,
     mediaType: shellModule ? assetBuildMediaType : "text/html; charset=utf-8",
   };
-  const built = createAppBuild(ui, null, {
+  const appDeclaration = {
     capabilities: [
       ...(declared ? ["team.workbenchHost"] : []),
       ...(opens ? ["apps.open"] : []),
+      ...(calls === undefined ? [] : ["apps.call"]),
     ],
     handlers: [],
     roles: [],
     storage: [{ key: "desktop", scopes: ["member"], maxBytes: 16384 }],
-  });
+  };
+  if (calls !== undefined) appDeclaration.calls = calls;
+  const built = createAppBuild(ui, null, appDeclaration);
   const artifact = await put(
     new globalThis.TextEncoder().encode(JSON.stringify(built)),
   );

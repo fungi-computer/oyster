@@ -1422,11 +1422,25 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         declaration,
         operationDescriptors,
       );
+      const directory = host.workbench
+        ? await host.workbench.directory()
+        : null;
+      const appCalls = (declaration.calls ?? []).flatMap((call) => {
+        const targetName =
+          directory?.apps.find((app) => app.appId === call.appId)
+            ?.displayName ?? `App ${call.appId}`;
+        return call.methods.map((method) => ({
+          operation: appCallOperation(call.appId, method),
+          method,
+          targetName,
+        }));
+      });
       const config = appPermissionPageSchema.parse({
         storeGeneration: generation,
         installationId: current.installationId,
         appId: current.appId,
         appName: declaration.displayName ?? current.installationId,
+        appCalls,
         artifactDigest: current.release.artifact.artifactDigest,
         canEdit: oysterPrincipalIsOwner(principal),
         resources:

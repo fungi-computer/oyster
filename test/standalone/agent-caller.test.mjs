@@ -537,7 +537,7 @@ test("standalone owner attaches fleet and configured Computers without an App, r
       const unsupported = await modelRequest(sibling.agentId, "PUT", {
         keySource: "byok",
         keyId: "cred_unused",
-        model: { providerId: "cloudflare-workers-ai", modelId: "@cf/x/y" },
+        model: { providerId: "openai-compatible", modelId: "custom-model" },
       });
       assert.equal(unsupported.status, 409);
       assert.deepEqual(await unsupported.json(), {
@@ -651,6 +651,9 @@ test("standalone owner attaches fleet and configured Computers without an App, r
         const sealedText = await sealed.text();
         assert.ok(!sealedText.includes(secretKey));
         const record = JSON.parse(sealedText);
+        assert.deepEqual(await directory.modelKeyBaseUrl(record.keyId), {
+          baseUrl: "https://api.openai.com/v1",
+        });
         const listed = await (await send("/api/model-keys", "GET")).text();
         assert.ok(!listed.includes(secretKey));
         assert.deepEqual(JSON.parse(listed), { keys: [record] });
@@ -724,6 +727,9 @@ test("standalone owner attaches fleet and configured Computers without an App, r
 
         const removed = await send(`/api/model-keys/${record.keyId}`, "DELETE");
         assert.equal(removed.status, 204);
+        assert.deepEqual(await directory.modelKeyBaseUrl(record.keyId), {
+          error: "key_removed",
+        });
         assert.equal(
           (await send(`/api/model-keys/${record.keyId}`, "DELETE")).status,
           404,

@@ -1,3 +1,4 @@
+import { appCallMethodLabel } from "@fungi.computer/nacre/app-directory";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Disclosure } from "@fungi.computer/caps/components/disclosure";
 import { Alert } from "@fungi.computer/caps/components/alert";
@@ -65,17 +66,8 @@ type GrantRowContext = Readonly<{
   disabled: boolean;
   describedBy: (capability: PermissionColumn["capability"]) => string;
   edit: (change: PermissionEdit) => void;
+  appCalls: AppPermissionsViewData["appCalls"];
 }>;
-
-/** "publishDraft" and "publish_draft" read as "Publish draft". */
-function methodLabel(operation: string): string {
-  const words = operation
-    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
-    .replace(/[._-]+/gu, " ")
-    .trim()
-    .toLowerCase();
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 /** One grid row per grant: a label, its state in words and a labelled switch. */
 function grantRow(
@@ -185,14 +177,21 @@ function appRows(
         },
       });
     }),
-    ...group.operations.map((operation) =>
-      grantRow(context, {
+    ...group.operations.map((operation) => {
+      const call = context.appCalls.find(
+        (call) => call.operation === operation.operation,
+      );
+      const words =
+        call === undefined
+          ? "Use another App"
+          : appCallMethodLabel(call.method);
+      return grantRow(context, {
         id: `${operation.capability}:${operation.operation}`,
         capability: operation.capability,
         sigil: permissionCatalog["apps.call"].sigil,
-        label: methodLabel(operation.operation),
+        label: words.charAt(0).toUpperCase() + words.slice(1),
         chip: groupLabels[group.id],
-        scopeName: "Other Apps",
+        scopeName: call?.targetName ?? operation.operation,
         pending: false,
         on: operation.on,
         locked: false,
@@ -204,8 +203,8 @@ function appRows(
             on,
           });
         },
-      }),
-    ),
+      });
+    }),
   ];
 }
 
@@ -461,6 +460,7 @@ function PermissionEditor({
   );
   const context: GrantRowContext = {
     disabled,
+    appCalls: view.appCalls,
     describedBy: (capability) => `${describeId}-${capability}`,
     edit,
   };
@@ -482,7 +482,6 @@ function PermissionEditor({
     (groups.length > 0 && !shellChanged) || uncertain || refreshNeeded;
   return (
     <Form
-      style={{ maxWidth: "var(--container-2xl)", marginInline: "auto" }}
       onSubmit={(event) => {
         event.preventDefault();
         void save();

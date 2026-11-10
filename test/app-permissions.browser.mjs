@@ -77,15 +77,15 @@ async function appPermissionsProof(t, control = {}) {
   for (const width of [1400, 390]) {
     for (const theme of ["mocha", "latte"]) {
       let app;
-      let directoryReads = 0;
+      let directoryRequests = 0;
       app = await homePageFixture({
         approved: true,
+        calls: [{ appId: "app_bonsai", methods: ["files.read", "files.save"] }],
         shellModule: true,
         pageScript: null,
         shellCode,
         // This is the host's metadata port, not grant or admission authority.
         rootDirectory: async () => {
-          directoryReads++;
           const installations = await (
             await app.request("/api/installations")
           ).json();
@@ -107,7 +107,13 @@ async function appPermissionsProof(t, control = {}) {
                 enforcement: null,
                 handlers: [],
                 roles: [],
-                declaredCapabilities: ["team.workbenchHost"],
+                declaredCapabilities: ["team.workbenchHost", "apps.call"],
+                calls: [
+                  {
+                    appId: "app_bonsai",
+                    methods: ["files.read", "files.save"],
+                  },
+                ],
                 commands: [],
                 gills: [],
                 availability: "available",
@@ -139,6 +145,12 @@ async function appPermissionsProof(t, control = {}) {
         });
       await page.route("http://localhost/**", async (route) => {
         const request = route.request();
+        if (
+          request.method() === "GET" &&
+          new globalThis.URL(request.url()).pathname ===
+            "/api/workbench/directory"
+        )
+          directoryRequests++;
         if (
           request.method() === "PUT" &&
           new globalThis.URL(request.url()).pathname ===
@@ -213,6 +225,22 @@ async function appPermissionsProof(t, control = {}) {
         .catch((cause) => {
           throw new Error("Oyster grants iframe must load", { cause });
         });
+      await permissions
+        .getByRole("switch", {
+          name: "App app_bonsai: Read files",
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(await permissions.getByText(/route:apps/u).count(), 0);
+      assert.equal(
+        await permissions
+          .getByRole("switch", {
+            name: "App app_bonsai: Save files",
+            exact: true,
+          })
+          .count(),
+        1,
+      );
       const privilege = shell.getByText(
         "Full access to your Team and every App",
         { exact: true },
@@ -399,7 +427,7 @@ async function appPermissionsProof(t, control = {}) {
       await assertNativeFrame();
       assert.equal(writes, 0, "Cancelling keeps the saved Shell approval");
       await revoke.click();
-      const readsBeforeSave = directoryReads;
+      const readsBeforeSave = directoryRequests;
       const refreshed = page.waitForResponse(
         (response) =>
           response.request().method() === "GET" &&
@@ -412,13 +440,13 @@ async function appPermissionsProof(t, control = {}) {
         .click();
       assert.equal((await refreshed).status(), 200);
       assert.equal(
-        directoryReads,
+        directoryRequests,
         readsBeforeSave + 1,
         "Tourtois consumes accepted from its actual frame and refreshes Settings",
       );
       await permissions
         .getByRole("status")
-        .filter({ hasText: "Permissions saved." })
+        .filter({ hasText: /^Permissions saved$/u })
         .waitFor();
       assert.equal(writes, 1, "Confirmation commits one permission change");
       await shell
@@ -461,7 +489,7 @@ async function appPermissionsProof(t, control = {}) {
         .click();
       await page
         .getByRole("status")
-        .filter({ hasText: "Permissions saved." })
+        .filter({ hasText: /^Permissions saved$/u })
         .waitFor();
       assert.equal(writes, 2);
       await page.reload();

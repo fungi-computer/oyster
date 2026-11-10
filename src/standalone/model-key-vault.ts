@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import {
   createCredentialSealer,
   createCredentialStore,
@@ -13,9 +14,7 @@ import {
   modelKeyTarget,
   modelKeyValidationRequest,
   modelKeyValidationResult,
-  type ModelKeyProvider,
-  type ModelKeyRecord,
-  type ModelKeyVault,
+  type ModelKeyRecord as HostedModelKeyRecord,
 } from "@fungi.computer/veil/model-keys";
 
 /**
@@ -42,21 +41,53 @@ export class ModelKeyRefused extends Error {
   }
 }
 
-export type { ModelKeyRecord };
+/** Standalone custody also accepts an owner’s Cloudflare account and token. */
+export type ModelKeyRecord = Omit<HostedModelKeyRecord, "provider"> & {
+  readonly provider: HostedModelKeyRecord["provider"] | "cloudflare-workers-ai";
+};
+type Provider = ModelKeyRecord["provider"];
+const isProvider = (value: string): value is Provider =>
+  value === "cloudflare-workers-ai" || isModelKeyProvider(value);
+const cloudflareCredentialSchema = Schema.Struct({
+  apiKey: Schema.NonEmptyString,
+  accountId: Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/u)),
+});
+const decodeCloudflareCredential = Schema.decodeUnknownOption(
+  Schema.fromJsonString(cloudflareCredentialSchema),
+);
+function readCloudflareCredential(secret: string) {
+  const parsed = decodeCloudflareCredential(secret);
+  if (parsed._tag === "None") throw new ModelKeyRefused("custody_unavailable");
+  return parsed.value;
+}
+const cloudflareBase = (accountId: string) =>
+  `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`;
+
+function providerConfiguration(provider: Provider, secret: string) {
+  if (provider === "cloudflare-workers-ai") {
+    const credential = readCloudflareCredential(secret);
+    return {
+      apiKey: credential.apiKey,
+      baseUrl: cloudflareBase(credential.accountId),
+    };
+  }
+  return { apiKey: secret, baseUrl: modelKeyBaseUrl(provider) };
+}
 
 /** What the owner submits to seal one provider key. */
 export type ModelKeySealInput = Readonly<{
   provider: string;
   label: string;
   apiKey: string;
+  accountId?: string;
 }>;
 
 export type ModelKeyStorage = CredentialStorage;
 
-const kindOf = (provider: ModelKeyProvider) => `model-key/${provider}`;
-const providerOf = (kind: string): ModelKeyProvider => {
+const kindOf = (provider: Provider) => `model-key/${provider}`;
+const providerOf = (kind: string): Provider => {
   const provider = kind.slice("model-key/".length);
-  if (!isModelKeyProvider(provider)) throw new ModelKeyRefused("invalid_key");
+  if (!isProvider(provider)) throw new ModelKeyRefused("invalid_key");
   return provider;
 };
 const maxKeyLength = 16_384;
@@ -70,7 +101,7 @@ const publicRecord = (record: CredentialRecord): ModelKeyRecord => ({
 
 /** Anthropic authenticates with `x-api-key`; the others take a bearer token. */
 function authenticated(
-  provider: ModelKeyProvider,
+  provider: Provider,
   headers: Headers,
   apiKey: string,
 ): Headers {
@@ -114,8 +145,7 @@ export function createModelKeyVault(options: {
   credentialKey: string | undefined;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
-}): ModelKeyVault &
-  Readonly<{ get: (keyId: string) => Promise<ModelKeyRecord | null> }> {
+}) {
   const send: typeof globalThis.fetch =
     options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const credentialKey = options.credentialKey;
@@ -142,7 +172,7 @@ export function createModelKeyVault(options: {
     async seal(input: ModelKeySealInput): Promise<ModelKeyRecord> {
       const { provider, label, apiKey } = input;
       if (
-        !isModelKeyProvider(provider) ||
+        !isProvider(provider) ||
         provider === "openai-compatible" ||
         label.length === 0 ||
         label.length > 64 ||
@@ -152,11 +182,34 @@ export function createModelKeyVault(options: {
         throw new ModelKeyRefused("invalid_key");
       if (credentialKey === undefined)
         throw new ModelKeyRefused("custody_unavailable");
-      const baseUrl = modelKeyBaseUrl(provider);
-      const probe = modelKeyValidationRequest(
-        { provider, baseUrl },
-        AbortSignal.timeout(15_000),
-      );
+      let secret = apiKey;
+      let probe: Request;
+      if (provider === "cloudflare-workers-ai") {
+        const credential = Schema.decodeUnknownOption(
+          cloudflareCredentialSchema,
+        )({
+          apiKey,
+          accountId: input.accountId,
+        });
+        if (credential._tag === "None")
+          throw new ModelKeyRefused("invalid_key");
+        secret = JSON.stringify(credential.value);
+        // Cloudflare’s authenticated model search spends no inference tokens.
+        probe = new Request(
+          `https://api.cloudflare.com/client/v4/accounts/${credential.value.accountId}/ai/models/search?per_page=1`,
+          {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          },
+        );
+      } else {
+        if (input.accountId !== undefined)
+          throw new ModelKeyRefused("invalid_key");
+        probe = modelKeyValidationRequest(
+          { provider, baseUrl: modelKeyBaseUrl(provider) },
+          AbortSignal.timeout(15_000),
+        );
+      }
       let status: number;
       try {
         const response = await send(
@@ -176,7 +229,7 @@ export function createModelKeyVault(options: {
         throw new ModelKeyRefused("provider_unavailable");
       return publicRecord(
         await custody(() =>
-          credentials.put({ kind: kindOf(provider), label, secret: apiKey }),
+          credentials.put({ kind: kindOf(provider), label, secret }),
         ),
       );
     },
@@ -192,6 +245,18 @@ export function createModelKeyVault(options: {
       return record === null ? null : publicRecord(record);
     },
 
+    /** Host-only model configuration; the token never leaves its sealed callback. */
+    baseUrl(keyId: string): Promise<string> {
+      return custody(() =>
+        store().withSecret(keyId, (secret, record) => {
+          const provider = providerOf(record.kind);
+          return Promise.resolve(
+            providerConfiguration(provider, secret).baseUrl,
+          );
+        }),
+      );
+    },
+
     remove(keyId: string): Promise<"deleted" | "absent"> {
       return custody(() => store().remove(keyId));
     },
@@ -199,18 +264,12 @@ export function createModelKeyVault(options: {
     /** Send one provider request with the key attached; the caller's auth is dropped. */
     send(keyId: string, request: Request): Promise<Response> {
       return custody(() =>
-        store().withSecret(keyId, (apiKey, record) => {
+        store().withSecret(keyId, (secret, record) => {
           const provider = providerOf(record.kind);
+          const credential = providerConfiguration(provider, secret);
           let target: URL;
           try {
-            target = modelKeyTarget(
-              {
-                locator: record.credentialId,
-                provider,
-                baseUrl: modelKeyBaseUrl(provider),
-              },
-              request,
-            );
+            target = modelKeyTarget({ baseUrl: credential.baseUrl }, request);
           } catch {
             throw new ModelKeyRefused("target_denied");
           }
@@ -220,7 +279,7 @@ export function createModelKeyVault(options: {
             headers: authenticated(
               provider,
               modelKeyForwardedHeaders(request),
-              apiKey,
+              credential.apiKey,
             ),
             body: request.method === "GET" ? null : request.body,
             signal: request.signal,

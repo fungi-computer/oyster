@@ -43,8 +43,10 @@ const defaultChoice: AgentModelChoice = {
 
 /** Pi's maintained catalog for a provider a key may be brought for. */
 async function byokCatalog(
-  provider: "anthropic" | "openai" | "openrouter",
+  provider: "anthropic" | "openai" | "openrouter" | "cloudflare-workers-ai",
 ): Promise<readonly Model<Api>[]> {
+  if (provider === "cloudflare-workers-ai")
+    return cloudflareWorkersAIProvider().getModels();
   if (provider === "anthropic")
     return (await import("@earendil-works/pi-ai/providers/anthropic"))
       .anthropicProvider()
@@ -82,7 +84,8 @@ export async function resolveDefaultChoice(
     if (
       provider !== "anthropic" &&
       provider !== "openai" &&
-      provider !== "openrouter"
+      provider !== "openrouter" &&
+      provider !== "cloudflare-workers-ai"
     )
       continue;
     const catalog = await byokCatalog(provider);
@@ -106,7 +109,10 @@ export async function selectAgentModel(
   const { providerId, modelId, reasoning } = choice.model;
   if (choice.keySource === "byok") {
     // Only a catalogued provider's own models; an OpenAI-compatible base has none.
-    if (!isModelKeyProvider(providerId) || providerId === "openai-compatible")
+    if (
+      providerId !== "cloudflare-workers-ai" &&
+      (!isModelKeyProvider(providerId) || providerId === "openai-compatible")
+    )
       throw new AgentModelRefused("unsupported_key_source");
     const found = (await byokCatalog(providerId)).find(
       (item) => item.id === modelId,

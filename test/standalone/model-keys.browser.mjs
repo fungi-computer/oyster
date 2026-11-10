@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { error, log } from "node:console";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import process from "node:process";
 import { URL, fileURLToPath } from "node:url";
 import { chromium, expect } from "playwright/test";
 import { z } from "zod";
@@ -34,6 +35,9 @@ const host = await nativeWorkflowRoot({
 const jsonAuth = { ...host.auth, "Content-Type": "application/json" };
 const credentialKey = randomBytes(32).toString("base64url");
 let browser;
+const screenshotDirectory =
+  process.env.OYSTER_MODEL_KEYS_SCREENSHOT_DIR ?? host.work;
+await mkdir(screenshotDirectory, { recursive: true });
 
 async function owner(path, init = {}) {
   return globalThis.fetch(`${host.origin}${path}`, {
@@ -128,15 +132,40 @@ try {
     await form.getByRole("button", { name: "Add model key" }).click();
   };
 
+  // Cloudflare comes first, with its required account rather than a token-only form.
+  const firstForm = dialog.getByRole("form", { name: "Add model key" });
+  await expect(firstForm.getByLabel("Provider")).toHaveValue(
+    "cloudflare-workers-ai",
+  );
+  await expect(firstForm.getByLabel("Account ID")).toBeVisible();
+  await firstForm.getByLabel("Name").fill("My Cloudflare");
+  await firstForm.getByLabel("API key").fill("bogus-token");
+  await firstForm.getByRole("button", { name: "Add model key" }).click();
+  await expect(
+    firstForm.getByText("Enter your 32-character Cloudflare account ID."),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `${screenshotDirectory}/model-keys-cloudflare-1440.png`,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(firstForm.getByLabel("Account ID")).toBeVisible();
+  await page.screenshot({
+    path: `${screenshotDirectory}/model-keys-cloudflare-390.png`,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // 1. No credential key on this instance: explicit refusal, nothing stored.
   await dialog
     .getByRole("form", { name: "Add model key" })
     .getByLabel("Provider")
     .selectOption({ label: "OpenAI" });
+  await expect(firstForm.getByLabel("Account ID")).toHaveCount(0);
   await addKey("Bogus", `sk-test-${"z".repeat(16)}`);
   await expect(dialog.getByText(/no credential key/u)).toBeVisible();
   assert.deepEqual(await (await owner("/api/model-keys")).json(), { keys: [] });
-  await page.screenshot({ path: `${host.work}/model-keys-no-custody.png` });
+  await page.screenshot({
+    path: `${screenshotDirectory}/model-keys-no-custody.png`,
+  });
 
   // 2. With the key configured, the real provider rejects a bogus key.
   config.vars.OYSTER_CREDENTIAL_KEY = credentialKey;
@@ -174,7 +203,9 @@ try {
       .getByLabel("Agent models")
       .getByText("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
   ).toBeVisible();
-  await page.screenshot({ path: `${host.work}/model-keys-settings.png` });
+  await page.screenshot({
+    path: `${screenshotDirectory}/model-keys-settings.png`,
+  });
   assert.deepEqual(errors, []);
   log(
     "PASS Model keys: no-custody refusal, provider rejection, restart-persisted Agent model",

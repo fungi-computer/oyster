@@ -15,6 +15,7 @@ import type {
   ModelKeySealInput,
 } from "./standalone/model-key-vault.js";
 export type {
+  ModelKeyRecord,
   ModelKeyRefusal,
   ModelKeySealInput,
 } from "./standalone/model-key-vault.js";
@@ -858,7 +859,15 @@ export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
 
 const keyIdPattern = /^cred_[A-Za-z0-9_-]{1,64}$/u;
 const sealRequestSchema = Schema.Struct({
-  provider: Schema.Literals(["anthropic", "openai", "openrouter"]),
+  provider: Schema.Literals([
+    "anthropic",
+    "openai",
+    "openrouter",
+    "cloudflare-workers-ai",
+  ]),
+  accountId: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/u)),
+  ),
   label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
   apiKey: Schema.String.check(
     Schema.isMinLength(1),

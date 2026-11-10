@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.19.28
+
+### Patch Changes
+
+- Changes since 0.19.27:
+
+  - fix(ui): clarify App access and unfunded Agent setup
+  - fix(oyster): connect Cloudflare model keys from Settings
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/nacre@0.4.5
+  - @fungi.computer/veil@0.6.6
+
 ## 0.19.27
 
 ### Patch Changes
