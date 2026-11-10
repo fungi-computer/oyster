@@ -132,17 +132,19 @@ Fungi release on the
 [package versions page](https://docs.fungi.computer/reference/packages/), and
 follow [Upgrade Oyster](https://docs.fungi.computer/guides/run-your-own-oyster/)
 with the package manager and store that installed the project. Redeploy with the
-same `npx wrangler deploy` command, then run `npx oyster install-apps`. If pnpm
-stops with `ERR_PNPM_UNEXPECTED_STORE`, rerun with `--store-dir` set to the
-store the error names.
+same `npx wrangler deploy` command, then run
+`npx @fungi.computer/oyster install-apps`. If pnpm stops with
+`ERR_PNPM_UNEXPECTED_STORE`, rerun with `--store-dir` set to the store the error
+names.
 
 Two older upgrades reset data rather than convert it. From before 0.7.0, the
 installed Apps are cleared once: Oyster Home asks you to reinstall them with
-`npx oyster install-apps`, which restores the Apps and their App settings, while
-each App's own backend database starts empty. Agents, Sessions, files and keys
-are kept. From 0.2 or earlier, Oyster answers every request with `409` and
-`store_from_older_oyster`; deploy under new resource names or tear the old one
-down first. The changelog entry for each release says when it resets data.
+`npx @fungi.computer/oyster install-apps`, which restores the Apps and their App
+settings, while each App's own backend database starts empty. Agents, Sessions,
+files and keys are kept. From 0.2 or earlier, Oyster answers every request with
+`409` and `store_from_older_oyster`; deploy under new resource names or tear the
+old one down first. The changelog entry for each release says when it resets
+data.
 
 ### Run on celld
 

@@ -399,7 +399,7 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
         h(
           "p",
           { className: "detail" },
-          "This update reset your installed Apps. Reinstall them with npx oyster install-apps.",
+          "This update reset your installed Apps. Reinstall them with npx @fungi.computer/oyster install-apps.",
         ),
       );
     if (state === "empty")
@@ -408,7 +408,7 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
           "p",
           { className: "detail" },
           "Install Apps with ",
-          h("code", null, "npx oyster install-apps"),
+          h("code", null, "npx @fungi.computer/oyster install-apps"),
           ". Follow the quickstart for your local or hosted Oyster.",
         ),
       );

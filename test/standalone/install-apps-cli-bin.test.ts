@@ -65,5 +65,11 @@ describe("built Oyster npm bin symlink", () => {
     expect(finished.stdout).toContain("Usage: oyster install-apps");
     expect(finished.stdout).toContain("OYSTER_URL");
     expect(finished.stdout).toContain("seven starter Apps");
+    expect(finished.stdout).toContain(
+      "For a local trial, run `oyster try`; it sets up its Computer and starter Apps.",
+    );
+    expect(finished.stdout).toContain(
+      "Starter builds need a deployed Oyster host",
+    );
   });
 });

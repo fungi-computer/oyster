@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.19.29
+
+### Patch Changes
+
+- Changes since 0.19.28:
+
+  - fix(docs): name the scoped Oyster package in setup commands
+
 ## 0.19.28
 
 ### Patch Changes

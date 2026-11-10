@@ -1427,7 +1427,7 @@ for (const marker of [
     const jobs = db.prepare("SELECT * FROM watchdog_jobs").all();
     f.restart();
     const notice =
-      "This update reset your installed Apps. Reinstall them with npx oyster install-apps.";
+      "This update reset your installed Apps. Reinstall them with npx @fungi.computer/oyster install-apps.";
     const home = await app.request("/", { headers });
     assert.equal(home.status, 200, await home.clone().text());
     assert.equal((await home.text()).split(notice).length - 1, 1);

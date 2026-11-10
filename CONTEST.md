@@ -27,8 +27,8 @@ Worker (`examples/standalone`) and the Notes example App (`examples/notes-app`).
 Its `@fungi.computer` dependencies are their own repositories under
 [github.com/fungi-computer](https://github.com/fungi-computer), and so is each
 App: Bonsai, Tourtois, Shed, Inkcap, Workflows, Prints and Grove.
-`npx oyster install-apps` builds all seven on your own Oyster's Computer; the
-README's quick start walks through it.
+`npx @fungi.computer/oyster install-apps` builds all seven on your own Oyster's
+Computer; the README's quick start walks through it.
 
 ## Built by many agents at once
 

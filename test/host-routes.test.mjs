@@ -375,7 +375,7 @@ test("first host page requests serve exact digest-addressed assets and preserve 
   );
 });
 
-test("the empty home names the next step: install Apps with npx oyster install-apps", async () => {
+test("the empty home names the scoped Oyster command to install Apps", async () => {
   const host = await computerHost(
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
     null,
@@ -396,7 +396,11 @@ test("the empty home names the next step: install Apps with npx oyster install-a
   });
   const html = await (await app.request("/")).text();
   assert.match(html, /No Apps installed yet\./);
-  assert.match(html, /Install Apps with <code>npx oyster install-apps<\/code>/);
+  assert.ok(
+    html.includes(
+      "Install Apps with <code>npx @fungi.computer/oyster install-apps</code>",
+    ),
+  );
 });
 
 test("owner API routes stay private without blocking an admitted key's App requests", async () => {

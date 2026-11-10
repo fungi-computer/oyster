@@ -60,8 +60,8 @@ MCP and deployment.
 
 ## What you get
 
-Deploying Oyster and running `npx oyster install-apps` installs seven Apps. Each
-lives in its own repository under
+Deploying Oyster and running `npx @fungi.computer/oyster install-apps` installs
+seven Apps. Each lives in its own repository under
 [github.com/fungi-computer](https://github.com/fungi-computer), and each
 installed App is also a template your agents can fork and rebuild.
 
@@ -120,7 +120,7 @@ printf '%s' "$(cat .oyster-owner)" | npx wrangler secret put OYSTER_OWNER_KEY
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' |
   npx wrangler secret put OYSTER_CREDENTIAL_KEY
 export OYSTER_OWNER_KEY=$(cat .oyster-owner)
-npx oyster install-apps
+npx @fungi.computer/oyster install-apps
 ```
 
 Your workers.dev subdomain is on the Workers & Pages overview in the Cloudflare
