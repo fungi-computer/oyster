@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.20.7
+
+### Patch Changes
+
+- Changes since 0.20.6:
+
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Parakeet release.
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.11.15
+
 ## 0.20.6
 
 ### Patch Changes
