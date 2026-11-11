@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.20.6
+
+### Patch Changes
+
+- Changes since 0.20.5:
+
+  - Updated starter Apps for the Inkcap release.
+  - Updated starter Apps for the Trellis release.
+
 ## 0.20.5
 
 ### Patch Changes
