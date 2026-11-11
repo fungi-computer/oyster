@@ -120,6 +120,15 @@ async function appPermissionsProof(t, control = {}) {
                 surface: { stableRoute: `/apps/${row.installationId}/` },
                 surfacePath: `/apps/${row.installationId}/`,
               })),
+            // Bonsai is still being installed: only the starter list knows it.
+            installing: [
+              {
+                installationId: "bonsai",
+                displayName: "Bonsai",
+                appId: "app_bonsai",
+                state: "installing",
+              },
+            ],
             roles: {},
           };
         },
@@ -227,7 +236,7 @@ async function appPermissionsProof(t, control = {}) {
         });
       await permissions
         .getByRole("switch", {
-          name: "App app_bonsai: Read files",
+          name: "Bonsai: Read files",
           exact: true,
         })
         .waitFor();
@@ -235,7 +244,7 @@ async function appPermissionsProof(t, control = {}) {
       assert.equal(
         await permissions
           .getByRole("switch", {
-            name: "App app_bonsai: Save files",
+            name: "Bonsai: Save files",
             exact: true,
           })
           .count(),

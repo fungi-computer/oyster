@@ -4,7 +4,9 @@ import { createRoot } from "react-dom/client";
 import { expect, it, onTestFinished } from "vitest";
 import { AppPermissionsView } from "../../src/page/app-permissions.js";
 import {
+  appCallTargetName,
   appPermissionPageSchema,
+  unresolvedAppCallTarget,
   type AppPermissionsPort,
   type AppPermissionsViewData,
 } from "../../src/apps/permissions.js";
@@ -251,12 +253,12 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
       {
         operation: "route:apps.call:app_missing:files.save",
         method: "files.save",
-        targetName: "App app_missing",
+        targetName: unresolvedAppCallTarget,
       },
       {
         operation: "route:apps.call:app_other:files.save",
         method: "files.save",
-        targetName: "App app_other",
+        targetName: unresolvedAppCallTarget,
       },
     ],
     artifactDigest: digest,
@@ -327,10 +329,8 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
   expect(container.querySelector("tbody")?.textContent).toContain("On");
   expect(container.textContent).not.toContain("route:apps");
   expect(container.textContent).toContain("Read files");
-  expect(container.textContent).toContain("App app_missing");
-  expect(container.textContent).toContain("App app_other");
-  expect(container.textContent).toContain("route:app.methods:exportProject");
-  expect(container.textContent).toContain("route:app.methods:archiveProject");
+  expect(container.textContent).toContain(unresolvedAppCallTarget);
+  expect(container.textContent).not.toMatch(/app_|route:/u);
   const readFiles = container.querySelector<HTMLInputElement>(
     'input[aria-label="Bonsai: Read files"]',
   );
@@ -478,3 +478,20 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
     }
   },
 );
+
+it("names an App-call target from the directory and never shows an id while it is unresolved", () => {
+  const directory = {
+    apps: [{ appId: "app_bonsai", displayName: "Bonsai" }],
+    installing: [{ appId: "app_inkcap", displayName: "Inkcap" }],
+  };
+  expect(appCallTargetName(directory, "app_bonsai")).toBe("Bonsai");
+  expect(appCallTargetName(directory, "app_inkcap")).toBe("Inkcap");
+  for (const unresolved of [
+    appCallTargetName(directory, "app_missing"),
+    appCallTargetName({ apps: [{ appId: "app_inkcap" }] }, "app_inkcap"),
+    appCallTargetName(null, "app_inkcap"),
+  ]) {
+    expect(unresolved).toBe(unresolvedAppCallTarget);
+    expect(unresolved).not.toContain("app_");
+  }
+});

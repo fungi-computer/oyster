@@ -1,5 +1,24 @@
 # @fungi.computer/oyster
 
+## 0.20.4
+
+### Patch Changes
+
+- Changes since 0.20.3:
+
+  - fix(inkcap): answer a missing folder from the host, open Files for New file,
+    centre the welcome
+  - fix(oyster): accept exactOptionalPropertyTypes directories in
+    appCallTargetName
+  - fix(oyster): name an App-call target in permissions while it installs
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.10.6
+  - @fungi.computer/nacre@0.4.6
+  - @fungi.computer/parakeet@0.11.13
+
 ## 0.20.3
 
 ### Patch Changes

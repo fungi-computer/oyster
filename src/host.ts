@@ -85,6 +85,7 @@ import {
 } from "./apps/installation.js";
 import { admits, scopedBindings, grantsFor } from "./apps/gate.js";
 import {
+  appCallTargetName,
   appPermissionPageSchema,
   permissionSaveSchema,
   type ResourceOption,
@@ -1426,9 +1427,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         ? await host.workbench.directory()
         : null;
       const appCalls = (declaration.calls ?? []).flatMap((call) => {
-        const targetName =
-          directory?.apps.find((app) => app.appId === call.appId)
-            ?.displayName ?? `App ${call.appId}`;
+        const targetName = appCallTargetName(directory, call.appId);
         return call.methods.map((method) => ({
           operation: appCallOperation(call.appId, method),
           method,

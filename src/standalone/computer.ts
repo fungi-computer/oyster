@@ -154,7 +154,7 @@ export type StandaloneComputerResult =
       encoding: "base64";
       truncated: boolean;
     }>
-  | Readonly<{ error: "conflict" | "no_runtime" }>
+  | Readonly<{ error: "conflict" | "no_runtime" | "not_found" }>
   | z.output<typeof writeOutputSchema>
   | z.output<typeof mkdirOutputSchema>
   | z.output<typeof computerPortsOutputSchema>
@@ -1207,7 +1207,13 @@ export const computerFrameMethods: ComputerFrameMethods = {
     },
     read: {
       decodeArgs: (args) => z.tuple([readBytesInputSchema]).parse(args),
-      decodeResult: (value) => computerByteReadReplySchema.parse(value),
+      decodeResult: (value) =>
+        z
+          .union([
+            computerByteReadReplySchema,
+            z.strictObject({ error: z.literal("not_found") }),
+          ])
+          .parse(value),
       requiredOperations: () => ["read"],
     },
     write: {
@@ -1216,7 +1222,7 @@ export const computerFrameMethods: ComputerFrameMethods = {
         z
           .union([
             writeOutputSchema,
-            z.strictObject({ error: z.literal("conflict") }),
+            z.strictObject({ error: z.enum(["conflict", "not_found"]) }),
           ])
           .parse(value),
       requiredOperations: () => ["write"],
@@ -1434,19 +1440,32 @@ export async function computerInvocation(
       : null;
   const native = env.COMPUTER.getByName(computerId);
   frame.signal.throwIfAborted();
-  return native.value(
-    {
-      computerId,
-      actions: new Set([action]),
-      expiresAt: Math.min(frame.facts.deadlineAt, Date.now() + 60_000),
-      provenance: { actor: `${actor.kind}:${actorId}` },
-    },
-    action,
-    input,
-    grant === null
-      ? undefined
-      : computerValueSchema.parse(
-          JSON.parse(JSON.stringify({ workflowGit: grant })),
-        ),
-  );
+  try {
+    return await native.value(
+      {
+        computerId,
+        actions: new Set([action]),
+        expiresAt: Math.min(frame.facts.deadlineAt, Date.now() + 60_000),
+        provenance: { actor: `${actor.kind}:${actorId}` },
+      },
+      action,
+      input,
+      grant === null
+        ? undefined
+        : computerValueSchema.parse(
+            JSON.parse(JSON.stringify({ workflowGit: grant })),
+          ),
+    );
+  } catch (cause) {
+    // A missing file or parent folder is a domain answer. Rethrown, native RPC
+    // reports it to an Agent only as an unrecognized sandbox failure.
+    if (
+      (action === "files.write" ||
+        action === "files.edit" ||
+        action === "files.readBytes") &&
+      missingFile.safeParse(cause).success
+    )
+      return { error: "not_found" };
+    throw cause;
+  }
 }

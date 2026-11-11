@@ -487,6 +487,33 @@ export type PermissionPins = z.output<typeof permissionPinsSchema>;
 export const permissionSaveSchema = permissionPinsSchema.extend({
   command: grantCommandSchema,
 });
+/**
+ * What a permission row calls an App-call target the workbench directory cannot
+ * name yet (still installing, or not installed). Never an App or route id.
+ */
+export const unresolvedAppCallTarget = "An App that isn't installed yet";
+
+/** The directory's display name for an App-call target, else the shared plain copy. */
+export function appCallTargetName(
+  directory: Readonly<{
+    apps: readonly Readonly<{
+      appId: string;
+      displayName?: string | undefined;
+    }>[];
+    installing?: readonly Readonly<{
+      appId?: string | undefined;
+      displayName: string;
+    }>[];
+  }> | null,
+  appId: string,
+): string {
+  return (
+    directory?.apps.find((app) => app.appId === appId)?.displayName ??
+    directory?.installing?.find((app) => app.appId === appId)?.displayName ??
+    unresolvedAppCallTarget
+  );
+}
+
 /** Owner permission-page identity, artifact and current permission facts. */
 export const appPermissionPageSchema = z.strictObject({
   storeGeneration: permissionPinsSchema.shape.storeGeneration,

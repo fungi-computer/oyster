@@ -815,7 +815,7 @@ async function instanceBinding(
   };
 }
 
-async function nativeFileBinding(t) {
+async function nativeFileBinding(t, { missingParent = false } = {}) {
   const calls = [];
   class FilePorts extends ComputerDO {
     async readFileAfterAcceptance(input, accept) {
@@ -855,6 +855,11 @@ async function nativeFileBinding(t) {
         false,
         "CAS must use the native conditional replacement port",
       );
+      if (missingParent)
+        throw Object.assign(
+          new Error(`parent directory missing: ${input.path}`),
+          { code: "ENOENT" },
+        );
       calls.push({ operation, input });
       return {
         path: input.path,
@@ -888,6 +893,27 @@ async function nativeFileBinding(t) {
   );
   return { binding, calls };
 }
+
+test("a native write into a missing folder reaches Inkcap's method as a plain refusal", async (t) => {
+  const { appBackend } =
+    await import("../../../../apps/inkcap/backend/methods.ts");
+  const { binding } = await nativeFileBinding(t, { missingParent: true });
+  assert.deepEqual(
+    await binding.write({ path: "/home/levi/deep/note.md", content: "hi" }),
+    { error: "not_found" },
+  );
+  const refused = await appBackend.call(
+    "writeFile",
+    { path: "/home/levi/deep/note.md", content: "hi" },
+    { env: { COMPUTER: { write: (input) => binding.write(input) } } },
+    { actor: { kind: "agent", agentId: "agent-a" }, computerId: "computer-a" },
+  );
+  assert.equal(refused.error, "parent_not_found");
+  assert.match(
+    refused.message,
+    /^The folder \/home\/levi\/deep does not exist; Inkcap can't create folders yet\./u,
+  );
+});
 
 test("the scoped native read binding preserves binary byte windows and base64 replies", async (t) => {
   const { binding, calls } = await nativeFileBinding(t);

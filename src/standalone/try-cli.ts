@@ -1245,6 +1245,7 @@ export async function tryOyster(
       pending.set(name, {
         installationId: name,
         displayName: app.displayName,
+        appId: app.appId,
         state: "installing",
       });
       await publish();
@@ -1257,6 +1258,7 @@ export async function tryOyster(
         pending.set(name, {
           installationId: name,
           displayName: app.displayName,
+          appId: app.appId,
           state: "failed",
           reason: failureReason(settled.cause),
         });
@@ -1268,6 +1270,7 @@ export async function tryOyster(
         pending.set(name, {
           installationId: name,
           displayName: app.displayName,
+          appId: app.appId,
           state: "needs-runtime",
         });
         ui.info(`${name} installed: needs a Computer runtime (see ${name})`);
@@ -1292,6 +1295,7 @@ export async function tryOyster(
             pending.set(app.installationId, {
               installationId: app.installationId,
               displayName: app.displayName,
+              appId: app.appId,
               state: "installing",
             });
           await publish();
