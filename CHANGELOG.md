@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.21.4
+
+### Patch Changes
+
+- Changes since 0.21.3:
+
+  - fix(inkcap): forward the leader and window-focus chords from App frames, fix
+    the tab strip
+
+- Updated dependencies
+  - @fungi.computer/nacre@0.5.2
+
 ## 0.21.3
 
 ### Patch Changes

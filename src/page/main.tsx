@@ -19,6 +19,7 @@ import {
 import { appRightStates } from "./app-rights.js";
 import { createOysterAppPermissionsPort } from "./app-permissions-port.js";
 import type { WorkbenchSetupPort } from "@fungi.computer/nacre/workbench";
+import { windowShellReservedChordsForUserAgent } from "@fungi.computer/nacre/command-host";
 import { keyWire } from "@fungi.computer/ear-tag/keys";
 import { oysterKeyVocabulary } from "../keys.js";
 import {
@@ -370,7 +371,11 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
             openRequest: launch.openRequest,
             ...(setupFacts !== undefined && { setup: setupFacts }),
             ...(rightStates !== undefined && { permissions: rightStates }),
-            reservedChords: [],
+            // The shell's leader and window-focus chords cross the App's frame:
+            // keys typed inside it never reach the shell document.
+            reservedChords: windowShellReservedChordsForUserAgent(
+              navigator.userAgent,
+            ),
             theme,
             handlers: {
               ...options.commands.handlers,
