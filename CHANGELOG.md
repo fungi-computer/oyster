@@ -1,5 +1,25 @@
 # @fungi.computer/oyster
 
+## 0.20.9
+
+### Patch Changes
+
+- Changes since 0.20.8:
+
+  - Updated starter Apps for the Inkcap release.
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Caps release.
+  - Updated starter Apps for the Computer release.
+  - Updated starter Apps for the Darkroom release.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.10.8
+  - @fungi.computer/computer@0.8.4
+  - @fungi.computer/darkroom@0.5.8
+  - @fungi.computer/parakeet@0.11.17
+
 ## 0.20.8
 
 ### Patch Changes
