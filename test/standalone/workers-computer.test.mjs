@@ -287,6 +287,48 @@ test("a name that does not derive the object id is refused and not stored", () =
   }
 });
 
+test("a fleet Computer with no name record learns its name from a verified grant", () => {
+  class FleetComputer extends ComputerDO {
+    workspace() {
+      return {};
+    }
+  }
+  const grant = (computerId) => ({
+    computerId,
+    actions: new Set(["backing"]),
+    expiresAt: Date.now() + 60_000,
+    provenance: { actor: "owner" },
+  });
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = fromNodeSqlite(database);
+    const woken = () =>
+      new FleetComputer(
+        { id: objectId("fleet-two"), storage },
+        { COMPUTER: namespace, OYSTER_COMPUTER_ID: "workspace" },
+      );
+    const recorded = () =>
+      database
+        .prepare("SELECT 1 FROM sqlite_master WHERE name='computer_name'")
+        .all();
+    // A grant naming another Computer is refused and stores nothing.
+    assert.throws(() => woken().readBackends(grant("workspace"), "owner"), {
+      message: "Computer woken by object id before any named wake",
+    });
+    assert.deepEqual(recorded(), []);
+    // The verified claim names the Computer, and the name is then recorded.
+    assert.doesNotThrow(() =>
+      woken().readBackends(grant("fleet-two"), "owner"),
+    );
+    assert.equal(recorded().length, 1);
+    assert.doesNotThrow(() =>
+      woken().readBackends(grant("fleet-two"), "owner"),
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("a Computer no named wake has reached refuses to guess its identity", () => {
   const database = new DatabaseSync(":memory:");
   try {

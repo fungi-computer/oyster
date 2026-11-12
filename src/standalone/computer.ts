@@ -756,6 +756,9 @@ export class ComputerDO
   }
 
   #accept(authority: ComputerGrant, action: ComputerAction): void {
+    // A fleet Computer that predates the name record learns its name from the
+    // first grant that names it, once the namespace verifies the claim.
+    this.claimComputerName(authority.computerId);
     if (
       checkComputerGrant(authority, {
         computerId: this.#id(),
