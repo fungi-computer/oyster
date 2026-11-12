@@ -58,6 +58,11 @@ import {
   type WebsiteSite,
 } from "./website-channels.js";
 import {
+  createDiscordReplies,
+  type DiscordDelivery,
+  type DiscordReplies,
+} from "../channels/discord-replies.js";
+import {
   isDiscordBinding,
   createDiscordBindings,
   createDiscordInputSchema,
@@ -68,12 +73,14 @@ import {
   type UpdateDiscordInput,
 } from "../channels/discord-binding.js";
 import {
-  DISCORD_ANSWER_WINDOW_MS,
-  DISCORD_SETTLEMENT_POLL_MS,
+  DISCORD_SETTLEMENT_WAIT_MS,
   discordDenial,
   type DiscordAsk,
+  discordFailureText,
   patchOriginal,
+  postFollowUp,
   quoted,
+  splitDiscordMessage,
   registerAskCommand,
 } from "../channels/discord-interactions.js";
 import {
@@ -715,83 +722,148 @@ export abstract class StandaloneAgentBase<
   }
   /**
    * A verified Discord question for this Agent. The public edge has already
-   * checked the application's signature and the guild and channel; this
-   * accepts the work and returns at once, and the answer follows by the
-   * interaction webhook once the run settles.
+   * checked the application's signature and the guild and channel. The reply
+   * is recorded as owed before anything else, then paid off by the Agent's
+   * durable host work: an Agent evicted mid-run still answers when it wakes.
    */
   askDiscord(bindingId: string, ask: DiscordAsk): void {
+    this.discordReplies().record(bindingId, ask);
     this.ctx.waitUntil(
-      this.answerDiscord(bindingId, ask).catch((cause: unknown) => {
-        console.error("discord answer failed", cause);
+      this.wakeRuntime().catch((cause: unknown) => {
+        console.error("discord reply wake failed", cause);
       }),
     );
   }
-  private async answerDiscord(
-    bindingId: string,
-    ask: DiscordAsk,
-  ): Promise<void> {
-    const say = (content: string, withReply: boolean) =>
-      patchOriginal(fetch, {
-        applicationId: ask.applicationId,
-        interactionToken: ask.interactionToken,
-        content,
-        withReply,
-      });
+  private discordReplyOwner: DiscordReplies | undefined;
+  private discordReplies(): DiscordReplies {
+    return (this.discordReplyOwner ??= createDiscordReplies({
+      sql: this.ctx.storage.sql,
+      now: () => Date.now(),
+      deliver: (reply) => this.deliverDiscord(reply),
+      onExpired: (interactionId) => {
+        console.warn("discord reply expired undelivered", interactionId);
+      },
+    }));
+  }
+  /** The Discord replies this Agent owes; a full option override must run it. */
+  protected discordReplyWork() {
+    return this.discordReplies().work;
+  }
+  /** Replies of one Discord binding that never reached Discord; the host admits the owner first. */
+  async discordUndelivered(bindingId: string) {
     const binding = await this.loadChannelBinding(bindingId);
+    return binding === null ? [] : this.discordReplies().closed(bindingId);
+  }
+  /** One attempt at one owed reply; intake is idempotent per interaction. */
+  private async deliverDiscord(
+    reply: Parameters<Parameters<typeof createDiscordReplies>[0]["deliver"]>[0],
+  ): Promise<DiscordDelivery> {
+    const { ask } = reply;
+    const sayPart = async (
+      content: string,
+      first: boolean,
+      withReply: boolean,
+    ) => {
+      try {
+        return await (first ? patchOriginal : postFollowUp)(fetch, {
+          applicationId: ask.applicationId,
+          interactionToken: ask.interactionToken,
+          content,
+          withReply,
+        });
+      } catch (cause) {
+        console.warn(
+          "discord reply delivery failed",
+          cause instanceof Error ? cause.name : "unknown",
+        );
+        return "retry" as const;
+      }
+    };
+    const say = (content: string, withReply: boolean) =>
+      sayPart(content, true, withReply);
+    const binding = await this.loadChannelBinding(reply.bindingId);
     if (
       binding === null ||
       !isDiscordBinding(binding) ||
       binding.lifecycle !== "active"
-    ) {
-      await say("This Agent is not available right now.", false);
-      return;
-    }
-    const result = await this.channelConversations().receive({
-      bindingId,
-      conversation: `${ask.guildId}:${ask.channelId}:${ask.userId}`,
-      eventId: ask.interactionId,
-      party: {
-        kind: "discord-user",
-        guildId: ask.guildId,
-        userId: ask.userId,
-      },
-      text: ask.text,
-    });
-    if (result.kind === "denied") {
-      await say(discordDenial[result.reason], false);
-      return;
-    }
-    if (result.kind === "held") {
-      await say("A person has taken over this conversation.", false);
-      return;
-    }
-    const session = (await this.shiitake()).session(result.sessionId);
-    const deadline = Date.now() + DISCORD_ANSWER_WINDOW_MS;
-    let settlement;
-    while (settlement === undefined && Date.now() < deadline)
-      settlement = await session.readSettlement(result.commandId, {
-        timeoutMs: DISCORD_SETTLEMENT_POLL_MS,
+    )
+      return say("This Agent is not available right now.", false);
+    let accepted = reply.accepted;
+    if (accepted === null) {
+      const result = await this.channelConversations().receive({
+        bindingId: reply.bindingId,
+        conversation: `${ask.guildId}:${ask.channelId}:${ask.userId}`,
+        eventId: ask.interactionId,
+        party: {
+          kind: "discord-user",
+          guildId: ask.guildId,
+          userId: ask.userId,
+          displayName: ask.displayName,
+        },
+        text: ask.text,
       });
-    const answer =
-      settlement?.terminal.outcome === "completed" &&
-      settlement.content.trim().length > 0
+      if (result.kind === "denied")
+        return say(discordDenial[result.reason], false);
+      if (result.kind === "held")
+        return say("A person has taken over this conversation.", false);
+      accepted = { sessionId: result.sessionId, commandId: result.commandId };
+      this.discordReplies().attach(reply.interactionId, accepted);
+    }
+    const session = (await this.shiitake()).session(accepted.sessionId);
+    const settlement = await session.readSettlement(accepted.commandId, {
+      timeoutMs: DISCORD_SETTLEMENT_WAIT_MS,
+    });
+    if (settlement === undefined) return "waiting";
+    const answered =
+      settlement.terminal.outcome === "completed" &&
+      settlement.content.trim().length > 0;
+    if (!answered) {
+      // The host words a model failure on the run's last assistant message;
+      // the settlement's own diagnostic only names the runtime's reason.
+      const { messages } = await session.read({ limit: 20 });
+      const modelFailure = messages
+        .toReversed()
+        .find(
+          ({ value }) =>
+            value.role === "assistant" && value.errorMessage !== undefined,
+        );
+      return say(
+        discordFailureText({
+          outcome: settlement.terminal.outcome,
+          diagnostic:
+            modelFailure?.value.role === "assistant"
+              ? (modelFailure.value.errorMessage ?? null)
+              : settlement.terminal.diagnostic,
+        }),
+        false,
+      );
+    }
+    // The member's own quoted words open the first message; the answer follows
+    // in as many messages as it takes, in order.
+    const parts = splitDiscordMessage(
+      ask.echo === undefined
         ? settlement.content
-        : "I could not answer that. Please try again.";
-    await say(
-      ask.echo === undefined ? answer : `${quoted(ask.echo)}\n\n${answer}`,
-      true,
+        : `${quoted(ask.echo)}\n\n${settlement.content}`,
     );
+    let done = reply.deliveredParts;
+    for (; done < parts.length; done += 1) {
+      const last = done === parts.length - 1;
+      const outcome = await sayPart(parts[done] ?? "", done === 0, last);
+      if (outcome !== "delivered") return outcome;
+      this.discordReplies().progress(reply.interactionId, done + 1);
+    }
+    return "delivered";
   }
 
-  /** Owner read of one website's conversations; the host admits the owner first. */
-  async websiteConversations(
+  /** Owner read of one binding's conversations; the host admits the owner first. */
+  async bindingConversations(
     bindingId: string,
   ): Promise<readonly ChannelConversation[]> {
     const binding = await this.loadChannelBinding(bindingId);
     return binding === null ? [] : this.channelConversations().list(bindingId);
   }
-  /** Owner read of one conversation of a website, from its Session. */
-  async websiteTranscript(
+  /** Owner read of one conversation of a binding, from its Session. */
+  async bindingTranscript(
     bindingId: string,
     sessionId: string,
   ): Promise<WebsiteTranscript | null> {
@@ -1671,7 +1743,8 @@ export abstract class StandaloneAgentBase<
 
   /**
    * A full override must retain channelSource and channelInstructions:
-   * dropping them removes a suspended website's run refusal and turn capture.
+   * dropping them removes a suspended website's run refusal and turn capture,
+   * and it must run discordReplyWork or an evicted Discord run never answers.
    */
   protected override async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
     const [
@@ -1845,7 +1918,11 @@ export abstract class StandaloneAgentBase<
           this.archiveControl().assertOpen();
         },
       },
-      hostWork: [...keeping.hostWork, this.archiveControl().work],
+      hostWork: [
+        ...keeping.hostWork,
+        this.archiveControl().work,
+        this.discordReplyWork(),
+      ],
     };
   }
 

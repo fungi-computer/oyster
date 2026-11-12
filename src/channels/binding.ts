@@ -100,6 +100,8 @@ export const channelPartySchema = z.discriminatedUnion("kind", [
     kind: z.literal("discord-user"),
     guildId: discordSnowflakeSchema,
     userId: discordSnowflakeSchema,
+    /** What the member goes by in Discord, as of their latest message. */
+    displayName: z.string().min(1).max(80).optional(),
   }),
   z.strictObject({
     kind: z.literal("email-sender"),
@@ -126,7 +128,7 @@ export function partyLabel(party: ChannelParty): string {
     case "visitor":
       return `Visitor ${party.visitorId.slice(-4)}`;
     case "discord-user":
-      return `Discord user ${party.userId}`;
+      return party.displayName ?? "Discord member";
     case "email-sender":
       return party.dmarc === "pass"
         ? party.address

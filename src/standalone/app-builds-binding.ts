@@ -226,13 +226,13 @@ export async function dispatchAppsBuildsBinding(
       appId,
       sourceRevision: input.sourceRevision,
       requestedBy,
+      callerInstallationId: frame.facts.selection.owner.id,
     };
     if (input.installationId !== undefined && workflowRequestId === undefined)
       throw new AppInstanceError("revoked");
     if (workflowRequestId !== undefined) {
       request.workflow = {
         requestId: workflowRequestId,
-        callerInstallationId: frame.facts.selection.owner.id,
       };
       if (input.installationId !== undefined)
         request.workflow.installationId = input.installationId;

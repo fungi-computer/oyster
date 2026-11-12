@@ -388,13 +388,13 @@ describe("a website visitor's conversation", () => {
     expect(secondView).not.toContain("Do you sell ferns?");
 
     const agent = f.agentFor(f.binding);
-    const conversations = await agent.websiteConversations(f.binding.bindingId);
+    const conversations = await agent.bindingConversations(f.binding.bindingId);
     const mine = conversations.find(
       ({ party }) =>
         party.kind === "visitor" && party.visitorId === first.visitorId,
     );
     if (mine === undefined) throw new Error("The owner cannot see the visit");
-    const transcript = await agent.websiteTranscript(
+    const transcript = await agent.bindingTranscript(
       f.binding.bindingId,
       mine.sessionId,
     );

@@ -272,6 +272,18 @@ describe("the owner's Discord controls", () => {
       calls.push("register");
       return Promise.resolve({ registered: [], failed: [] });
     },
+    conversations: () => {
+      calls.push("conversations");
+      return Promise.resolve([]);
+    },
+    transcript: () => {
+      calls.push("transcript");
+      return Promise.resolve(null);
+    },
+    undelivered: () => {
+      calls.push("undelivered");
+      return Promise.resolve([]);
+    },
   });
   const ownerKey = ["fixture", "owner", "word"].join("-").padEnd(30, "o");
   const served = (calls: string[]) =>
@@ -293,6 +305,9 @@ describe("the owner's Discord controls", () => {
       ["POST", "/api/discord"],
       ["PUT", `/api/discord/${bindingId}`],
       ["POST", `/api/discord/${bindingId}/commands`],
+      ["GET", `/api/discord/${bindingId}/conversations`],
+      ["GET", `/api/discord/${bindingId}/undelivered`],
+      ["GET", `/api/discord/${bindingId}/conversations/some-session`],
     ] as const;
     for (const [method, path] of every) {
       const stranger = await app.request(`${origin}${path}`, {

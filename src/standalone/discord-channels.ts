@@ -31,6 +31,7 @@ import {
   REPLY_ID,
   REPLY_TEXT_ID,
   deferredResponse,
+  discordDisplayName,
   ephemeralResponse,
   interactionSchema,
   pongResponse,
@@ -38,6 +39,8 @@ import {
   verifyDiscordRequest,
   type DiscordAsk,
 } from "../channels/discord-interactions.js";
+import type { WebsiteTranscript } from "@fungi.computer/nacre/website-channels";
+import type { DiscordClosedReply } from "../channels/discord-replies.js";
 import type { OysterEnv } from "../host.js";
 import { defaultTenant, tenantScope, type TenantPrincipal } from "../tenant.js";
 import { agentDirectoryForScope } from "./agent-directory.js";
@@ -87,6 +90,31 @@ export async function sealDiscordToken(
   }
 }
 
+/** What the owner's Discord controls call on the directory. */
+export type DiscordDirectoryDoor = Readonly<{
+  list: () => Promise<readonly Readonly<{ agentId: string; name: string }>[]>;
+  discordList: (
+    principal: TenantPrincipal,
+  ) => Promise<readonly DiscordBinding[] | DiscordRefusal>;
+  discordCreate: (
+    principal: TenantPrincipal,
+    input: CreateDiscordInput,
+    requestId: string,
+  ) => Promise<DiscordBinding | DiscordRefusal>;
+  discordUpdate: (
+    principal: TenantPrincipal,
+    bindingId: string,
+    input: UpdateDiscordInput,
+  ) => Promise<DiscordBinding | DiscordRefusal>;
+  discordRegisterCommands: (
+    principal: TenantPrincipal,
+    bindingId: string,
+  ) => Promise<
+    | Readonly<{ registered: readonly string[]; failed: readonly string[] }>
+    | DiscordRefusal
+  >;
+}>;
+
 /** What the owner's Discord routes need from the directory. */
 export type StandaloneDiscordControl = Readonly<{
   read: (principal: TenantPrincipal) => Promise<
@@ -113,13 +141,41 @@ export type StandaloneDiscordControl = Readonly<{
     | Readonly<{ registered: readonly string[]; failed: readonly string[] }>
     | DiscordRefusal
   >;
+  conversations: (
+    principal: TenantPrincipal,
+    bindingId: string,
+  ) => Promise<
+    readonly Readonly<{
+      sessionId: string;
+      label: string;
+      lastEventAt: number;
+    }>[]
+  >;
+  transcript: (
+    principal: TenantPrincipal,
+    bindingId: string,
+    sessionId: string,
+  ) => Promise<WebsiteTranscript | null>;
+  undelivered: (
+    principal: TenantPrincipal,
+    bindingId: string,
+  ) => Promise<readonly DiscordClosedReply[]>;
 }>;
 
 /** The owner's Discord controls over the directory. */
 export function standaloneDiscordControl(
-  env: Pick<StandaloneAgentsEnv, "OYSTER_ORIGIN">,
-  directoryOf: () => ReturnType<typeof agentDirectoryForScope>,
+  env: Pick<StandaloneAgentsEnv, "AGENTS" | "OYSTER_ORIGIN">,
+  directoryOf: () => DiscordDirectoryDoor,
 ): StandaloneDiscordControl {
+  // Only a binding the directory knows names an Agent whose conversations are read.
+  const agentOf = async (principal: TenantPrincipal, bindingId: string) => {
+    const listed = await directoryOf().discordList(principal);
+    const binding =
+      "error" in listed
+        ? undefined
+        : listed.find((item) => item.bindingId === bindingId);
+    return binding === undefined ? null : env.AGENTS.getByName(binding.agentId);
+  };
   return {
     read: async (principal) => {
       const listed = await directoryOf().discordList(principal);
@@ -138,6 +194,28 @@ export function standaloneDiscordControl(
       directoryOf().discordUpdate(principal, bindingId, input),
     registerCommands: (principal, bindingId) =>
       directoryOf().discordRegisterCommands(principal, bindingId),
+    conversations: async (principal, bindingId) => {
+      const agent = await agentOf(principal, bindingId);
+      return agent === null
+        ? []
+        : (await agent.bindingConversations(bindingId)).map(
+            ({ sessionId, label, lastEventAt }) => ({
+              sessionId,
+              label,
+              lastEventAt,
+            }),
+          );
+    },
+    transcript: async (principal, bindingId, sessionId) => {
+      const agent = await agentOf(principal, bindingId);
+      return agent === null
+        ? null
+        : agent.bindingTranscript(bindingId, sessionId);
+    },
+    undelivered: async (principal, bindingId) => {
+      const agent = await agentOf(principal, bindingId);
+      return agent === null ? [] : agent.discordUndelivered(bindingId);
+    },
   };
 }
 
@@ -231,6 +309,47 @@ export function standaloneDiscordRoutes(
         : context.json(result);
     },
   );
+  table.get(
+    "/api/discord/:bindingId/conversations",
+    owner("direct"),
+    async (context, { principal }) => {
+      context.header("Cache-Control", "no-store");
+      return context.json({
+        conversations: await control.conversations(
+          principal,
+          context.req.param("bindingId"),
+        ),
+      });
+    },
+  );
+  table.get(
+    "/api/discord/:bindingId/undelivered",
+    owner("direct"),
+    async (context, { principal }) => {
+      context.header("Cache-Control", "no-store");
+      return context.json({
+        undelivered: await control.undelivered(
+          principal,
+          context.req.param("bindingId"),
+        ),
+      });
+    },
+  );
+  table.get(
+    "/api/discord/:bindingId/conversations/:sessionId",
+    owner("direct"),
+    async (context, { principal }) => {
+      context.header("Cache-Control", "no-store");
+      const transcript = await control.transcript(
+        principal,
+        context.req.param("bindingId"),
+        context.req.param("sessionId"),
+      );
+      return transcript === null
+        ? context.json({ error: "not_found" }, 404)
+        : context.json(transcript);
+    },
+  );
   return table;
 }
 
@@ -318,6 +437,7 @@ export function standaloneDiscordApp() {
           channelId,
           userId,
           text: trimmed,
+          displayName: discordDisplayName(interaction),
           echo,
         };
         // The answer outlives Discord's three seconds; it follows by webhook.

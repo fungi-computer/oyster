@@ -117,8 +117,8 @@ async function knownImageInfo(input: ReadableStream<Uint8Array>) {
 }
 
 // Darkroom's reference fitter only calls input()/transform()/output() to
-// scale an oversized reference down to MAX_REFERENCE_DIMENSION (512px;
-// packages/darkroom/src/index.ts). This fixture's only reference is the 1x1
+// scale an oversized reference down to the selected model's referenceDimension (512px
+// or 1024px; packages/darkroom/src/model-catalog.ts). This fixture's only reference is the 1x1
 // onePixelPng, always under that bound, so the real code path never calls
 // this chain; it stays unimplemented rather than inventing a fake resize.
 function controlledImages() {

@@ -620,10 +620,13 @@ export abstract class StandaloneRegistry
     appId: string;
     sourceRevision: string;
     requestedBy: string;
+    /**
+     * The installation whose admitted APPS call asks; it must own the source.
+     * Omitted only by the host owner's own HTTP build route.
+     */
+    callerInstallationId?: string;
     workflow?: {
       requestId: string;
-      /** The installation whose admitted Workflow node asks; it must own the source. */
-      callerInstallationId: string;
       installationId?: string;
     };
   }): Promise<OysterBuildStartResult> {
@@ -634,16 +637,18 @@ export abstract class StandaloneRegistry
         sourceRevision: input.sourceRevision,
         requestedBy: input.requestedBy,
       };
-      if (input.workflow !== undefined) {
-        // A Workflow builds only its own installation's registered App. A
-        // foreign App reads as unregistered, never as another's existence.
-        if (
-          !sourceOwnedBy(
-            builds.readSource(input.appId),
-            input.workflow.callerInstallationId,
-          )
+      // An APPS caller builds only its own installation's registered App. A
+      // foreign or template App reads as unregistered, never as another's
+      // existence.
+      if (
+        input.callerInstallationId !== undefined &&
+        !sourceOwnedBy(
+          builds.readSource(input.appId),
+          input.callerInstallationId,
         )
-          return { kind: "refused", reason: "no_source" };
+      )
+        return { kind: "refused", reason: "no_source" };
+      if (input.workflow !== undefined) {
         request.requestId = input.workflow.requestId;
         if (input.workflow.installationId !== undefined)
           request.installAt = input.workflow.installationId;

@@ -10,7 +10,10 @@ import { FungiMessageMetaSchema } from "@fungi.computer/agar/agents";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { vi } from "vitest";
 
-import { standaloneDiscordApp } from "../../src/standalone/discord-channels.js";
+import {
+  standaloneDiscordApp,
+  type DiscordDirectoryDoor,
+} from "../../src/standalone/discord-channels.js";
 import {
   AgentDirectory,
   StandaloneAgentBase,
@@ -97,21 +100,34 @@ export function discordDirectoryFixture(
   };
 }
 
-const discordReplies = ["The fern is fine", "Water it weekly"] as const;
+const defaultReplies: readonly string[] = [
+  "The fern is fine",
+  "Water it weekly",
+];
+let discordReplies: readonly string[] = defaultReplies;
+/** A scripted reply that makes the run fail the way the host words it. */
+export const failedRun = (code: string) => `FAIL:${code}`;
 
 /** The production Agent over a real store; only the model is a fixture. */
 export class DiscordFixtureAgent extends StandaloneAgentBase {
   /** The reply follows how many times the member has spoken. */
   private readonly scripted = fauxModelSource([
-    (context) =>
-      fauxAssistantMessage(
+    (context) => {
+      const reply =
         discordReplies[
           Math.max(
             0,
             context.messages.filter(({ role }) => role === "user").length - 1,
           )
-        ] ?? "Done",
-      ),
+        ] ?? "Done";
+      return reply.startsWith("FAIL:")
+        ? {
+            ...fauxAssistantMessage(""),
+            stopReason: "error",
+            errorMessage: `Model request failed (${reply.slice(5)}). Retry the request.`,
+          }
+        : fauxAssistantMessage(reply);
+    },
   ]);
   protected hostFor(): never {
     return unavailable();
@@ -126,6 +142,7 @@ export class DiscordFixtureAgent extends StandaloneAgentBase {
           Promise.resolve({ revision: "owner", text: "OWNER SECRET BRIEF" }),
       }),
       tools: [],
+      hostWork: [this.discordReplyWork()],
     });
   }
   close() {
@@ -200,10 +217,17 @@ export type DiscordCall = Readonly<{
  * A bound Discord application over the production directory, edge and Agent.
  * Only Discord itself is stubbed: the global `fetch` records every call.
  */
-export async function discordWorld() {
+export async function discordWorld(
+  options: Readonly<{ replies?: readonly string[] }> = {},
+) {
+  discordReplies = options.replies ?? defaultReplies;
   const base = discordDirectoryFixture();
   const key = await applicationKey();
   const agents = new Map<string, DiscordFixtureAgent>();
+  const stores = new Map<
+    string,
+    Readonly<{ db: DatabaseSync; state: DurableObjectState }>
+  >();
   const databases: DatabaseSync[] = [];
   const tasks: Promise<unknown>[] = [];
   const env = agentEnv();
@@ -215,24 +239,29 @@ export async function discordWorld() {
       getByName: (name: string) => {
         const existing = agents.get(name);
         if (existing !== undefined) return existing;
-        const db = new DatabaseSync(":memory:");
-        databases.push(db);
-        const state = agentDurableObjectState(() => 0);
-        Object.defineProperty(state, "storage", {
-          value: {
-            ...state.storage,
-            ...cloudflareStorageFixture(fromNodeSqlite(db)),
-          },
-        });
-        Object.defineProperty(state, "id", {
-          value: { ...state.id, name },
-        });
-        Object.defineProperty(state, "waitUntil", {
-          value: (work: Promise<unknown>) => {
-            tasks.push(work);
-          },
-        });
-        const agent = new DiscordFixtureAgent(state, env);
+        let store = stores.get(name);
+        if (store === undefined) {
+          const db = new DatabaseSync(":memory:");
+          databases.push(db);
+          const state = agentDurableObjectState(() => 0);
+          Object.defineProperty(state, "storage", {
+            value: {
+              ...state.storage,
+              ...cloudflareStorageFixture(fromNodeSqlite(db)),
+            },
+          });
+          Object.defineProperty(state, "id", {
+            value: { ...state.id, name },
+          });
+          Object.defineProperty(state, "waitUntil", {
+            value: (work: Promise<unknown>) => {
+              tasks.push(work);
+            },
+          });
+          store = { db, state };
+          stores.set(name, store);
+        }
+        const agent = new DiscordFixtureAgent(store.state, env);
         agents.set(name, agent);
         return agent;
       },
@@ -257,6 +286,7 @@ export async function discordWorld() {
   const discordCalls: DiscordCall[] = [];
   const bots: string[] = [];
   let status = 200;
+  const statuses: number[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -269,7 +299,7 @@ export async function discordWorld() {
       });
       const authorization = request.headers.get("authorization");
       if (authorization !== null) bots.push(authorization);
-      return Response.json({}, { status });
+      return Response.json({}, { status: statuses.shift() ?? status });
     }),
   );
   const edgeTasks: Promise<unknown>[] = [];
@@ -337,12 +367,47 @@ export async function discordWorld() {
     refuseDiscord: () => {
       status = 403;
     },
+    /** Discord answers the next calls with these statuses, then as before. */
+    answerNext: (...next: number[]) => {
+      statuses.push(...next);
+    },
+    /** What the Agent still owes, straight from its store. */
+    owed: () =>
+      [...stores.values()].flatMap(({ db }) =>
+        db
+          .prepare(
+            "SELECT interaction_id, state, attempts, token, text FROM oyster_discord_replies",
+          )
+          .all(),
+      ),
+    /** The Agent is evicted: a fresh instance wakes over the same store. */
+    restartAgent: async (): Promise<DiscordFixtureAgent> => {
+      const name = created.agentId;
+      await agents.get(name)?.close();
+      agents.delete(name);
+      env.AGENTS.getByName(name);
+      const reopened = agents.get(name);
+      if (reopened === undefined) throw new Error("The Agent never reopened");
+      return reopened;
+    },
     agentFor: (): DiscordFixtureAgent => {
       env.AGENTS.getByName(created.agentId);
       const agent = agents.get(created.agentId);
       if (agent === undefined) throw new Error("The Agent never opened");
       return agent;
     },
+    /** The directory as the owner's controls reach it: every call is a promise. */
+    door: (): DiscordDirectoryDoor => ({
+      list: () => Promise.resolve(base.directory.list()),
+      discordList: (
+        principal: Parameters<typeof base.directory.discordList>[0],
+      ) => Promise.resolve(base.directory.discordList(principal)),
+      discordCreate: base.directory.discordCreate.bind(base.directory),
+      discordUpdate: base.directory.discordUpdate.bind(base.directory),
+      discordRegisterCommands: base.directory.discordRegisterCommands.bind(
+        base.directory,
+      ),
+    }),
     close: async () => {
       for (const agent of agents.values()) await agent.close();
       for (const db of databases) db.close();
@@ -358,11 +423,24 @@ export function interaction(
     type: 1 | 2 | 3 | 5;
     data?: DiscordJson;
     userId?: string;
+    /** What Discord says the member goes by; Ava's display name by default. */
+    names?: Readonly<{
+      nick?: string;
+      global?: string | null;
+      username?: string;
+    }>;
     guild?: string | null;
     channel?: string;
     application?: string;
   }>,
 ) {
+  const user = {
+    id: fields.userId ?? "4567890123456789012",
+    global_name:
+      fields.names === undefined ? "Ava" : (fields.names.global ?? null),
+    username: fields.names?.username ?? "ava",
+  };
+  const nick = fields.names?.nick;
   const base = {
     id: fields.id,
     application_id: fields.application ?? applicationId,
@@ -370,7 +448,7 @@ export function interaction(
     token: `token-${fields.id}`,
     version: 1,
     channel_id: fields.channel ?? channelId,
-    member: { user: { id: fields.userId ?? "4567890123456789012" } },
+    member: nick === undefined ? { user } : { nick, user },
     data: fields.data,
   };
   return fields.guild === null

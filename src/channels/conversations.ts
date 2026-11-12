@@ -469,6 +469,27 @@ export function createChannelConversations(
       .map((raw) => sessionIdRow.parse(raw).session_id);
   };
 
+  /** A Discord member's name may change; each message carries the latest. */
+  const refreshName = (
+    existing: ChannelConversation,
+    party: ChannelParty,
+  ): ChannelConversation => {
+    if (
+      existing.party.kind !== "discord-user" ||
+      party.kind !== "discord-user" ||
+      party.displayName === undefined ||
+      party.displayName === existing.party.displayName
+    )
+      return existing;
+    const renamed = { ...existing.party, displayName: party.displayName };
+    sql.exec(
+      "UPDATE hub_channel_conversations SET party_json=? WHERE session_id=?",
+      JSON.stringify(renamed),
+      existing.sessionId,
+    );
+    return { ...existing, party: renamed, label: partyLabel(renamed) };
+  };
+
   /** Open (or find) the conversation Session without submitting work. */
   const open = async (
     binding: ConversationBinding,
@@ -481,7 +502,11 @@ export function createChannelConversations(
     if (isBanned(binding.bindingId, conversation))
       return { kind: "denied", reason: "banned" };
     const existing = findConversation(binding.bindingId, conversation);
-    if (existing !== null) return { kind: "open", conversation: existing };
+    if (existing !== null)
+      return {
+        kind: "open",
+        conversation: refreshName(existing, party),
+      };
     const limits = limitsOf(binding);
     const now = options.now();
     if (

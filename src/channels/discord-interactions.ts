@@ -27,10 +27,8 @@ export const DISCORD_ASK_LIMIT = 1_000;
 /** Discord API version the follow-up and registration calls pin. */
 const DISCORD_API = "https://discord.com/api/v10";
 
-/** How long an Agent has to answer before the interaction token lapses. */
-export const DISCORD_ANSWER_WINDOW_MS = 13 * 60_000;
 /** One settlement read waits at most this long (Shiitake allows 30 s). */
-export const DISCORD_SETTLEMENT_POLL_MS = 25_000;
+export const DISCORD_SETTLEMENT_WAIT_MS = 8_000;
 
 /** One verified question, as the public edge hands it to the Agent. */
 export type DiscordAsk = Readonly<{
@@ -42,9 +40,30 @@ export type DiscordAsk = Readonly<{
   channelId: string;
   userId: string;
   text: string;
+  /** What the member goes by, if Discord said; never their id. */
+  displayName?: string | undefined;
   /** The member's own words, quoted above the answer of a modal reply. */
   echo?: string | undefined;
 }>;
+
+/**
+ * What a member goes by: their nickname in the server, else their display
+ * name, else `@username`. Absent when Discord sent none of them.
+ */
+export function discordDisplayName(
+  who: Readonly<{
+    member?: z.infer<typeof memberSchema> | undefined;
+    user?: z.infer<typeof userSchema> | undefined;
+  }>,
+): string | undefined {
+  const user = who.member?.user ?? who.user;
+  const name =
+    [who.member?.nick, user?.global_name]
+      .map((candidate) => candidate?.trim())
+      .find((candidate) => candidate !== undefined && candidate !== "") ??
+    (user?.username?.trim() ? `@${user.username.trim()}` : undefined);
+  return name?.slice(0, 80);
+}
 
 /** What a member is told when intake says no. */
 export const discordDenial = {
@@ -65,14 +84,23 @@ const optionSchema = z.object({
   name: z.string(),
   value: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
-const userSchema = z.object({ id: discordSnowflakeSchema });
+const userSchema = z.object({
+  id: discordSnowflakeSchema,
+  username: z.string().nullish(),
+  global_name: z.string().nullish(),
+});
+const memberSchema = z.object({
+  user: userSchema,
+  /** The member's nickname in this server. */
+  nick: z.string().nullish(),
+});
 const placeFields = {
   id: discordSnowflakeSchema,
   application_id: discordSnowflakeSchema,
   token: z.string().min(1).max(512),
   guild_id: discordSnowflakeSchema.optional(),
   channel_id: discordSnowflakeSchema.optional(),
-  member: z.object({ user: userSchema }).optional(),
+  member: memberSchema.optional(),
   user: userSchema.optional(),
 };
 
@@ -214,10 +242,48 @@ const replyRow = [
   },
 ] as const;
 
-/** The body of a follow-up that fills the deferred message. */
+/** Most messages one answer may fill; past it the last one says the rest is cut. */
+const DISCORD_MAX_PARTS = 10;
+const CONTINUES = "\n\n… (the rest of this answer is too long for Discord)";
+
+/**
+ * Split an answer into messages Discord accepts, in order, losing nothing but
+ * the whitespace at each cut. A cut prefers a blank line, then a line, then a
+ * space, and only then falls inside a word. An answer past ten messages ends
+ * with a notice that the rest is cut.
+ */
+export function splitDiscordMessage(
+  text: string,
+  limit: number = DISCORD_MESSAGE_LIMIT,
+): readonly string[] {
+  const parts: string[] = [];
+  let rest = text.trim();
+  while (rest.length > limit) {
+    const room =
+      parts.length === DISCORD_MAX_PARTS - 1 ? limit - CONTINUES.length : limit;
+    const window = rest.slice(0, room);
+    const floor = Math.floor(room * 0.5);
+    const cut = [
+      window.lastIndexOf("\n\n"),
+      window.lastIndexOf("\n"),
+      window.lastIndexOf(" "),
+    ].find((at) => at >= floor);
+    if (parts.length === DISCORD_MAX_PARTS - 1) {
+      parts.push(`${window.trimEnd()}${CONTINUES}`);
+      return parts;
+    }
+    const end = cut ?? room;
+    parts.push(rest.slice(0, end).trimEnd());
+    rest = rest.slice(end).trimStart();
+  }
+  parts.push(rest);
+  return parts;
+}
+
+/** The body of a follow-up message; its content is already within Discord's bound. */
 function followUpBody(content: string, withReply: boolean) {
   return {
-    content: content.slice(0, DISCORD_MESSAGE_LIMIT),
+    content,
     // Model text never pings anyone.
     allowed_mentions: { parse: [] },
     components: withReply ? replyRow : [],
@@ -245,7 +311,7 @@ export async function patchOriginal(
     content: string;
     withReply: boolean;
   }>,
-): Promise<boolean> {
+): Promise<"delivered" | "gone" | "retry"> {
   const response = await send(
     `${DISCORD_API}/webhooks/${input.applicationId}/${input.interactionToken}/messages/@original`,
     {
@@ -256,7 +322,72 @@ export async function patchOriginal(
     },
   );
   await response.body?.cancel();
-  return response.ok;
+  // Discord answers 401, 403 or 404 for a token that lapsed or never was.
+  if (response.ok) return "delivered";
+  return [401, 403, 404].includes(response.status) ? "gone" : "retry";
+}
+
+/**
+ * Send one more message under the same interaction, after the original. The
+ * interaction token is the credential here too.
+ */
+export async function postFollowUp(
+  send: typeof fetch,
+  input: Readonly<{
+    applicationId: string;
+    interactionToken: string;
+    content: string;
+    withReply: boolean;
+  }>,
+): Promise<"delivered" | "gone" | "retry"> {
+  const response = await send(
+    `${DISCORD_API}/webhooks/${input.applicationId}/${input.interactionToken}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(followUpBody(input.content, input.withReply)),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  await response.body?.cancel();
+  if (response.ok) return "delivered";
+  return [401, 403, 404].includes(response.status) ? "gone" : "retry";
+}
+
+const failureCode = /^Model request failed \(([\w-]+)\)/u;
+
+/**
+ * Tell the member why an answer did not come, in plain words and with what to
+ * do next. The host's own failure diagnostic names the cause; provider prose
+ * never reaches a member.
+ */
+export function discordFailureText(
+  terminal: Readonly<{
+    outcome: "completed" | "cancelled" | "failed" | "interrupted";
+    diagnostic: string | null;
+  }>,
+): string {
+  if (terminal.outcome === "cancelled") return "That run was cancelled.";
+  if (terminal.outcome === "interrupted")
+    return "The run was interrupted before it finished. Ask again.";
+  if (terminal.outcome === "completed")
+    return "The Agent finished without a reply. Try asking again.";
+  switch (failureCode.exec(terminal.diagnostic ?? "")?.[1]) {
+    case "setup_required":
+      return "No model is connected to this Agent yet. Ask its owner to connect one, then ask again.";
+    case "usage-limit-reached":
+      return "The model provider says its usage limit or credit is used up. Ask the owner to check the provider account, then try again.";
+    case "rate-limit":
+    case "overloaded":
+    case "provider_unavailable":
+      return "The model provider is busy or unavailable right now. Try again in a minute.";
+    case "provider_rejected":
+      return "The model provider refused the request. Ask the owner to check the model connection.";
+    case "tools_unsupported":
+      return "This Agent's model cannot use tools. Ask the owner to pick another model.";
+    default:
+      return "Something went wrong while answering. Try again; if it keeps happening, tell the owner.";
+  }
 }
 
 /** The `/ask` application command, as Discord registers it. */

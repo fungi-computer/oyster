@@ -314,7 +314,7 @@ export function standaloneWebsiteControl(
       const agent = await agentOf(principal, bindingId);
       return agent === null
         ? []
-        : (await agent.websiteConversations(bindingId)).map(
+        : (await agent.bindingConversations(bindingId)).map(
             ({ sessionId, label, lastEventAt }) => ({
               sessionId,
               label,
@@ -326,7 +326,7 @@ export function standaloneWebsiteControl(
       const agent = await agentOf(principal, bindingId);
       return agent === null
         ? null
-        : agent.websiteTranscript(bindingId, sessionId);
+        : agent.bindingTranscript(bindingId, sessionId);
     },
   };
 }

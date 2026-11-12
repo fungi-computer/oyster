@@ -1,18 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   discordPlaceAllowed,
   type DiscordSelector,
 } from "../../src/channels/discord-binding.js";
 import { agentDurableObjectState } from "./agent-do-state.fixture.js";
+import {
+  discordFailureText,
+  splitDiscordMessage,
+} from "../../src/channels/discord-interactions.js";
+import { standaloneDiscordControl } from "../../src/standalone/discord-channels.js";
 import { cloudflareStorageFixture } from "./cloudflare-storage.fixture.js";
 import {
   applicationId,
   botToken,
   channelId,
   discordWorld,
+  failedRun,
   DiscordOptionsAgent,
   guildId,
   interaction,
@@ -25,8 +32,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
-async function world() {
-  const w = await discordWorld();
+async function world(replies?: readonly string[]) {
+  const w = await discordWorld({ replies });
   cleanups.push(w.close);
   return w;
 }
@@ -72,7 +79,7 @@ describe("the Discord interactions door", () => {
     await w.settle();
     expect(w.discordCalls).toEqual([]);
     expect(
-      await w.agentFor().websiteConversations(w.binding.bindingId),
+      await w.agentFor().bindingConversations(w.binding.bindingId),
     ).toEqual([]);
   });
 
@@ -121,15 +128,16 @@ describe("the Discord interactions door", () => {
       ],
     });
     const agent = w.agentFor();
-    const [conversation] = await agent.websiteConversations(
+    const [conversation] = await agent.bindingConversations(
       w.binding.bindingId,
     );
     expect(conversation?.party).toEqual({
       kind: "discord-user",
       guildId,
       userId: "4567890123456789012",
+      displayName: "Ava",
     });
-    const transcript = await agent.websiteTranscript(
+    const transcript = await agent.bindingTranscript(
       w.binding.bindingId,
       conversation?.sessionId ?? "",
     );
@@ -179,9 +187,9 @@ describe("the Discord interactions door", () => {
       content: "> How often?\n\nWater it weekly",
     });
     const agent = w.agentFor();
-    const conversations = await agent.websiteConversations(w.binding.bindingId);
+    const conversations = await agent.bindingConversations(w.binding.bindingId);
     expect(conversations).toHaveLength(1);
-    const transcript = await agent.websiteTranscript(
+    const transcript = await agent.bindingTranscript(
       w.binding.bindingId,
       conversations[0]?.sessionId ?? "",
     );
@@ -203,7 +211,7 @@ describe("the Discord interactions door", () => {
     );
     await w.settle();
     expect(
-      await w.agentFor().websiteConversations(w.binding.bindingId),
+      await w.agentFor().bindingConversations(w.binding.bindingId),
     ).toHaveLength(2);
   });
 
@@ -245,7 +253,7 @@ describe("the Discord interactions door", () => {
     await w.settle();
     expect(w.discordCalls).toEqual([]);
     expect(
-      await w.agentFor().websiteConversations(w.binding.bindingId),
+      await w.agentFor().bindingConversations(w.binding.bindingId),
     ).toEqual([]);
   });
 
@@ -270,6 +278,395 @@ describe("the Discord interactions door", () => {
       content: "That message could not be accepted.",
       components: [],
     });
+  });
+});
+
+describe("a reply an Agent still owes", () => {
+  const later = (ms: number) => {
+    vi.setSystemTime(Date.now() + ms);
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const afterOutage = async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world();
+    w.answerNext(503);
+    await w.interact(ask("5234567890123456781", "Is my fern fine?"));
+    await w.settle();
+    return w;
+  };
+
+  it("is paid off and forgotten, token and all, once Discord has the answer", async () => {
+    const w = await world();
+    await w.interact(ask("5234567890123456780", "Is my fern fine?"));
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(w.owed()).toEqual([]);
+  });
+
+  it("is kept through an outage and delivered by a restarted Agent", async () => {
+    const w = await afterOutage();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(w.owed()).toMatchObject([
+      { state: "waiting", attempts: 1, text: "Is my fern fine?" },
+    ]);
+    // The Agent is evicted; nothing it knew in memory survives.
+    const reopened = await w.restartAgent();
+    later(10_000);
+    await reopened.alarm();
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(2);
+    expect(w.discordCalls[1]?.body).toMatchObject({
+      content: "The fern is fine",
+    });
+    expect(w.discordCalls[1]?.url).toBe(w.discordCalls[0]?.url);
+    expect(w.owed()).toEqual([]);
+    // One question was one run: the conversation holds it once.
+    const [conversation] = await reopened.bindingConversations(
+      w.binding.bindingId,
+    );
+    const transcript = await reopened.bindingTranscript(
+      w.binding.bindingId,
+      conversation?.sessionId ?? "",
+    );
+    expect(transcript?.lines.map(({ text }) => text)).toEqual([
+      "Is my fern fine?",
+      "The fern is fine",
+    ]);
+    // The recovered reply still knows what the member goes by.
+    expect(conversation?.label).toBe("Ava");
+  });
+
+  it("is closed as expired, with its token and question wiped, once Discord's token has lapsed", async () => {
+    const w = await afterOutage();
+    const reopened = await w.restartAgent();
+    later(15 * 60_000);
+    await reopened.alarm();
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(w.owed()).toEqual([
+      expect.objectContaining({ state: "expired", token: "", text: "" }),
+    ]);
+    expect(w.owed()).toMatchObject([
+      { interaction_id: "5234567890123456781", state: "expired" },
+    ]);
+  });
+
+  it("is closed as expired at once when Discord no longer knows the token", async () => {
+    const w = await world();
+    w.answerNext(404);
+    await w.interact(ask("5234567890123456782", "hi"));
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(w.owed()).toEqual([
+      expect.objectContaining({ state: "expired", token: "" }),
+    ]);
+  });
+
+  it("is given up as failed after repeated delivery failures", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world();
+    w.answerNext(500, 500, 500, 500, 500);
+    await w.interact(ask("5234567890123456783", "hi"));
+    await w.settle();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      later(60_000);
+      await w.agentFor().alarm();
+      await w.settle();
+    }
+    expect(w.discordCalls).toHaveLength(5);
+    expect(w.owed()).toEqual([
+      expect.objectContaining({ state: "failed", token: "", text: "" }),
+    ]);
+  });
+});
+
+describe("the owner's Discord conversations", () => {
+  it("lists what members asked and reads the transcript back, for the owner only", async () => {
+    const w = await world();
+    await w.interact(ask("6234567890123456781", "Is my fern fine?"));
+    await w.settle();
+    const control = standaloneDiscordControl(w.env, w.door);
+    const [conversation] = await control.conversations(
+      owner,
+      w.binding.bindingId,
+    );
+    expect(conversation).toMatchObject({
+      label: "Ava",
+    });
+    const transcript = await control.transcript(
+      owner,
+      w.binding.bindingId,
+      conversation?.sessionId ?? "",
+    );
+    expect(transcript?.lines).toEqual([
+      { role: "visitor", text: "Is my fern fine?" },
+      { role: "agent", text: "The fern is fine" },
+    ]);
+    // Anyone else, an unknown binding and another binding's Session read nothing.
+    expect(await control.conversations(stranger, w.binding.bindingId)).toEqual(
+      [],
+    );
+    expect(await control.conversations(owner, "chb_none")).toEqual([]);
+    expect(
+      await control.transcript(
+        stranger,
+        w.binding.bindingId,
+        conversation?.sessionId ?? "",
+      ),
+    ).toBeNull();
+    expect(
+      await control.transcript(owner, w.binding.bindingId, "unrelated"),
+    ).toBeNull();
+  });
+});
+
+describe("what a member is called", () => {
+  const nameOf = async (
+    names: Parameters<typeof interaction>[0]["names"],
+    id: string,
+  ) => {
+    const w = await world();
+    await w.interact(
+      interaction({
+        id,
+        type: 2,
+        names,
+        data: { name: "ask", options: [{ name: "question", value: "hi" }] },
+      }),
+    );
+    await w.settle();
+    const [conversation] = await w
+      .agentFor()
+      .bindingConversations(w.binding.bindingId);
+    return conversation?.label;
+  };
+
+  it("prefers the server nickname, then the display name, then @username, never the id", async () => {
+    expect(
+      await nameOf(
+        { nick: "Ava B", global: "Ava", username: "ava" },
+        "7234567890123456781",
+      ),
+    ).toBe("Ava B");
+    expect(
+      await nameOf({ global: "Ava", username: "ava" }, "7234567890123456782"),
+    ).toBe("Ava");
+    expect(
+      await nameOf({ global: null, username: "ava" }, "7234567890123456783"),
+    ).toBe("@ava");
+    expect(
+      await nameOf({ global: null, username: "" }, "7234567890123456784"),
+    ).toBe("Discord member");
+  });
+
+  it("follows a member who renames themselves, in the same conversation", async () => {
+    const w = await world();
+    const send = (id: string, global: string) =>
+      w.interact(
+        interaction({
+          id,
+          type: 2,
+          names: { global },
+          data: { name: "ask", options: [{ name: "question", value: "hi" }] },
+        }),
+      );
+    await send("7234567890123456791", "Ava");
+    await w.settle();
+    await send("7234567890123456792", "Ava the Gardener");
+    await w.settle();
+    const conversations = await w
+      .agentFor()
+      .bindingConversations(w.binding.bindingId);
+    expect(conversations.map(({ label }) => label)).toEqual([
+      "Ava the Gardener",
+    ]);
+  });
+});
+
+const longAnswer = Array.from({ length: 60 }, (_, line) =>
+  `Line ${String(line + 1)} of a long answer about ferns. `.repeat(2),
+).join("\n\n");
+const flat = (text: string) => text.replace(/\s+/gu, " ").trim();
+const sentBody = z.object({
+  content: z.string(),
+  components: z.array(z.unknown()).optional(),
+});
+const bodyText = (call: { body: unknown } | undefined) =>
+  sentBody.parse(call?.body).content;
+const buttonCount = (call: { body: unknown } | undefined) =>
+  sentBody.parse(call?.body).components?.length ?? 0;
+
+describe("splitting a long answer", () => {
+  it("keeps every message within Discord's bound and loses nothing", () => {
+    const parts = splitDiscordMessage(longAnswer);
+    expect(parts.length).toBeGreaterThan(2);
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(2_000);
+    expect(flat(parts.join(" "))).toBe(flat(longAnswer));
+    // Cuts fall between paragraphs here, never inside a line of the answer.
+    for (const part of parts.slice(0, -1))
+      expect(part.endsWith("ferns.")).toBe(true);
+  });
+
+  it("returns a short answer whole and cuts a wall of text inside a word only as a last resort", () => {
+    expect(splitDiscordMessage("Short.")).toEqual(["Short."]);
+    const wall = "x".repeat(4_500);
+    const parts = splitDiscordMessage(wall);
+    expect(parts.map((part) => part.length)).toEqual([2_000, 2_000, 500]);
+  });
+
+  it("stops at ten messages and says the rest is cut", () => {
+    const parts = splitDiscordMessage("word ".repeat(10_000));
+    expect(parts).toHaveLength(10);
+    expect(parts.at(-1)).toContain("too long for Discord");
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe("a long answer in Discord", () => {
+  it("arrives in full: the first message fills the original, the rest follow, and only the last offers Reply", async () => {
+    const w = await world([longAnswer]);
+    await w.interact(ask("8234567890123456781", "Tell me everything"));
+    await w.settle();
+    const [first, ...rest] = w.discordCalls;
+    expect(first?.method).toBe("PATCH");
+    expect(first?.url).toContain("/messages/@original");
+    expect(rest.length).toBeGreaterThan(0);
+    for (const call of rest) {
+      expect(call.method).toBe("POST");
+      expect(call.url).toBe(
+        `https://discord.com/api/v10/webhooks/${applicationId}/token-8234567890123456781`,
+      );
+    }
+    const messages = [first, ...rest].map(bodyText);
+    for (const text of messages) expect(text.length).toBeLessThanOrEqual(2_000);
+    expect(flat(messages.join(" "))).toBe(flat(longAnswer));
+    const buttons = [first, ...rest].map(buttonCount);
+    expect(buttons.slice(0, -1).every((count) => count === 0)).toBe(true);
+    expect(buttons.at(-1)).toBe(1);
+    expect(w.owed()).toEqual([]);
+  });
+
+  it("opens with the member's quoted reply in the first message", async () => {
+    const w = await world(["Short first.", longAnswer]);
+    await w.interact(ask("8234567890123456782", "Is my fern fine?"));
+    await w.settle();
+    w.discordCalls.length = 0;
+    await w.interact(
+      interaction({
+        id: "8234567890123456783",
+        type: 5,
+        data: {
+          custom_id: "reply",
+          components: [
+            {
+              type: 1,
+              components: [
+                { type: 4, custom_id: "text", value: "Tell me more" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await w.settle();
+    expect(bodyText(w.discordCalls[0]).startsWith("> Tell me more\n\n")).toBe(
+      true,
+    );
+    expect(w.discordCalls.length).toBeGreaterThan(1);
+  });
+
+  it("resumes after the messages Discord already has, never repeating one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const w = await world([longAnswer]);
+      // The original is accepted; the first follow-up is refused, then all succeed.
+      w.answerNext(200, 503);
+      await w.interact(ask("8234567890123456784", "Tell me everything"));
+      await w.settle();
+      expect(w.discordCalls).toHaveLength(2);
+      expect(w.owed()).toMatchObject([{ state: "waiting", attempts: 1 }]);
+      vi.setSystemTime(Date.now() + 10_000);
+      await w.agentFor().alarm();
+      await w.settle();
+      const messages = w.discordCalls.map(bodyText);
+      // The first message went out once; the retry picked up at the second.
+      expect(messages.filter((text) => text === messages[0])).toHaveLength(1);
+      expect(w.discordCalls[0]?.method).toBe("PATCH");
+      expect(
+        w.discordCalls.slice(1).every((call) => call.method === "POST"),
+      ).toBe(true);
+      expect(flat([messages[0], ...messages.slice(2)].join(" "))).toBe(
+        flat(longAnswer),
+      );
+      expect(w.owed()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a failed answer in Discord", () => {
+  it("says why and what to do, in words a member can act on", () => {
+    const text = (
+      outcome: "failed" | "cancelled" | "interrupted" | "completed",
+      code?: string,
+    ) =>
+      discordFailureText({
+        outcome,
+        diagnostic:
+          code === undefined
+            ? null
+            : `Model request failed (${code}). Retry the request.`,
+      });
+    expect(text("failed", "setup_required")).toContain("No model is connected");
+    expect(text("failed", "usage-limit-reached")).toContain("credit");
+    for (const code of ["rate-limit", "overloaded", "provider_unavailable"])
+      expect(text("failed", code)).toContain("Try again in a minute");
+    expect(text("failed", "provider_rejected")).toContain("refused");
+    expect(text("failed", "tools_unsupported")).toContain("another model");
+    expect(text("failed", "something-new")).toContain("went wrong");
+    expect(text("failed")).toContain("went wrong");
+    expect(text("cancelled")).toContain("cancelled");
+    expect(text("interrupted")).toContain("interrupted");
+    expect(text("completed")).toContain("without a reply");
+  });
+
+  it("is what the member reads when the run fails, with no Reply button", async () => {
+    const w = await world([failedRun("setup_required")]);
+    await w.interact(ask("9234567890123456781", "Is my fern fine?"));
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(bodyText(w.discordCalls[0])).toContain("No model is connected");
+    expect(w.discordCalls[0]?.body).toMatchObject({ components: [] });
+    expect(JSON.stringify(w.discordCalls)).not.toContain("Retry the request");
+  });
+
+  it("lists replies that never reached Discord for the owner, by name", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const w = await world();
+      w.answerNext(500, 500, 500, 500, 500);
+      await w.interact(ask("9234567890123456782", "hi"));
+      await w.settle();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        vi.setSystemTime(Date.now() + 60_000);
+        await w.agentFor().alarm();
+        await w.settle();
+      }
+      const control = standaloneDiscordControl(w.env, w.door);
+      expect(
+        await control.undelivered(owner, w.binding.bindingId),
+      ).toMatchObject([{ label: "Ava", state: "failed" }]);
+      expect(w.everything()).not.toContain("4567890123456789012");
+      expect(await control.undelivered(stranger, w.binding.bindingId)).toEqual(
+        [],
+      );
+      expect(await control.undelivered(owner, "chb_none")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

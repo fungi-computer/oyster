@@ -1226,12 +1226,10 @@ test("build route preserves a template seed refusal instead of reporting missing
         },
       ),
     );
+    // An App cannot probe a template source; the host owner's route above can.
     assert.deepEqual(reply, {
       status: 409,
-      body: {
-        code: "not_template_seed",
-        error: "Revision is not a seed of this App's template",
-      },
+      body: { code: "no_source", error: "App has no build source" },
     });
   } finally {
     registryDatabase.close();
@@ -1346,9 +1344,9 @@ test("a Workflow build starts its exact head once and failed builds never select
         appId: "app_auto",
         sourceRevision: "git:" + fact.updates[0].after,
         requestedBy: "owner",
+        callerInstallationId: "other-installation",
         workflow: {
           requestId: "push_foreign",
-          callerInstallationId: "other-installation",
           installationId: "my-app",
         },
       }),
@@ -1358,9 +1356,9 @@ test("a Workflow build starts its exact head once and failed builds never select
       appId: "app_auto",
       sourceRevision: "git:" + fact.updates[0].after,
       requestedBy: "owner",
+      callerInstallationId: "bonsai",
       workflow: {
         requestId: fact.eventId,
-        callerInstallationId: "bonsai",
         installationId: "my-app",
       },
     });
@@ -1439,9 +1437,9 @@ test("a Workflow build starts its exact head once and failed builds never select
       appId: "app_auto",
       sourceRevision: "git:" + fact.updates[0].after,
       requestedBy: "owner",
+      callerInstallationId: "bonsai",
       workflow: {
         requestId: fact.eventId,
-        callerInstallationId: "bonsai",
         installationId: "my-app",
       },
     });
@@ -1450,6 +1448,46 @@ test("a Workflow build starts its exact head once and failed builds never select
     await Promise.all(pending.splice(0));
     assert.equal(executions.length, 1);
     assert.equal(await reopened.get("my-app"), null);
+    // A non-Workflow APPS caller builds only its own installation's source,
+    // and a foreign or template source reads like an unregistered App.
+    builds.registerSource({
+      appId: "app_template",
+      location: { kind: "template" },
+      recipe: pinned.recipe,
+      buildRecipeDigest: pinned.buildRecipeDigest,
+    });
+    const noSource = { kind: "refused", reason: "no_source" };
+    const revision = "git:" + fact.updates[0].after;
+    assert.deepEqual(
+      await registry.startBuild({
+        appId: "app_auto",
+        sourceRevision: revision,
+        requestedBy: "owner",
+        callerInstallationId: "other-installation",
+      }),
+      noSource,
+    );
+    assert.deepEqual(
+      await registry.startBuild({
+        appId: "app_template",
+        sourceRevision: revision,
+        requestedBy: "owner",
+        callerInstallationId: "bonsai",
+      }),
+      noSource,
+    );
+    assert.equal(
+      (
+        await registry.startBuild({
+          appId: "app_auto",
+          sourceRevision: revision,
+          requestedBy: "owner",
+          callerInstallationId: "bonsai",
+        })
+      ).kind,
+      "started",
+    );
+    await Promise.all(pending.splice(0));
   } finally {
     registryDatabase.close();
     tenantsDatabase.close();

@@ -113,10 +113,10 @@ export default {
     app.get("/owner/transcripts", async (context) => {
       // Fixture-only owner read through the Agent's own owner RPCs.
       const agent = env.WEBSITE_AGENTS.getByName("agent_native");
-      const conversations = await agent.websiteConversations(env.BINDING_ID);
+      const conversations = await agent.bindingConversations(env.BINDING_ID);
       const transcripts = await Promise.all(
         conversations.map(({ sessionId }) =>
-          agent.websiteTranscript(env.BINDING_ID, sessionId),
+          agent.bindingTranscript(env.BINDING_ID, sessionId),
         ),
       );
       return context.json({ transcripts });

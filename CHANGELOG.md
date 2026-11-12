@@ -1,5 +1,35 @@
 # @fungi.computer/oyster
 
+## 0.23.0
+
+### Minor Changes
+
+- Changes since 0.22.0:
+
+  - feat(oyster): split long Discord answers and say why a reply failed
+  - fix(oyster): start APPS builds only from the caller's own source
+  - fix(darkroom): fit GPT Image 2 references at 1024 px as WebP with a body
+    bound
+  - feat(oyster): show a Discord member's name, never their id
+  - feat(tourtois): read Discord conversations in the Channels view
+  - feat(oyster): deliver Discord replies from durable host work
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.10.1
+  - @fungi.computer/darkroom@0.5.10
+  - @fungi.computer/shiitake-extensions@0.6.14
+  - @fungi.computer/shiitake@0.14.0
+  - @fungi.computer/braid@0.4.10
+  - @fungi.computer/nacre@0.5.3
+  - @fungi.computer/parakeet@0.11.22
+  - @fungi.computer/workflows-wire@0.4.10
+  - @fungi.computer/zookeeper@0.0.21
+
 ## 0.22.0
 
 ### Minor Changes

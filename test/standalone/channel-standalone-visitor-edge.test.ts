@@ -247,7 +247,7 @@ it("mints centrally, sends to one dedicated website Agent, and never projects an
     await reader.cancel();
 
     // The owner reads the same conversations through the Agent's own owner reads.
-    const conversations = await website.websiteConversations(binding.bindingId);
+    const conversations = await website.bindingConversations(binding.bindingId);
     expect(conversations.map(({ party }) => party)).toEqual(
       expect.arrayContaining([{ kind: "visitor", visitorId: first.visitorId }]),
     );
@@ -256,7 +256,7 @@ it("mints centrally, sends to one dedicated website Agent, and never projects an
         party.kind === "visitor" && party.visitorId === first.visitorId,
     );
     if (mine === undefined) throw new Error("The owner cannot see the visit");
-    const transcript = await website.websiteTranscript(
+    const transcript = await website.bindingTranscript(
       binding.bindingId,
       mine.sessionId,
     );
@@ -265,7 +265,7 @@ it("mints centrally, sends to one dedicated website Agent, and never projects an
       { role: "agent", text: "A private Agent reply" },
     ]);
     expect(
-      await website.websiteTranscript(binding.bindingId, "unrelated-session"),
+      await website.bindingTranscript(binding.bindingId, "unrelated-session"),
     ).toBeNull();
 
     // A suspended binding refuses every visitor RPC, even with a valid proof.
