@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.21.7
+
+### Patch Changes
+
+- Changes since 0.21.6:
+
+  - fix(oyster): handle a thrown Instance call through the promise rejection
+    handler
+  - fix(oyster): retry an installation step whose Instance call throws
+
+- Updated dependencies
+  - @fungi.computer/caps@0.11.2
+  - @fungi.computer/parakeet@0.11.20
+
 ## 0.21.6
 
 ### Patch Changes

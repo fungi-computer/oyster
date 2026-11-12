@@ -58,6 +58,8 @@ async function fixture(
     | "prepare-once"
     | "apply"
     | "apply-once"
+    | "apply-drop"
+    | "apply-drop-always"
     | "backend-construction"
     | "stale-after-apply"
     | "lost-apply-reply",
@@ -294,9 +296,15 @@ async function fixture(
               })
             : result(core(id).prepare(state));
         },
-        apply: async (state) =>
-          unexpected === "apply" ||
-          (unexpected === "apply-once" && ++applyAttempts === 1)
+        apply: async (state) => {
+          // The Instance RPC itself throws instead of returning an InstanceResult.
+          if (
+            unexpected === "apply-drop-always" ||
+            (unexpected === "apply-drop" && ++applyAttempts === 1)
+          )
+            throw new Error("Network connection lost.");
+          return unexpected === "apply" ||
+            (unexpected === "apply-once" && ++applyAttempts === 1)
             ? Promise.resolve<InstanceResult<Instance>>({
                 ok: false,
                 code: "failed",
@@ -324,7 +332,8 @@ async function fixture(
                     code: "stale_authority" as const,
                   };
                 return applied;
-              })(),
+              })();
+        },
         fetch: () => Promise.reject(new Error("No fetch during installation")),
         call: () => Promise.reject(new Error("No call during installation")),
         gill: () => Promise.reject(new Error("No Gill during installation")),
@@ -757,48 +766,65 @@ it.each([false, true])(
   },
 );
 
-it("replays the exact retained selection after a lost actual apply reply without preparing, rebooting or incrementing authority", async () => {
+it("retries a lost actual apply reply and replays the exact committed selection without rebooting or incrementing authority", async () => {
   const state = await fixture(false, "lost-apply-reply");
-  let running: Promise<unknown> | undefined;
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
   try {
-    const admitted = await state.app.request("/api/installations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": "executor-proof",
-      },
-      body: JSON.stringify({ installationId: "notes", release: state.release }),
-    });
-    expect(admitted.status).toBe(202);
+    expect((await admitNotes(state)).status).toBe(202);
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
-    running = state.runtime.tick();
-    await state.replyLost.promise;
-    expect((await state.read()).state).toBe("pending");
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "succeeded",
+      creation: "fresh",
+    });
     expect(state.snapshot()).toMatchObject({
       status: "active",
       authorityVersion: 1,
     });
-    const retained = await state.operations.load("executor-proof");
-    expect(retained?.plan?.prepared).toBe(true);
-    const boots = state.boots();
-    const aborts = state.aborts();
-    state.replayDelivery.resolve(undefined);
-    await running;
-    expect(await state.read()).toMatchObject({
-      state: "succeeded",
-      creation: "fresh",
-      installation: retained?.plan?.installation,
-    });
-    expect(state.rows.get("notes")).toEqual(retained?.plan?.installation);
-    expect(state.snapshot()?.authorityVersion).toBe(1);
-    expect(state.boots()).toBe(boots);
-    expect(state.aborts()).toBe(aborts);
+    expect(state.boots()).toBe(2);
+    expect(state.aborts()).toBe(1);
   } finally {
+    logged.mockRestore();
+    state.database.close();
+  }
+});
+
+it("retries an apply whose Instance connection drops and settles succeeded", async () => {
+  const state = await fixture(false, "apply-drop");
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
+  try {
+    expect((await admitNotes(state)).status).toBe(202);
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
-    state.replayDelivery.resolve(undefined);
-    await running;
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({ state: "succeeded" });
+    expect(state.snapshot()?.status).toBe("active");
+    expect(logged).toHaveBeenCalledWith(
+      "Installation activation threw",
+      expect.objectContaining({ attempt: 1 }),
+    );
+  } finally {
+    logged.mockRestore();
+    state.database.close();
+  }
+});
+
+it("settles an apply that always drops its Instance connection as not activated, not unconfirmed", async () => {
+  const state = await fixture(false, "apply-drop-always");
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
+  try {
+    expect((await admitNotes(state)).status).toBe(202);
+    state.prepareGate.resolve(undefined);
+    state.applyGate.resolve(undefined);
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "refused",
+      status: 503,
+      code: "installation_not_activated",
+    });
+  } finally {
+    logged.mockRestore();
     state.database.close();
   }
 });

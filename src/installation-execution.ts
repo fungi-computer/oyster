@@ -52,7 +52,18 @@ async function withColdRetry<T>(
   run: () => Promise<InstanceResult<T>>,
 ): Promise<InstanceResult<T>> {
   for (let attempt = 1; ; attempt++) {
-    const outcome = await run();
+    // The Instance's RPC can throw instead of answering (a dropped
+    // connection, a reset Durable Object). That says nothing about whether
+    // the step ran, and repeating either step is safe, so it is one more
+    // generic failure rather than an unknown outcome.
+    const outcome = await run().then(
+      (settled) => settled,
+      (cause: unknown): InstanceResult<T> => {
+        const diagnostic = failureDiagnostic(cause);
+        console.error(`Installation ${step} threw`, { attempt, ...diagnostic });
+        return { ok: false, code: "failed", causeClass: diagnostic.causeClass };
+      },
+    );
     if (outcome.ok || outcome.code !== "failed") return outcome;
     console.error(`Installation ${step} failed`, {
       attempt,
