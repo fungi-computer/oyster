@@ -57,6 +57,30 @@ import {
   type WebsiteRefusal,
   type WebsiteSite,
 } from "./website-channels.js";
+import {
+  isDiscordBinding,
+  createDiscordBindings,
+  createDiscordInputSchema,
+  updateDiscordInputSchema,
+  type CreateDiscordInput,
+  type DiscordBinding,
+  type DiscordBindings,
+  type UpdateDiscordInput,
+} from "../channels/discord-binding.js";
+import {
+  DISCORD_ANSWER_WINDOW_MS,
+  DISCORD_SETTLEMENT_POLL_MS,
+  discordDenial,
+  type DiscordAsk,
+  patchOriginal,
+  quoted,
+  registerAskCommand,
+} from "../channels/discord-interactions.js";
+import {
+  discordOutcome,
+  sealDiscordToken,
+  type DiscordRefusal,
+} from "./discord-channels.js";
 import { channelSessionDoor } from "./channel-session-door.js";
 import { createAuthenticatedVisitorChannel } from "../channels/visitor-channel.js";
 import { verifyVisitor, type ProvenVisitor } from "./visitor-proof.js";
@@ -128,9 +152,10 @@ import { DurableObject } from "cloudflare:workers";
 import type { StandaloneComputerEnv } from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
 import { agentStoreKeeping } from "./agent-store.js";
-import type {
-  CredentialStorage,
-  StoredCredential,
+import {
+  CredentialError,
+  type CredentialStorage,
+  type StoredCredential,
 } from "@fungi.computer/veil/credential-store";
 import {
   createInstanceCredentialStore,
@@ -591,15 +616,18 @@ export abstract class StandaloneAgentBase<
   private channelDoor: ReturnType<typeof channelSessionDoor> | undefined;
   private readonly acquireChannelStream = createVisitorStreamSlots();
   /** The website bindings that name this Agent, as the directory last said. */
-  private readonly websiteBindings = new Map<string, WebsiteBinding>();
+  private readonly websiteBindings = new Map<
+    string,
+    WebsiteBinding | DiscordBinding
+  >();
   /** The owner's current record of one binding; hosts and tests supply it. */
   protected readChannelBinding(
     bindingId: string,
-  ): Promise<WebsiteBinding | null> {
+  ): Promise<WebsiteBinding | DiscordBinding | null> {
     return agentDirectoryForScope(
       this.env,
       tenantScope(defaultTenant, this.env.OYSTER_ORIGIN),
-    ).websiteBinding(bindingId);
+    ).channelBinding(bindingId);
   }
   /**
    * Read one binding afresh from its owner: suspension, persona and edits are
@@ -607,7 +635,7 @@ export abstract class StandaloneAgentBase<
    */
   protected async loadChannelBinding(
     bindingId: string,
-  ): Promise<WebsiteBinding | null> {
+  ): Promise<WebsiteBinding | DiscordBinding | null> {
     const binding = await this.readChannelBinding(bindingId);
     if (binding === null || binding.agentId !== this.ctx.id.name) {
       this.websiteBindings.delete(bindingId);
@@ -679,12 +707,82 @@ export abstract class StandaloneAgentBase<
           throw new Error("Website channel binding is unavailable");
         const base = await source.load(input);
         return {
-          revision: `${base.revision}+website-${String(decision.binding.authorityVersion)}`,
+          revision: `${base.revision}+${decision.binding.selector.provider}-${String(decision.binding.authorityVersion)}`,
           text: `${base.text}\n\n${personChannelInstructions(decision.binding.persona)}`,
         };
       },
     };
   }
+  /**
+   * A verified Discord question for this Agent. The public edge has already
+   * checked the application's signature and the guild and channel; this
+   * accepts the work and returns at once, and the answer follows by the
+   * interaction webhook once the run settles.
+   */
+  askDiscord(bindingId: string, ask: DiscordAsk): void {
+    this.ctx.waitUntil(
+      this.answerDiscord(bindingId, ask).catch((cause: unknown) => {
+        console.error("discord answer failed", cause);
+      }),
+    );
+  }
+  private async answerDiscord(
+    bindingId: string,
+    ask: DiscordAsk,
+  ): Promise<void> {
+    const say = (content: string, withReply: boolean) =>
+      patchOriginal(fetch, {
+        applicationId: ask.applicationId,
+        interactionToken: ask.interactionToken,
+        content,
+        withReply,
+      });
+    const binding = await this.loadChannelBinding(bindingId);
+    if (
+      binding === null ||
+      !isDiscordBinding(binding) ||
+      binding.lifecycle !== "active"
+    ) {
+      await say("This Agent is not available right now.", false);
+      return;
+    }
+    const result = await this.channelConversations().receive({
+      bindingId,
+      conversation: `${ask.guildId}:${ask.channelId}:${ask.userId}`,
+      eventId: ask.interactionId,
+      party: {
+        kind: "discord-user",
+        guildId: ask.guildId,
+        userId: ask.userId,
+      },
+      text: ask.text,
+    });
+    if (result.kind === "denied") {
+      await say(discordDenial[result.reason], false);
+      return;
+    }
+    if (result.kind === "held") {
+      await say("A person has taken over this conversation.", false);
+      return;
+    }
+    const session = (await this.shiitake()).session(result.sessionId);
+    const deadline = Date.now() + DISCORD_ANSWER_WINDOW_MS;
+    let settlement;
+    while (settlement === undefined && Date.now() < deadline)
+      settlement = await session.readSettlement(result.commandId, {
+        timeoutMs: DISCORD_SETTLEMENT_POLL_MS,
+      });
+    const answer =
+      settlement?.terminal.outcome === "completed" &&
+      settlement.content.trim().length > 0
+        ? settlement.content
+        : "I could not answer that. Please try again.";
+    await say(
+      ask.echo === undefined ? answer : `${quoted(ask.echo)}\n\n${answer}`,
+      true,
+    );
+  }
+
   /** Owner read of one website's conversations; the host admits the owner first. */
   async websiteConversations(
     bindingId: string,
@@ -2487,9 +2585,139 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     );
   }
 
-  /** Host-only: the binding a website Agent serves, read fresh on every use. */
-  websiteBinding(bindingId: string): WebsiteBinding | null {
-    return this.websites().bindings.read(bindingId);
+  private discordOwner: DiscordBindings | undefined;
+  private discords(): DiscordBindings {
+    return (this.discordOwner ??= createDiscordBindings({
+      sql: this.ctx.storage.sql,
+      transactionSync: (body) => this.ctx.storage.transactionSync(body),
+      agentExists: (agentId) => this.has(agentId),
+    }));
+  }
+  private discordVault() {
+    return createInstanceCredentialStore({
+      credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
+      storage: credentialStorage(this.ctx.storage),
+    });
+  }
+
+  /** Owner read of every Discord application bound to one of this tenant's Agents. */
+  discordList(
+    principal: TenantPrincipal,
+  ): readonly DiscordBinding[] | DiscordRefusal {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    return this.discords().list();
+  }
+
+  /**
+   * Owner-only: bind the owner's own Discord application to a chosen Agent. The
+   * bot token is sealed under the instance credential key before the binding
+   * exists and is never returned, listed or logged.
+   */
+  async discordCreate(
+    principal: TenantPrincipal,
+    input: CreateDiscordInput,
+    requestId: string,
+  ): Promise<DiscordBinding | DiscordRefusal> {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    const parsed = createDiscordInputSchema.safeParse(input);
+    if (!parsed.success) return { error: "invalid_input" };
+    const { botToken, ...facts } = parsed.data;
+    const bindings = this.discords();
+    // A replay of a created binding returns it without sealing the token again.
+    const replayed = discordOutcome(() => bindings.replay(facts, requestId));
+    if (replayed !== null) return replayed;
+    const sealed = await sealDiscordToken(this.discordVault(), botToken);
+    if ("error" in sealed) return sealed;
+    const outcome = discordOutcome(() =>
+      bindings.create(facts, sealed.credentialId, requestId),
+    );
+    if ("error" in outcome)
+      await this.discordVault().remove(sealed.credentialId);
+    return outcome;
+  }
+
+  /** Owner-only edit, fenced by the version the owner last read. */
+  async discordUpdate(
+    principal: TenantPrincipal,
+    bindingId: string,
+    input: UpdateDiscordInput,
+  ): Promise<DiscordBinding | DiscordRefusal> {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    const parsed = updateDiscordInputSchema.safeParse(input);
+    if (!parsed.success) return { error: "invalid_input" };
+    const { botToken, ...edit } = parsed.data;
+    const bindings = this.discords();
+    const previous = bindings.tokenCredentialId(bindingId);
+    if (previous === null) return { error: "not_found" };
+    let replacement: string | null = null;
+    if (botToken !== undefined) {
+      const sealed = await sealDiscordToken(this.discordVault(), botToken);
+      if ("error" in sealed) return sealed;
+      replacement = sealed.credentialId;
+    }
+    const outcome = discordOutcome(() =>
+      bindings.update(bindingId, edit, replacement),
+    );
+    // Exactly one of the old and the new credential survives the edit.
+    if (replacement !== null)
+      await this.discordVault().remove(
+        "error" in outcome ? replacement : previous,
+      );
+    return outcome;
+  }
+
+  /**
+   * Owner-only: register `/ask` in each bound guild with the sealed bot token,
+   * which stays inside this call. Discord says which guilds took it.
+   */
+  async discordRegisterCommands(
+    principal: TenantPrincipal,
+    bindingId: string,
+  ): Promise<
+    | Readonly<{ registered: readonly string[]; failed: readonly string[] }>
+    | DiscordRefusal
+  > {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    const binding = this.discords().read(bindingId);
+    const credentialId = this.discords().tokenCredentialId(bindingId);
+    if (binding === null || credentialId === null)
+      return { error: "not_found" };
+    const registered: string[] = [];
+    const failed: string[] = [];
+    try {
+      await this.discordVault().withSecret(credentialId, async (botToken) => {
+        for (const guildId of binding.selector.guildIds) {
+          const took = await registerAskCommand(fetch, {
+            applicationId: binding.selector.applicationId,
+            guildId,
+            botToken,
+          }).catch((cause: unknown) => {
+            // Transport text can echo request headers; log only the kind.
+            console.warn(
+              "discord command registration failed",
+              guildId,
+              cause instanceof Error ? cause.name : "unknown",
+            );
+            return false;
+          });
+          if (took) registered.push(guildId);
+          else failed.push(guildId);
+        }
+      });
+    } catch (error) {
+      if (error instanceof CredentialError)
+        return { error: "custody_unavailable" };
+      throw error;
+    }
+    return { registered, failed };
+  }
+
+  /** Host-only: the website or Discord binding an Agent serves, read fresh on every use. */
+  channelBinding(bindingId: string): WebsiteBinding | DiscordBinding | null {
+    return (
+      this.websites().bindings.read(bindingId) ??
+      this.discords().read(bindingId)
+    );
   }
 
   /** Host-only public lookup: a site key resolves to its site, or to nothing. */

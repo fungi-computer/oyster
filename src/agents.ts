@@ -19,6 +19,7 @@ export type {
   ModelKeyRefusal,
   ModelKeySealInput,
 } from "./standalone/model-key-vault.js";
+export type { StandaloneModelKeyProvider } from "./standalone/model-key-providers.js";
 import {
   agent,
   agents as agentCollection,
@@ -42,6 +43,7 @@ import { agentAvatarSchema } from "./agent-avatars.js";
 import type { StarterOutcome } from "./starter-agent.js";
 export type { StarterOutcome };
 import { computerTargetParam } from "./computer-target.js";
+import { modelKeyProviderChoices } from "./standalone/model-key-providers.js";
 import { supportedAgentModels } from "./standalone/agent-model-choice.js";
 import type {
   AgentModelChoice,
@@ -805,17 +807,16 @@ export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
         const providers = [...new Set(keys.map((key) => key.provider))];
         const catalogs = Object.fromEntries(
           await Promise.all(
-            providers
-              .filter((provider) => provider !== "openai-compatible")
-              .map(
-                async (provider) =>
-                  [provider, await supportedAgentModels(provider)] as const,
-              ),
+            providers.map(
+              async (provider) =>
+                [provider, await supportedAgentModels(provider)] as const,
+            ),
           ),
         );
         return Response.json({
           agents: rows,
           catalogs,
+          providers: modelKeyProviderChoices,
           models: (await agents.setup()).models,
         });
       })
@@ -876,12 +877,7 @@ export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
 
 const keyIdPattern = /^cred_[A-Za-z0-9_-]{1,64}$/u;
 const sealRequestSchema = Schema.Struct({
-  provider: Schema.Literals([
-    "anthropic",
-    "openai",
-    "openrouter",
-    "cloudflare-workers-ai",
-  ]),
+  provider: Schema.Literals(modelKeyProviderChoices.map((choice) => choice.id)),
   accountId: Schema.optional(
     Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/u)),
   ),

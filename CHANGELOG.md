@@ -1,5 +1,22 @@
 # @fungi.computer/oyster
 
+## 0.22.0
+
+### Minor Changes
+
+- Changes since 0.21.9:
+
+  - feat(oyster): answer Discord /ask through signed HTTP interactions
+  - feat(model-keys): connect every API-key provider Pi ships from one list
+  - feat(oyster): bind an owner's Discord application to an Agent
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.8.8
+  - @fungi.computer/veil@0.7.0
+
 ## 0.21.9
 
 ### Patch Changes

@@ -59,6 +59,7 @@ import { serveDoors } from "../authorization.js";
 import { standaloneWorkerRoutes } from "./worker-routes.js";
 import { HTTPException } from "hono/http-exception";
 import { standaloneOwnerRoutes } from "./owner-routes.js";
+import { standaloneDiscordApp } from "./discord-channels.js";
 import {
   standaloneWebsiteApp,
   type StandaloneWebsiteEnv,
@@ -285,6 +286,8 @@ export class OysterComputerEgress extends WorkerEntrypoint<
 
 /** The public website channel: one edge, authenticated per request. */
 const website = standaloneWebsiteApp();
+/** The public Discord channel: one signed door per bound application. */
+const discord = standaloneDiscordApp();
 
 const standaloneWorkerErrorHandler: ErrorHandler = (error, context) => {
   if (error instanceof StandaloneSeedConfigurationChanged) {
@@ -333,6 +336,8 @@ export default {
           ).fetch(incoming, env, context),
         website: (incoming) =>
           Promise.resolve(website.fetch(incoming, env, context)),
+        discord: (incoming) =>
+          Promise.resolve(discord.fetch(incoming, env, context)),
         localBackendDial: async (incoming) => {
           const dial = ownerLocalBackendDialPath.exec(
             new URL(incoming.url).pathname,

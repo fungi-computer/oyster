@@ -8,14 +8,17 @@ import {
   type CredentialStorage,
 } from "@fungi.computer/veil/credential-store";
 import {
-  isModelKeyProvider,
+  modelKeyAuthenticated,
   modelKeyForwardedHeaders,
   modelKeyBaseUrl,
   modelKeyTarget,
   modelKeyValidationRequest,
   modelKeyValidationResult,
-  type ModelKeyRecord as HostedModelKeyRecord,
 } from "@fungi.computer/veil/model-keys";
+import {
+  isStandaloneModelKeyProvider,
+  type StandaloneModelKeyProvider,
+} from "./model-key-providers.js";
 
 /**
  * This instance's own model-key owner. Provider API keys are sealed (AES-GCM)
@@ -41,13 +44,16 @@ export class ModelKeyRefused extends Error {
   }
 }
 
-/** Standalone custody also accepts an owner’s Cloudflare account and token. */
-export type ModelKeyRecord = Omit<HostedModelKeyRecord, "provider"> & {
-  readonly provider: HostedModelKeyRecord["provider"] | "cloudflare-workers-ai";
-};
-type Provider = ModelKeyRecord["provider"];
-const isProvider = (value: string): value is Provider =>
-  value === "cloudflare-workers-ai" || isModelKeyProvider(value);
+/** A stored key as the owner sees it: no secret, no custody locator. */
+export type ModelKeyRecord = Readonly<{
+  keyId: string;
+  provider: StandaloneModelKeyProvider;
+  label: string;
+  createdAt: number;
+  validatedAt: number;
+}>;
+type Provider = StandaloneModelKeyProvider;
+const isProvider = isStandaloneModelKeyProvider;
 const cloudflareCredentialSchema = Schema.Struct({
   apiKey: Schema.NonEmptyString,
   accountId: Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/u)),
@@ -99,16 +105,18 @@ const publicRecord = (record: CredentialRecord): ModelKeyRecord => ({
   validatedAt: record.validatedAt,
 });
 
-/** Anthropic authenticates with `x-api-key`; the others take a bearer token. */
+/** Cloudflare takes a bearer token; a catalog provider names its own header. */
 function authenticated(
   provider: Provider,
   headers: Headers,
   apiKey: string,
 ): Headers {
-  const next = new Headers(headers);
-  if (provider === "anthropic") next.set("x-api-key", apiKey);
-  else next.set("authorization", `Bearer ${apiKey}`);
-  return next;
+  if (provider === "cloudflare-workers-ai") {
+    const next = new Headers(headers);
+    next.set("authorization", `Bearer ${apiKey}`);
+    return next;
+  }
+  return modelKeyAuthenticated(provider, headers, apiKey);
 }
 
 /**
@@ -173,7 +181,6 @@ export function createModelKeyVault(options: {
       const { provider, label, apiKey } = input;
       if (
         !isProvider(provider) ||
-        provider === "openai-compatible" ||
         label.length === 0 ||
         label.length > 64 ||
         apiKey.length === 0 ||

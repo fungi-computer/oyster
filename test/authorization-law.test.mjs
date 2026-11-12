@@ -35,6 +35,10 @@ const ownRouters = new Map([
     "standalone/website-channels.ts",
     "public website edge behind the embed doors",
   ],
+  [
+    "standalone/discord-channels.ts",
+    "public Discord edge behind the signed interactions door",
+  ],
   // Sign-in adapters: their routes are the login door itself.
   ["tenancy/auth0.ts", "sign-in adapter"],
   ["tenancy/owner-key.ts", "sign-in adapter"],
@@ -724,6 +728,10 @@ test("every host /api route's owner reach is classified", async () => {
     "PUT /api/websites/:bindingId direct",
     "GET /api/websites/:bindingId/conversations direct",
     "GET /api/websites/:bindingId/conversations/:sessionId direct",
+    "GET /api/discord direct",
+    "POST /api/discord direct",
+    "PUT /api/discord/:bindingId direct",
+    "POST /api/discord/:bindingId/commands direct",
     "GET /api/agent-models direct",
     "GET /api/agent-models/:agentId direct",
     "PUT /api/agent-models/:agentId direct",
@@ -1123,6 +1131,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
     standaloneWorkerRoutes({
       machineLink: async () => new Response("link"),
       website: async () => new Response("website"),
+      discord: async () => new Response("discord"),
       localBackendDial: async () => new Response("dial"),
       workflowWebhooks: standaloneWorkflowWebhookRoutes(
         { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
@@ -1147,6 +1156,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
   const doors = standaloneWorkerRoutes({
     machineLink: async () => new Response("link"),
     website: async () => new Response("website"),
+    discord: async () => new Response("discord"),
     localBackendDial: async () => new Response("dial"),
     workflowWebhooks: standaloneWorkflowWebhookRoutes(
       { WORKFLOW_RUNS: { getByName: () => assert.fail("no delivery") } },
@@ -1160,6 +1170,7 @@ test("the real host and Worker serve nothing undeclared under /api", async () =>
   assert.deepEqual(doors, [
     ["/api/teams/:teamId/local/mesh/:deviceId/connect", "door"],
     ["/api/embed/*", "door"],
+    ["/api/discord/interactions/:bindingId", "door"],
     ["/api/computers/:computerId/backends/:backendId/connect", "door"],
     [
       "/api/installations/:installationId/workflows/webhooks/:bindingId",

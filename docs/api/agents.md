@@ -330,9 +330,23 @@ type OysterAgents = Readonly<{
       media: "ready" | "missing";
     }>
   >;
-  modelKeys: Promise<readonly ModelKeyRecord[]>;
+  modelKeys: Promise<
+    readonly Readonly<{
+      keyId: string;
+      provider: StandaloneModelKeyProvider;
+      label: string;
+      createdAt: number;
+      validatedAt: number;
+    }>[]
+  >;
   sealModelKey: Promise<
-    | ModelKeyRecord
+    | Readonly<{
+        keyId: string;
+        provider: StandaloneModelKeyProvider;
+        label: string;
+        createdAt: number;
+        validatedAt: number;
+      }>
     | Readonly<{
         error: ModelKeyRefusal;
       }>
@@ -434,6 +448,18 @@ Stable reason for rejecting a model or credential source before a run.
 
 ---
 
+### StandaloneModelKeyProvider
+
+```ts
+type StandaloneModelKeyProvider =
+  CatalogModelKeyProvider | "cloudflare-workers-ai";
+```
+
+Standalone custody takes every catalog provider's API key, plus an owner's
+Cloudflare account and token.
+
+---
+
 ### ModelKeyRefusal
 
 ```ts
@@ -454,16 +480,16 @@ Why a key could not be stored or used; stable, secret-free.
 ### ModelKeyRecord
 
 ```ts
-type ModelKeyRecord = Omit<HostedModelKeyRecord, "provider"> & object;
+type ModelKeyRecord = Readonly<{
+  keyId: string;
+  provider: StandaloneModelKeyProvider;
+  label: string;
+  createdAt: number;
+  validatedAt: number;
+}>;
 ```
 
-Standalone custody also accepts an owner’s Cloudflare account and token.
-
-#### Type Declaration
-
-| Name       | Type                                                                |
-| ---------- | ------------------------------------------------------------------- |
-| `provider` | `HostedModelKeyRecord`\[`"provider"`\] \| `"cloudflare-workers-ai"` |
+A stored key as the owner sees it: no secret, no custody locator.
 
 ---
 

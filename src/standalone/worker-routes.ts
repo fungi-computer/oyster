@@ -14,6 +14,8 @@ export type StandaloneWorkerRoutePorts = Readonly<{
   machineLink: (request: Request) => Promise<Response>;
   /** The public website channel: launcher, visitor document and visitor API. */
   website: (request: Request) => Promise<Response>;
+  /** A bound Discord application's signed interactions. */
+  discord: (request: Request) => Promise<Response>;
   /** A machine's signed dial to its attached Computer, verified by that Computer. */
   localBackendDial: (request: Request) => Promise<Response>;
   /** Signed Workflow webhook delivery, verified by the library's run owner. */
@@ -53,6 +55,11 @@ export function standaloneWorkerRoutes(
         "a website visitor; the edge checks the site key, origin and bearer",
       ),
       (context) => ports.website(context.req.raw),
+    )
+    .all(
+      "/api/discord/interactions/:bindingId",
+      door("a Discord application; the edge verifies its Ed25519 signature"),
+      (context) => ports.discord(context.req.raw),
     )
     .all(
       "/api/computers/:computerId/backends/:backendId/connect",

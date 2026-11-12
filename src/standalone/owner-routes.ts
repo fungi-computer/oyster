@@ -20,6 +20,10 @@ import type { StandaloneComputerEnv } from "./computer.js";
 import { standaloneComputerFleetRoutes } from "./computer-fleet.js";
 import { standaloneWorkflowWebhookControls } from "./workflow-webhooks.js";
 import {
+  standaloneDiscordControl,
+  standaloneDiscordRoutes,
+} from "./discord-channels.js";
+import {
   standaloneWebsiteControl,
   standaloneWebsiteRoutes,
 } from "./website-channels.js";
@@ -58,8 +62,12 @@ export function standaloneOwnerRoutes(
     .include(standaloneWorkflowWebhookControls(env, hostFor));
   // A website is served from the default tenant's directory, which owns it.
   return scope.tenantId === defaultTenant
-    ? owned.include(
-        standaloneWebsiteRoutes(standaloneWebsiteControl(env, directory)),
-      )
+    ? owned
+        .include(
+          standaloneWebsiteRoutes(standaloneWebsiteControl(env, directory)),
+        )
+        .include(
+          standaloneDiscordRoutes(standaloneDiscordControl(env, directory)),
+        )
     : owned;
 }

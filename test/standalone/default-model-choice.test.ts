@@ -7,6 +7,8 @@ import {
   agentModelSupportsTools,
 } from "../../src/standalone/agent-model-choice.js";
 
+import { modelKeyProviderChoices } from "../../src/standalone/model-key-providers.js";
+
 const none = { workersAi: false, gateway: false, keys: [] } as const;
 
 describe("resolveDefaultChoice", () => {
@@ -153,4 +155,25 @@ it("keeps Granite available as chat only, never as an Agent default", async () =
   expect(models.find((model) => model.id === choice.model.modelId)?.tools).toBe(
     true,
   );
+});
+
+it("gives every connectable provider a Pi catalog with at least one Agent tools model", async () => {
+  expect(modelKeyProviderChoices.map((choice) => choice.id)).toEqual(
+    expect.arrayContaining(["google", "xai", "groq", "mistral", "deepseek"]),
+  );
+  for (const { id } of modelKeyProviderChoices) {
+    const models = await supportedAgentModels(id);
+    const tools = models.find((model) => model.tools);
+    if (tools === undefined) throw new Error(`${id} has no tools model`);
+    const choice = await resolveDefaultChoice({
+      ...none,
+      keys: [{ keyId: "k", provider: id }],
+    });
+    expect(choice).toMatchObject({ keyId: "k", model: { providerId: id } });
+    await selectAgentModel({
+      keySource: "byok",
+      keyId: "k",
+      model: { providerId: id, modelId: tools.id },
+    });
+  }
 });

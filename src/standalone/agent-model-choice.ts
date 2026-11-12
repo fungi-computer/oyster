@@ -1,7 +1,10 @@
 import { ModelPreferenceSchema } from "@fungi.computer/shiitake/model-preference";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { isModelKeyProvider } from "@fungi.computer/veil/model-keys";
+import {
+  isStandaloneModelKeyProvider as isStandaloneProvider,
+  type StandaloneModelKeyProvider,
+} from "./model-key-providers.js";
 import * as Schema from "effect/Schema";
 
 /**
@@ -41,23 +44,62 @@ const defaultChoice: AgentModelChoice = {
   },
 };
 
-/** Pi's maintained catalog for a provider a key may be brought for. */
-async function byokCatalog(
-  provider: "anthropic" | "openai" | "openrouter" | "cloudflare-workers-ai",
-): Promise<readonly Model<Api>[]> {
-  if (provider === "cloudflare-workers-ai")
-    return cloudflareWorkersAIProvider().getModels();
-  if (provider === "anthropic")
-    return (await import("@earendil-works/pi-ai/providers/anthropic"))
+/** Pi's maintained catalog for each provider a key may be brought for. */
+const piCatalogs = {
+  "cloudflare-workers-ai": () =>
+    Promise.resolve(cloudflareWorkersAIProvider().getModels()),
+  anthropic: async () =>
+    (await import("@earendil-works/pi-ai/providers/anthropic"))
       .anthropicProvider()
-      .getModels();
-  if (provider === "openai")
-    return (await import("@earendil-works/pi-ai/providers/openai"))
+      .getModels(),
+  openai: async () =>
+    (await import("@earendil-works/pi-ai/providers/openai"))
       .openaiProvider()
-      .getModels();
-  return (await import("@earendil-works/pi-ai/providers/openrouter"))
-    .openrouterProvider()
-    .getModels();
+      .getModels(),
+  openrouter: async () =>
+    (await import("@earendil-works/pi-ai/providers/openrouter"))
+      .openrouterProvider()
+      .getModels(),
+  google: async () =>
+    (await import("@earendil-works/pi-ai/providers/google"))
+      .googleProvider()
+      .getModels(),
+  xai: async () =>
+    (await import("@earendil-works/pi-ai/providers/xai"))
+      .xaiProvider()
+      .getModels(),
+  groq: async () =>
+    (await import("@earendil-works/pi-ai/providers/groq"))
+      .groqProvider()
+      .getModels(),
+  mistral: async () =>
+    (await import("@earendil-works/pi-ai/providers/mistral"))
+      .mistralProvider()
+      .getModels(),
+  deepseek: async () =>
+    (await import("@earendil-works/pi-ai/providers/deepseek"))
+      .deepseekProvider()
+      .getModels(),
+  cerebras: async () =>
+    (await import("@earendil-works/pi-ai/providers/cerebras"))
+      .cerebrasProvider()
+      .getModels(),
+  together: async () =>
+    (await import("@earendil-works/pi-ai/providers/together"))
+      .togetherProvider()
+      .getModels(),
+  moonshotai: async () =>
+    (await import("@earendil-works/pi-ai/providers/moonshotai"))
+      .moonshotaiProvider()
+      .getModels(),
+} as const satisfies Readonly<
+  Record<StandaloneModelKeyProvider, () => Promise<readonly Model<Api>[]>>
+>;
+
+function byokCatalog(
+  provider: StandaloneModelKeyProvider,
+): Promise<readonly Model<Api>[]> {
+  return piCatalogs[provider]();
 }
 
 /**
@@ -73,24 +115,34 @@ async function byokCatalog(
  * this is an admission policy for Agents, not a claim they cannot chat.
  * Replace this fallback when Pi exposes its source's tool-calling flag.
  */
+const agentToolModels = {
+  "cloudflare-workers-ai": [
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/moonshotai/kimi-k2.6",
+  ],
+  anthropic: ["claude-sonnet-4-6"],
+  openai: ["gpt-6-luna", "openai/gpt-6-luna"],
+  openrouter: ["openai/gpt-6-luna"],
+  // Each is the provider's documented function-calling flagship; none has
+  // had a Grove write/read proof yet, unlike DeepSeek above.
+  google: ["gemini-2.5-pro"],
+  xai: ["grok-4.3"],
+  groq: ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"],
+  mistral: ["mistral-large-latest", "mistral-medium-latest"],
+  deepseek: ["deepseek-v4-pro", "deepseek-flash"],
+  cerebras: ["gpt-oss-120b"],
+  together: ["openai/gpt-oss-120b"],
+  moonshotai: ["kimi-k3"],
+} as const satisfies Readonly<
+  Record<StandaloneModelKeyProvider, readonly string[]>
+>;
+
 export function agentModelSupportsTools(
   model: Pick<Model<Api>, "provider" | "id">,
 ): boolean {
-  switch (model.provider) {
-    case "cloudflare-workers-ai":
-      return (
-        model.id === "@cf/deepseek-ai/deepseek-v4-flash-0731" ||
-        model.id === "@cf/moonshotai/kimi-k2.6"
-      );
-    case "anthropic":
-      return model.id === "claude-sonnet-4-6";
-    case "openai":
-      return model.id === "gpt-6-luna" || model.id === "openai/gpt-6-luna";
-    case "openrouter":
-      return model.id === "openai/gpt-6-luna";
-    default:
-      return false;
-  }
+  if (!isStandaloneProvider(model.provider)) return false;
+  const admitted: readonly string[] = agentToolModels[model.provider];
+  return admitted.includes(model.id);
 }
 
 /** A supported model and Pi's USD prices per million tokens, without credentials. */
@@ -104,7 +156,7 @@ export type SupportedAgentModel = Readonly<{
 
 /** Pi's full catalog: verified tools first, then chat only; each group by price. */
 export async function supportedAgentModels(
-  provider: "anthropic" | "openai" | "openrouter" | "cloudflare-workers-ai",
+  provider: StandaloneModelKeyProvider,
 ): Promise<readonly SupportedAgentModel[]> {
   return (await byokCatalog(provider))
     .map((model) => ({
@@ -143,13 +195,7 @@ export async function resolveDefaultChoice(
       model: { providerId: "openai", modelId: "openai/gpt-6-luna" },
     };
   for (const { keyId, provider } of ready.keys) {
-    if (
-      provider !== "anthropic" &&
-      provider !== "openai" &&
-      provider !== "openrouter" &&
-      provider !== "cloudflare-workers-ai"
-    )
-      continue;
+    if (!isStandaloneProvider(provider)) continue;
     const catalog = (await byokCatalog(provider)).filter(
       agentModelSupportsTools,
     );
@@ -172,11 +218,8 @@ export async function selectAgentModel(
 ): Promise<Model<Api>> {
   const { providerId, modelId, reasoning } = choice.model;
   if (choice.keySource === "byok") {
-    // Only a catalogued provider's own models; an OpenAI-compatible base has none.
-    if (
-      providerId !== "cloudflare-workers-ai" &&
-      (!isModelKeyProvider(providerId) || providerId === "openai-compatible")
-    )
+    // Only a catalogued provider's own models.
+    if (!isStandaloneProvider(providerId))
       throw new AgentModelRefused("unsupported_key_source");
     const found = (await byokCatalog(providerId)).find(
       (item) => item.id === modelId,

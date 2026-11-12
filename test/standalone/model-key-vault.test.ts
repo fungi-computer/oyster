@@ -74,6 +74,49 @@ describe("instance model-key vault", () => {
     expect(JSON.stringify(listed)).not.toContain(apiKey);
   });
 
+  it.each([
+    ["anthropic", "https://api.anthropic.com/v1/models?limit=1", "x-api-key"],
+    [
+      "google",
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+      "x-goog-api-key",
+    ],
+    ["xai", "https://api.x.ai/v1/models", "authorization"],
+    ["groq", "https://api.groq.com/openai/v1/models", "authorization"],
+    ["mistral", "https://api.mistral.ai/v1/models", "authorization"],
+    ["deepseek", "https://api.deepseek.com/models", "authorization"],
+    ["cerebras", "https://api.cerebras.ai/v1/models", "authorization"],
+    ["together", "https://api.together.ai/v1/models", "authorization"],
+    ["moonshotai", "https://api.moonshot.ai/v1/models", "authorization"],
+  ] as const)(
+    "validates a %s key against its own endpoint and header",
+    async (name, url, header) => {
+      const upstream = provider(200);
+      const vault = createModelKeyVault({
+        storage: memory(),
+        credentialKey,
+        fetch: upstream.fetch,
+      });
+      await vault.seal({ provider: name, label: "Key", apiKey });
+      expect(upstream.calls[0]?.url).toBe(url);
+      expect(upstream.calls[0]?.headers.get(header)).toBe(
+        header === "authorization" ? `Bearer ${apiKey}` : apiKey,
+      );
+    },
+  );
+
+  it("refuses a provider it does not list", async () => {
+    const vault = createModelKeyVault({
+      storage: memory(),
+      credentialKey,
+      fetch: provider(200).fetch,
+    });
+    for (const name of ["openai-compatible", "amazon-bedrock", "huggingface"])
+      await expect(
+        vault.seal({ provider: name, label: "Key", apiKey }),
+      ).rejects.toMatchObject({ reason: "invalid_key" });
+  });
+
   it("requires Cloudflare’s account, seals both fields and confines requests to that account", async () => {
     const storage = memory();
     const upstream = provider(200);
