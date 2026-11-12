@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.21.5
+
+### Patch Changes
+
+- Changes since 0.21.4:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Inkcap release.
+
 ## 0.21.4
 
 ### Patch Changes
