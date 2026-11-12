@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.21.8
+
+### Patch Changes
+
+- Changes since 0.21.7:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+  - @fungi.computer/caps@0.11.3
+  - @fungi.computer/parakeet@0.11.21
+
 ## 0.21.7
 
 ### Patch Changes
