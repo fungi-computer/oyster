@@ -36,25 +36,30 @@ const unconfirmed: InstallationOutcome = {
 };
 
 /**
- * Delays before each further preparation attempt. A cold Instance (first
- * backend construction, a Durable Object reset or an overloaded isolate) can
- * fail its first generic preparation and pass the next one.
+ * Delays before each further attempt at one Instance step. A cold Instance
+ * (first backend construction, a Durable Object reset or an overloaded
+ * isolate) can fail its first generic attempt and pass the next one.
  */
-const preparationRetryDelaysMs = [500, 2_000] as const;
+const instanceRetryDelaysMs = [500, 2_000] as const;
 
-/** Retry only generic preparation failures; typed refusals are final. */
-async function prepareWithRetry<T>(
-  prepare: () => Promise<InstanceResult<T>>,
+/**
+ * Retry only generic Instance failures; typed refusals are final. Both steps
+ * are safe to repeat: preparation never changes the active runtime, and apply
+ * replays the pinned committed fact (an applied selection is `unchanged`).
+ */
+async function withColdRetry<T>(
+  step: "preparation" | "activation",
+  run: () => Promise<InstanceResult<T>>,
 ): Promise<InstanceResult<T>> {
   for (let attempt = 1; ; attempt++) {
-    const prepared = await prepare();
-    if (prepared.ok || prepared.code !== "failed") return prepared;
-    console.error("Installation preparation failed", {
+    const outcome = await run();
+    if (outcome.ok || outcome.code !== "failed") return outcome;
+    console.error(`Installation ${step} failed`, {
       attempt,
-      causeClass: prepared.causeClass,
+      causeClass: outcome.causeClass,
     });
-    const wait = preparationRetryDelaysMs[attempt - 1];
-    if (wait === undefined) return prepared;
+    const wait = instanceRetryDelaysMs[attempt - 1];
+    if (wait === undefined) return outcome;
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
 }
@@ -197,7 +202,7 @@ export async function executeInstallation(
         return unconfirmed;
       }
     } else {
-      const prepared = await prepareWithRetry(() =>
+      const prepared = await withColdRetry("preparation", () =>
         instance.prepare(state, next.release),
       );
       if (!prepared.ok)
@@ -215,13 +220,20 @@ export async function executeInstallation(
   if (!commit.ok) return refused(409, commit.code);
   if (instance !== null) {
     // Replay the pinned fact; NEVER derive version N+1 from a current row here.
-    const applied = await instance.apply(state, next.release);
-    if (!applied.ok)
+    const applied = await withColdRetry("activation", () =>
+      instance.apply(state, next.release),
+    );
+    if (!applied.ok) {
+      // The selection is committed, so a persistent generic failure is not
+      // "nothing changed": it is a definitive, retryable activation failure.
+      if (applied.code === "failed")
+        return refused(503, "installation_not_activated");
       // Native apply can return stale_authority from its POST-application
       // owner check. That code does not establish that application never ran.
-      return applied.code === "failed" || applied.code === "stale_authority"
+      return applied.code === "stale_authority"
         ? unconfirmed
         : refused(instanceRefusalStatus(applied.code), applied.code);
+    }
     const receipt = Schema.decodeUnknownSync(instanceSchema)(applied.value);
     if (
       receipt.instanceId !== state.instanceId ||

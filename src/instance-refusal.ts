@@ -19,10 +19,16 @@ export function instanceRefusalStatus(code: AppInstanceErrorCode): number {
 export const installationNotAppliedMessage =
   "The new release was not applied: Oyster could not prepare it. The previous release is still installed; install again to retry.";
 
+/** The host-authored settlement for a committed release whose backend would not start. */
+export const installationNotActivatedMessage =
+  "The new release was selected, but its backend did not start. Install again to retry activation.";
+
 /** Only closed host-authored reasons produce a caller-facing message. */
 export function instanceRefusalBody(code: string) {
   if (code === "installation_not_applied")
     return { error: code, message: installationNotAppliedMessage };
+  if (code === "installation_not_activated")
+    return { error: code, message: installationNotActivatedMessage };
   const boot = bootFailureSchema.safeParse(code);
   return boot.success
     ? { error: boot.data, message: new BootGateError(boot.data).message }

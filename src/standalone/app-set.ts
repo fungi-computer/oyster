@@ -5,7 +5,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { olderOysterStoreCode } from "../older-oyster-store.js";
-import { installationNotAppliedMessage } from "../instance-refusal.js";
+import {
+  installationNotActivatedMessage,
+  installationNotAppliedMessage,
+} from "../instance-refusal.js";
 import { publishSource, type PackOptions } from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
@@ -580,7 +583,9 @@ export async function installStandaloneAppSet(
           throw new Error(
             operation.code === "installation_not_applied"
               ? `${name}: ${installationNotAppliedMessage}`
-              : `${name} installation refused (${operation.code})`,
+              : operation.code === "installation_not_activated"
+                ? `${name}: ${installationNotActivatedMessage}`
+                : `${name} installation refused (${operation.code})`,
           );
         const record = operation.installation;
         if (record === null)

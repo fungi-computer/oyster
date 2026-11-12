@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.21.6
+
+### Patch Changes
+
+- Changes since 0.21.5:
+
+  - fix(oyster): retry cold activation and report a failed activation instead of
+    unconfirmed
+
 ## 0.21.5
 
 ### Patch Changes

@@ -57,6 +57,7 @@ async function fixture(
     | "prepare"
     | "prepare-once"
     | "apply"
+    | "apply-once"
     | "backend-construction"
     | "stale-after-apply"
     | "lost-apply-reply",
@@ -151,6 +152,7 @@ async function fixture(
   let boots = 0;
   let aborts = 0;
   let prepares = 0;
+  let applyAttempts = 0;
   const preparing = Promise.withResolvers<undefined>();
   const prepareGate = Promise.withResolvers<undefined>();
   const applying = Promise.withResolvers<undefined>();
@@ -293,7 +295,8 @@ async function fixture(
             : result(core(id).prepare(state));
         },
         apply: async (state) =>
-          unexpected === "apply"
+          unexpected === "apply" ||
+          (unexpected === "apply-once" && ++applyAttempts === 1)
             ? Promise.resolve<InstanceResult<Instance>>({
                 ok: false,
                 code: "failed",
@@ -364,6 +367,7 @@ async function fixture(
     boots: () => boots,
     aborts: () => aborts,
     prepares: () => prepares,
+    applyAttempts: () => applyAttempts,
     reads: () => reads,
     replay: async () => {
       const row = rows.get("notes");
@@ -591,20 +595,48 @@ it("settles persistent preparation failure as not applied: nothing was committed
   }
 });
 
-it("keeps a generic apply InstanceResult after commit unconfirmed", async () => {
-  const state = await fixture(false, "apply");
+it("retries a generic activation failure on a cold Instance and settles succeeded", async () => {
+  const state = await fixture(false, "apply-once");
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
   try {
     expect((await admitNotes(state)).status).toBe(202);
     state.prepareGate.resolve(undefined);
     state.applyGate.resolve(undefined);
     await state.runtime.tick();
     expect(await state.read()).toMatchObject({
-      state: "unconfirmed",
-      outcome: "outcome_unknown",
+      state: "succeeded",
+      creation: "fresh",
+    });
+    // The fixture also replays the retained plan once after success.
+    expect(state.applyAttempts()).toBe(3);
+    expect(state.snapshot()?.status).toBe("active");
+  } finally {
+    logged.mockRestore();
+    state.database.close();
+  }
+});
+
+it("settles persistent activation failure after commit as a retryable refusal, not unconfirmed", async () => {
+  const state = await fixture(false, "apply");
+  const logged = vi.spyOn(console, "error").mockReturnValue(undefined);
+  try {
+    expect((await admitNotes(state)).status).toBe(202);
+    state.prepareGate.resolve(undefined);
+    state.applyGate.resolve(undefined);
+    await state.runtime.tick();
+    expect(await state.read()).toMatchObject({
+      state: "refused",
+      status: 503,
+      code: "installation_not_activated",
     });
     expect(state.rows.has("notes")).toBe(true);
     expect(state.snapshot()).toBeNull();
+    expect(logged).toHaveBeenCalledWith(
+      "Installation activation failed",
+      expect.objectContaining({ attempt: 3, causeClass: "TimeoutError" }),
+    );
   } finally {
+    logged.mockRestore();
     state.database.close();
   }
 });
