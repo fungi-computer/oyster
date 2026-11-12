@@ -687,7 +687,10 @@ export class ComputerDO
   }
 
   #id(): string {
-    return workspaceId.parse(this.state.id.name);
+    const name = this.computerName();
+    if (name === undefined)
+      throw new Error("Computer woken by object id before any named wake");
+    return workspaceId.parse(name);
   }
 
   /**

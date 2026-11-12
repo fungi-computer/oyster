@@ -211,6 +211,39 @@ for (const { name, env, expected } of [
   });
 }
 
+test("a Computer woken by object id after a redeploy keeps its name and build preflight", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = fromNodeSqlite(database);
+    const env = { COMPUTER_VM_DEFAULT_HOST: "proof-host" };
+    // The registry creates the Computer through a name-addressed stub.
+    const named = new ComputerDO({ id: { name: "workspace" }, storage }, env);
+    assert.deepEqual(named.buildBackend(), { kind: "hosted" });
+    // A redeploy restarts the object; the container's WorkspaceProxy
+    // reconnect wakes it by object id, so this instance never has a name,
+    // and later name-addressed calls reach it.
+    const reconnected = new ComputerDO({ id: {}, storage }, env);
+    assert.deepEqual(reconnected.buildBackend(), { kind: "hosted" });
+  } finally {
+    database.close();
+  }
+});
+
+test("a Computer no named wake has reached refuses to guess its identity", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const computer = new ComputerDO(
+      { id: {}, storage: fromNodeSqlite(database) },
+      { COMPUTER_VM_DEFAULT_HOST: "proof-host" },
+    );
+    assert.throws(() => computer.buildBackend(), {
+      message: "Computer woken by object id before any named wake",
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test("multiple Computers start independently on standalone and foreign grants wake neither", async () => {
   const pushed = [];
   class HostedComputer extends ComputerDO {

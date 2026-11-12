@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.21.2
+
+### Patch Changes
+
+- Changes since 0.21.1:
+
+  - fix(computer): keep a Computer's name when a redeploy wakes it by object id
+
+- Updated dependencies
+  - @fungi.computer/computer@0.8.5
+
 ## 0.21.1
 
 ### Patch Changes
