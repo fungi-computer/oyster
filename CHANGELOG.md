@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.21.0
+
+### Minor Changes
+
+- Changes since 0.20.9:
+
+  - feat(window): add in-App Forward to the window contract and title bar
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.10.0
+  - @fungi.computer/caps@0.11.0
+  - @fungi.computer/nacre@0.5.0
+  - @fungi.computer/braid@0.4.9
+  - @fungi.computer/darkroom@0.5.9
+  - @fungi.computer/parakeet@0.11.18
+  - @fungi.computer/shiitake@0.13.1
+  - @fungi.computer/workflows-wire@0.4.9
+  - @fungi.computer/shiitake-extensions@0.6.13
+  - @fungi.computer/zookeeper@0.0.20
+
 ## 0.20.9
 
 ### Patch Changes

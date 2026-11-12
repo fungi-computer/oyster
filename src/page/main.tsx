@@ -452,6 +452,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
             },
             requestClose: () => host.requestClose(),
             requestBack: () => host.requestBack(),
+            requestForward: () => host.requestForward(),
             activateStatus: (action) => host.activateStatus(action),
             activateNavigation: (activation) =>
               host.activateNavigation(activation),
