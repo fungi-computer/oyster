@@ -1,5 +1,23 @@
 # @fungi.computer/oyster
 
+## 0.21.1
+
+### Patch Changes
+
+- Changes since 0.21.0:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Inkcap release.
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Caps release.
+  - Updated starter Apps for the Nacre release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.11.1
+  - @fungi.computer/nacre@0.5.1
+  - @fungi.computer/parakeet@0.11.19
+
 ## 0.21.0
 
 ### Minor Changes
