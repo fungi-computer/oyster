@@ -229,6 +229,64 @@ test("a Computer woken by object id after a redeploy keeps its name and build pr
   }
 });
 
+const objectId = (name) => ({
+  name: undefined,
+  token: `id:${name}`,
+  equals(other) {
+    return other.token === this.token;
+  },
+});
+const namespace = { idFromName: objectId };
+
+test("a nameless Computer with no record learns its name from the configured id", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = fromNodeSqlite(database);
+    const env = { COMPUTER: namespace, COMPUTER_VM_DEFAULT_HOST: "proof-host" };
+    // Woken by object id before any named wake, with no record: the state of
+    // every Computer that predates the name record.
+    const first = new ComputerDO(
+      { id: objectId("workspace"), storage },
+      { ...env, OYSTER_COMPUTER_ID: "workspace" },
+    );
+    assert.deepEqual(first.buildBackend(), { kind: "hosted" });
+    // The name is now recorded for later nameless wakes.
+    const later = new ComputerDO(
+      { id: objectId("workspace"), storage },
+      { ...env, OYSTER_COMPUTER_ID: "other" },
+    );
+    assert.deepEqual(later.buildBackend(), { kind: "hosted" });
+  } finally {
+    database.close();
+  }
+});
+
+test("a name that does not derive the object id is refused and not stored", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = fromNodeSqlite(database);
+    const computer = new ComputerDO(
+      { id: objectId("workspace"), storage },
+      {
+        COMPUTER: namespace,
+        OYSTER_COMPUTER_ID: "someone-else",
+        COMPUTER_VM_DEFAULT_HOST: "proof-host",
+      },
+    );
+    assert.throws(() => computer.buildBackend(), {
+      message: "Computer woken by object id before any named wake",
+    });
+    assert.deepEqual(
+      database
+        .prepare("SELECT 1 FROM sqlite_master WHERE name='computer_name'")
+        .all(),
+      [],
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("a Computer no named wake has reached refuses to guess its identity", () => {
   const database = new DatabaseSync(":memory:");
   try {

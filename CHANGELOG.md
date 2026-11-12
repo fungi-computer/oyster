@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.21.3
+
+### Patch Changes
+
+- Changes since 0.21.2:
+
+  - fix(computer): learn a Computer's name from its first named call
+
+- Updated dependencies
+  - @fungi.computer/computer@0.8.6
+
 ## 0.21.2
 
 ### Patch Changes

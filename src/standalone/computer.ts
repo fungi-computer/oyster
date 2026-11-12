@@ -355,6 +355,15 @@ export class ComputerDO
     });
   }
 
+  /**
+   * The configured Computer predates the name record, and the container's
+   * object-id reconnect wakes it nameless after every redeploy; it learns its
+   * name from the configured id once the namespace verifies it.
+   */
+  protected override nameCandidates(): readonly string[] {
+    return [this.previewBindings.OYSTER_COMPUTER_ID];
+  }
+
   #fleetLifecycle(): FleetLifecycle {
     if (this.#lifecycle !== undefined) return this.#lifecycle;
     this.#lifecycle = new FleetLifecycle({
