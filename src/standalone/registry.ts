@@ -238,7 +238,7 @@ export abstract class StandaloneRegistry
         if (backings === null) throw new Error("Computer backing is missing");
         await this.#env.COMPUTER.getByName(
           created.computerId,
-        ).initializeFleetBackings(backings);
+        ).initializeFleetBackings(backings, created.size);
         return created;
       }
       case "list":

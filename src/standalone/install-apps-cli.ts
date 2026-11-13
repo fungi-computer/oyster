@@ -141,7 +141,7 @@ export async function installApps(
     throw new Error("Choose either --from or --repositories");
   const concurrency =
     values.concurrency === undefined
-      ? defaultStarterBuildConcurrency
+      ? defaultStarterBuildConcurrency()
       : Number(values.concurrency);
   const scratch = await mkdtemp(join(tmpdir(), "oyster-install-apps-"));
   try {

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { ComputerSize } from "@fungi.computer/computer/backing";
 import type {
   computerCreateRequestSchema,
   computerPageSchema,
@@ -35,7 +36,10 @@ export type ComputerControlPort = Readonly<{
     input: z.output<typeof computerCreateRequestSchema>,
     context: InvocationContext,
   ): Promise<
-    | { kind: "created"; computer: { computerId: string; name: string } }
+    | {
+        kind: "created";
+        computer: { computerId: string; name: string; size: ComputerSize };
+      }
     | { kind: "uncertain" | "denied" | "conflict" | "invalid" }
   >;
   /** List one Computer's attached execution backends with live status. */

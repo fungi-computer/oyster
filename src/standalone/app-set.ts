@@ -1,3 +1,7 @@
+import {
+  defaultBuildConcurrency,
+  machineMemoryMib,
+} from "../build/build-memory.js";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -250,11 +254,14 @@ export type StarterAppSetResult = Readonly<{
 const appBuildWaitMs = 20 * 60_000;
 /**
  * Builds the installer runs at once by default. A build's compiler may take a
- * 4 GB heap, so two fit the platform's 12 GiB Computer (standard-4) with room
- * for pnpm and esbuild; a third is the most it will run.
+ * 4 GiB heap and pnpm and esbuild another 2 GiB, so a Computer runs one build
+ * per 6 GiB, two at most: two on a 12 GiB container or 16 GiB VM, one on an
+ * 8 GiB or 4 GiB VM. A third runs only when asked for.
  */
-export const defaultStarterBuildConcurrency = 2;
-/** The most builds at once on the 12 GiB Computer. */
+export function defaultStarterBuildConcurrency(): number {
+  return defaultBuildConcurrency(machineMemoryMib());
+}
+/** The most builds at once, when the caller asks for more than the default. */
 const maxStarterBuildConcurrency = 3;
 
 const run = (command: string, args: readonly string[], cwd?: string) =>
@@ -304,7 +311,7 @@ export async function installStandaloneAppSet(
     waitMs?: number;
   }>,
 ): Promise<StarterAppSetResult> {
-  const concurrency = options.concurrency ?? defaultStarterBuildConcurrency;
+  const concurrency = options.concurrency ?? defaultStarterBuildConcurrency();
   if (
     !Number.isInteger(concurrency) ||
     concurrency < 1 ||

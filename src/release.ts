@@ -37,6 +37,12 @@ export type ArtifactHead = Readonly<{
   digest: Sha256Digest | null;
 }>;
 
+/** A store that can remove one object; only host-owned namespaces use it. */
+export type ArtifactDeletes = Readonly<{
+  /** Remove the object at `artifactRef`; a missing object is not an error. */
+  delete: (artifactRef: ArtifactRef) => Promise<void>;
+}>;
+
 /** A store that can describe an object without reading its bytes. */
 export type ArtifactHeads = Readonly<{
   /** Describe the object at `artifactRef`, or `null` when absent. */

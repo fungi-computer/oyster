@@ -30,6 +30,7 @@ export type { GuestLimits } from "./guest-policy.js";
 import { headContentObject } from "./build/content-objects.js";
 import type {
   ArtifactHeads,
+  ArtifactDeletes,
   ArtifactStore,
   ArtifactStreams,
   VerifiedObjectCache,
@@ -107,7 +108,7 @@ export function edgeVerifiedObjectCache(
 /** Store Release artifacts without loading the Worker ownership barrel. */
 export function r2ArtifactStore(
   bucket: R2Bucket,
-): ArtifactStore & ArtifactHeads & ArtifactStreams {
+): ArtifactStore & ArtifactHeads & ArtifactStreams & ArtifactDeletes {
   const abortError = (signal: AbortSignal): Error => {
     const reason: unknown = signal.reason;
     return reason instanceof Error
@@ -174,6 +175,9 @@ export function r2ArtifactStore(
     },
     async put(artifactRef, bytes) {
       await bucket.put(artifactRef, bytes);
+    },
+    async delete(artifactRef) {
+      await bucket.delete(artifactRef);
     },
   };
 }

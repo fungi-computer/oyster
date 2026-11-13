@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { computerSizeSchema } from "@fungi.computer/computer/backing";
 import {
   PendingApprovalSchema,
   ApprovalRefusalSchema,
@@ -89,6 +90,10 @@ const fleetCreate = z.strictObject({
     .unwrap()
     .nullable()
     .default(null),
+  size: computerCreateRequestSchema.shape.size
+    .unwrap()
+    .nullable()
+    .default(null),
   requestId: computerCreateRequestSchema.shape.requestId
     .nullable()
     .default(null),
@@ -96,6 +101,7 @@ const fleetCreate = z.strictObject({
 const fleetComputer = z.strictObject({
   computerId: z.string(),
   name: z.string(),
+  size: computerSizeSchema,
 });
 const fleetBackends = z.strictObject({
   backends: z.array(computerBackendViewSchema),
@@ -178,7 +184,7 @@ export function computerControlSpecs(port: ComputerControlPort) {
     create: {
       replay: "unsafe" as const,
       description:
-        "Create a Computer with an optional friendly name. Request identity is generated automatically. If the outcome is uncertain, retry with its returned requestId and the original name input; do not start a second creation.",
+        "Create a Computer with an optional friendly name and size (small, default or large; default when omitted). Request identity is generated automatically. If the outcome is uncertain, retry with its returned requestId and the original name and size input; do not start a second creation.",
       input: fleetCreate,
       output: fleetCreation,
       /** Mint one identity or preserve the requestId for an uncertain retry. */
@@ -188,7 +194,11 @@ export function computerControlSpecs(port: ComputerControlPort) {
       ): Promise<z.output<typeof fleetCreation>> => {
         const requestId = input.requestId ?? fleetIds.request.generate();
         const result = await port.create(
-          { name: input.name ?? undefined, requestId },
+          {
+            name: input.name ?? undefined,
+            size: input.size ?? undefined,
+            requestId,
+          },
           context,
         );
         return { ...result, requestId };

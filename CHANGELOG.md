@@ -1,5 +1,47 @@
 # @fungi.computer/oyster
 
+## 0.26.0
+
+### Minor Changes
+
+- Changes since 0.25.0:
+
+  - fix(nacre): document the Computer size values and regenerate API docs
+  - fix(oyster): decode pruned build-log job ids instead of stringifying rows
+  - feat(computer): weigh VM host admission by Computer size
+  - feat(computer): small, default and large Computers with a published hourly
+    price
+  - feat(oyster): let an Agent use skills left on its Computer
+  - fix(oyster): keep only the last five build logs per App
+  - feat(apps): let App backends create folders on the Computer (COMPUTER.mkdir)
+  - fix(hub): keep App Computer mkdir beside move after merging integration
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.12.1
+  - @fungi.computer/computer@0.11.0
+  - @fungi.computer/darkroom@0.6.0
+  - @fungi.computer/nacre@0.6.0
+  - @fungi.computer/puffball@0.7.0
+  - @fungi.computer/shiitake-extensions@0.8.0
+  - @fungi.computer/shiitake@0.15.0
+  - @fungi.computer/braid@0.4.13
+  - @fungi.computer/parakeet@0.11.25
+  - @fungi.computer/workflows-wire@0.4.13
+  - @fungi.computer/forage@0.3.7
+  - @fungi.computer/mycelium@0.3.10
+  - @fungi.computer/zookeeper@0.0.24
+  - @fungi.computer/knapsack@0.4.11
+  - @fungi.computer/veil@0.7.2
+  - @fungi.computer/computer-contract@0.3.1
+
 ## 0.25.0
 
 ### Minor Changes

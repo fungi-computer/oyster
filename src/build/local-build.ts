@@ -1,3 +1,4 @@
+import { buildHeapMib, machineMemoryMib } from "./build-memory.js";
 import { CleanupError, stopProcessGroup } from "./process-group.js";
 import { addAbortListener } from "node:events";
 import { Buffer } from "node:buffer";
@@ -956,22 +957,19 @@ function snapshotPrograms() {
   return import("#snapshot-program-scripts");
 }
 
-/** Compiler heap ceiling: fits a 12 GiB Computer with two builds at once. */
-const snapshotBuildHeapMegabytes = 4096;
-
 function snapshotBuildEnvironment(
   sourceSnapshotPath: string,
 ): NodeJS.ProcessEnv {
   // PATH locates pinned executables; the Computer's CA files authenticate
   // its egress gateway. Credentials and package-manager settings stay out.
   // V8 sizes its default heap from the machine, about 3 GB in a 12 GiB
-  // standard-4 Computer, where compiling Bonsai runs out; the build owns one
-  // fixed ceiling instead.
+  // Computer, where compiling Bonsai runs out; the build owns its ceiling
+  // instead, 4 GiB or two thirds of a smaller Computer (see build-memory.ts).
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     HOME: join(sourceSnapshotPath, ".publisher-home"),
     NODE_ENV: "production",
-    NODE_OPTIONS: `--max-old-space-size=${String(snapshotBuildHeapMegabytes)}`,
+    NODE_OPTIONS: `--max-old-space-size=${String(buildHeapMib(machineMemoryMib()))}`,
     NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
     SSL_CERT_FILE: process.env.SSL_CERT_FILE,
     npm_config_userconfig: "/dev/null",

@@ -1,6 +1,8 @@
 import {
   attachedBackendId,
+  computerSizeSchema,
   hostedBackingSchema,
+  type ComputerSize,
 } from "@fungi.computer/computer/backing";
 import {
   appMethodRefusalStatus,
@@ -203,6 +205,7 @@ const processStartReply = z.lazy(() =>
 const bindingWrite = writeInputSchema.extend({
   expectedContent: replaceInputSchema.shape.expectedContent.optional(),
 });
+const bindingMkdir = z.strictObject({ path: writeInputSchema.shape.path });
 const allActions = new Set(computerActionSchema.options);
 const terminalGrantHeader = "X-Oyster-Computer-Grant";
 const terminalGrant = computerGrantSchema.extend({
@@ -339,6 +342,9 @@ export type StandaloneAgentComputerRpc = ComputerFilesRpc &
     ): Promise<void>;
   }>;
 
+const sizeTable =
+  "CREATE TABLE IF NOT EXISTS oyster_computer_size (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), size TEXT NOT NULL CHECK (size IN ('small','default','large'))) STRICT";
+
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
 export class ComputerDO
   extends NativeComputerDO
@@ -403,8 +409,28 @@ export class ComputerDO
     return this.#lifecycle;
   }
 
+  /** The size fixed at creation; a Computer never created by the fleet has none. */
+  protected override computerSize(): ComputerSize {
+    const sql = this.state.storage.sql;
+    sql.exec(sizeTable);
+    const row = sql
+      .exec("SELECT size FROM oyster_computer_size WHERE singleton=1")
+      .toArray()[0];
+    if (row === undefined)
+      throw new Error("Computer was created without a size");
+    return computerSizeSchema.parse(row.size);
+  }
+
   /** Install the fleet's creation projection before exposing its new identity. */
-  initializeFleetBackings(backings: readonly AttachedBackend[]): void {
+  initializeFleetBackings(
+    backings: readonly AttachedBackend[],
+    size: ComputerSize,
+  ): void {
+    this.state.storage.sql.exec(sizeTable);
+    this.state.storage.sql.exec(
+      "INSERT OR IGNORE INTO oyster_computer_size (singleton, size) VALUES (1, ?)",
+      size,
+    );
     const owner = createFleetBacking(this.state.storage);
     owner.ensure();
     this.#backends = owner.computerCreated(
@@ -1268,6 +1294,11 @@ export const computerFrameMethods: ComputerFrameMethods = {
           .parse(value),
       requiredOperations: () => ["write"],
     },
+    mkdir: {
+      decodeArgs: (args) => z.tuple([bindingMkdir]).parse(args),
+      decodeResult: (value) => mkdirOutputSchema.parse(value),
+      requiredOperations: () => ["mkdir"],
+    },
     move: {
       decodeArgs: (args) => z.tuple([moveInputSchema]).parse(args),
       decodeResult: (value) =>
@@ -1439,6 +1470,12 @@ export async function computerInvocation(
               content: parsed.content,
               expectedContent: parsed.expectedContent,
             };
+      break;
+    }
+    case "mkdir": {
+      const [parsed] = z.tuple([bindingMkdir]).parse(args);
+      action = "mkdir";
+      input = { path: parsed.path, recursive: true };
       break;
     }
     case "move":

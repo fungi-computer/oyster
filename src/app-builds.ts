@@ -71,6 +71,7 @@ import {
   defaultAssetPolicy,
   readVerified,
   verifyRelease,
+  type ArtifactDeletes,
   type ArtifactHeads,
   type ArtifactStore,
 } from "./release.js";
@@ -225,7 +226,7 @@ export type OysterAppBuildOptions = Readonly<{
     port: OysterBuildComputer;
   }>;
   /** The host's artifact store; a build's objects are already in it. */
-  artifacts: ArtifactStore & ArtifactHeads;
+  artifacts: ArtifactStore & ArtifactHeads & ArtifactDeletes;
   /** The seed receipts a template build must match. */
   templates: Pick<PublisherTemplateSeedReceipts, "read">;
   now?: () => number;
@@ -267,6 +268,9 @@ const jobRow = Schema.Struct({
 });
 type JobRow = Schema.Schema.Type<typeof jobRow>;
 const decodeJob = Schema.decodeUnknownSync(jobRow);
+const decodeJobId = Schema.decodeUnknownSync(
+  Schema.Struct({ job_id: Schema.String }),
+);
 const sourceRow = Schema.Struct({ source: Schema.String });
 const releaseRow = Schema.Struct({ release: Schema.String });
 const sourceCodec = Schema.fromJsonString(oysterBuildSourceSchema);
@@ -324,6 +328,9 @@ export function migrateOysterAppBuilds(owner: WatchdogSqliteOwner): void {
     );
   });
 }
+
+/** Build logs kept per App; older logs are removed after each new one is written. */
+export const retainedBuildLogs = 5;
 
 /** The build owner over one tenant's SQLite, Computer and artifact store. */
 export function createOysterAppBuilds(options: OysterAppBuildOptions) {
@@ -430,6 +437,20 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
   const logRef = (jobId: string) =>
     parseArtifactRef(`artifact:build-log-${jobId}`);
   const logCodec = Schema.fromJsonString(buildJobLogSchema);
+  // Job rows and statuses stay; only the older logs of one App are removed.
+  // The ranking is read from the job table each time, so replays, retries and
+  // an owner restart can never delete a log inside the retained five.
+  const pruneLogs = async (appId: string) => {
+    const stale = owner.sql
+      .exec(
+        "SELECT job_id FROM oyster_build_jobs WHERE app_id=? ORDER BY issued_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+        appId,
+        retainedBuildLogs,
+      )
+      .toArray();
+    for (const row of stale)
+      await options.artifacts.delete(logRef(decodeJobId(row).job_id));
+  };
 
   const publisher = createTeamBuildPublisher({
     teamId: options.tenantId,
@@ -488,6 +509,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
             Schema.encodeUnknownSync(logCodec)(result.log),
           ),
         );
+        await pruneLogs(required(input.jobId).app_id);
         if (result.output === null) throw new BuildOutcomeUnknown();
         return result;
       },

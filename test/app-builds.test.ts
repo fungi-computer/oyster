@@ -53,6 +53,7 @@ import {
   type OysterBuildComputer,
   type OysterBuildLocation,
   type BuildJobLog,
+  retainedBuildLogs,
 } from "../src/app-builds.js";
 import { createBuildJobLog } from "../src/build/job-log.js";
 import { standaloneBuildRoutes } from "../src/standalone/builds.js";
@@ -60,6 +61,7 @@ import { serveHost } from "../src/authorization.js";
 import type { OysterAuthResult } from "../src/host.js";
 import {
   verifyRelease,
+  type ArtifactDeletes,
   type ArtifactHeads,
   type ArtifactStore,
 } from "../src/release.js";
@@ -160,7 +162,8 @@ const digestOf = (bytes: Uint8Array) =>
  * verifies nothing (as `r2ArtifactStore` writes a root), `head` reports the
  * size and any SHA-256 a streamed upload had the store check. */
 function memoryStore(): ArtifactStore &
-  ArtifactHeads & { objects: Map<string, StoredObject> } {
+  ArtifactHeads &
+  ArtifactDeletes & { objects: Map<string, StoredObject> } {
   const objects = new Map<string, StoredObject>();
   return {
     objects,
@@ -168,6 +171,10 @@ function memoryStore(): ArtifactStore &
       Promise.resolve(objects.get(artifactRef)?.bytes.slice() ?? null),
     put: (artifactRef: ArtifactRef, bytes: Uint8Array) => {
       objects.set(artifactRef, { bytes: bytes.slice(), digest: null });
+      return Promise.resolve();
+    },
+    delete: (artifactRef: ArtifactRef) => {
+      objects.delete(artifactRef);
       return Promise.resolve();
     },
     head: (artifactRef: ArtifactRef) => {
@@ -433,6 +440,33 @@ it("grows both retained log buffers logarithmically across small writes", () => 
   // 4 KiB initial capacity then doubling to 1 MiB: nine growths per buffer.
   expect(reallocations).toBeLessThanOrEqual(18);
   expect(capture.allocatedBytes).toBe(buildJobLogMaxBytes);
+});
+
+it("keeps only the last five build logs per App and every job's status", async () => {
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout: "out\n",
+  });
+  const jobIds: string[] = [];
+  for (let index = 0; index < retainedBuildLogs + 2; index += 1) {
+    const started = await f.builds.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner",
+    });
+    await started.run();
+    jobIds.push(started.build.jobId);
+  }
+  const reopened = f.reopen();
+  const [pruned, kept] = [jobIds.slice(0, 2), jobIds.slice(2)];
+  for (const jobId of pruned) {
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(false);
+    // A pruned log reads as absent; its job status remains.
+    expect(await reopened.readLog(jobId)).toBeNull();
+    expect(reopened.read(jobId)).not.toBeNull();
+  }
+  for (const jobId of kept)
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+  expect(kept).toHaveLength(retainedBuildLogs);
 });
 
 it("keeps exactly a 2 MiB head/tail and counts discarded raw bytes, including split UTF-8", async () => {

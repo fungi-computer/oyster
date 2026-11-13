@@ -7,6 +7,6 @@ export { default } from "./landed-push-root.fixture.js";
 export class ComputerDO extends NativeComputerDO {
   constructor(...args: ConstructorParameters<typeof NativeComputerDO>) {
     super(...args);
-    this.initializeFleetBackings([]);
+    this.initializeFleetBackings([], "default");
   }
 }

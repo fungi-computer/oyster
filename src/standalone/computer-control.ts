@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { computerSizeSchema } from "@fungi.computer/computer/backing";
 import {
   computerBackendViewSchema,
   computerStateSchema,
@@ -11,6 +12,7 @@ import type { StandaloneRegistryRpc } from "./registry.js";
 const inventoryComputer = z.strictObject({
   computerId: z.string(),
   name: z.string(),
+  size: computerSizeSchema,
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -99,7 +101,11 @@ export function standaloneComputerControl(
       const computer: FleetComputer = inventoryComputer.parse(result);
       return {
         kind: "created",
-        computer: { computerId: computer.computerId, name: computer.name },
+        computer: {
+          computerId: computer.computerId,
+          name: computer.name,
+          size: computer.size,
+        },
       };
     },
     backends: async (computerId) =>

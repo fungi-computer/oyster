@@ -94,6 +94,10 @@ import {
   createAgentInstructions,
   withOwnerInstructions,
 } from "../agent-instructions.js";
+import {
+  computerSkillsEmpty,
+  createComputerSkillSource,
+} from "./computer-skill-source.js";
 import { channelSessionDoor } from "./channel-session-door.js";
 import { createAuthenticatedVisitorChannel } from "../channels/visitor-channel.js";
 import { verifyVisitor, type ProvenVisitor } from "./visitor-proof.js";
@@ -1826,8 +1830,20 @@ export abstract class StandaloneAgentBase<
         return () => this.computerInvalidations.delete(invalidate);
       },
     });
+    // Skills the owner put on the Agent's Computer, found by the rules Local uses on a disk.
     const extensions = oysterAgentExtensions(
       conversationAgents.source(this.controlDirectory()),
+      {
+        source: createComputerSkillSource({
+          computers: async () => {
+            await this.preparedComputerSnapshot();
+            return readAgentComputerConnections(this.computerConnections()).map(
+              ({ name, files }) => ({ name, port: files.port }),
+            );
+          },
+        }),
+        empty: computerSkillsEmpty,
+      },
     );
     const keeping = agentStoreKeeping(this.ctx.storage, (request) =>
       this.readColdSessions(request),

@@ -31,6 +31,7 @@ export default defineConfig({
       "test/workspace-build-script.test.ts",
       "test/build/candidate-builder.test.ts",
       "test/build/candidate-diagnostic.test.ts",
+      "test/build/build-memory.test.ts",
     ],
   },
 });

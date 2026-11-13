@@ -120,6 +120,7 @@ test(
     const computers = ["A", "B"].map((name) => ({
       computerId: ids.computer.generate(),
       name,
+      size: "default",
       createdAt: 1,
       updatedAt: 1,
     }));

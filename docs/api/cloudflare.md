@@ -348,6 +348,9 @@ function r2ArtifactStore(bucket): Readonly<{
       artifactRef,
       signal?,
     ) => Promise<ReadableStream<Uint8Array<ArrayBufferLike>> | null>;
+  }> &
+  Readonly<{
+    delete: (artifactRef) => Promise<void>;
   }>;
 ```
 
@@ -368,7 +371,7 @@ Store Release artifacts without loading the Worker ownership barrel.
 `Sha256Digest` \| `null`; \}\> \| `null`\>; \}\> & `Readonly`\<\{ `stream`:
 (`artifactRef`, `signal?`) =>
 `Promise`\<`ReadableStream`\<`Uint8Array`\<`ArrayBufferLike`\>\> \| `null`\>;
-\}\>
+\}\> & `Readonly`\<\{ `delete`: (`artifactRef`) => `Promise`\<`void`\>; \}\>
 
 ---
 
