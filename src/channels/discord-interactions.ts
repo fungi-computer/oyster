@@ -354,6 +354,50 @@ export async function postFollowUp(
   return [401, 403, 404].includes(response.status) ? "gone" : "retry";
 }
 
+/** What a member is told on the original message when an answer will take longer. */
+export const STILL_WORKING_TEXT =
+  "Still working on this. I will post the answer in this channel when it is ready.";
+
+/**
+ * Post a normal channel message as the owner's bot, for an answer that
+ * outlived its interaction token. The bot token is the credential and never
+ * leaves the host call; the member is mentioned so they are told it arrived.
+ */
+export async function postChannelMessage(
+  send: typeof fetch,
+  input: Readonly<{
+    channelId: string;
+    botToken: string;
+    content: string;
+    withReply: boolean;
+    /** Mention this member, and only them. */
+    mentionUserId: string | null;
+  }>,
+): Promise<"delivered" | "gone" | "retry"> {
+  const response = await send(
+    `${DISCORD_API}/channels/${input.channelId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bot ${input.botToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...followUpBody(input.content, input.withReply),
+        allowed_mentions: {
+          parse: [],
+          users: input.mentionUserId === null ? [] : [input.mentionUserId],
+        },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  await response.body?.cancel();
+  // 401, 403 and 404: the bot is not allowed in that channel, or it is gone.
+  if (response.ok) return "delivered";
+  return [401, 403, 404].includes(response.status) ? "gone" : "retry";
+}
+
 const failureCode = /^Model request failed \(([\w-]+)\)/u;
 
 /**

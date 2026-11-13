@@ -92,7 +92,8 @@ function host(
     authorize: () => Promise.resolve(device),
     receive: () => Promise.resolve("accepted"),
     disposition,
-    replay: () => Promise.resolve(createLocalBackendReplayStore(owner)),
+    replay: () =>
+      Promise.resolve(createLocalBackendReplayStore(owner, "machine-link")),
     scheduleWake: () => Promise.resolve(),
     report: (operation, cause) => {
       throw new Error(operation, { cause });
@@ -189,7 +190,7 @@ await test("offline custody survives reopen and expires after seven days", async
   const dispositions: PostEnvelope[] = [];
   let database = new DatabaseSync(path);
   let owner = fromNodeSqlite(database);
-  const replay = createLocalBackendReplayStore(owner);
+  const replay = createLocalBackendReplayStore(owner, "machine-link");
   assert.equal(
     replay.admit({ nonce: "before-post", now: 1, expiresAt: 10_000 }),
     "admitted",
@@ -246,7 +247,7 @@ await test("offline custody survives reopen and expires after seven days", async
     database = new DatabaseSync(path);
     owner = fromNodeSqlite(database);
     assert.equal(
-      createLocalBackendReplayStore(owner).admit({
+      createLocalBackendReplayStore(owner, "machine-link").admit({
         nonce: "before-post",
         now: 1,
         expiresAt: 10_000,
@@ -758,7 +759,10 @@ await test(
           teamId: "team",
           directory: () => Promise.resolve([]),
           authorize: () => Promise.resolve(authorizedDevice),
-          replay: () => Promise.resolve(createLocalBackendReplayStore(owner)),
+          replay: () =>
+            Promise.resolve(
+              createLocalBackendReplayStore(owner, "machine-link"),
+            ),
           receive: () => Promise.resolve("refused"),
           disposition: () => Promise.resolve("accepted"),
           scheduleWake: () => Promise.resolve(),

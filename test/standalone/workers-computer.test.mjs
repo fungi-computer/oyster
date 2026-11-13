@@ -1154,6 +1154,7 @@ function fixture() {
                 sync: "unknown",
                 startedAt: Date.now(),
                 endedAt: null,
+                endedReason: null,
               };
               requests.set(
                 JSON.stringify([input.requestScope, input.requestId]),
@@ -1452,6 +1453,7 @@ test("Expose, Unexpose and Stop accept exactly the page's wire bodies and refuse
           exitCode: null,
           startedAt: 1,
           endedAt: 2,
+          endedReason: null,
           sync: null,
         },
         signalled: true,

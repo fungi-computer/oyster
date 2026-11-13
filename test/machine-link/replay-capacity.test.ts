@@ -28,7 +28,7 @@ import {
 // The Hub and standalone Oyster give every (Team, device) its own machine-link
 // Durable Object, whose own SQLite storage holds that device's signed-dial
 // replay records (link.ts hostFor -> MachineLinkHost(state, state.storage) ->
-// createLocalBackendReplayStore(owner)). Each "link" below is that real
+// createLocalBackendReplayStore(owner, "machine-link")). Each "link" below is that real
 // per-device store on its own SQLite file, reopened physically.
 
 async function deviceKey(deviceId: string) {
@@ -51,7 +51,10 @@ type Device = Awaited<ReturnType<typeof deviceKey>>;
 async function link(work: string, teamId: string, device: Device) {
   const path = join(work, `${teamId}-${device.deviceId}.sqlite`);
   let database = new DatabaseSync(path);
-  let replay = createLocalBackendReplayStore(fromNodeSqlite(database));
+  let replay = createLocalBackendReplayStore(
+    fromNodeSqlite(database),
+    "machine-link",
+  );
   const audience = machineLinkAudience(teamId, device.deviceId);
   const url = machineLinkDialUrl(
     "https://hub.test",
@@ -112,7 +115,10 @@ async function link(work: string, teamId: string, device: Device) {
     reopen() {
       database.close();
       database = new DatabaseSync(path);
-      replay = createLocalBackendReplayStore(fromNodeSqlite(database));
+      replay = createLocalBackendReplayStore(
+        fromNodeSqlite(database),
+        "machine-link",
+      );
     },
     close() {
       database.close();

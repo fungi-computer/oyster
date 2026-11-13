@@ -44,7 +44,10 @@ await test("a valid Team A machine-link signature cannot authorize Team B", asyn
   );
   const database = new DatabaseSync(":memory:");
   try {
-    const replay = createLocalBackendReplayStore(fromNodeSqlite(database));
+    const replay = createLocalBackendReplayStore(
+      fromNodeSqlite(database),
+      "machine-link",
+    );
     // Hold URL, key, method, time and replay state constant. Only Team differs.
     await assert.rejects(
       verifySeamRequest(

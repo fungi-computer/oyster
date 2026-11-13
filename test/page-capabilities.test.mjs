@@ -113,6 +113,7 @@ test("Computer port and process mutations send the host wire body, not the bare 
       exitCode: null,
       startedAt: 1,
       endedAt: 2,
+      endedReason: null,
       sync: "unknown",
     };
     if (url.startsWith("/computer/processes/logs"))

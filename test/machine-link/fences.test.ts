@@ -424,7 +424,10 @@ await test("a resumable fence retains signed-dial replay across receiver storage
     const verifiers = await importSeamVerifiers({
       [device.deviceId]: publicKey,
     });
-    let replay = createLocalBackendReplayStore(fromNodeSqlite(receiver));
+    let replay = createLocalBackendReplayStore(
+      fromNodeSqlite(receiver),
+      "machine-link",
+    );
     assert.equal(
       await verifySeamRequest(
         verifiers,
@@ -447,7 +450,10 @@ await test("a resumable fence retains signed-dial replay across receiver storage
     assert.equal(enrollment.retainedDevices()[0]?.revoked, false);
     receiver.close();
     receiver = new DatabaseSync(join(work, "link.sqlite"));
-    replay = createLocalBackendReplayStore(fromNodeSqlite(receiver));
+    replay = createLocalBackendReplayStore(
+      fromNodeSqlite(receiver),
+      "machine-link",
+    );
     await assert.rejects(
       verifySeamRequest(
         verifiers,

@@ -105,6 +105,12 @@ const defaultReplies: readonly string[] = [
   "Water it weekly",
 ];
 let discordReplies: readonly string[] = defaultReplies;
+let release: () => void = () => undefined;
+let held: Promise<void> = Promise.resolve();
+/** A scripted reply that keeps the run going until the test lets it finish. */
+export const heldRun = "HOLD";
+/** The same, finishing with an answer too long for one Discord message. */
+export const heldLongRun = "HOLD_LONG";
 /** A scripted reply that makes the run fail the way the host words it. */
 export const failedRun = (code: string) => `FAIL:${code}`;
 
@@ -120,6 +126,17 @@ export class DiscordFixtureAgent extends StandaloneAgentBase {
             context.messages.filter(({ role }) => role === "user").length - 1,
           )
         ] ?? "Done";
+      if (reply === "HOLD")
+        return held.then(() => fauxAssistantMessage("Done at last"));
+      if (reply === "HOLD_LONG")
+        return held.then(() =>
+          fauxAssistantMessage(
+            Array.from(
+              { length: 80 },
+              (_, line) => `Late line ${String(line + 1)} about ferns.`,
+            ).join("\n\n"),
+          ),
+        );
       return reply.startsWith("FAIL:")
         ? {
             ...fauxAssistantMessage(""),
@@ -131,6 +148,10 @@ export class DiscordFixtureAgent extends StandaloneAgentBase {
   ]);
   protected hostFor(): never {
     return unavailable();
+  }
+  /** A pass waits briefly on a run, so a test holding one open is not slowed. */
+  protected override discordSettlementWaitMs(): number {
+    return 300;
   }
   protected override shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
     return Promise.resolve({
@@ -221,6 +242,9 @@ export async function discordWorld(
   options: Readonly<{ replies?: readonly string[] }> = {},
 ) {
   discordReplies = options.replies ?? defaultReplies;
+  held = new Promise((resolve) => {
+    release = resolve;
+  });
   const base = discordDirectoryFixture();
   const key = await applicationKey();
   const agents = new Map<string, DiscordFixtureAgent>();
@@ -318,10 +342,21 @@ export async function discordWorld(
     abort: unavailable,
   };
   const app = standaloneDiscordApp();
+  // A run the test holds open keeps its runtime pass pending; the reply lane
+  // runs beside it, so waiting on that pass would wait for the test itself.
+  const holding =
+    options.replies?.some((reply) => reply.startsWith("HOLD")) === true;
+  const done = (task: Promise<unknown>) =>
+    holding
+      ? Promise.race([
+          task,
+          new Promise<void>((resolve) => setTimeout(resolve, 400)),
+        ])
+      : task;
   const settle = async () => {
     while (edgeTasks.length + tasks.length > 0) {
-      for (const task of edgeTasks.splice(0)) await task;
-      for (const task of tasks.splice(0)) await task;
+      for (const task of edgeTasks.splice(0)) await done(task);
+      for (const task of tasks.splice(0)) await done(task);
     }
   };
   const path = `/api/discord/interactions/${created.bindingId}`;
@@ -364,6 +399,10 @@ export async function discordWorld(
     /** The Authorization headers Discord saw. */
     bots,
     /** From now on Discord rejects every call. */
+    /** The held run finishes now. */
+    finishRun: () => {
+      release();
+    },
     refuseDiscord: () => {
       status = 403;
     },

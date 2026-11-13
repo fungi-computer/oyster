@@ -20,6 +20,8 @@ import {
   channelId,
   discordWorld,
   failedRun,
+  heldLongRun,
+  heldRun,
   DiscordOptionsAgent,
   guildId,
   interaction,
@@ -338,10 +340,10 @@ describe("a reply an Agent still owes", () => {
     expect(conversation?.label).toBe("Ava");
   });
 
-  it("is closed as expired, with its token and question wiped, once Discord's token has lapsed", async () => {
+  it("is closed as expired, with its token and question wiped, when no answer reaches anyone within two hours", async () => {
     const w = await afterOutage();
     const reopened = await w.restartAgent();
-    later(15 * 60_000);
+    later(3 * 3_600_000);
     await reopened.alarm();
     await w.settle();
     expect(w.discordCalls).toHaveLength(1);
@@ -353,12 +355,35 @@ describe("a reply an Agent still owes", () => {
     ]);
   });
 
-  it("is closed as expired at once when Discord no longer knows the token", async () => {
+  it("falls back to the channel when Discord no longer knows the interaction token", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const w = await world();
     w.answerNext(404);
     await w.interact(ask("5234567890123456782", "hi"));
     await w.settle();
-    expect(w.discordCalls).toHaveLength(1);
+    later(5_000);
+    await w.agentFor().alarm();
+    await w.settle();
+    expect(w.discordCalls.map((call) => call.method)).toEqual([
+      "PATCH",
+      "POST",
+    ]);
+    expect(w.discordCalls[1]?.url).toBe(
+      `https://discord.com/api/v10/channels/${channelId}/messages`,
+    );
+    expect(w.owed()).toEqual([]);
+  });
+
+  it("is closed as expired when neither the token nor the channel will take it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world();
+    w.answerNext(404, 403);
+    await w.interact(ask("5234567890123456784", "hi"));
+    await w.settle();
+    later(5_000);
+    await w.agentFor().alarm();
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(2);
     expect(w.owed()).toEqual([
       expect.objectContaining({ state: "expired", token: "" }),
     ]);
@@ -667,6 +692,106 @@ describe("a failed answer in Discord", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a run that outlives the interaction token", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const later = (ms: number) => {
+    vi.setSystemTime(Date.now() + ms);
+  };
+  const channelCalls = (w: Awaited<ReturnType<typeof world>>) =>
+    w.discordCalls.filter((call) => call.url.includes("/channels/"));
+  /** Wake the Agent until the held run's answer has been delivered. */
+  const untilDelivered = async (w: Awaited<ReturnType<typeof world>>) => {
+    await vi.waitFor(async () => {
+      await w.agentFor().alarm();
+      await w.settle();
+      expect(w.owed()).toEqual([]);
+    });
+  };
+
+  it("says it is still working before the token lapses, then posts the answer in the channel", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world([heldRun]);
+    await w.interact(ask("7234567890123456781", "Think hard"));
+    await w.settle();
+    expect(w.discordCalls).toEqual([]);
+    later(12 * 60_000 + 1_000);
+    await w.agentFor().alarm();
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    expect(w.discordCalls[0]?.method).toBe("PATCH");
+    expect(bodyText(w.discordCalls[0])).toContain("Still working");
+    // It says so once, not at every look.
+    later(30_000);
+    await w.agentFor().alarm();
+    await w.settle();
+    expect(w.discordCalls).toHaveLength(1);
+    // The token lapses; the run finishes later.
+    later(10 * 60_000);
+    w.finishRun();
+    await untilDelivered(w);
+    const [posted] = channelCalls(w);
+    expect(posted?.method).toBe("POST");
+    expect(posted?.url).toBe(
+      `https://discord.com/api/v10/channels/${channelId}/messages`,
+    );
+    expect(bodyText(posted)).toBe("<@4567890123456789012> Done at last");
+    expect(posted?.body).toMatchObject({
+      allowed_mentions: { parse: [], users: ["4567890123456789012"] },
+      components: [{ components: [{ custom_id: "reply" }] }],
+    });
+    expect(w.bots).toEqual([`Bot ${botToken}`]);
+    // The original was never touched again after the notice.
+    expect(
+      w.discordCalls.filter((call) => call.method === "PATCH"),
+    ).toHaveLength(1);
+  });
+
+  it("splits a long late answer across channel messages, mentioning the member once", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world([heldLongRun]);
+    await w.interact(ask("7234567890123456782", "Think hard"));
+    await w.settle();
+    later(20 * 60_000);
+    w.finishRun();
+    await untilDelivered(w);
+    const posted = channelCalls(w);
+    expect(posted.length).toBeGreaterThan(1);
+    for (const call of posted)
+      expect(bodyText(call).length).toBeLessThanOrEqual(2_000);
+    expect(bodyText(posted[0]).startsWith("<@4567890123456789012> ")).toBe(
+      true,
+    );
+    expect(
+      posted.slice(1).every((call) => !bodyText(call).includes("<@")),
+    ).toBe(true);
+    expect(buttonCount(posted.at(-1))).toBe(1);
+    expect(posted.slice(0, -1).every((call) => buttonCount(call) === 0)).toBe(
+      true,
+    );
+  });
+
+  it("gives up as expired after two hours without an answer and posts nothing", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const w = await world([heldRun]);
+    await w.interact(ask("7234567890123456783", "Think hard"));
+    await w.settle();
+    later(3 * 3_600_000);
+    await w.agentFor().alarm();
+    await w.settle();
+    expect(channelCalls(w)).toEqual([]);
+    expect(w.owed()).toEqual([
+      expect.objectContaining({ state: "expired", token: "", text: "" }),
+    ]);
+    const control = standaloneDiscordControl(w.env, w.door);
+    expect(await control.undelivered(owner, w.binding.bindingId)).toMatchObject(
+      [{ label: "Ava", state: "expired" }],
+    );
+    w.finishRun();
   });
 });
 

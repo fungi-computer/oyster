@@ -5,15 +5,23 @@ import type { ConversationSql } from "./conversations.js";
 
 /**
  * The Discord replies an Agent still owes. An interaction token is valid for
- * about 15 minutes; until the answer is delivered or the token lapses, one row
- * per interaction keeps the debt in the Agent's own store, so an evicted run
- * still answers after the Agent wakes. A row names no secret once it is
- * closed, and a closed row says honestly why: `expired` (the token lapsed or
- * Discord no longer knew it) or `failed` (delivery kept failing).
+ * about 15 minutes: until then the answer fills the original message. A run
+ * that needs longer says it is still working before the token lapses, and its
+ * answer then arrives as a normal channel message. One row per interaction
+ * keeps the debt in the Agent's own store, so an evicted run still answers
+ * after the Agent wakes. A row names no secret once it is closed, and a closed
+ * row says honestly why: `expired` (no answer within two hours) or `failed`
+ * (delivery kept failing).
  */
 
-/** The token window we honour, a little under Discord's own 15 minutes. */
+/** The interaction token window we honour, a little under Discord's 15 minutes. */
 const DISCORD_REPLY_WINDOW_MS = 14 * 60_000;
+/** When a run still going tells the member so, safely inside the token window. */
+const STILL_WORKING_AFTER_MS = 12 * 60_000;
+/** How long an answer may take before the reply is given up as expired. */
+const CHANNEL_WINDOW_MS = 2 * 3_600_000;
+/** How soon a run past the token window is looked at again. */
+const SLOW_POLL_MS = 10_000;
 /** How long a closed row stays readable before it is pruned. */
 const CLOSED_RETENTION_MS = 7 * 86_400_000;
 /** Delivery attempts after which a reply is given up as failed. */
@@ -29,7 +37,7 @@ export type DiscordDelivery =
   | "delivered"
   /** The run has not settled yet; look again soon. */
   | "waiting"
-  /** Discord no longer knows the token; nothing more can be sent. */
+  /** Discord refuses every way of reaching the member; nothing more can be sent. */
   | "gone"
   /** A transient failure; try again with backoff. */
   | "retry";
@@ -43,6 +51,10 @@ export type DiscordPendingReply = Readonly<{
   attempts: number;
   /** Messages of the answer Discord already has; a retry resumes after them. */
   deliveredParts: number;
+  /** Whether the interaction token still works; past it, only the channel does. */
+  tokenLive: boolean;
+  /** The token is about to lapse and the member has not been told it is still working. */
+  stillWorkingDue: boolean;
 }>;
 
 /** One reply that never reached Discord, as the owner's list shows it. */
@@ -69,6 +81,8 @@ const pendingRow = z.strictObject({
   command_id: z.string().nullable(),
   attempts: z.number().int().nonnegative(),
   delivered_parts: z.number().int().nonnegative(),
+  still_working: z.union([z.literal(0), z.literal(1)]),
+  created_at: z.number().int(),
   expires_at: z.number().int(),
 });
 const closedRow = z.strictObject({
@@ -105,6 +119,7 @@ export function createDiscordReplies(
       echo TEXT,
       display_name TEXT,
       delivered_parts INTEGER NOT NULL DEFAULT 0,
+      still_working INTEGER NOT NULL DEFAULT 0,
       session_id TEXT,
       command_id TEXT,
       state TEXT NOT NULL CHECK (state IN ('waiting','expired','failed')),
@@ -141,18 +156,20 @@ export function createDiscordReplies(
     );
     const rows = sql
       .exec(
-        "SELECT interaction_id,binding_id,application_id,token,guild_id,channel_id,user_id,text,echo,display_name,session_id,command_id,attempts,delivered_parts,expires_at FROM oyster_discord_replies WHERE state='waiting' AND next_at<=? ORDER BY next_at LIMIT ?",
+        "SELECT interaction_id,binding_id,application_id,token,guild_id,channel_id,user_id,text,echo,display_name,session_id,command_id,attempts,delivered_parts,still_working,created_at,expires_at FROM oyster_discord_replies WHERE state='waiting' AND next_at<=? ORDER BY next_at LIMIT ?",
         now,
         PASS_LIMIT,
       )
       .toArray()
       .map((raw) => pendingRow.parse(raw));
     for (const row of rows) {
-      if (options.now() >= row.expires_at) {
+      const at = options.now();
+      if (at >= row.created_at + CHANNEL_WINDOW_MS) {
         close(row.interaction_id, "expired");
         options.onExpired(row.interaction_id);
         continue;
       }
+      const tokenLive = at < row.expires_at;
       const delivery = await options.deliver({
         interactionId: row.interaction_id,
         bindingId: row.binding_id,
@@ -173,6 +190,11 @@ export function createDiscordReplies(
             : null,
         attempts: row.attempts,
         deliveredParts: row.delivered_parts,
+        tokenLive,
+        stillWorkingDue:
+          tokenLive &&
+          row.still_working === 0 &&
+          at >= row.created_at + STILL_WORKING_AFTER_MS,
       });
       switch (delivery) {
         case "delivered":
@@ -182,7 +204,11 @@ export function createDiscordReplies(
           );
           break;
         case "waiting":
-          reschedule(row.interaction_id, options.now() + POLL_MS, row.attempts);
+          reschedule(
+            row.interaction_id,
+            options.now() + (tokenLive ? POLL_MS : SLOW_POLL_MS),
+            row.attempts,
+          );
           break;
         case "gone":
           close(row.interaction_id, "expired");
@@ -221,6 +247,21 @@ export function createDiscordReplies(
         now,
         now + DISCORD_REPLY_WINDOW_MS,
         now,
+      );
+    },
+    /** The member has been told the run is still going. */
+    markStillWorking: (interactionId: string): void => {
+      sql.exec(
+        "UPDATE oyster_discord_replies SET still_working=1 WHERE interaction_id=?",
+        interactionId,
+      );
+    },
+    /** Discord no longer knows the token: only the channel reaches the member now. */
+    tokenGone: (interactionId: string): void => {
+      sql.exec(
+        "UPDATE oyster_discord_replies SET expires_at=? WHERE interaction_id=?",
+        options.now(),
+        interactionId,
       );
     },
     /** Remember how many messages of the answer Discord has. */

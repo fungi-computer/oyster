@@ -84,7 +84,8 @@ export function createMachineLink<Readback>(
   const openReplayStore = (): Promise<SeamReplayStore> => {
     replayStore ??= import("@fungi.computer/computer").then(
       ({ createLocalBackendReplayStore }) =>
-        createLocalBackendReplayStore(state.storage),
+        // One device per machine-link Durable Object, so one backend share.
+        createLocalBackendReplayStore(state.storage, "machine-link"),
     );
     return replayStore;
   };

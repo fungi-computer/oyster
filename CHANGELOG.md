@@ -1,5 +1,33 @@
 # @fungi.computer/oyster
 
+## 0.24.0
+
+### Minor Changes
+
+- Changes since 0.23.0:
+
+  - fix(computer): give each local backend its own dial-replay capacity share
+  - feat(computer): say a command ended because the Computer went to sleep
+  - feat(oyster): post a Discord answer in the channel when the token has lapsed
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.11.0
+  - @fungi.computer/computer-contract@0.2.0
+  - @fungi.computer/computer@0.9.0
+  - @fungi.computer/shiitake@0.14.1
+  - @fungi.computer/braid@0.4.11
+  - @fungi.computer/darkroom@0.5.11
+  - @fungi.computer/nacre@0.5.4
+  - @fungi.computer/parakeet@0.11.23
+  - @fungi.computer/workflows-wire@0.4.11
+  - @fungi.computer/shiitake-extensions@0.6.15
+  - @fungi.computer/zookeeper@0.0.22
+
 ## 0.23.0
 
 ### Minor Changes

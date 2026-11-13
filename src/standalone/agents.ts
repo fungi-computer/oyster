@@ -78,8 +78,10 @@ import {
   type DiscordAsk,
   discordFailureText,
   patchOriginal,
+  postChannelMessage,
   postFollowUp,
   quoted,
+  STILL_WORKING_TEXT,
   splitDiscordMessage,
   registerAskCommand,
 } from "../channels/discord-interactions.js";
@@ -745,6 +747,17 @@ export abstract class StandaloneAgentBase<
       },
     }));
   }
+  /** How long one pass waits on an unfinished run before looking again. */
+  protected discordSettlementWaitMs(): number {
+    return DISCORD_SETTLEMENT_WAIT_MS;
+  }
+  /** The directory, which holds the sealed bot token and sends with it. */
+  private discordDirectory() {
+    return agentDirectoryForScope(
+      this.env,
+      tenantScope(defaultTenant, this.env.OYSTER_ORIGIN),
+    );
+  }
   /** The Discord replies this Agent owes; a full option override must run it. */
   protected discordReplyWork() {
     return this.discordReplies().work;
@@ -759,28 +772,45 @@ export abstract class StandaloneAgentBase<
     reply: Parameters<Parameters<typeof createDiscordReplies>[0]["deliver"]>[0],
   ): Promise<DiscordDelivery> {
     const { ask } = reply;
+    // While the interaction token lives the answer fills the original and
+    // follows it; once it has lapsed (or Discord says it is gone) the same
+    // messages go to the channel as the owner's bot, mentioning the member.
     const sayPart = async (
       content: string,
-      first: boolean,
+      index: number,
       withReply: boolean,
-    ) => {
+    ): Promise<DiscordDelivery> => {
       try {
-        return await (first ? patchOriginal : postFollowUp)(fetch, {
-          applicationId: ask.applicationId,
-          interactionToken: ask.interactionToken,
-          content,
+        if (reply.tokenLive) {
+          const outcome = await (index === 0 ? patchOriginal : postFollowUp)(
+            fetch,
+            {
+              applicationId: ask.applicationId,
+              interactionToken: ask.interactionToken,
+              content,
+              withReply,
+            },
+          );
+          if (outcome !== "gone") return outcome;
+          this.discordReplies().tokenGone(reply.interactionId);
+          return "waiting";
+        }
+        return await this.discordDirectory().discordSend(reply.bindingId, {
+          channelId: ask.channelId,
+          content: index === 0 ? `<@${ask.userId}> ${content}` : content,
           withReply,
+          mentionUserId: index === 0 ? ask.userId : null,
         });
       } catch (cause) {
         console.warn(
           "discord reply delivery failed",
           cause instanceof Error ? cause.name : "unknown",
         );
-        return "retry" as const;
+        return "retry";
       }
     };
     const say = (content: string, withReply: boolean) =>
-      sayPart(content, true, withReply);
+      sayPart(content, 0, withReply);
     const binding = await this.loadChannelBinding(reply.bindingId);
     if (
       binding === null ||
@@ -811,9 +841,17 @@ export abstract class StandaloneAgentBase<
     }
     const session = (await this.shiitake()).session(accepted.sessionId);
     const settlement = await session.readSettlement(accepted.commandId, {
-      timeoutMs: DISCORD_SETTLEMENT_WAIT_MS,
+      timeoutMs: this.discordSettlementWaitMs(),
     });
-    if (settlement === undefined) return "waiting";
+    if (settlement === undefined) {
+      if (reply.stillWorkingDue) {
+        // The token is about to lapse: say so now; the answer follows in the channel.
+        const told = await sayPart(STILL_WORKING_TEXT, 0, false);
+        if (told === "delivered")
+          this.discordReplies().markStillWorking(reply.interactionId);
+      }
+      return "waiting";
+    }
     const answered =
       settlement.terminal.outcome === "completed" &&
       settlement.content.trim().length > 0;
@@ -844,11 +882,13 @@ export abstract class StandaloneAgentBase<
       ask.echo === undefined
         ? settlement.content
         : `${quoted(ask.echo)}\n\n${settlement.content}`,
+      // A channel message opens with a mention of the member.
+      reply.tokenLive ? undefined : 1_950,
     );
     let done = reply.deliveredParts;
     for (; done < parts.length; done += 1) {
       const last = done === parts.length - 1;
-      const outcome = await sayPart(parts[done] ?? "", done === 0, last);
+      const outcome = await sayPart(parts[done] ?? "", done, last);
       if (outcome !== "delivered") return outcome;
       this.discordReplies().progress(reply.interactionId, done + 1);
     }
@@ -2787,6 +2827,36 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       throw error;
     }
     return { registered, failed };
+  }
+
+  /**
+   * Host-only: post one channel message as this binding's bot, for an answer
+   * that outlived its interaction token. The sealed token stays inside this call.
+   */
+  async discordSend(
+    bindingId: string,
+    message: Readonly<{
+      channelId: string;
+      content: string;
+      withReply: boolean;
+      mentionUserId: string | null;
+    }>,
+  ): Promise<"delivered" | "gone" | "retry"> {
+    const credentialId = this.discords().tokenCredentialId(bindingId);
+    if (credentialId === null) return "gone";
+    try {
+      return await this.discordVault().withSecret(credentialId, (botToken) =>
+        postChannelMessage(fetch, { ...message, botToken }),
+      );
+    } catch (cause) {
+      if (cause instanceof CredentialError)
+        return cause.code === "absent" ? "gone" : "retry";
+      console.warn(
+        "discord channel message failed",
+        cause instanceof Error ? cause.name : "unknown",
+      );
+      return "retry";
+    }
   }
 
   /** Host-only: the website or Discord binding an Agent serves, read fresh on every use. */

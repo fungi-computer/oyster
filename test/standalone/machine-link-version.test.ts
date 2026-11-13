@@ -50,7 +50,10 @@ it("an authenticated version mismatch refuses the dial with upgrade fungi", asyn
       directory: () => Promise.resolve([]),
       replay: () =>
         Promise.resolve(
-          createLocalBackendReplayStore(fromNodeSqlite(database)),
+          createLocalBackendReplayStore(
+            fromNodeSqlite(database),
+            "machine-link",
+          ),
         ),
       authorize: () => {
         authorized += 1;

@@ -387,6 +387,9 @@ export class ComputerDO
         describeBackends: () => this.describeBackends(),
         requireHostedRoute: () => this.requireHostedRoute(),
         containerRunning: (backing) => this.containerRunning(backing),
+        endedByIdleSleep: (backendId) => {
+          this.endedByIdleSleep(backendId);
+        },
         // Standalone boots use the native host directly, not Hub's admission queue.
         vmQueuePosition: () => Promise.resolve(null),
       },
