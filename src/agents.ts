@@ -55,6 +55,8 @@ export type {
 } from "./standalone/agent-model-choice.js";
 import {
   agentAvatar,
+  agentInstructions,
+  appAgentInstructionsMaxLength,
   agentList,
   agentManage,
   agentRename,
@@ -255,6 +257,23 @@ export type OysterAgents = Readonly<{
   ): Promise<OysterAgent | Readonly<{ error: "not_found" | "not_granted" }>>;
   /** Owner-only, secret-free Agent default; an unknown Agent cannot be configured. */
   readModelChoice(agentId: string): Promise<AgentModelChoice | null>;
+  /** Owner-only read of the standing instructions this Agent follows on every turn. */
+  readInstructions(
+    agentId: string,
+    principal: TenantPrincipal,
+  ): Promise<
+    | Readonly<{ agentId: string; instructions: string }>
+    | Readonly<{ error: "not_found" | "not_granted" }>
+  >;
+  /** Owner-only replacement of them; empty clears. Appended after the host's fixed instructions. */
+  setInstructions(
+    agentId: string,
+    instructions: string,
+    principal: TenantPrincipal,
+  ): Promise<
+    | Readonly<{ agentId: string; instructions: string }>
+    | Readonly<{ error: "not_found" | "not_granted" }>
+  >;
   /** Parse the owner's JSON through the deployable Agent's model preference schema. */
   decodeModelChoice(json: string): AgentModelChoice | null;
   /** Persist a supported model and source reference for this Agent, or return an explicit refusal. */
@@ -346,6 +365,9 @@ const renameSchema = Schema.Struct({
   name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 });
 const avatarInputSchema = z.object({ avatar: agentAvatarSchema });
+const instructionsInputSchema = z.object({
+  instructions: z.string().max(appAgentInstructionsMaxLength),
+});
 const visitSchema = Schema.Struct({
   agentId: Schema.String,
   sessionId: Schema.String,
@@ -415,6 +437,24 @@ export function agentCapabilities(
           kind: "json",
           method: "PUT",
           path: "agent-avatars/:agentId",
+        },
+      },
+    },
+    {
+      ...shared,
+      id: "agent.instructions",
+      permission: "agent.instructions",
+      version: agentInstructions.version,
+      methods: {
+        read: {
+          kind: "json",
+          method: "GET",
+          path: "agent-instructions/:agentId",
+        },
+        set: {
+          kind: "json",
+          method: "PUT",
+          path: "agent-instructions/:agentId",
         },
       },
     },
@@ -592,6 +632,46 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
           const result = await agents.setAvatar(
             agentId,
             body.data.avatar,
+            principal,
+          );
+          if ("error" in result)
+            return refusal(
+              result.error === "not_found" ? 404 : 403,
+              result.error,
+            );
+          return Response.json(result);
+        },
+      )
+      .get(
+        "/agent-instructions/:agentId",
+        owner("direct-or-app"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const result = await agents.readInstructions(agentId, principal);
+          if ("error" in result)
+            return refusal(
+              result.error === "not_found" ? 404 : 403,
+              result.error,
+            );
+          return Response.json(result);
+        },
+      )
+      .put(
+        "/agent-instructions/:agentId",
+        owner("direct-or-app"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const body = instructionsInputSchema.safeParse(
+            await context.req.json(),
+          );
+          if (!body.success) return refusal(400, "Instructions are too long");
+          const result = await agents.setInstructions(
+            agentId,
+            body.data.instructions,
             principal,
           );
           if ("error" in result)

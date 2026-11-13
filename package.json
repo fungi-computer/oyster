@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -82,6 +82,10 @@
       "types": "./dist/browser/index.d.ts",
       "import": "./dist/browser/index.js"
     },
+    "./browser/boot-once": {
+      "types": "./dist/browser/boot-once.d.ts",
+      "import": "./dist/browser/boot-once.js"
+    },
     "./browser/boot": {
       "types": "./dist/browser/boot.d.ts",
       "import": "./dist/browser/boot.js"
@@ -137,6 +141,10 @@
     "./event-recipients": {
       "types": "./dist/event-recipients.d.ts",
       "import": "./dist/event-recipients.js"
+    },
+    "./agent-instructions": {
+      "types": "./dist/agent-instructions.d.ts",
+      "import": "./dist/agent-instructions.js"
     },
     "./channels/ids": {
       "types": "./dist/channels/ids.d.ts",

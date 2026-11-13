@@ -139,6 +139,8 @@ const adapter = {
   },
   rename: async () => ({ error: "not_found" }),
   setAvatar: async () => ({ error: "not_found" }),
+  readInstructions: async () => ({ error: "not_found" }),
+  setInstructions: async () => ({ error: "not_found" }),
   policyStatus: async () => null,
   appToolPolicy: async () => null,
   policyRevision: async () => null,

@@ -85,6 +85,13 @@ export const permissionCatalog = {
     "createAgents",
     "install",
   ),
+  "agent.instructions": entry(
+    "agents",
+    "Change Agent instructions",
+    "change the standing instructions of your Agents.",
+    "createAgents",
+    "install",
+  ),
   "agent.toolPolicy": entry(
     "agents",
     "Allow Agents to use Apps",

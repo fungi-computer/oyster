@@ -50,6 +50,7 @@ import {
 } from "@fungi.computer/knapsack/files-patch";
 import {
   ComputerFileConflict,
+  ComputerFileMoveError,
   computerExecutionRequestSchema,
   computerValueSchema,
   computerPortInputSchema,
@@ -60,6 +61,8 @@ import {
   replaceInputSchema,
   writeOutputSchema,
   mkdirOutputSchema,
+  moveInputSchema,
+  moveOutputSchema,
   computerPortsOutputSchema,
   computerPortOutputSchema,
   computerPortRemovalOutputSchema,
@@ -154,8 +157,9 @@ export type StandaloneComputerResult =
       encoding: "base64";
       truncated: boolean;
     }>
-  | Readonly<{ error: "conflict" | "no_runtime" | "not_found" }>
+  | Readonly<{ error: "conflict" | "no_runtime" | "not_found" | "invalid" }>
   | z.output<typeof writeOutputSchema>
+  | z.output<typeof moveOutputSchema>
   | z.output<typeof mkdirOutputSchema>
   | z.output<typeof computerPortsOutputSchema>
   | z.output<typeof computerPortOutputSchema>
@@ -239,6 +243,7 @@ const computerTools = {
   read: { action: "files.read", output: readOutputSchema },
   list: { action: "files.list", output: listOutputSchema },
   write: { action: "files.write", output: writeOutputSchema },
+  move: { action: "files.move", output: moveOutputSchema },
   mkdir: { action: "mkdir", output: mkdirOutputSchema },
   bash: { action: "bash", output: computerToolResultSchema },
   exec: { action: "exec", output: computerToolResultSchema },
@@ -253,6 +258,7 @@ const computerTool = z.enum([
   "read",
   "list",
   "write",
+  "move",
   "mkdir",
   "bash",
   "exec",
@@ -899,6 +905,23 @@ export class ComputerDO
         return writeOutputSchema.parse(
           await this.callAfterAcceptance("write", input, accept),
         );
+      case "files.move":
+        try {
+          return moveOutputSchema.parse(
+            await this.callAfterAcceptance("move", input, accept),
+          );
+        } catch (error) {
+          if (error instanceof ComputerFileMoveError)
+            return {
+              error:
+                error.reason === "exists"
+                  ? "conflict"
+                  : error.reason === "missing"
+                    ? "not_found"
+                    : "invalid",
+            };
+          throw error;
+        }
       case "mkdir":
         return mkdirOutputSchema.parse(
           await this.callAfterAcceptance("mkdir", input, accept),
@@ -1245,6 +1268,19 @@ export const computerFrameMethods: ComputerFrameMethods = {
           .parse(value),
       requiredOperations: () => ["write"],
     },
+    move: {
+      decodeArgs: (args) => z.tuple([moveInputSchema]).parse(args),
+      decodeResult: (value) =>
+        z
+          .union([
+            moveOutputSchema,
+            z.strictObject({
+              error: z.enum(["conflict", "not_found", "invalid"]),
+            }),
+          ])
+          .parse(value),
+      requiredOperations: () => ["move"],
+    },
     ports: {
       decodeArgs: (args) => z.tuple([empty]).parse(args),
       decodeResult: (value) => computerPortsOutputSchema.parse(value),
@@ -1405,6 +1441,10 @@ export async function computerInvocation(
             };
       break;
     }
+    case "move":
+      action = "files.move";
+      [input] = z.tuple([moveInputSchema]).parse(args);
+      break;
     case "ports":
       action = "listPorts";
       [input] = z.tuple([empty]).parse(args);

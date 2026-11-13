@@ -48,6 +48,7 @@ const {
   standaloneComputerCapabilities,
   ComputerDO,
   computerInvocation,
+  computerFrameMethods,
 } = await import("../../src/standalone/computer.ts");
 const { serveCapability } = await import("../../src/authorization.ts");
 const { StandaloneInstance, StandaloneAgent } =
@@ -176,6 +177,71 @@ test("captured fleet frames keep A and B files and processes isolated from the c
   } finally {
     database.close();
   }
+});
+
+test("a captured frame moves one file as files.move and the decoder keeps its refusals", async () => {
+  const calls = [];
+  const scope = scopeOf({ OYSTER_ORIGIN: "https://move.test" });
+  const env = {
+    OYSTER_COMPUTER_ID: "move-computer",
+    REGISTRY: {
+      getByName: () => ({ ownsComputer: () => true }),
+    },
+    COMPUTER: {
+      getByName: () => ({
+        value: async (authority, action, input) => {
+          calls.push({ actions: [...authority.actions], action, input });
+          return { from: input.from, to: input.to };
+        },
+      }),
+    },
+  };
+  const frame = {
+    signal: new globalThis.AbortController().signal,
+    facts: {
+      subject: {
+        kind: "call",
+        context: {
+          computerId: "move-computer",
+          actor: { kind: "member", memberId: "owner" },
+          idempotencyKey: "move",
+        },
+      },
+      selection: { owner: { kind: "installation", id: "prints" } },
+      deadlineAt: Date.now() + 60_000,
+    },
+    host: { method: { name: "moveFiles" } },
+  };
+  assert.deepEqual(
+    await computerInvocation(env, scope, frame, "move", [
+      { from: "/lib/a.png", to: "/lib/Characters/a.png" },
+    ]),
+    { from: "/lib/a.png", to: "/lib/Characters/a.png" },
+  );
+  assert.deepEqual(calls, [
+    {
+      actions: ["files.move"],
+      action: "files.move",
+      input: {
+        from: "/lib/a.png",
+        to: "/lib/Characters/a.png",
+        createParents: false,
+      },
+    },
+  ]);
+  await assert.rejects(
+    computerInvocation(env, scope, frame, "move", [
+      { from: "/lib/a.png", to: "/lib/b.png", extra: true },
+    ]),
+  );
+  const move = computerFrameMethods.COMPUTER.move;
+  assert.deepEqual(move.requiredOperations(), ["move"]);
+  assert.deepEqual(move.decodeArgs([{ from: "/a", to: "/b" }]), [
+    { from: "/a", to: "/b", createParents: false },
+  ]);
+  for (const error of ["conflict", "not_found", "invalid"])
+    assert.deepEqual(move.decodeResult({ error }), { error });
+  assert.throws(() => move.decodeResult({ error: "unavailable" }));
 });
 
 for (const { name, env, expected } of [

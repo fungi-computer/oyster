@@ -269,6 +269,24 @@ type OysterAgents = Readonly<{
     };
     keyId?: string;
   } | null>;
+  readInstructions: Promise<
+    | Readonly<{
+        agentId: string;
+        instructions: string;
+      }>
+    | Readonly<{
+        error: "not_found" | "not_granted";
+      }>
+  >;
+  setInstructions: Promise<
+    | Readonly<{
+        agentId: string;
+        instructions: string;
+      }>
+    | Readonly<{
+        error: "not_found" | "not_granted";
+      }>
+  >;
   decodeModelChoice: {
     keySource: "workers-ai" | "ai-gateway" | "byok";
     model: {

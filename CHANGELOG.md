@@ -1,5 +1,40 @@
 # @fungi.computer/oyster
 
+## 0.25.0
+
+### Minor Changes
+
+- Changes since 0.24.0:
+
+  - feat(computer): add the files.move operation
+  - fix(hub): one boot check per App Release across concurrent asks
+  - feat(hub): give each Hub Agent standing member instructions, set from Grove
+  - feat(oyster): give each Agent standing owner instructions, set from Grove
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.12.0
+  - @fungi.computer/computer-contract@0.3.0
+  - @fungi.computer/computer@0.10.0
+  - @fungi.computer/puffball@0.6.0
+  - @fungi.computer/shiitake-extensions@0.7.0
+  - @fungi.computer/braid@0.4.12
+  - @fungi.computer/darkroom@0.5.12
+  - @fungi.computer/nacre@0.5.5
+  - @fungi.computer/parakeet@0.11.24
+  - @fungi.computer/shiitake@0.14.2
+  - @fungi.computer/workflows-wire@0.4.12
+  - @fungi.computer/forage@0.3.6
+  - @fungi.computer/mycelium@0.3.9
+  - @fungi.computer/zookeeper@0.0.23
+  - @fungi.computer/knapsack@0.4.10
+  - @fungi.computer/veil@0.7.1
+
 ## 0.24.0
 
 ### Minor Changes

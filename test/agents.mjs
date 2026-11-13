@@ -11,6 +11,8 @@ const archived = new Set();
 const forwarded = [];
 let approvalWrites = 0;
 let renameWrites = 0;
+let instructionWrites = 0;
+const instructionsOf = new Map();
 let avatarWrites = 0;
 // Simulates an Agent already pending from before owner-direct creation, or an
 // auto-approval that failed open; the "Allow App tools" control recovers it.
@@ -72,6 +74,20 @@ const adapter = {
     avatarWrites += 1;
     agent.avatar = avatar;
     return agent;
+  },
+  readInstructions: async (agentId, principal) => {
+    assert.deepEqual(principal, owner);
+    if (!agents.some((item) => item.agentId === agentId))
+      return { error: "not_found" };
+    return { agentId, instructions: instructionsOf.get(agentId) ?? "" };
+  },
+  setInstructions: async (agentId, instructions, principal) => {
+    assert.deepEqual(principal, owner);
+    if (!agents.some((item) => item.agentId === agentId))
+      return { error: "not_found" };
+    instructionWrites += 1;
+    instructionsOf.set(agentId, instructions);
+    return { agentId, instructions };
   },
   policyStatus: async (agentId) => {
     if (!agents.some((agent) => agent.agentId === agentId)) return null;
@@ -158,6 +174,7 @@ const declared = [
   "agent.manage",
   "agent.rename",
   "agent.avatar",
+  "agent.instructions",
   "agent.toolPolicy",
   "agent.read",
   "agent.send",
@@ -347,6 +364,43 @@ assert.equal((await setAvatar({ ...cat, v: 2 })).status, 400);
 assert.equal((await setAvatar(cat, "agent_9")).status, 404);
 assert.deepEqual((await (await setAvatar(cat)).json()).avatar, cat);
 assert.equal(avatarWrites, 1);
+
+const putInstructions = (instructions, agentId = "agent_1", who = "owner") =>
+  call(
+    `/agent-instructions/${agentId}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instructions }),
+    },
+    who,
+  );
+assert.equal(
+  (await putInstructions("Be brief.", "agent_1", "key")).status,
+  403,
+);
+assert.equal(instructionWrites, 0, "a non-owner never changes instructions");
+assert.equal(
+  (await putInstructions("x".repeat(4_001))).status,
+  400,
+  "instructions over the bound are refused",
+);
+assert.equal((await putInstructions("Be brief.", "agent_9")).status, 404);
+assert.equal(instructionWrites, 0);
+assert.deepEqual(await (await putInstructions("Be brief.")).json(), {
+  agentId: "agent_1",
+  instructions: "Be brief.",
+});
+assert.deepEqual(
+  await (await call("/agent-instructions/agent_1")).json(),
+  { agentId: "agent_1", instructions: "Be brief." },
+  "the owner reads back what they wrote",
+);
+assert.equal(
+  (await call("/agent-instructions/agent_1", {}, "key")).status,
+  403,
+  "a key cannot read an Agent's standing instructions",
+);
 assert.deepEqual(
   (await (await call("/agents")).json()).find(
     (agent) => agent.agentId === "agent_1",

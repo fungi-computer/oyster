@@ -80,6 +80,8 @@ const proofAgents = (): OysterAgents => ({
   ensureStarter: notInProof,
   rename: notInProof,
   setAvatar: notInProof,
+  readInstructions: notInProof,
+  setInstructions: notInProof,
   readModelChoice: notInProof,
   decodeModelChoice: notInProofSync,
   setModelChoice: notInProof,

@@ -16,6 +16,7 @@
 | [apps](apps.md)                                     | -           |
 | [auth](auth.md)                                     | -           |
 | [authorization](authorization.md)                   | -           |
+| [browser/boot-once](browser/boot-once.md)           | -           |
 | [browser/boot](browser/boot.md)                     | -           |
 | [browser](browser.md)                               | -           |
 | [build-contract](build-contract.md)                 | -           |

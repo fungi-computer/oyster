@@ -48,6 +48,8 @@ function dummyAgents() {
       create: unused("create"),
       rename: unused("rename"),
       setAvatar: unused("setAvatar"),
+      readInstructions: unused("readInstructions"),
+      setInstructions: unused("setInstructions"),
       policyStatus: unused("policyStatus"),
       appToolPolicy: async () => null,
       policyRevision: unused("policyRevision"),

@@ -90,6 +90,10 @@ import {
   sealDiscordToken,
   type DiscordRefusal,
 } from "./discord-channels.js";
+import {
+  createAgentInstructions,
+  withOwnerInstructions,
+} from "../agent-instructions.js";
 import { channelSessionDoor } from "./channel-session-door.js";
 import { createAuthenticatedVisitorChannel } from "../channels/visitor-channel.js";
 import { verifyVisitor, type ProvenVisitor } from "./visitor-proof.js";
@@ -1582,6 +1586,22 @@ export abstract class StandaloneAgentBase<
     );
   }
 
+  private instructionsOwner:
+    ReturnType<typeof createAgentInstructions> | undefined;
+  private ownerInstructions() {
+    return (this.instructionsOwner ??= createAgentInstructions(
+      this.ctx.storage.sql,
+    ));
+  }
+  /** The owner's standing instructions for this Agent; the host admits the owner first. */
+  readInstructions(): string {
+    return this.ownerInstructions().read().instructions;
+  }
+  /** Replace them. The next turn follows the new text; a run already going does not change. */
+  writeInstructions(instructions: string): string {
+    return this.ownerInstructions().write(instructions).instructions;
+  }
+
   /** Secret-free default of this Agent; stored separately from Session history. */
   async readModelChoice(): Promise<AgentModelChoice> {
     return this.choice().read();
@@ -1832,10 +1852,13 @@ export abstract class StandaloneAgentBase<
       instructions: this.channelInstructions({
         load: async () => {
           const { appApprovalInstructions } = await import("../mcp.js");
-          return {
-            revision: "oyster-7",
-            text: instructions + "\n" + appApprovalInstructions,
-          };
+          return withOwnerInstructions(
+            {
+              revision: "oyster-7",
+              text: instructions + "\n" + appApprovalInstructions,
+            },
+            this.ownerInstructions().read(),
+          );
         },
       }),
       tools: {
@@ -3402,6 +3425,23 @@ export function standaloneAgents(
         { onExcessProperty: "error" },
       )(json);
       return parsed._tag === "None" ? null : parsed.value;
+    },
+    readInstructions: async (agentId, principal) => {
+      if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+      if (!(await directory().has(agentId))) return { error: "not_found" };
+      return {
+        agentId,
+        instructions: await env.AGENTS.getByName(agentId).readInstructions(),
+      };
+    },
+    setInstructions: async (agentId, instructions, principal) => {
+      if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+      if (!(await directory().has(agentId))) return { error: "not_found" };
+      return {
+        agentId,
+        instructions:
+          await env.AGENTS.getByName(agentId).writeInstructions(instructions),
+      };
     },
     setModelChoice: async (agentId, choice, principal) => {
       if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };

@@ -23,6 +23,7 @@
     "src/media.ts",
     "src/browser/index.ts",
     "src/browser/boot.ts",
+    "src/browser/boot-once.ts",
     "src/computer.ts",
     "src/root-data.ts",
     "src/page/mount.ts",
