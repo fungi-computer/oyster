@@ -16,6 +16,7 @@ import {
   type Installation,
 } from "./apps/installation.js";
 import { instanceIds, instanceIdSchema } from "./instance-id.js";
+import { migrateCommandRows } from "./installation-migration.js";
 import { tenantIdSchema, tenantScope } from "./tenant.js";
 import { failureDiagnostic } from "./cause-class.js";
 import type { InstallationCommit } from "./host.js";
@@ -485,6 +486,7 @@ export async function createInstallationOperations(
       ON installation_commands(retention_due_at)
       WHERE retention_due_at IS NOT NULL`,
   );
+  migrateCommandRows(owner);
   const load = (requestId: string): StoredCommand | null => {
     const row = owner.sql
       .exec(

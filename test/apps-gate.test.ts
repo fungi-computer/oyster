@@ -1,13 +1,20 @@
 import { expect, it } from "vitest";
 import * as Result from "effect/Result";
-import type { AppDeclaration } from "@fungi.computer/puffball/app";
+import type {
+  AppCapabilityId,
+  AppDeclaration,
+} from "@fungi.computer/puffball/app";
 import { instanceIds } from "../src/index.js";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
 import {
   applyGrantCommand,
   applyInstallationCommand,
   type CapabilityOperationDescriptor,
+  carryGrant,
+  unstampedFingerprint,
+  type DeclaredOperations,
 } from "../src/apps/installation.js";
+import { pendingCapabilities } from "../src/apps/permissions.js";
 import {
   admits,
   admitMethodMetadata,
@@ -124,6 +131,24 @@ it("a method cannot use its required capability on an unapproved Computer", asyn
   }
 });
 
+/** Operations the signed declaration alone defines carry this fingerprint. */
+const declarationFingerprint = '["declaration"]';
+/** The fingerprints a snapshot assigns, as an owner approval of those operations stores them. */
+function fingerprintsOf(
+  declared: DeclaredOperations,
+  capability: AppCapabilityId,
+  operations: readonly string[],
+): Record<string, string> {
+  const row = declared.capabilities.find((r) => r.capability === capability);
+  return Object.fromEntries(
+    operations.map((operation) => {
+      const fingerprint = row?.fingerprints[operation];
+      if (fingerprint === undefined)
+        throw new Error(`No fingerprint for ${operation}`);
+      return [operation, fingerprint];
+    }),
+  );
+}
 async function approvedFacts(
   nextDeclaration: AppDeclaration = declaration,
   operationDescriptors: readonly CapabilityOperationDescriptor[] = descriptors,
@@ -441,6 +466,11 @@ it("keeps route and backend approvals separate and preserves host resource selec
           capability: "computer.readFile" as const,
           capabilityApproved: true as const,
           operations: ["route:computer.readFile:open"],
+          fingerprints: fingerprintsOf(
+            current.declaredOperations,
+            "computer.readFile",
+            ["route:computer.readFile:open"],
+          ),
           resources: [{ kind: "computer", id: "selected" }],
         },
       ],
@@ -578,6 +608,11 @@ it("requires explicit approval of the canonical event capability before emitting
       "route:app.methods:emit",
       "route:app.methods:inspect",
     ],
+    fingerprints: {
+      "binding:EVENTS:emit": '["app.events.emit","write",["app.events.emit"]]',
+      "route:app.methods:emit": declarationFingerprint,
+      "route:app.methods:inspect": declarationFingerprint,
+    },
     resources: "tenant-scope",
   });
   expect(
@@ -766,6 +801,7 @@ it("keeps capability consent through replacing its only method without widening 
       capability: "workflow.publish",
       capabilityApproved: true,
       operations: [],
+      fingerprints: {},
       resources: "tenant-scope",
     },
   ]);
@@ -818,6 +854,10 @@ it("stores one capability approval for two signed methods requiring that capabil
         "route:app.methods:publishAnother",
         "route:app.methods:publishWorkflow",
       ],
+      fingerprints: {
+        "route:app.methods:publishAnother": declarationFingerprint,
+        "route:app.methods:publishWorkflow": declarationFingerprint,
+      },
       resources: "tenant-scope",
     },
   ]);
@@ -870,12 +910,21 @@ it("keeps approvals across an operation-digest change without adding operations"
         ...current.installation.authority,
         declaredOperationsDigest: oldSnapshot.digest,
         approvedGrants: current.installation.authority.approvedGrants.map(
-          (grant) => ({
-            ...grant,
-            operations: grant.operations.filter(
+          (grant) => {
+            const operations = grant.operations.filter(
               (operation) => !operation.startsWith("route:app.methods:"),
-            ),
-          }),
+            );
+            return {
+              ...grant,
+              operations,
+              fingerprints: Object.fromEntries(
+                operations.map((operation) => [
+                  operation,
+                  grant.fingerprints[operation] ?? "",
+                ]),
+              ),
+            };
+          },
         ),
       },
     },
@@ -1380,6 +1429,9 @@ it("an apps.open affordance preserves stored operation and resource ceilings", a
     capability: "apps.open",
     capabilityApproved: true,
     operations: ["route:app.methods:open"],
+    fingerprints: fingerprintsOf(current.declaredOperations, "apps.open", [
+      "route:app.methods:open",
+    ]),
     resources: [{ kind: "computer", id: "c1" }],
   } satisfies NonNullable<ReturnType<typeof grantsFor>>;
   const installation = {
@@ -1465,6 +1517,7 @@ it("approvals routes require their own current installation consent", async () =
       ...descriptors,
       {
         id: "approvals",
+        base: "/approvals",
         permission: "approvals",
         methods: { list: { kind: "json", method: "POST", path: "/list" } },
       },
@@ -1515,21 +1568,37 @@ it("approvals routes require their own current installation consent", async () =
   ).toEqual({ kind: "refused", code: "stale_authority" });
 });
 
+const mediaDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+  capabilities: ["media.generation"],
+  handlers: [],
+  roles: [],
+  commands: [],
+  gills: [],
+});
+const mediaSlot = (
+  names: readonly string[],
+  path: (name: string) => string = (name) => name,
+): CapabilityOperationDescriptor => ({
+  id: "media.generation",
+  base: "/media",
+  permission: "media.generation",
+  methods: Object.fromEntries(
+    names.map((name) => [
+      name,
+      { kind: "json", method: "POST", path: path(name) },
+    ]),
+  ),
+});
+const mediaRoute = (facts: GateFacts, method: string) =>
+  admits(facts, {
+    kind: "capability-route",
+    capability: "media.generation",
+    operation: `route:media.generation:${method}`,
+    effect: "write",
+  });
+
 it("keeps media approvals across a host upgrade that adds the quote method, until the owner approves it", async () => {
-  const mediaDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
-    capabilities: ["media.generation"],
-    handlers: [],
-    roles: [],
-    commands: [],
-    gills: [],
-  });
-  const slot = (names: readonly string[]): CapabilityOperationDescriptor => ({
-    id: "media.generation",
-    permission: "media.generation",
-    methods: Object.fromEntries(
-      names.map((name) => [name, { kind: "json", method: "POST", path: name }]),
-    ),
-  });
+  const slot = mediaSlot;
   // Approved under the 0.34 host: no quote route.
   const before = await approvedFacts(mediaDeclaration, [
     slot(["describe", "generate", "cancelAttempt"]),
@@ -1594,6 +1663,217 @@ it("keeps media approvals across a host upgrade that adds the quote method, unti
       effect: "write",
     }),
   ).toEqual({ kind: "admitted", grants: [] });
+});
+
+const mediaMethods = ["describe", "generate", "cancelAttempt"];
+/** Select the same Release under another host snapshot, as a host upgrade does. */
+async function upgradeHost(
+  before: GateFacts,
+  descriptors: readonly CapabilityOperationDescriptor[],
+): Promise<GateFacts> {
+  const declaredOperations = await deriveDeclaredOperations(
+    release,
+    mediaDeclaration,
+    descriptors,
+  );
+  const selected = applyGrantCommand(
+    before.installation.authority,
+    { kind: "select-release" },
+    {
+      principal: before.principal,
+      expectedVersion: before.installation.authority.authorityVersion,
+      declaration: mediaDeclaration,
+      declaredOperations,
+      now: 4000,
+    },
+  );
+  if (Result.isFailure(selected)) throw new Error(selected.failure.code);
+  return {
+    ...before,
+    declaredOperations,
+    installation: { ...before.installation, authority: selected.success },
+  };
+}
+const mediaGrant = (facts: GateFacts) =>
+  facts.installation.authority.approvedGrants.find(
+    (grant) => grant.capability === "media.generation",
+  );
+
+it("an unchanged host upgrade keeps every approval", async () => {
+  const before = await approvedFacts(mediaDeclaration, [
+    mediaSlot(mediaMethods),
+  ]);
+  const after = await upgradeHost(before, [mediaSlot(mediaMethods)]);
+  expect(after.installation.authority.approvedGrants).toEqual(
+    before.installation.authority.approvedGrants,
+  );
+  for (const method of mediaMethods)
+    expect(mediaRoute(after, method)).toEqual({ kind: "admitted", grants: [] });
+});
+
+it("a host upgrade that changes one method's descriptor drops only that approval and lists it as needing approval", async () => {
+  const before = await approvedFacts(mediaDeclaration, [
+    mediaSlot(mediaMethods),
+  ]);
+  const changed = mediaSlot(mediaMethods, (name) =>
+    name === "generate" ? "generate-v2" : name,
+  );
+  const after = await upgradeHost(before, [changed]);
+  const generate = "route:media.generation:generate";
+  expect(mediaGrant(after)?.operations).toEqual(
+    mediaGrant(before)?.operations.filter(
+      (operation) => operation !== generate,
+    ),
+  );
+  expect(Object.keys(mediaGrant(after)?.fingerprints ?? {})).not.toContain(
+    generate,
+  );
+  expect(mediaRoute(after, "describe")).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  expect(mediaRoute(after, "cancelAttempt")).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  expect(mediaRoute(after, "generate")).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+  // The page reads the carried approvals: only the changed operation is pending.
+  const shown = after.installation.authority.approvedGrants.map((grant) =>
+    carryGrant(grant, after.declaredOperations),
+  );
+  expect(
+    pendingCapabilities(
+      { approvedGrants: shown },
+      mediaDeclaration,
+      after.declaredOperations,
+    ),
+  ).toEqual(["media.generation"]);
+  // Before the Release is re-selected, stored approvals still carry the old
+  // fingerprint, so the gate and the page agree without a commit.
+  const unselected: GateFacts = {
+    ...before,
+    declaredOperations: after.declaredOperations,
+  };
+  expect(mediaRoute(unselected, "generate")).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+  expect(mediaRoute(unselected, "describe")).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  // Approving the changed operation stores its new fingerprint.
+  const approved = applyGrantCommand(
+    after.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [
+        {
+          capability: "media.generation",
+          grant: {
+            operations:
+              after.declaredOperations.capabilities[0]?.operations ?? [],
+            resources: "tenant-scope",
+          },
+        },
+      ],
+    },
+    {
+      principal: {
+        actor: { kind: "member", memberId: "owner" },
+        role: "owner",
+      },
+      expectedVersion: after.installation.authority.authorityVersion,
+      declaration: mediaDeclaration,
+      declaredOperations: after.declaredOperations,
+      now: 5000,
+    },
+  );
+  if (Result.isFailure(approved)) throw new Error(approved.failure.code);
+  expect(
+    mediaRoute(
+      {
+        ...after,
+        installation: { ...after.installation, authority: approved.success },
+      },
+      "generate",
+    ),
+  ).toEqual({ kind: "admitted", grants: [] });
+});
+
+it("an approval stored before fingerprints carries by name and is stamped by the first selection", async () => {
+  const before = await approvedFacts(mediaDeclaration, [
+    mediaSlot(mediaMethods),
+  ]);
+  const migrated: GateFacts = {
+    ...before,
+    installation: {
+      ...before.installation,
+      authority: {
+        ...before.installation.authority,
+        approvedGrants: before.installation.authority.approvedGrants.map(
+          (grant) => ({
+            ...grant,
+            fingerprints: Object.fromEntries(
+              grant.operations.map((operation) => [
+                operation,
+                unstampedFingerprint,
+              ]),
+            ),
+          }),
+        ),
+      },
+    },
+  };
+  // Even a changed descriptor is adopted by name, as before fingerprints existed.
+  const changed = mediaSlot(mediaMethods, (name) =>
+    name === "generate" ? "generate-v2" : name,
+  );
+  const upgraded = await upgradeHost(migrated, [changed]);
+  expect(mediaGrant(upgraded)?.operations).toEqual(
+    mediaGrant(before)?.operations,
+  );
+  expect(mediaGrant(upgraded)?.fingerprints).toEqual(
+    upgraded.declaredOperations.capabilities[0]?.fingerprints,
+  );
+  expect(mediaRoute(migrated, "generate")).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  // Once stamped, a later change drops it.
+  const later = await upgradeHost(upgraded, [mediaSlot(mediaMethods)]);
+  expect(mediaRoute(later, "generate")).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+});
+
+it("an added method needs approval while every existing approval is kept", async () => {
+  const before = await approvedFacts(mediaDeclaration, [
+    mediaSlot(mediaMethods),
+  ]);
+  const after = await upgradeHost(before, [
+    mediaSlot([...mediaMethods, "quote"]),
+  ]);
+  expect(mediaGrant(after)?.operations).toEqual(mediaGrant(before)?.operations);
+  expect(mediaRoute(after, "describe")).toEqual({
+    kind: "admitted",
+    grants: [],
+  });
+  expect(mediaRoute(after, "quote")).toEqual({
+    kind: "refused",
+    code: "not_approved",
+  });
+  expect(
+    pendingCapabilities(
+      after.installation.authority,
+      mediaDeclaration,
+      after.declaredOperations,
+    ),
+  ).toEqual(["media.generation"]);
 });
 
 it("a change-grants drops untouched approved operations the declaration no longer carries", async () => {

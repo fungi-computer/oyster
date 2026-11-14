@@ -33,6 +33,7 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
             capability: "team.workbenchHost",
             capabilityApproved: true,
             operations: [],
+            fingerprints: {},
             resources: "tenant-scope",
           },
         ],
@@ -42,8 +43,12 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
         artifactDigest: digest,
         digest,
         capabilities: [
-          { capability: "team.workbenchHost", operations: [] },
-          { capability: "agent.send", operations: [] },
+          {
+            capability: "team.workbenchHost",
+            operations: [],
+            fingerprints: {},
+          },
+          { capability: "agent.send", operations: [], fingerprints: {} },
         ],
       },
     },
@@ -65,6 +70,7 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
                 capability: "agent.send",
                 capabilityApproved: true,
                 operations: [],
+                fingerprints: {},
                 resources: "tenant-scope",
               },
             ],
@@ -184,7 +190,9 @@ it("changing Apps never exposes the previous App's editable draft while the new 
         declaredOperations: {
           artifactDigest: digest,
           digest,
-          capabilities: [{ capability: "agent.send", operations: [] }],
+          capabilities: [
+            { capability: "agent.send", operations: [], fingerprints: {} },
+          ],
         },
       },
     });
@@ -276,7 +284,7 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
         artifactDigest: digest,
         digest,
         capabilities: [
-          { capability: "agent.send", operations: [] },
+          { capability: "agent.send", operations: [], fingerprints: {} },
           {
             capability: "apps.call",
             operations: [
@@ -286,6 +294,13 @@ it("lists each grant once under a sentence-case heading with a labelled switch a
               "route:app.methods:exportProject",
               "route:app.methods:archiveProject",
             ],
+            fingerprints: {
+              "route:apps.call:app_bonsai:files.read": "fingerprint",
+              "route:apps.call:app_missing:files.save": "fingerprint",
+              "route:apps.call:app_other:files.save": "fingerprint",
+              "route:app.methods:exportProject": "fingerprint",
+              "route:app.methods:archiveProject": "fingerprint",
+            },
           },
         ],
       },
@@ -383,10 +398,14 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
           artifactDigest: digest,
           digest,
           capabilities: [
-            { capability: "approvals", operations: [] },
-            { capability: "apps.open", operations: [] },
-            { capability: "channels.personal.manage", operations: [] },
-            { capability: "channels.read", operations: [] },
+            { capability: "approvals", operations: [], fingerprints: {} },
+            { capability: "apps.open", operations: [], fingerprints: {} },
+            {
+              capability: "channels.personal.manage",
+              operations: [],
+              fingerprints: {},
+            },
+            { capability: "channels.read", operations: [], fingerprints: {} },
           ],
         },
       },
@@ -407,7 +426,19 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
                 approvedGrants: args[2].flatMap(({ capability, grant }) =>
                   grant === null
                     ? []
-                    : [{ capability, capabilityApproved: true, ...grant }],
+                    : [
+                        {
+                          capability,
+                          capabilityApproved: true,
+                          ...grant,
+                          fingerprints: Object.fromEntries(
+                            grant.operations.map((operation) => [
+                              operation,
+                              "fingerprint",
+                            ]),
+                          ),
+                        },
+                      ],
                 ),
               },
             },

@@ -1337,6 +1337,7 @@ const computerGrant = {
   capability: "computer.execute",
   capabilityApproved: true,
   operations: [],
+  fingerprints: {},
   resources: "tenant-scope",
 };
 

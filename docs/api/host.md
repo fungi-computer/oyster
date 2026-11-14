@@ -624,6 +624,7 @@ type InstallationOperations = Readonly<{
               capability: ...;
               capabilityApproved: ...;
               operations: ...;
+              fingerprints: ...;
               resources: ...;
            }>[];
            approval:   | Readonly<{
@@ -780,6 +781,7 @@ type InstallationOperations = Readonly<{
               capability: ...;
               capabilityApproved: ...;
               operations: ...;
+              fingerprints: ...;
               resources: ...;
            }>[];
            approval:   | Readonly<{
@@ -937,6 +939,7 @@ type InstallationOperations = Readonly<{
               capability: ...;
               capabilityApproved: ...;
               operations: ...;
+              fingerprints: ...;
               resources: ...;
            }>[];
            approval:   | Readonly<{
@@ -1031,6 +1034,7 @@ type InstallationOperations = Readonly<{
               capability: ...;
               capabilityApproved: ...;
               operations: ...;
+              fingerprints: ...;
               resources: ...;
            }>[];
            approval:   | Readonly<{
@@ -1213,6 +1217,7 @@ type InstallationOperations = Readonly<{
                  | ...;
               capabilityApproved: true;
               operations: readonly ...[];
+              fingerprints: Readonly<...>;
               resources: ... | ...;
            }>[];
            approval:   | Readonly<{
@@ -1249,6 +1254,7 @@ type InstallationOperations = Readonly<{
                  capability: ...;
                  capabilityApproved: ...;
                  operations: ...;
+                 fingerprints: ...;
                  resources: ...;
               }>[];
               approval:   | Readonly<{

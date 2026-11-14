@@ -16,17 +16,39 @@ artifact digest, the derived capabilities, descriptor routes and each binding
 operation's effect and requirements. Hosts recompute this snapshot when
 resolving a Release and pass it as a fact.
 
+Each declared operation also carries a fingerprint of the data that defines what
+it does. A `route:<descriptor id>:<method>` operation is fingerprinted by its
+host descriptor method entry (the descriptor `base` plus the method's kind, HTTP
+method and path). A `binding:<binding>:<operation>` operation is fingerprinted
+by its Puffball registry entry (broker class, effect and required capabilities).
+`apps.call` targets and `route:app.methods:*` rows are defined by the signed
+declaration alone, so they carry a constant fingerprint. An approval stores the
+fingerprint of each operation the owner approved.
+
 The pin that gates an installation is its immutable artifact digest. The stored
 `declaredOperationsDigest` is the snapshot at the last install, select-release
 or change-grants write; it is a record, not a gate. A host upgrade that adds
 operations leaves existing approvals working, because every check intersects the
 approved operations with the current declaration: a removed operation drops, and
 an added one is `not_approved` and shows as needing review until the owner
-approves it. A permissions save carries the snapshot digest the owner saw; the
-host refuses it with `stale_authority` when the freshly derived digest differs,
-so an owner never approves operations they were not shown. `change-grants` for
-an unchanged Release succeeds, refreshes the digest and drops untouched
-approvals the declaration no longer carries.
+approves it. An operation carries only when its name and its fingerprint both
+match the approval; one that keeps its name but whose host descriptor or binding
+operation changed drops exactly like a new operation, while unchanged operations
+keep theirs. The gate, `select-release`, `change-grants` and the permissions
+page all apply the same `carryGrant` rule, so none of them shows or honours an
+approval the owner has not seen for the current behavior. `route:app.methods:*`
+rows still record approval detail and are not enforced. Approvals stored before
+fingerprints existed (Oyster 0.28 and earlier) are migrated when the registry
+opens: `migrateInstallationRows` gives each approved operation the `unstamped`
+marker and rewrites the row, so the directory stays readable and every approval
+keeps working. The first snapshot that carries an operation by name (a gate
+check, `select-release` or `change-grants`) replaces the marker with the
+declared fingerprint, so that first upgrade carries by name exactly as before
+and later ones compare fingerprints. A permissions save carries the snapshot
+digest the owner saw; the host refuses it with `stale_authority` when the
+freshly derived digest differs, so an owner never approves operations they were
+not shown. `change-grants` for an unchanged Release succeeds, refreshes the
+digest and drops untouched approvals the declaration no longer carries.
 
 Stored grants contain one explicit operation list per capability. Resources are
 opaque host-minted references or `tenant-scope`, which the host resolves against
@@ -36,9 +58,10 @@ operation and resource selectors into a wider authorization.
 
 The reducer takes host-minted installation/Instance identities and captured
 time. Members may manage installations; only owners approve operations. Upgrades
-intersect existing approvals with the new derived operations. They never add an
-operation. `external` App methods always return `approval_required`. Method
-inputs retain the Hub's 64 KiB bound. Oyster admits no anonymous caller.
+intersect existing approvals with the new derived operations by name and
+fingerprint. They never add an operation. `external` App methods always return
+`approval_required`. Method inputs retain the Hub's 64 KiB bound. Oyster admits
+no anonymous caller.
 
 S2 invocation grants retain the existing `{binding, operations}` shape,
 validated with Puffball's registry. The host passes admitted grants into its

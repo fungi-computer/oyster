@@ -284,6 +284,13 @@ test(
             "binding:APP_STORAGE:write",
             "route:app.methods:write",
           ],
+          fingerprints: {
+            "binding:APP_STORAGE:read":
+              '["app.storage.read","read",["app.storage"]]',
+            "binding:APP_STORAGE:write":
+              '["app.storage.write","write",["app.storage"]]',
+            "route:app.methods:write": '["declaration"]',
+          },
           resources: "tenant-scope",
         },
       ]);

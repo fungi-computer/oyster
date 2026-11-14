@@ -12,6 +12,7 @@ import {
   declaredOperationsSchema,
   ownerCodec,
   type AppAuthority,
+  type ApprovedGrant,
   type DeclaredOperations,
   type GrantCommand,
   grantCommandSchema,
@@ -25,9 +26,24 @@ export type ResourceOption = {
   id: string;
   label: string;
 };
-/** Includes newly declared operations and capabilities the owner has narrowed. */
+/**
+ * The approval facts the permission page edits; fingerprints are the host's concern.
+ * @inline
+ */
+export type ApprovalRows = Readonly<{
+  approvedGrants: readonly Pick<
+    ApprovedGrant,
+    "capability" | "operations" | "resources"
+  >[];
+}>;
+
+/**
+ * Includes newly declared or changed operations and capabilities the owner has
+ * narrowed. The host sends grants already reduced by carryGrant, so a changed
+ * operation is absent from them exactly as a new one is.
+ */
 export function pendingCapabilities(
-  authority: Pick<AppAuthority, "approvedGrants">,
+  authority: ApprovalRows,
   declaration: Pick<AppDeclaration, "capabilities">,
   declaredOperations: DeclaredOperations,
 ): AppDeclaration["capabilities"] {
@@ -176,7 +192,7 @@ export type PermissionEdit =
     }>;
 
 /** The saved operation ceiling is the starting point, including empty operation rows. */
-export function draftOf(authority: AppAuthority): PermissionDraft {
+export function draftOf(authority: ApprovalRows): PermissionDraft {
   return new Map(
     authority.approvedGrants.map(({ capability, operations, resources }) => [
       capability,
@@ -277,7 +293,7 @@ export function editPermissions(
 
 /** Only touched capability rows cross the save boundary. */
 export function planGrantChange(
-  baseline: AppAuthority,
+  baseline: ApprovalRows,
   draft: PermissionDraft,
 ): readonly GrantChange[] {
   const saved = draftOf(baseline);
@@ -292,8 +308,8 @@ export function planGrantChange(
 /** A conflict preserves the person's edits while taking fresh untouched capabilities. */
 export function rebaseDraft(
   draft: PermissionDraft,
-  baseline: AppAuthority,
-  current: AppAuthority,
+  baseline: ApprovalRows,
+  current: ApprovalRows,
 ): PermissionDraft {
   const rebased = new Map(draftOf(current));
   for (const change of planGrantChange(baseline, draft))
@@ -352,8 +368,12 @@ export type PermissionScreen = Readonly<{
 
 /** Every declared permission is visible, including removable saved resources no longer listed by the host. */
 export function permissionScreen(
-  input: AppPermissionsWire &
-    Readonly<{ resources: readonly ResourceOption[]; canEdit: boolean }>,
+  input: Omit<AppPermissionsWire, "authority"> &
+    Readonly<{
+      authority: ApprovalRows;
+      resources: readonly ResourceOption[];
+      canEdit: boolean;
+    }>,
 ): PermissionScreen {
   const pending = pendingCapabilities(
     input.authority,

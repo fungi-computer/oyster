@@ -157,6 +157,7 @@ const library = (installationId, capability, status = "enabled") => ({
         capability,
         capabilityApproved: true,
         operations: [],
+        fingerprints: {},
         resources: "tenant-scope",
       },
     ],

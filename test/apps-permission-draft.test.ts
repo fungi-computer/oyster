@@ -19,12 +19,20 @@ const baseline = appAuthoritySchema.parse({
       capability: "computer.readFile",
       capabilityApproved: true,
       operations: ["binding:COMPUTER:read"],
+      fingerprints: {
+        "binding:COMPUTER:read":
+          '["app.computer.read","read",["computer.readFile"]]',
+      },
       resources: [{ kind: "computer", id: "c1" }],
     },
     {
       capability: "computer.writeFile",
       capabilityApproved: true,
       operations: ["binding:COMPUTER:write"],
+      fingerprints: {
+        "binding:COMPUTER:write":
+          '["app.computer.write","write",["computer.writeFile"]]',
+      },
       resources: "tenant-scope",
     },
   ],
@@ -140,7 +148,7 @@ it("rebase keeps touched revocation and adopts concurrent untouched narrowing", 
     authorityVersion: 3,
     approvedGrants: baseline.approvedGrants.map((grant) =>
       grant.capability === "computer.readFile"
-        ? { ...grant, operations: [] }
+        ? { ...grant, operations: [], fingerprints: {} }
         : grant,
     ),
   });
@@ -362,6 +370,7 @@ it("empty selected resources revoke, while empty operations retain capability co
       capability: "computer.writeFile",
       capabilityApproved: true,
       operations: [],
+      fingerprints: {},
       resources: "tenant-scope",
     },
   ]);

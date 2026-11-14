@@ -60,10 +60,24 @@ const operationsSchema = z.lazy(() =>
     .readonly(),
 );
 /**
+ * Stands in for the fingerprint of an operation approved before fingerprints
+ * existed. The storage migration writes it; the first snapshot that carries the
+ * operation by name replaces it with the declared fingerprint (`carryGrant`).
+ */
+export const unstampedFingerprint = "unstamped";
+/** Operation name to the fingerprint of the data defining what it does. */
+const fingerprintsSchema = z.lazy(() =>
+  z.record(z.string().min(1), z.string().min(1)).readonly(),
+);
+/**
  * Consent approves capabilities, with explicit operation and resource ceilings.
  * A Release adding a method that requires an already-approved capability needs
  * no new consent; a new capability does. Release selection intersects stored
- * operations instead of adding approvals. Each Worker call is still restricted
+ * operations instead of adding approvals: an operation carries only when its
+ * name and its fingerprint (the host descriptor method entry, or the binding
+ * operation, that defines what it does) both match the approval, so a
+ * same-named operation whose behavior changed needs approval again, as a new
+ * operation does. Each Worker call is still restricted
  * to that method's declared requires, never the App's complete capability set.
  * Only an approved install or change-grants command mints capabilityApproved.
  * Empty operation rows retain that consent; removing the capability revokes it.
@@ -76,6 +90,8 @@ export const approvedGrantSchema = z
     capability: ownerCodec(appCapabilityIdSchema),
     capabilityApproved: z.literal(true),
     operations: operationsSchema,
+    /** Fingerprint of each approved operation as declared when the owner approved it. */
+    fingerprints: fingerprintsSchema,
     resources: z.union([
       z.literal("tenant-scope"),
       z.array(resourceRefSchema).readonly(),
@@ -92,6 +108,17 @@ const approvedGrantsSchema = z.lazy(() =>
         new Set(grants.map((grant) => grant.capability)).size === grants.length,
       "Capabilities must be unique",
     )
+    .refine(
+      (grants) =>
+        grants.every((grant) => {
+          const names = Object.keys(grant.fingerprints);
+          return (
+            names.length === grant.operations.length &&
+            grant.operations.every((operation) => names.includes(operation))
+          );
+        }),
+      "Every approved operation needs exactly one fingerprint",
+    )
     .readonly(),
 );
 /** A bounded owner edit. Unnamed approvals are not part of the command. */
@@ -100,7 +127,11 @@ export const grantChangeSchema = z
     capability: ownerCodec(appCapabilityIdSchema),
     grant: approvedGrantSchema
       .unwrap()
-      .omit({ capabilityApproved: true, capability: true })
+      .omit({
+        capabilityApproved: true,
+        capability: true,
+        fingerprints: true,
+      })
       .readonly()
       .nullable(),
   })
@@ -165,6 +196,52 @@ export type GrantRefusal = Readonly<{
   code: "stale_authority" | "not_owner" | "not_declared" | "invalid_command";
 }>;
 
+const declaredRow = (
+  declared: DeclaredOperations,
+  capability: ApprovedGrant["capability"],
+) => declared.capabilities.find((row) => row.capability === capability);
+
+/** Fingerprints the declaration currently assigns to these operations. */
+function fingerprintsOf(
+  declared: DeclaredOperations,
+  capability: ApprovedGrant["capability"],
+  operations: readonly string[],
+): Readonly<Record<string, string>> {
+  const row = declaredRow(declared, capability);
+  return Object.fromEntries(
+    operations.flatMap((operation) => {
+      const fingerprint = row?.operations.includes(operation)
+        ? row.fingerprints[operation]
+        : undefined;
+      return fingerprint === undefined ? [] : [[operation, fingerprint]];
+    }),
+  );
+}
+
+/**
+ * The part of a stored approval the current declaration still covers: an
+ * operation carries only when it is declared and its stored fingerprint equals
+ * the declared one (or it was approved before fingerprints existed and is
+ * stamped now). Everything else needs the owner's approval again.
+ */
+export function carryGrant(
+  grant: ApprovedGrant,
+  declared: DeclaredOperations,
+): ApprovedGrant {
+  const current = fingerprintsOf(declared, grant.capability, grant.operations);
+  const operations = grant.operations.filter(
+    (operation) =>
+      current[operation] !== undefined &&
+      (grant.fingerprints[operation] === unstampedFingerprint ||
+        current[operation] === grant.fingerprints[operation]),
+  );
+  return {
+    ...grant,
+    operations,
+    fingerprints: fingerprintsOf(declared, grant.capability, operations),
+  };
+}
+
 /** One host-independent approval policy; selection only intersects existing grants. */
 export function applyGrantCommand(
   current: AppAuthority | null,
@@ -210,6 +287,11 @@ export function applyGrantCommand(
                 capability,
                 capabilityApproved: true,
                 operations: declared(capability),
+                fingerprints: fingerprintsOf(
+                  context.declaredOperations,
+                  capability,
+                  declared(capability),
+                ),
                 resources: "tenant-scope",
               }))
           : [];
@@ -238,17 +320,23 @@ export function applyGrantCommand(
       grants = [
         ...grants
           .filter((grant) => !changed.has(grant.capability))
-          .map((grant) => ({
-            ...grant,
-            operations: grant.operations.filter((operation) =>
-              declared(grant.capability).includes(operation),
-            ),
-          })),
+          .map((grant) => carryGrant(grant, context.declaredOperations)),
         ...command.changes.flatMap(({ capability, grant }): ApprovedGrant[] =>
           grant === null ||
           (grant.resources !== "tenant-scope" && grant.resources.length === 0)
             ? []
-            : [{ capability, ...grant, capabilityApproved: true }],
+            : [
+                {
+                  capability,
+                  ...grant,
+                  fingerprints: fingerprintsOf(
+                    context.declaredOperations,
+                    capability,
+                    grant.operations,
+                  ),
+                  capabilityApproved: true,
+                },
+              ],
         ),
       ];
       break;
@@ -258,12 +346,7 @@ export function applyGrantCommand(
         .filter((grant) =>
           context.declaration.capabilities.includes(grant.capability),
         )
-        .map((grant) => ({
-          ...grant,
-          operations: grant.operations.filter((operation) =>
-            declared(grant.capability).includes(operation),
-          ),
-        }));
+        .map((grant) => carryGrant(grant, context.declaredOperations));
       break;
     case "delete":
       grants = [];
@@ -295,6 +378,8 @@ export const declaredOperationsSchema = z.lazy(() =>
           .strictObject({
             capability: ownerCodec(appCapabilityIdSchema),
             operations: operationsSchema,
+            /** What each operation does, from its host descriptor method or binding operation. */
+            fingerprints: fingerprintsSchema,
           })
           .readonly(),
       )
@@ -307,7 +392,7 @@ export type DeclaredOperations = Readonly<
 /** Use the existing adapter's permission and methods; hosts author no operation lists. */
 export type CapabilityOperationDescriptor = Pick<
   CapabilityDescriptor,
-  "id" | "methods"
+  "id" | "base" | "methods"
 > &
   Readonly<{ permission: ApprovedGrant["capability"] }>;
 /** Resolved immutable Release plus host-owned installation and approval state. */

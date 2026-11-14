@@ -1,6 +1,9 @@
 import { AppInstanceError } from "../index.js";
 import { appMethodSchemas } from "@fungi.computer/forage";
-import { bindingOperationKey } from "./operations.js";
+import {
+  bindingOperationFingerprint,
+  bindingOperationKey,
+} from "./operations.js";
 import * as z from "zod";
 import * as Schema from "effect/Schema";
 import {
@@ -22,6 +25,8 @@ import {
   type DeclaredOperations,
   type Installation,
   type ApprovedGrant,
+  carryGrant,
+  unstampedFingerprint,
 } from "./installation.js";
 
 /** Attested by the host, never authenticated by decoding request JSON. */
@@ -167,18 +172,23 @@ export function grantsFor(
   const approved = installation.authority.approvedGrants.find(
     (grant) => grant.capability === capability,
   );
-  const declared =
-    snapshot.capabilities.find((row) => row.capability === capability)
-      ?.operations ?? [];
   if (
     !approved?.capabilityApproved ||
     !grantsResource(approved.resources, resource)
   )
     return null;
-  const operations = approved.operations.filter((operation) =>
-    declared.includes(operation),
+  return carryGrant(approved, snapshot);
+}
+
+/** A stored fingerprint covers the registry's current one, or awaits its first stamp. */
+function approvedFingerprintMatches(
+  stored: string | undefined,
+  current: string | null,
+): boolean {
+  return (
+    stored === unstampedFingerprint ||
+    (stored !== undefined && stored === current)
   );
-  return { ...approved, operations };
 }
 
 /** Approved binding operations from an already verified declaration. Hosts still pin
@@ -206,6 +216,10 @@ export function approvedBindingGrants(
             grantsResource(approved.resources, resource) &&
             approved.operations.includes(
               bindingOperationKey(binding.name, name),
+            ) &&
+            approvedFingerprintMatches(
+              approved.fingerprints[bindingOperationKey(binding.name, name)],
+              bindingOperationFingerprint(binding.name, name),
             )
           );
         })

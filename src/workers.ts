@@ -37,6 +37,7 @@ import {
 import { checkBootPage } from "./browser/boot.js";
 import { bindingSessions, type BrowserBinding } from "./browser/sessions.js";
 import { registryInstallations } from "./internal/registry-installations.js";
+import { migrateInstallationRows } from "./installation-migration.js";
 import { installationsFromOlderOyster } from "./older-oyster-store.js";
 import { refuseOlderOysterStore } from "./older-oyster-store-refusal.js";
 import {
@@ -391,6 +392,7 @@ export class OysterRegistry<
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS installations (installation_id TEXT PRIMARY KEY, record TEXT NOT NULL) STRICT",
     );
+    migrateInstallationRows(ctx.storage);
     this.#installationStore = createInstallationStoreGeneration(ctx.storage);
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS boot_capabilities (id TEXT PRIMARY KEY, token_digest TEXT NOT NULL, expires_at INTEGER NOT NULL, record TEXT NOT NULL) STRICT",

@@ -128,6 +128,9 @@ it("pre-grants the declared Shell only when the host attests its built-in instal
     operations: snapshot.capabilities.find(
       (row) => row.capability === "team.workbenchHost",
     )?.operations,
+    fingerprints: snapshot.capabilities.find(
+      (row) => row.capability === "team.workbenchHost",
+    )?.fingerprints,
     resources: "tenant-scope",
   });
 });
@@ -162,6 +165,12 @@ it("derives approved operations from the real descriptors and registry and pins 
         "route:app.methods:notes.read",
         "route:computer.readFile:open",
       ],
+      fingerprints: {
+        "binding:COMPUTER:read":
+          '["app.computer.read","read",["computer.readFile"]]',
+        "route:app.methods:notes.read": '["declaration"]',
+        "route:computer.readFile:open": '["/files/","read","GET","content"]',
+      },
       resources: "tenant-scope",
     },
     {
@@ -174,6 +183,15 @@ it("derives approved operations from the real descriptors and registry and pins 
         "route:computer.writeFile:open",
         "route:computer.writeFile:replace",
       ],
+      fingerprints: {
+        "binding:COMPUTER:write":
+          '["app.computer.write","write",["computer.writeFile"]]',
+        "route:app.methods:notes.write": '["declaration"]',
+        "route:computer.writeFile:mkdir": '["/files/","json","POST","mkdir"]',
+        "route:computer.writeFile:open": '["/files/","write","PUT","content"]',
+        "route:computer.writeFile:replace":
+          '["/files/","json","POST","replace"]',
+      },
       resources: "tenant-scope",
     },
   ]);
@@ -338,6 +356,10 @@ it("drops removed operations and clears grants on deletion without changing the 
       capability: "computer.writeFile",
       capabilityApproved: true,
       operations: ["binding:COMPUTER:write"],
+      fingerprints: {
+        "binding:COMPUTER:write":
+          '["app.computer.write","write",["computer.writeFile"]]',
+      },
       resources: "tenant-scope",
     },
   ]);
@@ -460,6 +482,9 @@ it("an App-call approval names each target method and upgrades never add calls",
       capability: "apps.call",
       capabilityApproved: true,
       operations: ["route:apps.call:app_bonsai:files.read"],
+      fingerprints: {
+        "route:apps.call:app_bonsai:files.read": '["declaration"]',
+      },
       resources: "tenant-scope",
     },
   ]);
@@ -545,6 +570,9 @@ it("approves signed API requirements and intersects stored operation identities 
       capability: "workflow.publish",
       capabilityApproved: true,
       operations: ["route:app.methods:publishWorkflow"],
+      fingerprints: {
+        "route:app.methods:publishWorkflow": '["declaration"]',
+      },
       resources: "tenant-scope",
     },
   ]);
@@ -613,6 +641,7 @@ it("approves signed API requirements and intersects stored operation identities 
       capability: "workflow.publish",
       capabilityApproved: true,
       operations: [],
+      fingerprints: {},
       resources: "tenant-scope",
     },
   ]);
@@ -623,6 +652,7 @@ it("reserves the app.methods descriptor identity for signed API requirement oper
     deriveDeclaredOperations(release, declaration, [
       {
         id: "app.methods",
+        base: "/app-methods",
         permission: "computer.readFile",
         methods: {
           "notes.read": { kind: "json", method: "POST", path: "read" },

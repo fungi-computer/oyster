@@ -24,6 +24,43 @@ export function appCallOperation(appId: string, method: string): string {
   return `route:apps.call:${appId}:${method}`;
 }
 
+/**
+ * What a backend binding operation does: the broker class, effect and required
+ * capabilities from Puffball's registry. Null for an operation the registry lacks.
+ */
+export function bindingOperationFingerprint(
+  binding: AppBackendBindingName,
+  operation: string,
+): string | null {
+  const definition = appBackendBindingOperation(binding, operation);
+  return definition === undefined
+    ? null
+    : JSON.stringify([
+        definition.cap,
+        definition.effect,
+        [...definition.requires].sort(),
+      ]);
+}
+
+/** What a host route operation does: where its descriptor method entry sends the call. */
+function routeFingerprint(
+  descriptor: CapabilityOperationDescriptor,
+  method: CapabilityOperationDescriptor["methods"][string],
+): string {
+  return JSON.stringify([
+    descriptor.base,
+    method.kind,
+    method.method,
+    method.path,
+  ]);
+}
+
+/**
+ * Operations the signed declaration alone defines (`apps.call` targets and the
+ * `route:app.methods:*` approval-detail rows) have nothing host-side to change.
+ */
+const declarationFingerprint = JSON.stringify(["declaration"]);
+
 /** Sole derivation owner. Inputs are the verified Release declaration and existing host adapters. */
 export async function deriveDeclaredOperations(
   release: Installation["release"],
@@ -35,25 +72,32 @@ export async function deriveDeclaredOperations(
   const capabilities = new Map(
     declaration.capabilities.map((capability) => [
       capability,
-      new Set<string>(),
+      new Map<string, string>(),
     ]),
   );
   for (const call of declaration.calls ?? [])
     for (const method of call.methods)
-      capabilities.get("apps.call")?.add(appCallOperation(call.appId, method));
+      capabilities
+        .get("apps.call")
+        ?.set(appCallOperation(call.appId, method), declarationFingerprint);
   for (const [name, method] of Object.entries(declaration.api?.methods ?? {}))
     for (const capability of method.requires)
-      capabilities.get(capability)?.add(`route:app.methods:${name}`);
+      capabilities
+        .get(capability)
+        ?.set(`route:app.methods:${name}`, declarationFingerprint);
   const routes = descriptors
     .filter((descriptor) => capabilities.has(descriptor.permission))
     .map((descriptor) => {
       const methods = Object.entries(descriptor.methods).sort(([a], [b]) =>
         a < b ? -1 : a > b ? 1 : 0,
       );
-      for (const [name] of methods)
+      for (const [name, method] of methods)
         capabilities
           .get(descriptor.permission)
-          ?.add(`route:${descriptor.id}:${name}`);
+          ?.set(
+            `route:${descriptor.id}:${name}`,
+            routeFingerprint(descriptor, method),
+          );
       return { id: descriptor.id, permission: descriptor.permission, methods };
     })
     .sort((a, b) =>
@@ -77,10 +121,12 @@ export async function deriveDeclaredOperations(
           )
         )
           return [];
+        const fingerprint = bindingOperationFingerprint(binding.name, name);
+        if (fingerprint === null) return [];
         for (const capability of operation.requires)
           capabilities
             .get(capability)
-            ?.add(bindingOperationKey(binding.name, name));
+            ?.set(bindingOperationKey(binding.name, name), fingerprint);
         return [
           {
             binding: binding.name,
@@ -102,10 +148,16 @@ export async function deriveDeclaredOperations(
     );
   const rows = [...capabilities]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([capability, operations]) => ({
-      capability,
-      operations: [...operations].sort(),
-    }));
+    .map(([capability, operations]) => {
+      const sorted = [...operations].sort(([a], [b]) =>
+        a < b ? -1 : a > b ? 1 : 0,
+      );
+      return {
+        capability,
+        operations: sorted.map(([name]) => name),
+        fingerprints: Object.fromEntries(sorted),
+      };
+    });
   const artifactDigest = release.artifact.artifactDigest;
   const digest = await sha256(
     new TextEncoder().encode(

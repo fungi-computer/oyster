@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.28.2
+
+### Patch Changes
+
+- Changes since 0.28.1:
+
+  - fix(oyster): rewrite a stored installation only when migration changed it
+  - fix(oyster): drop a carried App approval when its host descriptor changes
+
+- Updated dependencies
+  - @fungi.computer/shiitake@0.17.0
+  - @fungi.computer/parakeet@0.11.29
+  - @fungi.computer/shiitake-extensions@0.9.3
+  - @fungi.computer/zookeeper@0.0.28
+
 ## 0.28.1
 
 ### Patch Changes

@@ -77,6 +77,7 @@ import { type BackgroundSyncRefusal } from "@fungi.computer/puffball/background-
 import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
 import {
   applyInstallationCommand,
+  carryGrant,
   installationIdSchema,
   type ApprovedGrant,
   type Installation,
@@ -1455,7 +1456,14 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
                 ]
             : await host.permissionResources(principal),
         permissions: {
-          authority: current.authority,
+          // Show only approvals the declaration still covers; a changed
+          // operation needs approval again, as a new one does.
+          authority: {
+            ...current.authority,
+            approvedGrants: current.authority.approvedGrants.map((grant) =>
+              carryGrant(grant, declared),
+            ),
+          },
           declaredOperations: declared,
         },
       });

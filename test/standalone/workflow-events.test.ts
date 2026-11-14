@@ -191,6 +191,7 @@ const library = (
         capability,
         capabilityApproved: true as const,
         operations: [],
+        fingerprints: {},
         resources: "tenant-scope" as const,
       },
     ],

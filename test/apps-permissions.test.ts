@@ -121,6 +121,10 @@ it("window Allow scopes upgrade approval to its Computer; stale or member approv
     capability: "computer.execute",
     capabilityApproved: true,
     operations: ["binding:COMPUTER:exec"],
+    fingerprints: {
+      "binding:COMPUTER:exec":
+        '["app.computer.exec","write",["computer.execute"]]',
+    },
     resources: [{ kind: "computer", id: "computer-a" }],
   });
   const storedBeforeReplay = structuredClone(scoped.success);

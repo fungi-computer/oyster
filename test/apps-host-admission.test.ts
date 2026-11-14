@@ -41,7 +41,10 @@ import type { TenantPrincipal } from "@fungi.computer/oyster/tenant";
 import { parseRelease, sha256 } from "@fungi.computer/oyster/host";
 import { fileCapabilities } from "../src/files.js";
 import { installationSchema } from "../src/apps/installation.js";
-import { appPermissionsWireSchema } from "../src/apps/permissions.js";
+import {
+  appPermissionsWireSchema,
+  pendingCapabilities,
+} from "../src/apps/permissions.js";
 import type { AppToolPolicy } from "../src/apps/tools.js";
 import type { InvocationFacts } from "../src/invocation.js";
 import { ownerKeyCookieName, ownerOrKeyAuth } from "../src/auth.js";
@@ -1844,4 +1847,65 @@ it("refuses a permissions save made against a host snapshot that changed after t
   expect((await save(displayed)).status).toBe(409);
   expect(f.records.get("notes")).toEqual(initial);
   expect((await save(reloaded)).status).toBe(200);
+});
+
+it("lists an operation whose host descriptor changed as needing approval", async () => {
+  const f = await fixture();
+  await f.install();
+  const upgraded = createOyster({
+    ...f.host,
+    capabilities: (f.host.capabilities ?? []).map((capability) =>
+      capability.id === "computer.readFile"
+        ? {
+            ...capability,
+            methods: Object.fromEntries(
+              Object.entries(capability.methods).map(([name, method]) => [
+                name,
+                { ...method, path: `${method.path}-v2` },
+              ]),
+            ),
+          }
+        : capability,
+    ),
+  });
+  const read = async (app: typeof f.app) => {
+    const projection = Schema.decodeUnknownSync(
+      Schema.Struct({ permissions: Schema.Unknown }),
+    )(
+      await (
+        await app.request("/api/installations/notes/grants", {
+          headers: { Accept: "application/json" },
+        })
+      ).json(),
+    );
+    return appPermissionsWireSchema.parse(projection.permissions);
+  };
+  const before = await read(f.app);
+  const after = await read(upgraded);
+  const operations = (wire: typeof before) =>
+    wire.authority.approvedGrants.find(
+      (grant) => grant.capability === "computer.readFile",
+    )?.operations ?? [];
+  expect(
+    pendingCapabilities(
+      before.authority,
+      {
+        capabilities: ["computer.readFile"],
+      },
+      before.declaredOperations,
+    ),
+  ).toEqual([]);
+  // The changed route drops from the approvals the page shows.
+  expect(operations(before)).toContain("route:computer.readFile:open");
+  expect(operations(after)).not.toContain("route:computer.readFile:open");
+  expect(after.declaredOperations.capabilities[0]?.operations).toContain(
+    "route:computer.readFile:open",
+  );
+  expect(
+    pendingCapabilities(
+      after.authority,
+      { capabilities: ["computer.readFile"] },
+      after.declaredOperations,
+    ),
+  ).toEqual(["computer.readFile"]);
 });

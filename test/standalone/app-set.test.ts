@@ -243,8 +243,9 @@ const operations = declaredOperationsSchema.parse({
     {
       capability: "computer.readFile",
       operations: ["route:computer.readFile:open"],
+      fingerprints: { "route:computer.readFile:open": "fingerprint" },
     },
-    { capability: "team.workbenchHost", operations: [] },
+    { capability: "team.workbenchHost", operations: [], fingerprints: {} },
   ],
 });
 const approvalBody = Schema.Struct({

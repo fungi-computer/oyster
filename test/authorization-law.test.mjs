@@ -968,6 +968,7 @@ test("inside a capability table every request is App-mediated", async () => {
       capability: "agent.manage",
       capabilityApproved: true,
       operations: [],
+      fingerprints: {},
       resources: "tenant-scope",
     },
   };
@@ -998,6 +999,7 @@ test("inside a capability table an Agent decision stays within the grant's selec
       capability: "agent.read",
       capabilityApproved: true,
       operations: [],
+      fingerprints: {},
       resources: [{ kind: "agent", id: "agent_a" }],
     },
   };

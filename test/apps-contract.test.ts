@@ -15,6 +15,7 @@ describe("the installation contract", () => {
       capability: "media.generation",
       capabilityApproved: true,
       operations: ["binding:MEDIA:generate"],
+      fingerprints: { "binding:MEDIA:generate": "fingerprint" },
       resources: "tenant-scope",
     };
     expect(approvedGrantSchema.parse(grant)).toEqual(grant);
@@ -22,6 +23,7 @@ describe("the installation contract", () => {
       { operations: "declared" },
       { resources: "all" },
       { capability: "unknown" },
+      { fingerprints: ["fingerprint"] },
     ])
       expect(
         approvedGrantSchema.safeParse({ ...grant, ...change }).success,
@@ -65,6 +67,33 @@ const stored = {
     approval: null,
   },
 };
+
+it("requires exactly one fingerprint per approved operation in the current contract", () => {
+  const grant = {
+    capability: "media.generation",
+    capabilityApproved: true,
+    operations: ["binding:MEDIA:generate"],
+    resources: "tenant-scope",
+  };
+  const authority = (approvedGrants: readonly unknown[]) =>
+    installationSchema.safeParse({
+      ...stored,
+      authority: { ...stored.authority, approvedGrants },
+    }).success;
+  expect(
+    authority([{ ...grant, fingerprints: { "binding:MEDIA:generate": "f" } }]),
+  ).toBe(true);
+  expect(authority([grant])).toBe(false);
+  expect(authority([{ ...grant, fingerprints: {} }])).toBe(false);
+  expect(
+    authority([{ ...grant, fingerprints: { "binding:MEDIA:other": "f" } }]),
+  ).toBe(false);
+  expect(
+    authority([
+      { ...grant, fingerprints: { "binding:MEDIA:generate": "f", extra: "f" } },
+    ]),
+  ).toBe(false);
+});
 
 it("stores one embedded authority and refuses the superseded inline grant fields", () => {
   expect(installationSchema.parse(stored).authority).toEqual(stored.authority);
@@ -167,7 +196,7 @@ it("keeps host identity, read-only storage and pre-read tool facts in the frozen
     "installation" | "declaration" | "declaredOperations" | "api" | "access"
   >();
   expectTypeOf<keyof CapabilityOperationDescriptor>().toEqualTypeOf<
-    "id" | "methods" | "permission"
+    "id" | "base" | "methods" | "permission"
   >();
   const command = installationCommandSchema.parse({
     kind: "install",
@@ -183,6 +212,7 @@ it("keeps host identity, read-only storage and pre-read tool facts in the frozen
         {
           capability: "media.generation",
           operations: ["binding:MEDIA:generate"],
+          fingerprints: { "binding:MEDIA:generate": "fingerprint" },
         },
       ],
     }).success,
@@ -266,6 +296,7 @@ it("stores event approval under the sole capability grant grammar", () => {
     capability: "app.events.emit",
     capabilityApproved: true,
     operations: ["binding:EVENTS:emit"],
+    fingerprints: { "binding:EVENTS:emit": "fingerprint" },
     resources: "tenant-scope",
   };
   expect(approvedGrantSchema.parse(grant)).toEqual(grant);
@@ -283,6 +314,7 @@ it("requires explicit stored capability consent even when no operation remains",
     capability: "workflow.publish",
     capabilityApproved: true,
     operations: [],
+    fingerprints: {},
     resources: "tenant-scope",
   };
   expect(approvedGrantSchema.parse(approved)).toEqual(approved);
