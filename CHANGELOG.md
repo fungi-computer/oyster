@@ -1,5 +1,31 @@
 # @fungi.computer/oyster
 
+## 0.28.1
+
+### Patch Changes
+
+- Changes since 0.28.0:
+
+  - Updated starter Apps for the Trellis release.
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Agar release.
+  - Updated starter Apps for the Caps release.
+  - Updated starter Apps for the Darkroom release.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.15.0
+  - @fungi.computer/caps@0.11.5
+  - @fungi.computer/darkroom@0.9.0
+  - @fungi.computer/braid@0.4.16
+  - @fungi.computer/nacre@0.6.3
+  - @fungi.computer/parakeet@0.11.28
+  - @fungi.computer/shiitake@0.16.2
+  - @fungi.computer/workflows-wire@0.4.16
+  - @fungi.computer/shiitake-extensions@0.9.2
+  - @fungi.computer/zookeeper@0.0.27
+
 ## 0.28.0
 
 ### Minor Changes
