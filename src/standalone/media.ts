@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  MAX_REFERENCE_BYTES,
-  MediaSettingsError,
-  type MediaReference,
-} from "@fungi.computer/darkroom";
+import type { MediaReference } from "@fungi.computer/darkroom";
 import { AppInstanceError } from "../index.js";
 import type { FrameBindingMethods, FrameBindingProps } from "../cloudflare.js";
 import type { InvocationFrame } from "../invocation.js";
@@ -27,6 +23,8 @@ import {
   createDailyMediaMetering,
   type DailyMediaMeterPort,
   createMediaService,
+  readHostReference,
+  referenceFilename,
   estimateMediaModel,
   mediaPendingSchema,
   mediaResultSchema,
@@ -301,6 +299,21 @@ function standaloneMediaService(
     env.IMAGES === undefined
       ? undefined
       : createImagesReferenceFitter(env.IMAGES);
+  const readWorkspaceReference = (
+    kind: "image" | "audio",
+    reference: MediaReference,
+  ) =>
+    readHostReference({
+      reference,
+      destinationId: computerId,
+      kind,
+      open: async (path) => {
+        const bytes = await files.read(workspacePath(path));
+        return bytes === null
+          ? null
+          : { size: bytes.byteLength, bytes: () => Promise.resolve(bytes) };
+      },
+    });
   const destination = {
     authorize: async (path: string) => {
       workspacePath(path);
@@ -309,39 +322,21 @@ function standaloneMediaService(
     },
     write: (path: string, bytes: Uint8Array) =>
       files.write(workspacePath(path), bytes),
-    readAudioReference: async (reference: MediaReference) => {
-      if (reference.computerId !== computerId)
-        throw new MediaSettingsError("reference Computer is not selected");
-      const bytes = await files.read(workspacePath(reference.path));
-      if (bytes === null)
-        throw new MediaSettingsError("audio reference is unavailable");
-      return bytes;
-    },
+    readAudioReference: (reference: MediaReference) =>
+      readWorkspaceReference("audio", reference),
   };
   const admittedDestination: MediaServiceHost["destination"] =
     fit === undefined
       ? destination
       : {
           ...destination,
-          readReference: async (reference, model) => {
-            if (reference.computerId !== computerId)
-              throw new MediaSettingsError(
-                "reference Computer is not selected",
-              );
-            const bytes = await files.read(workspacePath(reference.path));
-            if (
-              bytes === null ||
-              bytes.byteLength === 0 ||
-              bytes.byteLength > MAX_REFERENCE_BYTES
-            )
-              throw new MediaSettingsError(
-                "reference image is unavailable or exceeds the byte limit",
-              );
-            return {
-              ...(await fit(bytes, model)),
-              filename: reference.path.split("/").at(-1) ?? "reference",
-            };
-          },
+          readReference: async (reference, model) => ({
+            ...(await fit(
+              await readWorkspaceReference("image", reference),
+              model,
+            )),
+            filename: referenceFilename(reference),
+          }),
         };
   const provider = createWorkersAiMediaProvider(
     env.AI,

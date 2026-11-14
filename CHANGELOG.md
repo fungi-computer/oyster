@@ -1,5 +1,28 @@
 # @fungi.computer/oyster
 
+## 0.30.0
+
+### Minor Changes
+
+- Changes since 0.29.3:
+
+  - feat(darkroom): add an R2 media destination that reads references and saves
+    output
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.17.0
+  - @fungi.computer/darkroom@0.10.0
+  - @fungi.computer/braid@0.4.18
+  - @fungi.computer/nacre@0.6.5
+  - @fungi.computer/parakeet@0.11.34
+  - @fungi.computer/shiitake@0.18.1
+  - @fungi.computer/workflows-wire@0.4.18
+  - @fungi.computer/shiitake-extensions@0.10.1
+  - @fungi.computer/zookeeper@0.0.31
+
 ## 0.29.3
 
 ### Patch Changes
