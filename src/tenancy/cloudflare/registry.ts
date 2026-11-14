@@ -94,6 +94,8 @@ class RegistryObject extends DurableObject<Record<string, never>> {
       CREATE TABLE IF NOT EXISTS domains (host TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, ordinal INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS domains_tenant ON domains(tenant_id);
       CREATE TABLE IF NOT EXISTS identities (provider TEXT NOT NULL, subject TEXT NOT NULL, member_id TEXT UNIQUE NOT NULL, PRIMARY KEY(provider,subject));
+      CREATE TABLE IF NOT EXISTS identity_aliases (provider TEXT NOT NULL, subject TEXT NOT NULL, member_id TEXT NOT NULL, PRIMARY KEY(provider,subject));
+      CREATE INDEX IF NOT EXISTS identity_aliases_member ON identity_aliases(member_id);
       CREATE TABLE IF NOT EXISTS memberships (tenant_id TEXT NOT NULL, member_id TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('owner','member')), membership_version INTEGER NOT NULL DEFAULT 1 CHECK(membership_version BETWEEN 1 AND 9007199254740991), PRIMARY KEY(tenant_id,member_id));
       CREATE TABLE IF NOT EXISTS membership_clock (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991));
       INSERT OR IGNORE INTO membership_clock VALUES(1,0);
@@ -225,7 +227,7 @@ class RegistryObject extends DurableObject<Record<string, never>> {
   #membershipOf(id: TenantId, owner: Identity) {
     const row = this.ctx.storage.sql
       .exec(
-        `SELECT m.member_id,m.role,m.membership_version FROM memberships m JOIN identities i ON m.member_id=i.member_id WHERE m.tenant_id=? AND i.provider=? AND i.subject=?`,
+        `SELECT m.member_id,m.role,m.membership_version FROM memberships m JOIN (SELECT provider,subject,member_id FROM identities UNION ALL SELECT provider,subject,member_id FROM identity_aliases) i ON m.member_id=i.member_id WHERE m.tenant_id=? AND i.provider=? AND i.subject=?`,
         id,
         owner.provider,
         owner.subject,
@@ -246,7 +248,9 @@ class RegistryObject extends DurableObject<Record<string, never>> {
       return this.ctx.storage.transactionSync(() => {
         const raw = this.ctx.storage.sql
           .exec(
-            "SELECT member_id FROM identities WHERE provider=? AND subject=?",
+            "SELECT member_id FROM identities WHERE provider=? AND subject=? UNION ALL SELECT member_id FROM identity_aliases WHERE provider=? AND subject=?",
+            parsed.owner.provider,
+            parsed.owner.subject,
             parsed.owner.provider,
             parsed.owner.subject,
           )
@@ -291,6 +295,79 @@ class RegistryObject extends DurableObject<Record<string, never>> {
       });
     });
   }
+  /**
+   * Declare every identity `provider` may use as one existing member, in one
+   * transaction. Other aliases of that provider for the member are removed, so
+   * the call states the complete set. It never creates a member or tenant, and
+   * refuses an identity already mapped to a different member.
+   */
+  bindIdentities(
+    id: TenantId,
+    memberId: string,
+    provider: string,
+    subjects: readonly string[],
+  ): Promise<void> {
+    return Promise.resolve().then(() => {
+      const target = Schema.decodeUnknownSync(
+        Schema.Struct({
+          id: tenantIdSchema,
+          memberId: Schema.NonEmptyString,
+          provider: Schema.NonEmptyString,
+          subjects: Schema.Array(Schema.NonEmptyString),
+        }),
+      )({ id, memberId, provider, subjects });
+      this.ctx.storage.transactionSync(() => {
+        if (
+          this.ctx.storage.sql
+            .exec(
+              "SELECT 1 FROM memberships WHERE tenant_id=? AND member_id=?",
+              target.id,
+              target.memberId,
+            )
+            .toArray().length === 0
+        )
+          throw new Error("Member does not exist in this tenant");
+        for (const subject of target.subjects) {
+          const mapped = this.ctx.storage.sql
+            .exec(
+              "SELECT member_id FROM identities WHERE provider=? AND subject=? UNION ALL SELECT member_id FROM identity_aliases WHERE provider=? AND subject=?",
+              target.provider,
+              subject,
+              target.provider,
+              subject,
+            )
+            .toArray()
+            .map((row) => Schema.decodeUnknownSync(memberRow)(row).member_id);
+          if (mapped.some((existing) => existing !== target.memberId))
+            throw new Error("Identity already has a canonical member mapping");
+          if (mapped.length === 0)
+            this.ctx.storage.sql.exec(
+              "INSERT INTO identity_aliases (provider,subject,member_id) VALUES (?,?,?)",
+              target.provider,
+              subject,
+              target.memberId,
+            );
+        }
+        for (const raw of this.ctx.storage.sql
+          .exec(
+            "SELECT subject FROM identity_aliases WHERE provider=? AND member_id=?",
+            target.provider,
+            target.memberId,
+          )
+          .toArray()) {
+          const { subject } = Schema.decodeUnknownSync(
+            Schema.Struct({ subject: Schema.String }),
+          )(raw);
+          if (!target.subjects.includes(subject))
+            this.ctx.storage.sql.exec(
+              "DELETE FROM identity_aliases WHERE provider=? AND subject=?",
+              target.provider,
+              subject,
+            );
+        }
+      });
+    });
+  }
   setStatus(id: TenantId, status: Tenant["status"]): Promise<void> {
     const parsed = Schema.decodeUnknownSync(statusSchema)(status);
     if (this.#get(id) === null) throw new Error("Tenant does not exist");
@@ -323,6 +400,13 @@ export type TenancyRegistryDO = ManagedTenantRegistry &
       host: string,
       identity: Identity,
     ): Promise<RegistryAdmission | null>;
+    /** Declare a provider's complete identity set for one existing member. */
+    bindIdentities(
+      id: TenantId,
+      memberId: string,
+      provider: string,
+      subjects: readonly string[],
+    ): Promise<void>;
   }> &
   Rpc.DurableObjectBranded;
 /** Re-export from a host Worker and bind a SQLite-backed Durable Object namespace. */

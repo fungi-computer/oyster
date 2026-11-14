@@ -199,6 +199,8 @@ async function raceHost(t) {
         storeGeneration: projection.storeGeneration,
         authorityVersion: projection.permissions.authority.authorityVersion,
         artifactDigest: projection.artifactDigest,
+        declaredOperationsDigest:
+          projection.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: projection.permissions.declaredOperations.capabilities.map(
@@ -450,6 +452,8 @@ test("a save captured before replacing the store refuses matching version and ar
       storeGeneration: projection.storeGeneration,
       authorityVersion: projection.permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest:
+        projection.permissions.declaredOperations.digest,
       command: {
         kind: "change-grants",
         changes: [{ capability: "computer.execute", grant: null }],

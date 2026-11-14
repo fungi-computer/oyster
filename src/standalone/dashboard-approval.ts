@@ -45,8 +45,6 @@ export async function approveChosenDashboard(
     permissions.authority.authorityVersion !==
       installed.authority.authorityVersion ||
     permissions.authority.declaredOperationsDigest !==
-      installed.authority.declaredOperationsDigest ||
-    permissions.declaredOperations.digest !==
       installed.authority.declaredOperationsDigest
   )
     throw new Error(`${name} approval snapshot changed`);
@@ -70,6 +68,7 @@ export async function approveChosenDashboard(
       storeGeneration: projection.storeGeneration,
       authorityVersion: installed.authority.authorityVersion,
       artifactDigest: digest,
+      declaredOperationsDigest: permissions.declaredOperations.digest,
       command,
     }),
   );

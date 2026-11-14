@@ -99,6 +99,7 @@ export function createShellAppAccess(
             storeGeneration: view.storeGeneration,
             authorityVersion: permissions.authority.authorityVersion,
             artifactDigest: view.artifactDigest,
+            declaredOperationsDigest: permissions.declaredOperations.digest,
             command: decision.command,
           }),
         });

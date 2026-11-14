@@ -145,6 +145,7 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
         storeGeneration: "generation",
         authorityVersion: 1,
         artifactDigest: digest,
+        declaredOperationsDigest: digest,
       },
       [
         { capability: "team.workbenchHost", grant: null },
@@ -449,6 +450,7 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
           storeGeneration: "generation",
           authorityVersion: 1,
           artifactDigest: digest,
+          declaredOperationsDigest: digest,
         },
         ["approvals", "channels.personal.manage", "channels.read"].map(
           (capability) => ({

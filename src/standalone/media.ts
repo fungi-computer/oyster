@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   MAX_REFERENCE_BYTES,
   MediaSettingsError,
+  type MediaReference,
 } from "@fungi.computer/darkroom";
 import { AppInstanceError } from "../index.js";
 import type { FrameBindingMethods, FrameBindingProps } from "../cloudflare.js";
@@ -308,6 +309,14 @@ function standaloneMediaService(
     },
     write: (path: string, bytes: Uint8Array) =>
       files.write(workspacePath(path), bytes),
+    readAudioReference: async (reference: MediaReference) => {
+      if (reference.computerId !== computerId)
+        throw new MediaSettingsError("reference Computer is not selected");
+      const bytes = await files.read(workspacePath(reference.path));
+      if (bytes === null)
+        throw new MediaSettingsError("audio reference is unavailable");
+      return bytes;
+    },
   };
   const admittedDestination: MediaServiceHost["destination"] =
     fit === undefined

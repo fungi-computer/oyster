@@ -71,6 +71,7 @@ type TenancyRegistryDO = ManagedTenantRegistry &
       tenant: Tenant;
       membership: Membership | null;
     }> | null>;
+    bindIdentities: Promise<void>;
   }> &
   Rpc.DurableObjectBranded;
 ```

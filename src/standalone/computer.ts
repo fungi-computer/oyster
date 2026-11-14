@@ -1,6 +1,7 @@
 import {
   attachedBackendId,
   computerSizeSchema,
+  defaultComputerSize,
   hostedBackingSchema,
   type ComputerSize,
 } from "@fungi.computer/computer/backing";
@@ -9,6 +10,7 @@ import {
   appMethodRefusedReplySchema,
   type AppMethodRefusedReply,
 } from "@fungi.computer/agar/backend";
+import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import * as Schema from "effect/Schema";
 import {
   computerPortsSchema,
@@ -352,6 +354,23 @@ export type StandaloneAgentComputerRpc = ComputerFilesRpc &
 const sizeTable =
   "CREATE TABLE IF NOT EXISTS oyster_computer_size (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), size TEXT NOT NULL CHECK (size IN ('small','default','large'))) STRICT";
 
+/**
+ * The size fixed at creation. The configured Computer and the build Computer
+ * are never created by the fleet, so they have no row and run at the default
+ * size; refusing them would fail every container start and App build.
+ */
+export function standaloneComputerSize(
+  sql: WatchdogSqliteOwner["sql"],
+): ComputerSize {
+  sql.exec(sizeTable);
+  const row = sql
+    .exec("SELECT size FROM oyster_computer_size WHERE singleton=1")
+    .toArray()[0];
+  return row === undefined
+    ? defaultComputerSize
+    : computerSizeSchema.parse(row.size);
+}
+
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
 export class ComputerDO
   extends NativeComputerDO
@@ -416,16 +435,9 @@ export class ComputerDO
     return this.#lifecycle;
   }
 
-  /** The size fixed at creation; a Computer never created by the fleet has none. */
+  /** The size fixed at creation, or the default for a non-fleet Computer. */
   protected override computerSize(): ComputerSize {
-    const sql = this.state.storage.sql;
-    sql.exec(sizeTable);
-    const row = sql
-      .exec("SELECT size FROM oyster_computer_size WHERE singleton=1")
-      .toArray()[0];
-    if (row === undefined)
-      throw new Error("Computer was created without a size");
-    return computerSizeSchema.parse(row.size);
+    return standaloneComputerSize(this.state.storage.sql);
   }
 
   /** Install the fleet's creation projection before exposing its new identity. */

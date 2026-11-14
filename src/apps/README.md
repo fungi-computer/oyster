@@ -4,16 +4,29 @@ The standalone host uses these pure contracts through `oyster/apps`. Hosts
 retain their installation stores, transactions, receipts, revocation and live
 resource checks. The Hub's record and gate switches remain separate slices.
 
-An installation pins its immutable Release and `declaredOperationsDigest`.
-`deriveDeclaredOperations` takes that Release's verified declaration and the
-host's existing capability adapters (`permission`, descriptor id and methods).
-It derives backend requirements from Puffball's binding registry. Hosts do not
-supply hand-authored operation lists. Canonically sorted operations use
-`route:<descriptor id>:<method>` and `binding:<binding name>:<operation>` so an
-approval of a browser method cannot silently approve a same-named backend
-method. The snapshot digest covers the artifact digest and the derived
-capabilities. Hosts recompute this snapshot when resolving a Release and pass it
-as a fact.
+An installation pins its immutable Release and artifact digest, and records the
+`declaredOperationsDigest` of the last write. `deriveDeclaredOperations` takes
+that Release's verified declaration and the host's existing capability adapters
+(`permission`, descriptor id and methods). It derives backend requirements from
+Puffball's binding registry. Hosts do not supply hand-authored operation lists.
+Canonically sorted operations use `route:<descriptor id>:<method>` and
+`binding:<binding name>:<operation>` so an approval of a browser method cannot
+silently approve a same-named backend method. The snapshot digest covers the
+artifact digest, the derived capabilities, descriptor routes and each binding
+operation's effect and requirements. Hosts recompute this snapshot when
+resolving a Release and pass it as a fact.
+
+The pin that gates an installation is its immutable artifact digest. The stored
+`declaredOperationsDigest` is the snapshot at the last install, select-release
+or change-grants write; it is a record, not a gate. A host upgrade that adds
+operations leaves existing approvals working, because every check intersects the
+approved operations with the current declaration: a removed operation drops, and
+an added one is `not_approved` and shows as needing review until the owner
+approves it. A permissions save carries the snapshot digest the owner saw; the
+host refuses it with `stale_authority` when the freshly derived digest differs,
+so an owner never approves operations they were not shown. `change-grants` for
+an unchanged Release succeeds, refreshes the digest and drops untouched
+approvals the declaration no longer carries.
 
 Stored grants contain one explicit operation list per capability. Resources are
 opaque host-minted references or `tenant-scope`, which the host resolves against

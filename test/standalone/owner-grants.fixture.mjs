@@ -52,6 +52,8 @@ export async function grantDeclaredAppCapabilities({
       storeGeneration: projection.storeGeneration,
       authorityVersion: projection.permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest:
+        projection.permissions.declaredOperations.digest,
       command,
     }),
     signal: globalThis.AbortSignal.timeout(30_000),

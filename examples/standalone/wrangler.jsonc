@@ -43,6 +43,13 @@
     "OYSTER_HOME_INSTALLATION": "tourtois",
     "OYSTER_ORIGIN": "https://oyster.example",
     "OYSTER_OWNER_NAME": "owner",
+    // Opt in to Cloudflare Access sign-in (hostname-based Access application).
+    // Set both, plus the Access user ID (sub) to bind to the existing owner.
+    // With Access, OYSTER_ORIGIN must be the protected hostname and
+    // workers_dev/preview_urls must be false.
+    // "OYSTER_ACCESS_TEAM_DOMAIN": "yourteam.cloudflareaccess.com",
+    // "OYSTER_ACCESS_AUD": "<Application Audience (AUD) tag>",
+    // "OYSTER_ACCESS_OWNER_SUBJECT": "<your Access user's sub>",
     // Cloudflare creates the account's default AI Gateway on first use.
     // Set another ID here to route Prints through a Gateway you configured.
     "AI_GATEWAY_ID": "default",

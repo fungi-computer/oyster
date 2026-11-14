@@ -412,8 +412,9 @@ function starterRegistry(
  * build answers `running` once, then `outcome(appId)`.
  */
 function oyster(
-  outcome: (appId: string) => "succeeded" | "failed" | "missing" = () =>
-    "succeeded",
+  outcome: (
+    appId: string,
+  ) => "succeeded" | "failed" | "interrupted" | "missing" = () => "succeeded",
   registry = starterRegistry(),
 ) {
   const calls: string[] = [];
@@ -440,7 +441,12 @@ function oyster(
       return Response.json({
         jobId: path.slice("/api/builds/".length),
         status,
-        detail: status === "failed" ? "Build exited with 1" : null,
+        detail:
+          status === "failed"
+            ? "Build exited with 1"
+            : status === "interrupted"
+              ? "Build expired without a result"
+              : null,
         release: status === "succeeded" ? builtRelease(job.appId) : null,
       });
     }
@@ -1312,6 +1318,7 @@ it.each([
 
 it.each([
   ["failed", "bonsai build failed: Build exited with 1"],
+  ["interrupted", "bonsai build interrupted: Build expired without a result"],
   ["missing", "bonsai build is missing (404)"],
 ] as const)(
   "continues past a build that %s and reports the failed App",

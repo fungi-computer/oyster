@@ -1506,6 +1506,15 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       )
         return refusal(409, "stale_authority");
       const release = await releaseOf(current.release);
+      // The owner approved what the page displayed: a host snapshot that
+      // changed since (not the stored one) needs a reload and a fresh review.
+      const snapshot = await deriveDeclaredOperations(
+        current.release,
+        release.declaration ?? emptyAppDeclaration,
+        operationDescriptors,
+      );
+      if (snapshot.digest !== parsed.data.declaredOperationsDigest)
+        return refusal(409, "stale_authority");
       const update = await reduceInstallation(
         current,
         parsed.data.command,
@@ -1861,10 +1870,8 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         return refusal(403, "Gill source is not admitted");
       const current = await gateFacts(installation, release, principal);
       if (
-        current.declaredOperations.digest !==
-          installation.authority.declaredOperationsDigest ||
         current.declaredOperations.artifactDigest !==
-          installation.release.artifact.artifactDigest
+        installation.release.artifact.artifactDigest
       )
         return refusal(403, "stale_authority");
       if (

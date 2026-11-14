@@ -181,12 +181,7 @@ export function applyGrantCommand(
     (current !== null && command.kind === "install")
   )
     return refuse("invalid_command");
-  if (
-    (context.expectedVersion ?? 0) !== (current?.authorityVersion ?? 0) ||
-    (current !== null &&
-      command.kind !== "select-release" &&
-      current.declaredOperationsDigest !== context.declaredOperations.digest)
-  )
+  if ((context.expectedVersion ?? 0) !== (current?.authorityVersion ?? 0))
     return refuse("stale_authority");
   if (
     context.principal.role === null ||
@@ -241,7 +236,14 @@ export function applyGrantCommand(
         command.changes.map((change) => [change.capability, change.grant]),
       );
       grants = [
-        ...grants.filter((grant) => !changed.has(grant.capability)),
+        ...grants
+          .filter((grant) => !changed.has(grant.capability))
+          .map((grant) => ({
+            ...grant,
+            operations: grant.operations.filter((operation) =>
+              declared(grant.capability).includes(operation),
+            ),
+          })),
         ...command.changes.flatMap(({ capability, grant }): ApprovedGrant[] =>
           grant === null ||
           (grant.resources !== "tenant-scope" && grant.resources.length === 0)
@@ -420,11 +422,7 @@ export function applyInstallationCommand(
     return refuse("release_app_mismatch");
   if (
     context.declaredOperations.artifactDigest !==
-      release.artifact.artifactDigest ||
-    (current !== null &&
-      command.kind !== "select-release" &&
-      context.declaredOperations.digest !==
-        current.authority.declaredOperationsDigest)
+    release.artifact.artifactDigest
   )
     return refuse("stale_authority");
   const version = (current?.authority.authorityVersion ?? 0) + 1;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 
 const hooks = registerHooks({
@@ -592,7 +593,7 @@ test("HTTP and root readers share the stored canonical owner and live membership
   };
   try {
     const shared = await standaloneTenancy(env);
-    const stored = await probe.owner.membershipOf(shared.tenantId, input.owner);
+    const stored = await probe.owner.membershipOf("default", input.owner);
     keyOwner = stored.memberId;
     const owner = await shared.owner();
     assert.deepEqual(owner, {
@@ -885,6 +886,253 @@ test("one atomic admission answers only its own tenant, identity and member", as
     assert.equal(
       (await registry.admission("bonsai.test", input.owner))?.tenant.status,
       "suspended",
+    );
+  } finally {
+    probe.close();
+  }
+});
+
+const accessTeam = "team.cloudflareaccess.com";
+const accessIssuer = `https://${accessTeam}`;
+const accessAud = "f".repeat(64);
+
+async function accessFixture() {
+  const pair = await generateKeyPair("RS256");
+  const jwks = {
+    keys: [{ ...(await exportJWK(pair.publicKey)), kid: "k1", alg: "RS256" }],
+  };
+  const assertion = (sub, claims = {}) =>
+    new SignJWT({ type: "app", ...claims })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer(accessIssuer)
+      .setAudience([accessAud])
+      .setSubject(sub)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(pair.privateKey);
+  const real = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new globalThis.Request(input, init).url;
+    assert.equal(url, `${accessIssuer}/cdn-cgi/access/certs`);
+    return globalThis.Response.json(jwks);
+  };
+  return { assertion, restore: () => (globalThis.fetch = real) };
+}
+
+function accessEnv(probe, overrides = {}) {
+  return {
+    OYSTER_ORIGIN: input.origin,
+    OYSTER_OWNER_NAME: input.owner.subject,
+    OYSTER_OWNER_KEY: "standalone-access-owner-key-".padEnd(40, "k"),
+    OYSTER_ACCESS_TEAM_DOMAIN: accessTeam,
+    OYSTER_ACCESS_AUD: accessAud,
+    OYSTER_ACCESS_OWNER_SUBJECT: "access-owner",
+    TENANTS: { getByName: () => probe.owner },
+    KEYS: { getByName: () => ({ verify: async () => ({ kind: "missing" }) }) },
+    ...overrides,
+  };
+}
+
+async function accessOutcome(shared, headers) {
+  const request = new globalThis.Request(`${input.origin}/api/apps`, {
+    headers,
+  });
+  const selected = await shared.oyster.resolve(request);
+  assert.ok(selected);
+  return selected.auth.authenticate(request);
+}
+
+test("opt-in Cloudflare Access admits only the Access subject bound to the existing owner", async () => {
+  const probe = fixture();
+  const { assertion, restore } = await accessFixture();
+  try {
+    const env = accessEnv(probe);
+    const shared = await standaloneTenancy(env);
+    const owner = await shared.owner();
+    assert.ok(owner);
+    const bound = {
+      "Cf-Access-Jwt-Assertion": await assertion("access-owner"),
+    };
+    assert.deepEqual(await accessOutcome(shared, bound), {
+      kind: "admitted",
+      principal: { actor: owner.actor, role: "owner", soleMember: true },
+    });
+    // The binding is the owner's existing member, not a new one.
+    assert.deepEqual(
+      await probe.owner.membershipOf(shared.tenantId, {
+        provider: accessIssuer,
+        subject: "access-owner",
+      }),
+      await probe.owner.membershipOf(shared.tenantId, input.owner),
+    );
+    // A valid Access user nobody bound is refused and not created.
+    assert.deepEqual(
+      await accessOutcome(shared, {
+        "Cf-Access-Jwt-Assertion": await assertion("stranger"),
+      }),
+      { kind: "refused", status: 403 },
+    );
+    assert.equal(
+      await probe.owner.membershipOf(shared.tenantId, {
+        provider: accessIssuer,
+        subject: "stranger",
+      }),
+      null,
+    );
+    // A service token never becomes the owner.
+    assert.deepEqual(
+      await accessOutcome(shared, {
+        "Cf-Access-Jwt-Assertion": await assertion("", {
+          common_name: "client.access",
+        }),
+      }),
+      { kind: "refused", status: 401 },
+    );
+    // A wrong explicit key is refused by the key path even beside a valid assertion.
+    assert.deepEqual(
+      await accessOutcome(shared, {
+        ...bound,
+        Authorization: "Bearer not-the-owner-key-not-the-owner-key",
+      }),
+      { kind: "refused", status: 401 },
+    );
+    // The owner key still wins when both are presented.
+    assert.equal(
+      (
+        await accessOutcome(shared, {
+          ...bound,
+          Authorization: `Bearer ${env.OYSTER_OWNER_KEY}`,
+        })
+      ).kind,
+      "admitted",
+    );
+    // Re-pointing the configured subject replaces the binding.
+    const moved = await standaloneTenancy(
+      accessEnv(probe, { OYSTER_ACCESS_OWNER_SUBJECT: "access-owner-2" }),
+    );
+    assert.deepEqual(await accessOutcome(moved, bound), {
+      kind: "refused",
+      status: 403,
+    });
+    assert.equal(
+      (
+        await accessOutcome(moved, {
+          "Cf-Access-Jwt-Assertion": await assertion("access-owner-2"),
+        })
+      ).kind,
+      "admitted",
+    );
+    // A stale alias an old isolate re-bound is never admitted by a newer one.
+    await probe.owner.bindIdentities(
+      "default",
+      owner.actor.memberId,
+      accessIssuer,
+      ["access-owner", "access-owner-2"],
+    );
+    assert.deepEqual(await accessOutcome(moved, bound), {
+      kind: "refused",
+      status: 403,
+    });
+    // With no subject configured, no one is bound.
+    const none = await standaloneTenancy(
+      accessEnv(probe, { OYSTER_ACCESS_OWNER_SUBJECT: "" }),
+    );
+    assert.deepEqual(
+      await accessOutcome(none, {
+        "Cf-Access-Jwt-Assertion": await assertion("access-owner-2"),
+      }),
+      { kind: "refused", status: 403 },
+    );
+  } finally {
+    restore();
+    probe.close();
+  }
+});
+
+test("Cloudflare Access is off unless configured, and half a configuration is refused", async () => {
+  const probe = fixture();
+  const { assertion, restore } = await accessFixture();
+  try {
+    const off = await standaloneTenancy(
+      accessEnv(probe, {
+        OYSTER_ACCESS_TEAM_DOMAIN: undefined,
+        OYSTER_ACCESS_AUD: undefined,
+      }),
+    );
+    assert.deepEqual(
+      await accessOutcome(off, {
+        "Cf-Access-Jwt-Assertion": await assertion("access-owner"),
+      }),
+      { kind: "refused", status: 401 },
+    );
+    await assert.rejects(
+      standaloneTenancy(accessEnv(probe, { OYSTER_ACCESS_AUD: undefined })),
+      /together, or neither/,
+    );
+  } finally {
+    restore();
+    probe.close();
+  }
+});
+
+test("binding an identity never creates a member and never steals another's identity", async () => {
+  const probe = fixture();
+  try {
+    const tenant = await probe.owner.seed(input);
+    const [ownerId] = tenant.owners;
+    await assert.rejects(
+      probe.owner.bindIdentities("default", "no-such-member", "issuer", ["s"]),
+      /Member does not exist/,
+    );
+    assert.equal(
+      await probe.owner.membershipOf("default", {
+        provider: "issuer",
+        subject: "s",
+      }),
+      null,
+    );
+    // The owner's primary identity cannot be rebound elsewhere or removed.
+    await probe.owner.bindIdentities(
+      "default",
+      ownerId,
+      input.owner.provider,
+      [],
+    );
+    assert.equal(
+      (await probe.owner.membershipOf("default", input.owner))?.memberId,
+      ownerId,
+    );
+    await probe.owner.bindIdentities("default", ownerId, "issuer", ["a", "b"]);
+    await probe.owner.bindIdentities("default", ownerId, "issuer", ["b"]);
+    assert.equal(
+      await probe.owner.membershipOf("default", {
+        provider: "issuer",
+        subject: "a",
+      }),
+      null,
+    );
+    assert.equal(
+      (
+        await probe.owner.membershipOf("default", {
+          provider: "issuer",
+          subject: "b",
+        })
+      )?.memberId,
+      ownerId,
+    );
+  } finally {
+    probe.close();
+  }
+});
+
+test("Cloudflare Access refuses to start on a workers.dev origin", async () => {
+  const probe = fixture();
+  try {
+    await assert.rejects(
+      standaloneTenancy(
+        accessEnv(probe, { OYSTER_ORIGIN: "https://oyster.me.workers.dev" }),
+      ),
+      /workers\.dev/,
     );
   } finally {
     probe.close();

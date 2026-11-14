@@ -72,8 +72,6 @@ export function grantRequestFor(
   request: AppPermissionRequest,
   window: Readonly<{ computerId: string | null }>,
 ): GrantRequestDecision {
-  if (authority.declaredOperationsDigest !== facts.declaredOperations.digest)
-    return { kind: "refused", code: "stale_authority" };
   const requested = [
     ...new Set([
       ...(request.agents ?? []),
@@ -480,6 +478,8 @@ export const permissionPinsSchema = z.strictObject({
   storeGeneration: z.string().min(1),
   authorityVersion: z.number().int().positive(),
   artifactDigest: ownerCodec(sha256DigestSchema),
+  /** The declared-operations digest the owner saw; a save against a changed host snapshot is refused. */
+  declaredOperationsDigest: ownerCodec(sha256DigestSchema),
 });
 /** Generation, authority version and artifact digest fencing a permission edit. */
 export type PermissionPins = z.output<typeof permissionPinsSchema>;

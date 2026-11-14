@@ -176,6 +176,8 @@ test("an approved shell loads, but ordinary owner revocation refuses its next lo
       storeGeneration: "fixture-generation",
       authorityVersion: projection.permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest:
+        projection.permissions.declaredOperations.digest,
       command: {
         kind: "change-grants",
         changes: [{ capability: "team.workbenchHost", grant: null }],

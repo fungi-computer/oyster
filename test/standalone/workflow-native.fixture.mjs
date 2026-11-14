@@ -364,6 +364,7 @@ export function nativeAppClient(
         storeGeneration: page.storeGeneration,
         authorityVersion: page.permissions.authority.authorityVersion,
         artifactDigest: page.artifactDigest,
+        declaredOperationsDigest: page.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: page.permissions.declaredOperations.capabilities.map(

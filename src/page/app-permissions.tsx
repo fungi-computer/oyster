@@ -334,6 +334,8 @@ function PermissionEditor({
             storeGeneration: view.storeGeneration,
             authorityVersion: view.permissions.authority.authorityVersion,
             artifactDigest: view.artifactDigest,
+            declaredOperationsDigest:
+              view.permissions.declaredOperations.digest,
           },
           planGrantChange(view.permissions.authority, nextDraft),
         );

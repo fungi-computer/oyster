@@ -679,13 +679,6 @@ test("Gill source requirements use the current explicit installation approval", 
         approvedGrants: [],
       },
     },
-    {
-      ...installation,
-      authority: {
-        ...installation.authority,
-        declaredOperationsDigest: `sha256:${"a".repeat(64)}`,
-      },
-    },
   ]) {
     const app = createOyster({
       ...host,

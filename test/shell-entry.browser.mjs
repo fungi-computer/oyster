@@ -194,6 +194,8 @@ async function revoke(app, origin) {
       storeGeneration: "fixture-generation",
       authorityVersion: projection.permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest:
+        projection.permissions.declaredOperations.digest,
       command: {
         kind: "change-grants",
         changes: [{ capability: "team.workbenchHost", grant: null }],

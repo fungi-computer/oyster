@@ -371,6 +371,8 @@ test("the shell entry and its module recheck current approval instead of immutab
       storeGeneration: "fixture-generation",
       authorityVersion: projection.permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest:
+        projection.permissions.declaredOperations.digest,
       command: {
         kind: "change-grants",
         changes: [{ capability: "team.workbenchHost", grant: null }],
@@ -769,6 +771,8 @@ for (const [appId, builtIn] of [
         storeGeneration: projection.storeGeneration,
         authorityVersion: projection.permissions.authority.authorityVersion,
         artifactDigest: projection.artifactDigest,
+        declaredOperationsDigest:
+          projection.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: [{ capability: "team.workbenchHost", grant: null }],
@@ -910,6 +914,7 @@ test("a deleted installation id is retired; a reinstall takes a new id", async (
       storeGeneration: "fixture-generation",
       authorityVersion: pins.permissions.authority.authorityVersion,
       artifactDigest: pins.artifactDigest,
+      declaredOperationsDigest: pins.permissions.declaredOperations.digest,
       command: {
         kind: "change-grants",
         changes: [{ capability: "team.workbenchHost", grant: null }],

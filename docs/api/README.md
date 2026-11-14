@@ -35,7 +35,7 @@ uses. A `createOysterWorker` host needs `LOADER`, `RELEASES`, `REGISTRY`,
 | `@fungi.computer/oyster/auth`           | `ownerKeyAuth`, `ownerOrKeyAuth`                                              | Owner-key sign-in (a Bearer key or the login cookie, compared in constant time) and named agent keys.                |
 | `@fungi.computer/oyster/authorization`  | `routes`, route requirements                                                  | The one route table and its typed requirements.                                                                      |
 | `@fungi.computer/oyster/tenant`         | `TenantScope`, `tenantScope`, `singleTenant`, `OysterTenancy`                 | Host-resolved tenant identity and the scope that prefixes registry, key and repository names.                        |
-| `@fungi.computer/oyster/tenancy`        | `createTenancy` and its adapters                                              | Request resolution, a tenant registry and sign-in adapters (owner key, Auth0) for a multi-tenant host.               |
+| `@fungi.computer/oyster/tenancy`        | `createTenancy` and its adapters                                              | Request resolution, a tenant registry and sign-in adapters (owner key, Auth0, Access) for a multi-tenant host.       |
 | `@fungi.computer/oyster/app-storage`    | `AppStorageBinding`, `createAppStorage`, `appStorageSchemaStatements`         | `env.APP_STORAGE` and its SQLite owner: declared keys, live admission, revision checks and watch invalidations.      |
 | `@fungi.computer/oyster/agents`         | `OysterAgents`, `agentCapabilities`, `agentApprovalRoutes`                    | The host's Agent slot, its App capabilities and the owner-only approval routes.                                      |
 | `@fungi.computer/oyster/computer`       | `computerSlots`, `ComputerTerminalHost`                                       | Computer ports, processes and terminal routes supplied by the host; execution stays in the Computer runtime.         |
@@ -237,11 +237,12 @@ returns 409.
 **App permissions.** After selecting a new Release, open **App access** beside
 the App, or `/api/installations/<installationId>/grants`, review the requested
 capabilities and choose **Save permissions**. The page sends a `PUT` carrying
-the captured `storeGeneration`, `authorityVersion` and Release `artifactDigest`
-with a `{kind:"change-grants",changes:[{capability,grant}]}` command; `null`
-revokes a capability. A replaced store, stale Release or concurrent approval
-returns `409`, and the page refreshes and rebases your edits. The required
-`InstallationStore` exposes `generation()` and
+the captured `storeGeneration`, `authorityVersion`, Release `artifactDigest` and
+the displayed `declaredOperationsDigest` with a
+`{kind:"change-grants",changes:[{capability,grant}]}` command; `null` revokes a
+capability. A replaced store, stale Release, changed host operations or
+concurrent approval returns `409`, and the page refreshes and rebases your
+edits. The required `InstallationStore` exposes `generation()` and
 `compareAndPut(record, expectedVersion, expectedGeneration)`, checking both pins
 in one commit transaction.
 
@@ -646,6 +647,68 @@ encoding, length, disposition and range, accepted ranges, ETag and
 last-modified. Oyster adds `Cache-Control: no-store`,
 `X-Content-Type-Options: nosniff` and a sandboxed, deny-by-default Content
 Security Policy. Cookies, redirects and other headers cannot come from guests.
+
+### Cloudflare Access sign-in
+
+`@fungi.computer/oyster/tenancy/cloudflare-access` exports `cloudflareAccess`,
+an opt-in `AuthAdapter` for installations behind a Cloudflare Access
+application. It verifies the `Cf-Access-Jwt-Assertion` header with `jose`
+against the team's keys at
+`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Keys are cached, and
+an unknown `kid` triggers a refetch, so Cloudflare's six-week rotation needs no
+deploy (the library rate-limits that refetch to once per 30 seconds). A token
+must have the exact `iss` `https://<team>.cloudflareaccess.com`, your
+application's AUD tag in `aud`, a valid `exp` and `nbf`, `type: "app"` and a
+non-empty `sub`. Only the header is read, as Cloudflare recommends, never
+`CF_Authorization` or the unvalidated email header.
+
+The adapter returns the identity
+`{ provider: "https://<team>.cloudflareaccess.com", subject: sub }`. Email is
+display data and is never looked up. The tenancy kit then resolves it only
+through `membershipOf` to a member that was bound ahead of time, so an Access
+user with no binding is refused with 403 and no member is created. An Access
+service token (a `common_name`, empty `sub`) is never a human: the adapter
+passes, and it is refused 401 unless an Oyster key credential accompanies it.
+
+**Precedence.** Any `Authorization` header or `oyster_session` cookie is an
+explicit Oyster credential, so the adapter passes and the key adapters decide.
+An invalid key is therefore never rescued by a valid assertion. With no
+assertion it passes; an invalid or expired assertion is refused 401. Place it
+after the key adapters and before any adapter that refuses what remains.
+
+**Standalone host.** Set both of these (a half-set pair fails at startup) to
+turn it on, and bind your Access subject to the existing owner:
+
+```jsonc
+"vars": {
+  "OYSTER_ACCESS_TEAM_DOMAIN": "yourteam.cloudflareaccess.com",
+  "OYSTER_ACCESS_AUD": "<Application Audience (AUD) tag>",
+  "OYSTER_ACCESS_OWNER_SUBJECT": "<your Access user's sub>"
+}
+```
+
+`OYSTER_ACCESS_OWNER_SUBJECT` is the binding. At startup the host calls the
+registry's `bindIdentities` on the `TENANTS` Durable Object, which adds an
+`identity_aliases` row from `{ issuer, sub }` to the owner's existing member ID.
+It writes no tenant, member or owner, and the standalone seed is unchanged, so
+your data and owner key stay. The setting states the complete binding: changing
+or clearing it removes the old subject, and only that subject, for that issuer.
+Only the owner can be bound. To find your `sub`, sign in through Access, copy
+the `CF_Authorization` cookie from your browser's developer tools and decode its
+payload (`cut -d. -f2`, then base64url). Cloudflare documents `sub` as unique to
+an email address per account, and it changes if the Access user is deleted and
+re-added, so rebind it then.
+
+**Set `OYSTER_ORIGIN` to the Access-protected hostname**, and set
+`workers_dev: false` and `preview_urls: false` in Wrangler so the Worker has no
+unprotected `workers.dev` address. The host refuses to start with Access
+configured and `OYSTER_ORIGIN` on `*.workers.dev`. Because a stale Durable
+Object binding could outlive a removed subject during a rollout, each isolate
+also admits only the `OYSTER_ACCESS_OWNER_SUBJECT` it is configured with.
+
+**Use a hostname-based Access application.** Worker-level Access rejects
+WebSocket upgrades, which Shed and Computer terminals use. Protect the Worker's
+hostname, not the Worker, and keep Oyster's own keys for agents and automation.
 
 ### Hosting many tenants
 

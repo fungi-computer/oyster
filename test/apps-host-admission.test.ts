@@ -573,6 +573,7 @@ async function fixture(
         storeGeneration: "fixture-generation",
         authorityVersion: current.authority.authorityVersion,
         artifactDigest: current.release.artifact.artifactDigest,
+        declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
         command: {
           kind: "change-grants",
           changes,
@@ -695,6 +696,7 @@ it("ordinary destinations, including the Tourtois name, require pinned owner app
       storeGeneration: "fixture-generation",
       authorityVersion: permissions.authority.authorityVersion,
       artifactDigest: projection.artifactDigest,
+      declaredOperationsDigest: await liveOperationsDigest(app, "tourtois"),
       command: {
         kind: "change-grants",
         changes: permissions.declaredOperations.capabilities
@@ -718,6 +720,7 @@ it("ordinary destinations, including the Tourtois name, require pinned owner app
       storeGeneration: "fixture-generation",
       authorityVersion: current.authority.authorityVersion,
       artifactDigest: current.release.artifact.artifactDigest,
+      declaredOperationsDigest: await liveOperationsDigest(app, "tourtois"),
       command: {
         kind: "change-grants",
         changes: [{ capability: "team.workbenchHost", grant: null }],
@@ -1117,6 +1120,7 @@ it("lets the direct owner approve new Release capabilities without reinstalling"
       storeGeneration: "fixture-generation",
       authorityVersion: current.authority.authorityVersion,
       artifactDigest: current.release.artifact.artifactDigest,
+      declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
       command: {
         kind: "change-grants",
         changes: permissions.declaredOperations.capabilities
@@ -1163,6 +1167,7 @@ it.each([
   async ({ principal }) => {
     const { app, install, setPrincipal, records } = await fixture();
     const initial = await install();
+    const displayed = await liveOperationsDigest(app, "notes");
     setPrincipal(principal);
     const response = await app.request("/api/installations/notes/grants", {
       method: "PUT",
@@ -1170,6 +1175,7 @@ it.each([
         storeGeneration: "fixture-generation",
         authorityVersion: initial.authority.authorityVersion,
         artifactDigest: initial.release.artifact.artifactDigest,
+        declaredOperationsDigest: displayed,
         command: {
           kind: "change-grants",
           changes: [
@@ -1193,6 +1199,7 @@ it("refuses App-origin approval even with the owner's browser principal", async 
       storeGeneration: "fixture-generation",
       authorityVersion: initial.authority.authorityVersion,
       artifactDigest: initial.release.artifact.artifactDigest,
+      declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
       command: {
         kind: "change-grants",
         changes: [
@@ -1218,6 +1225,7 @@ it("refuses stale versions and Release digests without restoring withdrawn appro
         storeGeneration: "fixture-generation",
         authorityVersion: initial.authority.authorityVersion,
         artifactDigest: initial.release.artifact.artifactDigest,
+        declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
         command: {
           kind: "change-grants",
           changes: [
@@ -1239,6 +1247,7 @@ it("refuses malformed approval commands and unknown installations", async () => 
     storeGeneration: "fixture-generation",
     authorityVersion: initial.authority.authorityVersion,
     artifactDigest: initial.release.artifact.artifactDigest,
+    declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
     command: {
       kind: "change-grants",
       changes: [
@@ -1284,6 +1293,7 @@ it("cannot approve a capability outside the verified Release declaration", async
       storeGeneration: "fixture-generation",
       authorityVersion: initial.authority.authorityVersion,
       artifactDigest: initial.release.artifact.artifactDigest,
+      declaredOperationsDigest: await liveOperationsDigest(app, "notes"),
       command: {
         kind: "change-grants",
         changes: [
@@ -1666,6 +1676,7 @@ it("HTTP methods requiring apps.open need stored approval and refuse again after
         storeGeneration: "fixture-generation",
         authorityVersion: current.authority.authorityVersion,
         artifactDigest: current.release.artifact.artifactDigest,
+        declaredOperationsDigest: await liveOperationsDigest(f.app, "notes"),
         command: {
           kind: "change-grants",
           changes: [
@@ -1772,4 +1783,65 @@ it("owner-direct first install without permission requirements creates the insta
   const installed = await f.install("notes", candidate);
   expect(installed.release).toEqual(candidate);
   expect(installed.authority.approvedGrants).toEqual([]);
+});
+
+/** The declared-operations digest the owner's permissions page displays now. */
+async function liveOperationsDigest(
+  app: {
+    request: (path: string, init?: RequestInit) => Response | Promise<Response>;
+  },
+  installationId: string,
+) {
+  const page = Schema.decodeUnknownSync(
+    Schema.Struct({ permissions: Schema.Unknown }),
+  )(
+    await (
+      await app.request(`/api/installations/${installationId}/grants`, {
+        headers: { Accept: "application/json" },
+      })
+    ).json(),
+  );
+  return appPermissionsWireSchema.parse(page.permissions).declaredOperations
+    .digest;
+}
+
+it("refuses a permissions save made against a host snapshot that changed after the page loaded, and accepts it after a reload", async () => {
+  const f = await fixture();
+  const initial = await f.install();
+  const displayed = await liveOperationsDigest(f.app, "notes");
+  // The host upgrades and now declares one more read route for the same App.
+  const upgraded = createOyster({
+    ...f.host,
+    capabilities: (f.host.capabilities ?? []).map((capability) =>
+      capability.id === "computer.readFile"
+        ? {
+            ...capability,
+            methods: {
+              ...capability.methods,
+              stat: { kind: "read", method: "GET", path: "stat" },
+            },
+          }
+        : capability,
+    ),
+  });
+  const save = async (digest: string) =>
+    upgraded.request("/api/installations/notes/grants", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        storeGeneration: "fixture-generation",
+        authorityVersion: initial.authority.authorityVersion,
+        artifactDigest: initial.release.artifact.artifactDigest,
+        declaredOperationsDigest: digest,
+        command: {
+          kind: "change-grants",
+          changes: [{ capability: "computer.readFile", grant: null }],
+        },
+      }),
+    });
+  const reloaded = await liveOperationsDigest(upgraded, "notes");
+  expect(reloaded).not.toBe(displayed);
+  expect((await save(displayed)).status).toBe(409);
+  expect(f.records.get("notes")).toEqual(initial);
+  expect((await save(reloaded)).status).toBe(200);
 });

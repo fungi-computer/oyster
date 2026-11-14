@@ -160,7 +160,6 @@ export function grantsFor(
 ): ApprovedGrant | null {
   if (
     installation.status !== "enabled" ||
-    snapshot.digest !== installation.authority.declaredOperationsDigest ||
     snapshot.artifactDigest !== installation.artifactDigest ||
     !declaration.capabilities.includes(capability)
   )
@@ -272,8 +271,6 @@ function admissionRefusal(
   const { installation, principal } = facts;
   if (installation.status !== "enabled") return refusal("unavailable");
   if (
-    facts.declaredOperations.digest !==
-      installation.authority.declaredOperationsDigest ||
     facts.declaredOperations.artifactDigest !== installation.artifactDigest ||
     (facts.pins !== undefined &&
       (facts.pins.authorityVersion !==

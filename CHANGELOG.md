@@ -1,5 +1,33 @@
 # @fungi.computer/oyster
 
+## 0.28.0
+
+### Minor Changes
+
+- Changes since 0.27.1:
+
+  - fix(oyster): bind a permissions save to the operations the owner saw
+  - fix(oyster): run the configured and build Computer at the default size
+  - fix(oyster): keep App approvals across a host upgrade that adds operations
+  - fix(oyster): harden Cloudflare Access against stale bindings, crafted tokens
+    and workers.dev
+  - feat(oyster): add opt-in Cloudflare Access sign-in adapter
+  - feat(darkroom): send Seedance 2.5 reference audio clips
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.14.0
+  - @fungi.computer/darkroom@0.8.0
+  - @fungi.computer/braid@0.4.15
+  - @fungi.computer/nacre@0.6.2
+  - @fungi.computer/parakeet@0.11.27
+  - @fungi.computer/shiitake@0.16.1
+  - @fungi.computer/workflows-wire@0.4.15
+  - @fungi.computer/shiitake-extensions@0.9.1
+  - @fungi.computer/zookeeper@0.0.26
+
 ## 0.27.1
 
 ### Patch Changes

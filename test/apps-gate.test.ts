@@ -849,7 +849,7 @@ it("refuses a method requiring two capabilities when only one has consent", asyn
   ).toEqual({ kind: "refused", code: "requires_not_granted" });
 });
 
-it("refuses an old operation digest and reselects the release without adding method operations", async () => {
+it("keeps approvals across an operation-digest change without adding operations", async () => {
   const current = await approvedFacts();
   const oldDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
     capabilities: declaration.capabilities,
@@ -880,22 +880,27 @@ it("refuses an old operation digest and reselects the release without adding met
       },
     },
   };
+  // The approved operations survive; the new route operation is not added.
   expect(
     grantsFor(
       old.installation,
       declaration,
       current.declaredOperations,
       "computer.readFile",
-    ),
-  ).toBeNull();
+    )?.operations,
+  ).toEqual(
+    old.installation.authority.approvedGrants.find(
+      (grant) => grant.capability === "computer.readFile",
+    )?.operations,
+  );
   expect(
     admits(old, {
       kind: "method",
       name: "notes.read",
       input: { path: "/note" },
       via: "ui",
-    }),
-  ).toEqual({ kind: "refused", code: "stale_authority" });
+    }).kind,
+  ).toBe("admitted");
   const selected = await selectRequirements(old, declaration);
   expect(selected.installation.authority.approvedGrants).toEqual(
     old.installation.authority.approvedGrants,
@@ -1173,19 +1178,6 @@ it("metadata and dispatch preserve refusal parity for every valid-input policy f
       change: (value) => ({
         ...value,
         installation: { ...value.installation, instanceId: null },
-      }),
-    },
-    {
-      label: "snapshot digest",
-      name: "notes.read",
-      input: { path: "/note" },
-      expected: "stale_authority",
-      change: (value) => ({
-        ...value,
-        declaredOperations: {
-          ...value.declaredOperations,
-          digest: otherDigest,
-        },
       }),
     },
     {
@@ -1521,4 +1513,131 @@ it("approvals routes require their own current installation consent", async () =
       request,
     ),
   ).toEqual({ kind: "refused", code: "stale_authority" });
+});
+
+it("keeps media approvals across a host upgrade that adds the quote method, until the owner approves it", async () => {
+  const mediaDeclaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+    capabilities: ["media.generation"],
+    handlers: [],
+    roles: [],
+    commands: [],
+    gills: [],
+  });
+  const slot = (names: readonly string[]): CapabilityOperationDescriptor => ({
+    id: "media.generation",
+    permission: "media.generation",
+    methods: Object.fromEntries(
+      names.map((name) => [name, { kind: "json", method: "POST", path: name }]),
+    ),
+  });
+  // Approved under the 0.34 host: no quote route.
+  const before = await approvedFacts(mediaDeclaration, [
+    slot(["describe", "generate", "cancelAttempt"]),
+  ]);
+  // The 0.35 host's snapshot adds route:media.generation:quote.
+  const declaredOperations = await deriveDeclaredOperations(
+    release,
+    mediaDeclaration,
+    [slot(["describe", "generate", "cancelAttempt", "quote"])],
+  );
+  expect(declaredOperations.digest).not.toBe(before.declaredOperations.digest);
+  const upgraded: GateFacts = { ...before, declaredOperations };
+  const route = (method: string) =>
+    admits(upgraded, {
+      kind: "capability-route",
+      capability: "media.generation",
+      operation: `route:media.generation:${method}`,
+      effect: "write",
+    });
+  expect(route("describe")).toEqual({ kind: "admitted", grants: [] });
+  expect(route("generate")).toEqual({ kind: "admitted", grants: [] });
+  expect(route("quote")).toEqual({ kind: "refused", code: "not_approved" });
+  // Saving the permissions page succeeds for the unchanged release.
+  const saved = applyGrantCommand(
+    upgraded.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [
+        {
+          capability: "media.generation",
+          grant: {
+            operations: declaredOperations.capabilities[0]?.operations ?? [],
+            resources: "tenant-scope",
+          },
+        },
+      ],
+    },
+    {
+      principal: {
+        actor: { kind: "member", memberId: "owner" },
+        role: "owner",
+      },
+      expectedVersion: upgraded.installation.authority.authorityVersion,
+      declaration: mediaDeclaration,
+      declaredOperations,
+      now: 2000,
+    },
+  );
+  if (Result.isFailure(saved)) throw new Error(saved.failure.code);
+  expect(saved.success.declaredOperationsDigest).toBe(
+    declaredOperations.digest,
+  );
+  const approved: GateFacts = {
+    ...upgraded,
+    installation: { ...upgraded.installation, authority: saved.success },
+  };
+  expect(
+    admits(approved, {
+      kind: "capability-route",
+      capability: "media.generation",
+      operation: "route:media.generation:quote",
+      effect: "write",
+    }),
+  ).toEqual({ kind: "admitted", grants: [] });
+});
+
+it("a change-grants drops untouched approved operations the declaration no longer carries", async () => {
+  const current = await approvedFacts();
+  const removed = "route:computer.readFile:open";
+  const shrunk = {
+    ...current.declaredOperations,
+    capabilities: current.declaredOperations.capabilities.map((row) => ({
+      ...row,
+      operations: row.operations.filter((op) => op !== removed),
+    })),
+  };
+  const written = current.declaredOperations.capabilities.find(
+    (row) => row.capability === "computer.writeFile",
+  );
+  const saved = applyGrantCommand(
+    current.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [
+        {
+          capability: "computer.writeFile",
+          grant: {
+            operations: written?.operations ?? [],
+            resources: "tenant-scope",
+          },
+        },
+      ],
+    },
+    {
+      principal: {
+        actor: { kind: "member", memberId: "owner" },
+        role: "owner",
+      },
+      expectedVersion: current.installation.authority.authorityVersion,
+      declaration: current.declaration,
+      declaredOperations: shrunk,
+      now: 3000,
+    },
+  );
+  if (Result.isFailure(saved)) throw new Error(saved.failure.code);
+  const read = saved.success.approvedGrants.find(
+    (grant) => grant.capability === "computer.readFile",
+  );
+  expect(read?.operations).not.toContain(removed);
+  expect(read?.operations.length).toBeGreaterThan(0);
 });

@@ -10,6 +10,10 @@ import {
   type Tenant,
   type ReadonlyTenancy,
 } from "../tenancy/index.js";
+import {
+  cloudflareAccess,
+  cloudflareAccessIssuer,
+} from "../tenancy/cloudflare-access.js";
 import { ownerKey } from "../tenancy/owner-key.js";
 import { loopbackAliasLocation } from "../tenancy/registry-record.js";
 import { hosts } from "../tenancy/resolve.js";
@@ -137,6 +141,12 @@ export type StandaloneTenancyEnv = Pick<
 > &
   Readonly<{
     TENANTS: DurableObjectNamespace<StandaloneTenants>;
+    /** Opt-in Cloudflare Access sign-in: the team domain, with the AUD tag. */
+    OYSTER_ACCESS_TEAM_DOMAIN?: string;
+    /** The Access application's AUD tag; set together with the team domain. */
+    OYSTER_ACCESS_AUD?: string;
+    /** The Access `sub` bound to the existing owner; unset binds no one. */
+    OYSTER_ACCESS_OWNER_SUBJECT?: string;
   }>;
 
 /** A live registry-owned owner; the configured label is never its member ID. */
@@ -214,6 +224,10 @@ export function standaloneTenancy(
   return pending;
 }
 
+function blankAsAbsent(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === "" ? undefined : value.trim();
+}
+
 /** The kit's admission over one registry read; it performs no further I/O. */
 type Admitted = Readonly<{
   tenancy: ReadonlyTenancy<"origin">;
@@ -236,6 +250,35 @@ async function composeTenancy(
   });
   if ("kind" in seeded) throw new StandaloneSeedConfigurationChanged(seeded);
   const registry = durableObjectRegistry(env.TENANTS, { readonly: true });
+  const teamDomain = blankAsAbsent(env.OYSTER_ACCESS_TEAM_DOMAIN);
+  const accessAudience = blankAsAbsent(env.OYSTER_ACCESS_AUD);
+  if ((teamDomain === undefined) !== (accessAudience === undefined))
+    throw new Error(
+      "Set OYSTER_ACCESS_TEAM_DOMAIN and OYSTER_ACCESS_AUD together, or neither",
+    );
+  // One adapter per environment, so its signing-key cache outlives requests.
+  const access =
+    teamDomain === undefined || accessAudience === undefined
+      ? null
+      : cloudflareAccess({ teamDomain, audience: accessAudience });
+  const subject = blankAsAbsent(env.OYSTER_ACCESS_OWNER_SUBJECT);
+  if (access !== null && teamDomain !== undefined) {
+    // Access fronts a hostname you control; workers.dev would bypass it.
+    if (new URL(scope.origin).hostname.endsWith(".workers.dev"))
+      throw new Error(
+        "Cloudflare Access cannot protect a workers.dev origin; set OYSTER_ORIGIN to the Access-protected hostname",
+      );
+    // The configuration states the whole Access binding of the existing owner.
+    const [ownerId] = seeded.owners;
+    if (ownerId === undefined)
+      throw new Error("Standalone tenant has no owner to bind");
+    await env.TENANTS.getByName("registry").bindIdentities(
+      defaultTenant,
+      ownerId,
+      cloudflareAccessIssuer(teamDomain),
+      subject === undefined ? [] : [subject],
+    );
+  }
   /** The canonical owner, only while the one admitted record still proves it. */
   const ownerOf = ({
     tenant,
@@ -283,6 +326,42 @@ async function composeTenancy(
       },
       auth: [
         ownerAuth,
+        // After the key adapters and before the terminal named-key entry.
+        ...(access === null
+          ? []
+          : [
+              {
+                id: "standalone-cloudflare-access",
+                async authenticate(request: Request, selected: Tenant) {
+                  const result = await access.authenticate(request, selected);
+                  if (result.kind !== "identity") return result;
+                  // Resolve only through the registry's existing binding, and
+                  // only to the one owner this admission proved.
+                  // Shared registry state can hold a binding a newer
+                  // configuration removed; this isolate admits only its own.
+                  if (result.identity.subject !== subject)
+                    return { kind: "refused", status: 403 } as const;
+                  const membership = await registry.membershipOf(
+                    selected.id,
+                    result.identity,
+                  );
+                  return owner === null ||
+                    membership?.role !== "owner" ||
+                    membership.memberId !== owner.actor.memberId
+                    ? ({ kind: "refused", status: 403 } as const)
+                    : ({
+                        kind: "principal",
+                        principal: {
+                          actor: {
+                            kind: "member",
+                            memberId: membership.memberId,
+                          },
+                          role: "owner",
+                        },
+                      } as const);
+                },
+              },
+            ]),
         {
           id: "standalone-named-key",
           async authenticate(request) {

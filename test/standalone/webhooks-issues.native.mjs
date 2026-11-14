@@ -529,6 +529,7 @@ async function runProof() {
         storeGeneration: pins.storeGeneration,
         authorityVersion: pins.permissions.authority.authorityVersion,
         artifactDigest: pins.artifactDigest,
+        declaredOperationsDigest: pins.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: pins.permissions.declaredOperations.capabilities.map(

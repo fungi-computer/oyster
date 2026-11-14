@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.27.1",
+  "version": "0.28.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -289,6 +289,10 @@
     "./tenancy/auth0": {
       "types": "./dist/tenancy/auth0.d.ts",
       "import": "./dist/tenancy/auth0.js"
+    },
+    "./tenancy/cloudflare-access": {
+      "types": "./dist/tenancy/cloudflare-access.d.ts",
+      "import": "./dist/tenancy/cloudflare-access.js"
     },
     "./tenancy/cloudflare": {
       "types": "./dist/tenancy/cloudflare.d.ts",

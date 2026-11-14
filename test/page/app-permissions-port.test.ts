@@ -40,6 +40,10 @@ it.each([
           artifactDigest: appPermissionPageSchema.shape.artifactDigest.parse(
             `sha256:${"a".repeat(64)}`,
           ),
+          declaredOperationsDigest:
+            appPermissionPageSchema.shape.artifactDigest.parse(
+              `sha256:${"b".repeat(64)}`,
+            ),
         },
         [{ capability: "agent.send", grant: null }],
       );

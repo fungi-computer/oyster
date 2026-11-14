@@ -832,14 +832,19 @@ test("owner grant approval refreshes the backend Instance before the next method
       method: "PUT",
       headers,
       body: JSON.stringify({
-        storeGeneration: (
-          await (
+        ...(await (async () => {
+          const page = await (
             await app.request(
               "/api/installations/" + current.installationId + "/grants",
               { headers: { ...headers, Accept: "application/json" } },
             )
-          ).json()
-        ).storeGeneration,
+          ).json();
+          return {
+            storeGeneration: page.storeGeneration,
+            declaredOperationsDigest:
+              page.permissions.declaredOperations.digest,
+          };
+        })()),
         authorityVersion: current.authority.authorityVersion,
         artifactDigest: current.release.artifact.artifactDigest,
         command: {
@@ -961,14 +966,19 @@ test("UI-only release replacement succeeds without creating a backend Instance",
         method: "PUT",
         headers,
         body: JSON.stringify({
-          storeGeneration: (
-            await (
+          ...(await (async () => {
+            const page = await (
               await app.request(
                 "/api/installations/" + current.installationId + "/grants",
                 { headers: { ...headers, Accept: "application/json" } },
               )
-            ).json()
-          ).storeGeneration,
+            ).json();
+            return {
+              storeGeneration: page.storeGeneration,
+              declaredOperationsDigest:
+                page.permissions.declaredOperations.digest,
+            };
+          })()),
           authorityVersion: current.authority.authorityVersion,
           artifactDigest: current.release.artifact.artifactDigest,
           command: {
@@ -1973,6 +1983,8 @@ test("store identity survives registry restart and rejects an old save in a repl
         storeGeneration: projection.storeGeneration,
         authorityVersion: projection.permissions.authority.authorityVersion,
         artifactDigest: projection.artifactDigest,
+        declaredOperationsDigest:
+          projection.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: [

@@ -167,6 +167,7 @@ try {
         storeGeneration: pins.storeGeneration,
         authorityVersion: current.authority.authorityVersion,
         artifactDigest: digest,
+        declaredOperationsDigest: pins.permissions.declaredOperations.digest,
         command: {
           kind: "change-grants",
           changes: [

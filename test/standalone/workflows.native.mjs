@@ -627,6 +627,8 @@ try {
           storeGeneration: reapproval.storeGeneration,
           authorityVersion: reapproval.permissions.authority.authorityVersion,
           artifactDigest: current.release.artifact.artifactDigest,
+          declaredOperationsDigest:
+            reapproval.permissions.declaredOperations.digest,
           command: {
             kind: "change-grants",
             changes: reapproval.permissions.declaredOperations.capabilities.map(
@@ -903,6 +905,7 @@ try {
           storeGeneration: drift.storeGeneration,
           authorityVersion: drift.permissions.authority.authorityVersion,
           artifactDigest: library.release.artifact.artifactDigest,
+          declaredOperationsDigest: drift.permissions.declaredOperations.digest,
           command: {
             kind: "change-grants",
             changes: drift.permissions.declaredOperations.capabilities.map(

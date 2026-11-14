@@ -35,6 +35,7 @@
     "src/tenancy/registry.ts",
     "src/tenancy/owner-key.ts",
     "src/tenancy/auth0.ts",
+    "src/tenancy/cloudflare-access.ts",
     "src/tenancy/cold-directory.ts",
     "src/tenancy/cloudflare.ts"
   ],
