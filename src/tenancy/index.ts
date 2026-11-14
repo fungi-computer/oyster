@@ -1,3 +1,4 @@
+import { teamRoleAtLeast } from "@fungi.computer/cairn/team-role";
 import { isTenantOriginScheme } from "./registry-record.js";
 import { createOysterTenancy } from "./oyster.js";
 import type { MiddlewareHandler } from "hono";
@@ -167,7 +168,7 @@ export function createTenancy(
         options.role !== undefined &&
         (principal.actor.kind !== "member" ||
           !("role" in principal) ||
-          (options.role === "owner" && principal.role !== "owner"))
+          !teamRoleAtLeast(principal.role, options.role))
       )
         return context.json({ error: "forbidden" }, 403);
       context.set("tenant", admission.tenant);

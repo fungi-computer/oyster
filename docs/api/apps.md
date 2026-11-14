@@ -244,7 +244,7 @@ Consent and resource semantics belong to the grant owner, not its UI.
 ```ts
 type HostPrincipal = Readonly<{
   actor: HostActor;
-  role: "owner" | "member" | null;
+  role: TeamRole | null;
 }>;
 ```
 
@@ -430,7 +430,7 @@ host-owned.
 ```ts
 type GrantRefusal = Readonly<{
   kind: "refused";
-  code: "stale_authority" | "not_owner" | "not_declared" | "invalid_command";
+  code: "stale_authority" | "not_approver" | "not_declared" | "invalid_command";
 }>;
 ```
 
@@ -494,7 +494,7 @@ host-owned.
 ```ts
 type InstallationContext = Readonly<{
   by: HostActor;
-  role: "owner" | "member" | null;
+  role: TeamRole | null;
   expectedVersion: number | null;
   declaration: AppDeclaration;
   declaredOperations: DeclaredOperations;
@@ -1110,6 +1110,18 @@ Installation names cannot contain the tenant separator.
 
 ---
 
+### unstampedFingerprint
+
+```ts
+const unstampedFingerprint: "unstamped" = "unstamped";
+```
+
+Stands in for the fingerprint of an operation approved before fingerprints
+existed. The storage migration writes it; the first snapshot that carries the
+operation by name replaces it with the declared fingerprint (`carryGrant`).
+
+---
+
 ### approvedGrantSchema
 
 ```ts
@@ -1484,7 +1496,7 @@ const installationRefusalSchema: ZodLazy<
         stale_authority: "stale_authority";
         not_declared: "not_declared";
         release_app_mismatch: "release_app_mismatch";
-        not_owner: "not_owner";
+        not_approver: "not_approver";
         invalid_command: "invalid_command";
       }>;
     },
@@ -1924,7 +1936,8 @@ function applyGrantCommand(
   },
   Readonly<{
     kind: "refused";
-    code: "stale_authority" | "not_declared" | "not_owner" | "invalid_command";
+    code:
+      "stale_authority" | "not_declared" | "not_approver" | "invalid_command";
   }>
 >;
 ```
@@ -1960,7 +1973,7 @@ readonly `string`[]; `fingerprints`: `Readonly`\<`Record`\<`string`,
 `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`:
 `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \},
 `Readonly`\<\{ `kind`: `"refused"`; `code`: `"stale_authority"` \|
-`"not_declared"` \| `"not_owner"` \| `"invalid_command"`; \}\>\>
+`"not_declared"` \| `"not_approver"` \| `"invalid_command"`; \}\>\>
 
 ---
 
@@ -1983,7 +1996,7 @@ function applyInstallationCommand(
       | "stale_authority"
       | "not_declared"
       | "release_app_mismatch"
-      | "not_owner"
+      | "not_approver"
       | "invalid_command";
   }
 >;
@@ -2004,7 +2017,7 @@ Pure transition; hosts retain transactions, receipts, epochs and delivery.
 `Result`\<`Readonly`\<\{ `next`: [`Installation`](#installation);
 `authorityChanged`: `boolean`; \}\>, \{ `kind`: `"refused"`; `code`: \|
 `"unavailable"` \| `"stale_authority"` \| `"not_declared"` \|
-`"release_app_mismatch"` \| `"not_owner"` \| `"invalid_command"`; \}\>
+`"release_app_mismatch"` \| `"not_approver"` \| `"invalid_command"`; \}\>
 
 ---
 

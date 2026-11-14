@@ -1,3 +1,4 @@
+import type { TeamRole } from "@fungi.computer/cairn/team-role";
 import { AppInstanceError } from "../index.js";
 import { appMethodSchemas } from "@fungi.computer/forage";
 import {
@@ -32,7 +33,7 @@ import {
 /** Attested by the host, never authenticated by decoding request JSON. */
 export type HostPrincipal = Readonly<{
   actor: HostActor;
-  role: "owner" | "member" | null;
+  role: TeamRole | null;
 }>;
 const bindingNameSchema = ownerCodec(
   Schema.Literals(

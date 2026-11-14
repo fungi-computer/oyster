@@ -62,6 +62,7 @@ export const permissionCatalog = {
     "see which Agents are available.",
     "listAgents",
     "install",
+    "agent",
   ),
   "agent.manage": entry(
     "agents",

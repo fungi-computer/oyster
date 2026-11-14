@@ -27,6 +27,7 @@ export {
   type InstallationRefusal,
   type InstallationUpdate,
   type ResourceRef,
+  unstampedFingerprint,
 } from "./installation.js";
 export {
   permissionPinsSchema,

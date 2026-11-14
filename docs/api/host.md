@@ -270,13 +270,13 @@ type OysterGitHost = Readonly<{
   workflowPass?: Promise<Readonly<{
     kind: "actor";
     actor: HostActor;
-    role?: "owner" | "member";
+    role?: TeamRole;
     workflow?: WorkflowAttestation & object;
   }> | null>;
   buildPass?: Promise<Readonly<{
     kind: "actor";
     actor: HostActor;
-    role?: "owner" | "member";
+    role?: TeamRole;
     workflow?: WorkflowAttestation & object;
   }> | null>;
   git: Promise<

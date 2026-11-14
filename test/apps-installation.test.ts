@@ -374,8 +374,47 @@ it("drops removed operations and clears grants on deletion without changing the 
   expect(deleted.authority.approval).toBeNull();
   expect(installation.authority.approvedGrants).toHaveLength(2);
 });
+it("an admin install grants the same declared install-class set as an owner", async () => {
+  const declaredOperations = await deriveDeclaredOperations(
+    release,
+    declaration,
+    descriptors,
+  );
+  const grantsFor = (role: "owner" | "admin") => {
+    const result = applyGrantCommand(
+      null,
+      { kind: "install" },
+      {
+        principal: { actor: { kind: "member", memberId: "installer" }, role },
+        expectedVersion: null,
+        declaration,
+        declaredOperations,
+        now: 1000,
+      },
+    );
+    if (Result.isFailure(result)) throw new Error(result.failure.code);
+    return result.success.approvedGrants;
+  };
+  expect(grantsFor("admin")).toHaveLength(2);
+  expect(grantsFor("admin")).toEqual(grantsFor("owner"));
+});
+it("an admin changes grants through the installation reducer", async () => {
+  const { installation, context } = await installed();
+  const outcome = applyInstallationCommand(
+    installation,
+    {
+      kind: "change-grants",
+      changes: context.declaredOperations.capabilities.map(
+        ({ capability }) => ({ capability, grant: null }),
+      ),
+    },
+    { ...context, role: "admin", expectedVersion: 1 },
+  );
+  if (Result.isFailure(outcome)) throw new Error(outcome.failure.code);
+  expect(outcome.success.next.authority.approvedGrants).toEqual([]);
+});
 it.each([false, true])(
-  "only owners change grants, including revocation (%s)",
+  "only owners and admins change grants, including revocation (%s)",
   async (approve) => {
     const { installation, context } = await installed();
     expect(
@@ -392,7 +431,7 @@ it.each([false, true])(
         },
         { ...context, role: "member" },
       ),
-    ).toEqual(Result.fail({ kind: "refused", code: "not_owner" }));
+    ).toEqual(Result.fail({ kind: "refused", code: "not_approver" }));
   },
 );
 it("lets members manage installations without granting operations", async () => {

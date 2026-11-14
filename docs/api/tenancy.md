@@ -46,7 +46,7 @@ One provisioned tenant and its registry-owned canonical public origin.
 ```ts
 type Membership = Readonly<{
   memberId: string;
-  role: "owner" | "member";
+  role: TeamRole;
   membershipVersion: number;
 }>;
 ```
@@ -86,12 +86,12 @@ type ReadonlyTenantRegistry = Readonly<{
   status: Promise<"active" | "suspended" | "deleting" | null>;
   membershipOf: Promise<Readonly<{
     memberId: string;
-    role: "owner" | "member";
+    role: TeamRole;
     membershipVersion: number;
   }> | null>;
   memberById: Promise<Readonly<{
     memberId: string;
-    role: "owner" | "member";
+    role: TeamRole;
     membershipVersion: number;
   }> | null>;
 }>;

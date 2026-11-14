@@ -379,7 +379,7 @@ The owner, as every owner route receives it.
 type MemberPrincipal = Extract<
   TenantPrincipal,
   {
-    role: "owner" | "member";
+    role: TeamRole;
   }
 >;
 ```

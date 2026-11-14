@@ -1,3 +1,4 @@
+import type { TeamRole } from "@fungi.computer/cairn/team-role";
 import type { HostActor } from "@fungi.computer/puffball/app-method-runtime";
 import * as Schema from "effect/Schema";
 import type { OysterAuth } from "./host.js";
@@ -20,7 +21,7 @@ export type TenantPrincipal =
       /** Stored member identity resolved by the tenant registry. */
       actor: Extract<HostActor, { kind: "member" }>;
       /** The member's admitted role; membership does not imply ownership. */
-      role: "owner" | "member";
+      role: TeamRole;
       /** The host attests this member is the tenant's only member. */
       soleMember?: true;
     }>

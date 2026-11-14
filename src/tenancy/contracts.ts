@@ -1,3 +1,4 @@
+import type { TeamRole } from "@fungi.computer/cairn/team-role";
 import type { OysterTenancy } from "../tenant.js";
 import type { TenantId, TenantPrincipal, TenantScope } from "../tenant.js";
 import type { Hono, MiddlewareHandler } from "hono";
@@ -31,7 +32,7 @@ export type Membership = Readonly<{
   /** Canonical member ID minted or supplied by the registry owner. */
   memberId: string;
   /** Authority granted by this tenant's membership record. */
-  role: "owner" | "member";
+  role: TeamRole;
   /** Positive safe revision owned by the registry; changes never reuse a deleted membership's revision. */
   membershipVersion: number;
 }>;
@@ -204,8 +205,8 @@ export type ReadonlyTenancy<
   /** Admit requests and populate Hono context before reaching protected handlers. */
   middleware(
     options?: Readonly<{
-      /** Require a member role; owners satisfy member, keys/Agents satisfy neither. */
-      role?: "owner" | "member";
+      /** Require at least this role; a higher role satisfies a lower one, keys/Agents satisfy neither. */
+      role?: TeamRole;
     }>,
   ): MiddlewareHandler<{
     /** Context fields supplied only after successful tenant admission. */

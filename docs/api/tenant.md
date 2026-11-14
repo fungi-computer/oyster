@@ -31,7 +31,7 @@ type TenantPrincipal =
           kind: "member";
         }
       >;
-      role: "owner" | "member";
+      role: TeamRole;
       soleMember?: true;
     }>
   | Readonly<{

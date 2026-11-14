@@ -248,6 +248,10 @@ owner-only: a browser signs in only with the owner key, and named keys sign in
 only by header, for MCP, git and the API. The same Worker runs on Cloudflare
 Workers and on celld, a Workers-compatible runtime you can host yourself.
 
+Hosts that run teams on this installation model let an owner or an admin approve
+an App's permissions; a member can install but not approve, and the refusal is
+`not_approver`. Standalone Oyster has only the owner, so it behaves as before.
+
 ## Install
 
 ```sh

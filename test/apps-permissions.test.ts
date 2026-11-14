@@ -205,7 +205,7 @@ it("window Allow scopes upgrade approval to its Computer; stale or member approv
       expectedVersion: 2,
       principal: { ...principal, role: "member" },
     }),
-  ).toEqual(Result.fail({ kind: "refused", code: "not_owner" }));
+  ).toEqual(Result.fail({ kind: "refused", code: "not_approver" }));
   const approved = applyGrantCommand(selected.success, command, {
     ...context,
     expectedVersion: 2,

@@ -1,3 +1,4 @@
+import type { TeamRole } from "@fungi.computer/cairn/team-role";
 /**
  * Oyster's one authorization owner. Every Oyster HTTP route is registered
  * through {@link routes} with a typed {@link Requirement}; a table's `serve`
@@ -77,10 +78,7 @@ export function oysterPrincipalIsOwner(
 }
 
 /** A member, owner or not, as member routes receive it. */
-export type MemberPrincipal = Extract<
-  TenantPrincipal,
-  { role: "owner" | "member" }
->;
+export type MemberPrincipal = Extract<TenantPrincipal, { role: TeamRole }>;
 
 /** The live facts this module reads to decide; every host supplies the same ports. */
 export type AuthorityPorts = Readonly<{

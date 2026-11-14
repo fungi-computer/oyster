@@ -248,6 +248,51 @@ it("projects only approved declared binding operations for host freshness checks
   ).toEqual([]);
 });
 
+it("agent.list approves selected Agents and admits each Agent on its own", async () => {
+  const declaration = requirementDeclaration({}, ["agent.list"]);
+  const current = await approvedFacts(declaration, []);
+  const changed = applyGrantCommand(
+    current.installation.authority,
+    {
+      kind: "change-grants",
+      changes: [
+        {
+          capability: "agent.list",
+          grant: {
+            operations: [],
+            resources: [{ kind: "agent", id: "a1" }],
+          },
+        },
+      ],
+    },
+    {
+      principal: current.principal,
+      expectedVersion: current.installation.authority.authorityVersion,
+      declaration,
+      declaredOperations: current.declaredOperations,
+      now: 2000,
+    },
+  );
+  if (Result.isFailure(changed)) throw new Error(changed.failure.code);
+  const facts = {
+    ...current,
+    installation: { ...current.installation, authority: changed.success },
+  };
+  for (const id of ["a1", "a2"]) {
+    expect(
+      admits(facts, {
+        kind: "capability",
+        capability: "agent.list",
+        resource: { kind: "agent", id },
+      }),
+    ).toEqual(
+      id === "a1"
+        ? { kind: "admitted", grants: [] }
+        : { kind: "refused", code: "not_approved" },
+    );
+  }
+});
+
 it("matches each Agent binding operation to its own finite resource approval", async () => {
   const declaration: AppDeclaration = {
     ...requirementDeclaration({}, ["agent.read", "agent.manage", "agent.send"]),

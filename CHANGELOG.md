@@ -1,5 +1,37 @@
 # @fungi.computer/oyster
 
+## 0.29.0
+
+### Minor Changes
+
+- Changes since 0.28.2:
+
+  - feat(oyster): admins approve App permissions; agent.list is Agent-scoped
+  - feat(oyster): app callers carry owner, admin or member from the shared role
+  - feat(oyster): carry the shared TeamRole through Apps and Oyster
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.16.0
+  - @fungi.computer/mycelium@0.4.0
+  - @fungi.computer/puffball@0.9.0
+  - @fungi.computer/braid@0.4.17
+  - @fungi.computer/darkroom@0.9.1
+  - @fungi.computer/nacre@0.6.4
+  - @fungi.computer/parakeet@0.11.30
+  - @fungi.computer/shiitake@0.17.1
+  - @fungi.computer/workflows-wire@0.4.17
+  - @fungi.computer/knapsack@0.4.13
+  - @fungi.computer/shiitake-extensions@0.9.4
+  - @fungi.computer/veil@0.7.4
+  - @fungi.computer/forage@0.3.9
+  - @fungi.computer/zookeeper@0.0.29
+  - @fungi.computer/computer@0.12.2
+  - @fungi.computer/computer-contract@0.4.1
+
 ## 0.28.2
 
 ### Patch Changes

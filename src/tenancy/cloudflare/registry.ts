@@ -1,3 +1,4 @@
+import { teamRoles } from "@fungi.computer/cairn/team-role";
 import { DurableObject } from "cloudflare:workers";
 import type { Brand } from "effect/Brand";
 import * as Schema from "effect/Schema";
@@ -26,7 +27,7 @@ const tenantRow = Schema.Struct({
 });
 const membershipRow = Schema.Struct({
   member_id: Schema.NonEmptyString,
-  role: Schema.Literals(["owner", "member"]),
+  role: Schema.Literals(teamRoles),
   membership_version: membershipVersionSchema,
 });
 const memberRow = Schema.Struct({ member_id: Schema.NonEmptyString });
@@ -49,7 +50,7 @@ const tenantAdmissionSchema = Schema.Struct({
   membership: Schema.NullOr(
     Schema.Struct({
       memberId: Schema.NonEmptyString,
-      role: Schema.Literals(["owner", "member"]),
+      role: Schema.Literals(teamRoles),
       membershipVersion: membershipVersionSchema,
     }),
   ),
@@ -84,6 +85,9 @@ const createSchema = Schema.Struct({
 class RegistryObject extends DurableObject<Record<string, never>> {
   constructor(ctx: DurableObjectState) {
     super(ctx, {});
+    // A self-hosted Oyster stores only owner and member rows (the Team's admin role
+    // lives in Hub's Colony); the CHECK stays so existing stores open in place. Reads
+    // decode the shared TeamRole.
     // Pre-launch registries require a fresh store; CREATE IF NOT EXISTS does not
     // upgrade an old memberships table. No incremental migration is supported.
     // DEFAULT 1 is only an insert placeholder: the AFTER INSERT trigger replaces

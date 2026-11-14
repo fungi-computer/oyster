@@ -124,7 +124,7 @@ type GitDoorHost = Readonly<{
      | Readonly<{
      kind: "actor";
      actor: HostActor;
-     role?: "owner" | "member";
+     role?: TeamRole;
      workflow?: WorkflowAttestation & object;
    }>
     | null>;
