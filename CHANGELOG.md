@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.29.1
+
+### Patch Changes
+
+- Changes since 0.29.0:
+
+  - Updated starter Apps for the Shiitake release.
+  - Updated starter Apps for the Shiitake-extensions release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.10.0
+  - @fungi.computer/shiitake@0.18.0
+  - @fungi.computer/parakeet@0.11.31
+  - @fungi.computer/zookeeper@0.0.30
+
 ## 0.29.0
 
 ### Minor Changes
