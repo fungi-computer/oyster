@@ -1,5 +1,60 @@
 # @fungi.computer/oyster
 
+## 0.27.0
+
+### Minor Changes
+
+- Changes since 0.26.0:
+
+  - fix(oyster): satisfy anti-slop in the Oyster price proof
+  - feat(shed): read process output on the Hub; say a long command's limit
+    plainly
+  - fix(hub): fill the agents instructionsUrl in the quote test host; regenerate
+    API docs
+  - feat(media): price one exact generation through the host
+  - fix(darkroom): document the daily meter and regenerate API docs
+  - feat(tourtois): show Computer state, one lifecycle key, confirm Stop, toasts
+  - feat(oyster): owner Stop for a standalone Computer
+  - feat(computer): ten-minute commands and detached processes Agents can read,
+    wait on and stop
+  - fix(oyster): explain Cloudflare Images error 9432 and minify the standalone
+    Worker
+  - feat(oyster): install-apps --only installs chosen starter Apps
+  - feat(agents): an Agent's instructions are AGENTS.md on its Home Computer
+  - fix(oyster): keep the media env type and check the daily meter object
+  - feat(oyster): daily media hard stop with a plain spending-limit message
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.13.0
+  - @fungi.computer/caps@0.11.4
+  - @fungi.computer/computer-contract@0.4.0
+  - @fungi.computer/computer@0.12.0
+  - @fungi.computer/darkroom@0.7.0
+  - @fungi.computer/parakeet@0.11.26
+  - @fungi.computer/puffball@0.8.0
+  - @fungi.computer/shiitake-extensions@0.9.0
+  - @fungi.computer/shiitake@0.16.0
+  - @fungi.computer/sigils@0.3.2
+  - @fungi.computer/braid@0.4.14
+  - @fungi.computer/nacre@0.6.1
+  - @fungi.computer/workflows-wire@0.4.14
+  - @fungi.computer/forage@0.3.8
+  - @fungi.computer/mycelium@0.3.11
+  - @fungi.computer/zookeeper@0.0.25
+  - @fungi.computer/knapsack@0.4.12
+  - @fungi.computer/veil@0.7.3
+
 ## 0.26.0
 
 ### Minor Changes

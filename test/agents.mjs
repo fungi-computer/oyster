@@ -13,6 +13,7 @@ let approvalWrites = 0;
 let renameWrites = 0;
 let instructionWrites = 0;
 const instructionsOf = new Map();
+const noHome = "agent_nohome";
 let avatarWrites = 0;
 // Simulates an Agent already pending from before owner-direct creation, or an
 // auto-approval that failed open; the "Allow App tools" control recovers it.
@@ -77,17 +78,34 @@ const adapter = {
   },
   readInstructions: async (agentId, principal) => {
     assert.deepEqual(principal, owner);
-    if (!agents.some((item) => item.agentId === agentId))
+    if (agentId !== noHome && !agents.some((item) => item.agentId === agentId))
       return { error: "not_found" };
-    return { agentId, instructions: instructionsOf.get(agentId) ?? "" };
+    const content = instructionsOf.get(agentId) ?? null;
+    return {
+      agentId,
+      home: agentId === noHome ? null : { name: "garden" },
+      content: agentId === noHome ? null : content,
+      bytes: content === null ? 0 : content.length,
+      limit: 32_000,
+    };
   },
-  setInstructions: async (agentId, instructions, principal) => {
+  setInstructions: async (agentId, edit, principal) => {
     assert.deepEqual(principal, owner);
-    if (!agents.some((item) => item.agentId === agentId))
+    if (agentId !== noHome && !agents.some((item) => item.agentId === agentId))
       return { error: "not_found" };
+    if (agentId === noHome) return { error: "no_home" };
+    if (edit.content.length > 32_000) return { error: "too_large" };
+    if ((instructionsOf.get(agentId) ?? null) !== edit.expectedContent)
+      return { error: "conflict" };
     instructionWrites += 1;
-    instructionsOf.set(agentId, instructions);
-    return { agentId, instructions };
+    instructionsOf.set(agentId, edit.content);
+    return {
+      agentId,
+      home: { name: "garden" },
+      content: edit.content,
+      bytes: edit.content.length,
+      limit: 32_000,
+    };
   },
   policyStatus: async (agentId) => {
     if (!agents.some((agent) => agent.agentId === agentId)) return null;
@@ -365,41 +383,70 @@ assert.equal((await setAvatar(cat, "agent_9")).status, 404);
 assert.deepEqual((await (await setAvatar(cat)).json()).avatar, cat);
 assert.equal(avatarWrites, 1);
 
-const putInstructions = (instructions, agentId = "agent_1", who = "owner") =>
+const putInstructions = (
+  content,
+  expectedContent = null,
+  agentId = "agent_1",
+  who = "owner",
+) =>
   call(
     `/agent-instructions/${agentId}`,
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ instructions }),
+      body: JSON.stringify({ expectedContent, content }),
     },
     who,
   );
 assert.equal(
-  (await putInstructions("Be brief.", "agent_1", "key")).status,
+  (await putInstructions("Be brief.", null, "agent_1", "key")).status,
   403,
 );
 assert.equal(instructionWrites, 0, "a non-owner never changes instructions");
 assert.equal(
-  (await putInstructions("x".repeat(4_001))).status,
-  400,
-  "instructions over the bound are refused",
+  (await putInstructions("x".repeat(32_001))).status,
+  413,
+  "a file over the limit is refused",
 );
-assert.equal((await putInstructions("Be brief.", "agent_9")).status, 404);
+assert.equal((await putInstructions("Be brief.", null, "agent_9")).status, 404);
+assert.equal(
+  (await putInstructions("Be brief.", null, noHome)).status,
+  409,
+  "an Agent with no Home has nowhere to save",
+);
 assert.equal(instructionWrites, 0);
-assert.deepEqual(await (await putInstructions("Be brief.")).json(), {
+const saved = {
   agentId: "agent_1",
-  instructions: "Be brief.",
-});
+  home: { name: "garden" },
+  content: "Be brief.",
+  bytes: 9,
+  limit: 32_000,
+};
+assert.deepEqual(await (await putInstructions("Be brief.")).json(), saved);
 assert.deepEqual(
   await (await call("/agent-instructions/agent_1")).json(),
-  { agentId: "agent_1", instructions: "Be brief." },
+  saved,
   "the owner reads back what they wrote",
+);
+assert.equal(
+  (await putInstructions("Be rude.", null)).status,
+  409,
+  "a file that already exists is not created again",
+);
+assert.equal(
+  (await putInstructions("Be kind.", "Be brief.")).status,
+  200,
+  "an edit against what the owner last read is saved",
+);
+assert.equal(
+  (await putInstructions("Be rude.", "Be brief.")).status,
+  409,
+  "an edit made over a changed file is a conflict",
 );
 assert.equal(
   (await call("/agent-instructions/agent_1", {}, "key")).status,
   403,
-  "a key cannot read an Agent's standing instructions",
+  "a key cannot read an Agent's AGENTS.md",
 );
 assert.deepEqual(
   (await (await call("/agents")).json()).find(

@@ -6,7 +6,7 @@
 //
 //   OYSTER_URL=https://… OYSTER_OWNER_KEY=… oyster install-apps
 //     [--repositories <base URL>] [--ref <branch or tag>]
-//     [--from <checkout directory>] [--concurrency 1-3] [--timings <file>]
+//     [--from <checkout directory>] [--concurrency 1-3] [--timings <file>] [--only <app>[,<app>]]
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,7 +35,7 @@ import {
 const defaultRepositories = "https://github.com/fungi-computer";
 
 const usage =
-  "Usage: oyster install-apps [--repositories <base URL>] [--ref <ref>] [--from <checkout>] [--concurrency 1-3] [--timings <file>]";
+  "Usage: oyster install-apps [--repositories <base URL>] [--ref <ref>] [--from <checkout>] [--concurrency 1-3] [--timings <file>] [--only <app>[,<app>]]";
 
 const urlSource =
   "OYSTER_URL is the address of your deployed Oyster Worker, such as https://oyster.<your-subdomain>.workers.dev. You set it when you deploy. For a local trial, run `oyster try`; it sets up its Computer and starter Apps.";
@@ -56,6 +56,7 @@ Options:
   --ref <ref>                branch or tag to build (default main)
   --from <checkout>          install from a Botanical checkout directory
   --concurrency 1-3          Apps to build at once
+  --only <app>[,<app>]       install only these Apps, such as --only prints
   --timings <file>           write the build timings as JSON
   -h, --help                 show this help
 `;
@@ -125,6 +126,7 @@ export async function installApps(
       from: { type: "string" },
       concurrency: { type: "string" },
       timings: { type: "string" },
+      only: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -143,6 +145,10 @@ export async function installApps(
     values.concurrency === undefined
       ? defaultStarterBuildConcurrency()
       : Number(values.concurrency);
+  const only =
+    values.only === undefined
+      ? undefined
+      : values.only.split(",").map((name) => name.trim());
   const scratch = await mkdtemp(join(tmpdir(), "oyster-install-apps-"));
   try {
     let source: StarterAppSource;
@@ -167,6 +173,7 @@ export async function installApps(
       url,
       key,
       concurrency,
+      only,
       // Builds run side by side, so each report is its own line, not a spinner.
       report: (message) => {
         ui.step(message);

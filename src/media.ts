@@ -8,6 +8,7 @@ export const mediaSlot = {
   base: "/media/",
   methods: {
     describe: { kind: "json", method: "GET", path: "describe" },
+    quote: { kind: "json", method: "POST", path: "quote" },
     generate: { kind: "json", method: "POST", path: "generate" },
     cancelAttempt: { kind: "json", method: "POST", path: "cancel-attempt" },
   },

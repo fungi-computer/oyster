@@ -14,6 +14,7 @@ const configSchema = z.object({
       }),
     )
     .optional(),
+  minify: z.boolean().optional(),
   durable_objects: z.object({
     bindings: z.array(z.object({ class_name: z.string() })),
   }),
@@ -106,4 +107,10 @@ describe("Cloudflare Computer container capacity", () => {
       });
     });
   }
+});
+
+describe("Cloudflare Worker startup budget", () => {
+  it("minifies the published standalone example so startup stays under the CPU limit (10021)", () => {
+    expect(read("examples/standalone/wrangler.jsonc").minify).toBe(true);
+  });
 });

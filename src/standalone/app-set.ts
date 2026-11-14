@@ -102,6 +102,23 @@ export const standaloneAppSet: readonly StarterApp[] = [
   },
 ];
 
+/**
+ * The starter Apps to install: all of them, or only the named installation ids,
+ * in the starter order. An unknown name is refused with the valid names.
+ */
+export function selectStarterApps(
+  only?: readonly string[],
+): readonly StarterApp[] {
+  if (only === undefined) return standaloneAppSet;
+  const known = standaloneAppSet.map((app) => app.installationId);
+  const unknown = only.filter((name) => !known.includes(name));
+  if (unknown.length > 0 || only.length === 0)
+    throw new Error(
+      `Unknown starter App ${unknown.join(", ") || "(none named)"}. Choose from: ${known.join(", ")}.`,
+    );
+  return standaloneAppSet.filter((app) => only.includes(app.installationId));
+}
+
 /** The Apps `oyster try` installs after the desktop, in the order it reports them. */
 export const trialStarterOrder = [
   "grove",
@@ -296,6 +313,8 @@ export async function installStandaloneAppSet(
     report: (message: string) => void;
     /** Builds at once on the Computer, 1 to 3; one by default. */
     concurrency?: number;
+    /** Install only these starter installation ids; every starter by default. */
+    only?: readonly string[];
     /** Publishes one App's source; the real installer uses `publishSource`. */
     publish?: (
       app: StarterApp,
@@ -311,6 +330,7 @@ export async function installStandaloneAppSet(
     waitMs?: number;
   }>,
 ): Promise<StarterAppSetResult> {
+  const apps = selectStarterApps(options.only);
   const concurrency = options.concurrency ?? defaultStarterBuildConcurrency();
   if (
     !Number.isInteger(concurrency) ||
@@ -537,7 +557,7 @@ export async function installStandaloneAppSet(
   };
   const seedAll = async () => {
     try {
-      for (const app of standaloneAppSet) {
+      for (const app of apps) {
         try {
           const seeded = await seedApp(app);
           const waiter = waiting.shift();
@@ -665,11 +685,11 @@ export async function installStandaloneAppSet(
   for (const outcome of settled)
     if (outcome.status === "rejected") throw outcome.reason;
   return {
-    installed: standaloneAppSet.flatMap((app) => {
+    installed: apps.flatMap((app) => {
       const result = installed.get(app.installationId);
       return result === undefined ? [] : [result];
     }),
-    failed: standaloneAppSet.flatMap((app) => {
+    failed: apps.flatMap((app) => {
       const reason = failures.get(app.installationId);
       return reason === undefined
         ? []

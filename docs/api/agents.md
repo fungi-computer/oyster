@@ -10,6 +10,24 @@
 
 ## Type Aliases
 
+### OysterAgentInstructions
+
+```ts
+type OysterAgentInstructions = Readonly<{
+  home: Readonly<{
+    name: string;
+  }> | null;
+  content: string | null;
+  bytes: number;
+  limit: number;
+}>;
+```
+
+An Agent's AGENTS.md on its Home Computer, with the byte limit the host
+enforces.
+
+---
+
 ### OysterAgent
 
 ```ts
@@ -189,243 +207,215 @@ This Agent's App-tool policy, in the shape Apps read it.
 
 ```ts
 type OysterAgents = Readonly<{
-  list: Promise<
-    readonly Readonly<{
-      agentId: string;
-      name: string;
-      avatar: Avatar;
-      sessionOperations: readonly (
-        "agent.read" | "agent.send" | "agent.manage"
-      )[];
-    }>[]
-  >;
+  list: Promise<readonly Readonly<{
+     agentId: string;
+     name: string;
+     avatar: Avatar;
+     sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
+  }>[]>;
   ensureStarter: Promise<StarterOutcome>;
   setArchived: Promise<
-    | Readonly<{
-        archived: boolean;
-        revision: number;
-      }>
-    | Readonly<{
-        error:
-          | "not_found"
-          | "not_granted"
-          | "self"
-          | "not_creator"
-          | "running"
-          | "pending"
-          | "unreadable"
-          | "archived";
-        message?: string;
-        archived?: boolean;
-        revision?: number;
-      }>
-  >;
-  create: Promise<
-    Readonly<{
-      agentId: string;
-      name: string;
-      avatar: Avatar;
-      sessionOperations: readonly (
-        "agent.read" | "agent.send" | "agent.manage"
-      )[];
-    }>
-  >;
+     | Readonly<{
+     archived: boolean;
+     revision: number;
+   }>
+     | Readonly<{
+     error:   | "not_found"
+        | "not_granted"
+        | "self"
+        | "not_creator"
+        | "running"
+        | "pending"
+        | "unreadable"
+        | "archived";
+     message?: string;
+     archived?: boolean;
+     revision?: number;
+  }>>;
+  create: Promise<Readonly<{
+     agentId: string;
+     name: string;
+     avatar: Avatar;
+     sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
+  }>>;
   rename: Promise<
-    | Readonly<{
-        agentId: string;
-        name: string;
-        avatar: Avatar;
-        sessionOperations: readonly (
-          "agent.read" | "agent.send" | "agent.manage"
-        )[];
-      }>
-    | Readonly<{
-        error: "not_found" | "name_taken" | "not_granted";
-      }>
-  >;
+     | Readonly<{
+     agentId: string;
+     name: string;
+     avatar: Avatar;
+     sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
+   }>
+     | Readonly<{
+     error: "not_found" | "name_taken" | "not_granted";
+  }>>;
   setAvatar: Promise<
-    | Readonly<{
-        agentId: string;
-        name: string;
-        avatar: Avatar;
-        sessionOperations: readonly (
-          "agent.read" | "agent.send" | "agent.manage"
-        )[];
-      }>
-    | Readonly<{
-        error: "not_found" | "not_granted";
-      }>
-  >;
-  readModelChoice: Promise<{
-    keySource: "workers-ai" | "ai-gateway" | "byok";
-    model: {
-      providerId: Schema.String;
-      modelId: Schema.String;
-      reasoning?: Schema.optional<
-        Schema.Literals<
-          readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
-        >
-      >;
-    };
-    keyId?: string;
-  } | null>;
+     | Readonly<{
+     agentId: string;
+     name: string;
+     avatar: Avatar;
+     sessionOperations: readonly ("agent.read" | "agent.send" | "agent.manage")[];
+   }>
+     | Readonly<{
+     error: "not_found" | "not_granted";
+  }>>;
+  readModelChoice: Promise<
+     | {
+     keySource: "workers-ai" | "ai-gateway" | "byok";
+     model: {
+        providerId: Schema.String;
+        modelId: Schema.String;
+        reasoning?: Schema.optional<Schema.Literals<readonly ["minimal", "low", "medium", "high", "xhigh", "max"]>>;
+     };
+     keyId?: string;
+   }
+    | null>;
   readInstructions: Promise<
-    | Readonly<{
-        agentId: string;
-        instructions: string;
+     | Readonly<object & Readonly<{
+     home:   | Readonly<{
+        name: ...;
       }>
-    | Readonly<{
-        error: "not_found" | "not_granted";
-      }>
-  >;
+        | null;
+     content: string | null;
+     bytes: number;
+     limit: number;
+   }>>
+     | Readonly<{
+     error: "not_found" | "not_granted";
+  }>>;
   setInstructions: Promise<
-    | Readonly<{
-        agentId: string;
-        instructions: string;
+     | Readonly<object & Readonly<{
+     home:   | Readonly<{
+        name: ...;
       }>
-    | Readonly<{
-        error: "not_found" | "not_granted";
-      }>
-  >;
-  decodeModelChoice: {
-    keySource: "workers-ai" | "ai-gateway" | "byok";
-    model: {
-      providerId: Schema.String;
-      modelId: Schema.String;
-      reasoning?: Schema.optional<
-        Schema.Literals<
-          readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
-        >
-      >;
-    };
-    keyId?: string;
-  } | null;
+        | null;
+     content: string | null;
+     bytes: number;
+     limit: number;
+   }>>
+     | Readonly<{
+     error: "not_found" | "not_granted" | "conflict" | "too_large" | "no_home";
+  }>>;
+  decodeModelChoice:   | {
+     keySource: "workers-ai" | "ai-gateway" | "byok";
+     model: {
+        providerId: Schema.String;
+        modelId: Schema.String;
+        reasoning?: Schema.optional<Schema.Literals<readonly ["minimal", "low", "medium", "high", "xhigh", "max"]>>;
+     };
+     keyId?: string;
+   }
+     | null;
   setModelChoice: Promise<
-    | {
-        keySource: "workers-ai" | "ai-gateway" | "byok";
-        model: {
-          providerId: Schema.String;
-          modelId: Schema.String;
-          reasoning?: Schema.optional<
-            Schema.Literals<
-              readonly ["minimal", "low", "medium", "high", "xhigh", "max"]
-            >
-          >;
-        };
-        keyId?: string;
-      }
-    | Readonly<{
-        error: "not_found" | "not_granted" | AgentModelRefusal;
-      }>
-  >;
-  policyStatus: Promise<Readonly<{
-    status: "pending" | "approved";
-    revision: string;
-  }> | null>;
-  appToolPolicy: Promise<{
-    level: "read" | "write";
-    revision: string;
-    grantedBy: string;
-  } | null>;
+     | {
+     keySource: "workers-ai" | "ai-gateway" | "byok";
+     model: {
+        providerId: Schema.String;
+        modelId: Schema.String;
+        reasoning?: Schema.optional<Schema.Literals<readonly ["minimal", "low", "medium", "high", "xhigh", "max"]>>;
+     };
+     keyId?: string;
+   }
+     | Readonly<{
+     error: "not_found" | "not_granted" | AgentModelRefusal;
+  }>>;
+  policyStatus: Promise<
+     | Readonly<{
+     status: "pending" | "approved";
+     revision: string;
+   }>
+    | null>;
+  appToolPolicy: Promise<
+     | {
+     level: "read" | "write";
+     revision: string;
+     grantedBy: string;
+   }
+    | null>;
   policyRevision: Promise<string | null>;
   approveAppToolPolicy: Promise<
-    | {
-        level: "read" | "write";
-        revision: string;
-        grantedBy: string;
-      }
-    | Readonly<{
-        status: "pending";
-        revision: string;
-      }>
-    | Readonly<{
-        error: "not_found" | "revision_conflict" | "not_granted";
-      }>
-  >;
-  setup: Promise<
-    Readonly<{
-      models: "ready" | "missing";
-      media: "ready" | "missing";
-    }>
-  >;
-  modelKeys: Promise<
-    readonly Readonly<{
-      keyId: string;
-      provider: StandaloneModelKeyProvider;
-      label: string;
-      createdAt: number;
-      validatedAt: number;
-    }>[]
-  >;
+     | {
+     level: "read" | "write";
+     revision: string;
+     grantedBy: string;
+   }
+     | Readonly<{
+     status: "pending";
+     revision: string;
+   }>
+     | Readonly<{
+     error: "not_found" | "revision_conflict" | "not_granted";
+  }>>;
+  setup: Promise<Readonly<{
+     models: "ready" | "missing";
+     media: "ready" | "missing";
+  }>>;
+  modelKeys: Promise<readonly Readonly<{
+     keyId: string;
+     provider: StandaloneModelKeyProvider;
+     label: string;
+     createdAt: number;
+     validatedAt: number;
+  }>[]>;
   sealModelKey: Promise<
-    | Readonly<{
-        keyId: string;
-        provider: StandaloneModelKeyProvider;
-        label: string;
-        createdAt: number;
-        validatedAt: number;
-      }>
-    | Readonly<{
-        error: ModelKeyRefusal;
-      }>
-  >;
+     | Readonly<{
+     keyId: string;
+     provider: StandaloneModelKeyProvider;
+     label: string;
+     createdAt: number;
+     validatedAt: number;
+   }>
+     | Readonly<{
+     error: ModelKeyRefusal;
+  }>>;
   removeModelKey: Promise<"deleted" | "absent">;
-  connections: Promise<
-    readonly Readonly<{
-      connectionId: string;
-      name: string;
-      label: string;
-      kind: "mcp" | "openapi";
-      url: string;
-      auth: "none" | "token" | "oauth";
-      state: "connected" | "pending" | "reconnect_required";
-      grants: readonly Readonly<{
+  connections: Promise<readonly Readonly<{
+     connectionId: string;
+     name: string;
+     label: string;
+     kind: "mcp" | "openapi";
+     url: string;
+     auth: "none" | "token" | "oauth";
+     state: "connected" | "pending" | "reconnect_required";
+     grants: readonly Readonly<{
         agentId: string;
         access: ConnectionAccess;
-      }>[];
-    }>[]
-  >;
+     }>[];
+  }>[]>;
   addConnection: Promise<
-    | Readonly<{
-        connectionId: string;
-        authorizeUrl: string | null;
-      }>
-    | Readonly<{
-        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
-      }>
-  >;
+     | Readonly<{
+     connectionId: string;
+     authorizeUrl: string | null;
+   }>
+     | Readonly<{
+     error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+  }>>;
   grantConnection: Promise<
-    | Readonly<{
-        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
-      }>
-    | Readonly<{
-        ok: true;
-      }>
-  >;
+     | Readonly<{
+     error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+   }>
+     | Readonly<{
+     ok: true;
+  }>>;
   ungrantConnection: Promise<boolean>;
   removeConnection: Promise<boolean>;
   connectionTools: Promise<
-    | readonly string[]
-    | Readonly<{
-        error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
-      }>
-  >;
+     | readonly string[]
+     | Readonly<{
+     error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+  }>>;
   completeMcpConnection: Promise<
-    | Readonly<{
-        ok: true;
-      }>
-    | Readonly<{
-        error: string;
-      }>
-  >;
+     | Readonly<{
+     ok: true;
+   }>
+     | Readonly<{
+     error: string;
+  }>>;
   mcpCallbackUrl: string;
   fetch: Promise<Response | null>;
-  inbox: Promise<
-    Readonly<{
-      items: readonly OysterInboxItem[];
-      revision: number;
-    }>
-  >;
+  inbox: Promise<Readonly<{
+     items: readonly OysterInboxItem[];
+     revision: number;
+  }>>;
   revision: Promise<number>;
   visit: Promise<boolean>;
 }>;

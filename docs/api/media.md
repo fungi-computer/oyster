@@ -30,6 +30,10 @@ Media slot supplied by the host; Oyster owns routing, never generation.
 | `methods.describe.kind`                 | `"json"`             | `"json"`                  |
 | `methods.describe.method`               | `"GET"`              | `"GET"`                   |
 | `methods.describe.path`                 | `"describe"`         | `"describe"`              |
+| `methods.quote`                         | `object`             | -                         |
+| `methods.quote.kind`                    | `"json"`             | `"json"`                  |
+| `methods.quote.method`                  | `"POST"`             | `"POST"`                  |
+| `methods.quote.path`                    | `"quote"`            | `"quote"`                 |
 | `methods.generate`                      | `object`             | -                         |
 | `methods.generate.kind`                 | `"json"`             | `"json"`                  |
 | `methods.generate.method`               | `"POST"`             | `"POST"`                  |

@@ -5,6 +5,9 @@
   "main": "worker.ts",
   "compatibility_date": "2026-09-04",
   "compatibility_flags": ["nodejs_compat"],
+  // The unminified bundle can exceed Cloudflare's Worker startup CPU limit
+  // (error 10021) on some accounts.
+  "minify": true,
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": true },

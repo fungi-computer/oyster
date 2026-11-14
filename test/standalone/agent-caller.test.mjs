@@ -4057,6 +4057,10 @@ for (const binding of [false, true]) {
   ]) {
     test(`typed provider decisions for ${binding ? "AI binding" : "Luna"} ${code}`, async (context) => {
       let requests = 0;
+      // A 429 through the Workers AI gateway means the daily spend limit, which
+      // retrying cannot help; the Luna door has no such rule.
+      const expectRetryable =
+        retryable && !(binding && code === "rate_limit_exceeded");
       const fetch = async () => {
         requests += 1;
         return globalThis.Response.json(
@@ -4097,11 +4101,11 @@ for (const binding of [false, true]) {
         for await (const event of response)
           if (event.type === "error") terminal = event.error;
         assert.notEqual(terminal, undefined);
-        assert.equal(lease.retryable(terminal), retryable);
+        assert.equal(lease.retryable(terminal), expectRetryable);
         const result = await response.result();
         assert.equal(result.stopReason, "error");
         assert.equal(requests, 1);
-        assert.equal(lease.retryable(result), retryable);
+        assert.equal(lease.retryable(result), expectRetryable);
         assert.equal(
           lease.retryable(globalThis.structuredClone(result)),
           false,
@@ -4118,7 +4122,7 @@ for (const binding of [false, true]) {
           }),
         );
         assert.equal(outcome.status, "failed");
-        assert.equal(requests, retryable ? 2 : 1);
+        assert.equal(requests, expectRetryable ? 2 : 1);
         controller.abort();
         assert.equal(lease.retryable(result), false);
       } finally {

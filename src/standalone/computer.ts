@@ -71,7 +71,9 @@ import {
   processListOutputSchema,
   processKillOutputSchema,
   processLogsInputSchema,
+  processWaitInputSchema,
   processLogsOutputSchema,
+  processWaitOutputSchema,
   computerOperationResultSchema,
   mintComputerRequestId,
   processIdInputSchema,
@@ -169,6 +171,7 @@ export type StandaloneComputerResult =
   | z.output<typeof processListOutputSchema>
   | z.output<typeof processKillOutputSchema>
   | z.output<typeof processLogsOutputSchema>
+  | z.output<typeof processWaitOutputSchema>
   | z.output<typeof computerProcessSchema>
   | ComputerPorts["ports"][number]
   | z.output<typeof computerOperationResultSchema>
@@ -253,6 +256,8 @@ const computerTools = {
   start_process: { action: "processStart", output: computerProcessSchema },
   list_processes: { action: "processList", output: processListOutputSchema },
   kill_process: { action: "processKill", output: processKillOutputSchema },
+  process_logs: { action: "processLogs", output: processLogsOutputSchema },
+  wait_process: { action: "processWait", output: processWaitOutputSchema },
 } as const satisfies Record<
   string,
   Readonly<{ action: ComputerAction; output: z.ZodType }>
@@ -268,6 +273,8 @@ const computerTool = z.enum([
   "start_process",
   "list_processes",
   "kill_process",
+  "process_logs",
+  "wait_process",
 ]);
 
 /**
@@ -524,6 +531,14 @@ export class ComputerDO
       this.#accept(authority, "start");
       await run();
     });
+  }
+
+  /** An admitted fleet control stops exactly this Computer's hosted backend. */
+  async stopHostedComputer(authority: ComputerGrant) {
+    this.#accept(authority, "stop");
+    if (this.previewBindings.OYSTER_COMPUTER_BACKEND === "local")
+      return { error: "no_runtime" as const };
+    return this.#fleetLifecycle().stopHostedComputer();
   }
 
   /** Runtime facts for the host's owner-admitted setup read. */
@@ -881,6 +896,11 @@ export class ComputerDO
           processLogsInputSchema.parse(input),
           accept,
         );
+      case "processWait":
+        return this.waitProcessAfterAcceptance(
+          processWaitInputSchema.parse(input),
+          accept,
+        );
       case "processKill":
         return this.killProcessAfterAcceptance(
           processIdInputSchema.parse(input),
@@ -1033,7 +1053,7 @@ export class ComputerDO
   async fileReplace(
     authority: ComputerGrant,
     path: string,
-    expectedContent: string,
+    expectedContent: string | null,
     content: string,
   ) {
     try {
@@ -1126,6 +1146,32 @@ export function standaloneWorkspace(
       replace: (path, expected, content) =>
         computer().fileReplace(authority(), path, expected, content),
     },
+  };
+}
+
+/**
+ * One Computer's AGENTS.md as the principal behind `actor`: the Computer's
+ * grant names that person or key. A missing file reads as null.
+ */
+export function standaloneHomeInstructionsFile(
+  computer: Pick<ComputerDO, "fileRead" | "fileReplace">,
+  computerId: string,
+  actor: string,
+) {
+  const authority = grant(computerId, actor);
+  const path = "/AGENTS.md";
+  return {
+    read: async (): Promise<string | null> => {
+      const bytes = await computer.fileRead(authority, path);
+      return bytes === null
+        ? null
+        : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            bytes,
+          );
+    },
+    /** Replace what the owner last read, or with null create it only while absent. */
+    replace: (expectedContent: string | null, content: string) =>
+      computer.fileReplace(authority, path, expectedContent, content),
   };
 }
 

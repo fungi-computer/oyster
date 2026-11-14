@@ -19,9 +19,12 @@ import { pendingSchema } from "@fungi.computer/agar/backend-definition";
 import {
   mediaGenerationDescriptionSchema,
   mediaGenerationJsonRequestSchema,
+  mediaGenerationQuoteRequestSchema,
   mediaGenerationReferenceSchema,
 } from "@fungi.computer/agar/media-json";
 import {
+  createDailyMediaMetering,
+  type DailyMediaMeterPort,
   createMediaService,
   estimateMediaModel,
   mediaPendingSchema,
@@ -54,8 +57,16 @@ export type OysterMediaEnv = Readonly<{
   AI: MediaAiPort;
   /** This Worker's own origin; a loopback origin has no Cloudflare account. */
   OYSTER_ORIGIN?: string | undefined;
-  /** Darkroom's durable operation namespace. */
-  MEDIA_OPERATION: MediaServiceHost["operations"];
+  /** Darkroom's durable operation namespace; the named daily-meter object lives here too. */
+  MEDIA_OPERATION: Readonly<{
+    getByName(
+      name: string,
+    ): ReturnType<MediaServiceHost["operations"]["getByName"]> &
+      Partial<DailyMediaMeterPort>;
+  }>;
+  /** Hard stop on one UTC day's media spend, in US dollars (for example `100`).
+   * Unset leaves media unmetered. A set but invalid value refuses all media. */
+  OYSTER_DAILY_MEDIA_LIMIT_USD?: string | undefined;
   /** Native image decoding and bounded reference fitting. */
   IMAGES?: MediaImagePort;
   /** The AI Gateway third-party models (GPT Image 2, Seedance, Veo) route
@@ -63,6 +74,37 @@ export type OysterMediaEnv = Readonly<{
    * name for its own provider, so one var wires both doors. */
   AI_GATEWAY_ID?: string;
 }>;
+
+/** One Durable Object holds the whole Oyster's UTC-day media total. */
+const DAILY_METER_NAME = "oyster-daily-media-meter";
+
+/** $1 is 100,000 milliunits (1 cent is 1,000). */
+const MILLIUNITS_PER_USD = 100_000;
+
+const dailyLimitUsdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform(Number)
+  .pipe(z.number().nonnegative());
+
+/** Customer copy for the daily limit; the Oyster-wide limit is not holder-specific. */
+const DAILY_LIMIT_COPY =
+  "Today's spending limit for this Oyster is used up. It resets at 00:00 UTC.";
+
+/** The daily limit in milliunits, or undefined when the var is unset. A set but invalid
+ * value fails closed with a zero limit, so a typo never silently removes the cap. */
+function dailyLimitMilliunits(env: OysterMediaEnv): number | undefined {
+  const raw = env.OYSTER_DAILY_MEDIA_LIMIT_USD;
+  if (raw === undefined) return undefined;
+  const parsed = dailyLimitUsdSchema.safeParse(raw);
+  return parsed.success ? Math.floor(parsed.data * MILLIUNITS_PER_USD) : 0;
+}
+
+/** The service's provider-cost quote for one exact request. */
+const mediaQuoteSchema = z.object({
+  providerCostMilliunits: z.number().int().nonnegative(),
+});
 
 /** Media capability using Darkroom execution and the existing workspace FileSource. */
 export function workersMedia(
@@ -157,6 +199,39 @@ export function workersMedia(
         destination: { computerId, path: destination },
       },
     });
+  });
+  routes.post("/quote", computer(), async (context, { principal }) => {
+    const input = Schema.decodeUnknownOption(
+      Schema.fromJsonString(mediaGenerationQuoteRequestSchema),
+      { onExcessProperty: "error" },
+    )(await context.req.text());
+    if (input._tag === "None") return context.json(invalidRequest(), 400);
+    const references = input.value.settings.references?.map((reference) => ({
+      computerId,
+      ...reference,
+      path: normalizeFilePath(reference.path),
+    }));
+    if (
+      references?.some(
+        (reference) => reference.path === null || reference.path === "/",
+      )
+    )
+      return context.json(invalidRequest(), 400);
+    const response = await service(principal).request("http://media/quote", {
+      method: "POST",
+      signal: context.req.raw.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: { ...input.value.settings, references },
+      }),
+    });
+    if (!response.ok)
+      return context.json({ error: "These settings cannot be priced" }, 400);
+    // A self-hosted Oyster is unmetered: the price is the provider's cost.
+    const { providerCostMilliunits } = mediaQuoteSchema.parse(
+      await response.json(),
+    );
+    return context.json({ costMilliunits: providerCostMilliunits });
   });
   routes.post("/cancel-attempt", computer(), async (context) => {
     const reference = Schema.decodeUnknownOption(
@@ -259,17 +334,41 @@ function standaloneMediaService(
             };
           },
         };
-  return createMediaService({
+  const provider = createWorkersAiMediaProvider(
+    env.AI,
+    env.AI_GATEWAY_ID === undefined
+      ? undefined
+      : { gateway: { id: env.AI_GATEWAY_ID } },
+  );
+  const limit = dailyLimitMilliunits(env);
+  const host = {
     scope: { actorId, namespace: "oyster", owner, destinationId: computerId },
     operations: env.MEDIA_OPERATION,
-    provider: createWorkersAiMediaProvider(
-      env.AI,
-      env.AI_GATEWAY_ID === undefined
-        ? undefined
-        : { gateway: { id: env.AI_GATEWAY_ID } },
-    ),
-    metering: "unmetered",
+    provider,
     destination: admittedDestination,
+  };
+  if (limit === undefined)
+    return createMediaService({ ...host, metering: "unmetered" });
+  const meter = env.MEDIA_OPERATION.getByName(DAILY_METER_NAME);
+  const { dailyAdmit, dailySettle } = meter;
+  if (dailyAdmit === undefined || dailySettle === undefined)
+    throw new Error(
+      "OYSTER_DAILY_MEDIA_LIMIT_USD needs a MEDIA_OPERATION object that serves the daily meter.",
+    );
+  return createMediaService({
+    ...host,
+    metering: createDailyMediaMetering(
+      {
+        dailyAdmit: (input) => dailyAdmit.call(meter, input),
+        dailySettle: (input) => dailySettle.call(meter, input),
+      },
+      limit,
+    ),
+    refusalMessages: {
+      insufficient_credits: DAILY_LIMIT_COPY,
+      denied: DAILY_LIMIT_COPY,
+      daily_limit_reached: DAILY_LIMIT_COPY,
+    },
   });
 }
 

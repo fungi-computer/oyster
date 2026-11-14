@@ -88,7 +88,7 @@ export const permissionCatalog = {
   "agent.instructions": entry(
     "agents",
     "Change Agent instructions",
-    "change the standing instructions of your Agents.",
+    "change the AGENTS.md instructions on your Agents' Home Computers.",
     "createAgents",
     "install",
   ),

@@ -1,5 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
-import { MediaOperationOwner } from "@fungi.computer/darkroom/server";
+import {
+  DailyMediaMeter,
+  MediaOperationOwner,
+} from "@fungi.computer/darkroom/server";
 
 /** Native SQL and an in-memory R2 boundary; Darkroom owns all operation behavior. */
 export function mediaStorage(t, bucketBindings = ["APP_ARTIFACTS"], provider) {
@@ -35,6 +38,7 @@ export function mediaStorage(t, bucketBindings = ["APP_ARTIFACTS"], provider) {
     }),
   };
   const owners = new Map();
+  const meters = new Map();
   const alarms = new Map();
   const operations = {
     getByName(name) {
@@ -77,6 +81,37 @@ export function mediaStorage(t, bucketBindings = ["APP_ARTIFACTS"], provider) {
         owners.set(name, owner);
       }
       return owners.get(name);
+    },
+    /** The named daily-meter object, with Darkroom's real meter over native SQL. */
+    getMeterByName(name) {
+      if (!meters.has(name)) {
+        const database = new DatabaseSync(":memory:");
+        t.after(() => database.close());
+        const meter = new DailyMediaMeter({
+          sql: {
+            exec: (query, ...bindings) => {
+              const rows = database.prepare(query).all(...bindings);
+              return { toArray: () => rows };
+            },
+          },
+          transactionSync: (body) => {
+            database.exec("BEGIN IMMEDIATE");
+            try {
+              const result = body();
+              database.exec("COMMIT");
+              return result;
+            } catch (cause) {
+              database.exec("ROLLBACK");
+              throw cause;
+            }
+          },
+        });
+        meters.set(name, {
+          dailyAdmit: async (input) => meter.admit(input),
+          dailySettle: async (input) => meter.settle(input),
+        });
+      }
+      return meters.get(name);
     },
   };
   return {

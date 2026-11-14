@@ -96,6 +96,52 @@ test("only an admitted App's owner can describe workspace media; anonymous calle
   assert.equal((await describe("owner")).status, 403);
 });
 
+test("an admitted owner is quoted the provider cost of an exact request without dispatching anything", async () => {
+  const fixture = await mediaFixture();
+  const quote = (body, who = "owner") =>
+    fixture.app.request("https://oyster.test/media/quote", {
+      method: "POST",
+      headers: {
+        "X-Oyster-Installation": "capability-fixture",
+        "x-who": who,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const settings = (model, extra = {}) => ({
+    settings: {
+      model,
+      prompt: "A mushroom",
+      width: 1024,
+      height: 1024,
+      ...extra,
+    },
+  });
+  assert.equal(
+    (await quote(settings("@cf/black-forest-labs/flux-1-schnell"), "anonymous"))
+      .status,
+    401,
+  );
+  const image = await quote(settings("@cf/black-forest-labs/flux-1-schnell"));
+  assert.equal(image.status, 200);
+  const { costMilliunits } = await image.json();
+  assert.ok(Number.isInteger(costMilliunits) && costMilliunits > 0);
+  // Video prices by its requested length: ten seconds cost more than five.
+  const video = (durationSeconds) =>
+    quote(
+      settings("bytedance/seedance-2.0", {
+        width: 1280,
+        height: 720,
+        durationSeconds,
+      }),
+    );
+  const five = (await (await video(5)).json()).costMilliunits;
+  const ten = (await (await video(10)).json()).costMilliunits;
+  assert.ok(five > 0 && ten > five);
+  assert.equal((await quote(settings("not-a-model"))).status, 400);
+  assert.equal((await quote({ settings: {} })).status, 400);
+});
+
 test("the standalone Wrangler example defaults Prints to the account's AI Gateway", () => {
   const config = parse(
     readFileSync(
@@ -679,4 +725,82 @@ test("a local trial has no account behind its AI binding, so generation reports 
   assert.equal(outcome.failure.retryable, false);
   const described = await fixture.app.request("/media/describe", { headers });
   assert.equal((await described.json()).canGenerate, false);
+});
+
+const DAILY_LIMIT_COPY =
+  "Today's spending limit for this Oyster is used up. It resets at 00:00 UTC.";
+
+/** A deployed-shaped Oyster with the daily media limit var set to `limit`. */
+async function dailyLimitFixture(t, limit) {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAlklEQVRogeXOMQEAIAzAsMqZJgSgBtGTkYMjf5rz7s/SAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gEtHdDSAS0d0NIBLR3Q0gFtAcdLcQBrp4b3AAAAAElFTkSuQmCC",
+    "base64",
+  );
+  const { bucket, operations } = mediaStorage(t);
+  let dispatches = 0;
+  const adapters = workersMedia(
+    {
+      OYSTER_ORIGIN,
+      AI: {
+        run: async () => {
+          dispatches += 1;
+          return { image: Buffer.from(png).toString("base64") };
+        },
+      },
+      MEDIA_OPERATION: {
+        getByName: (name) =>
+          name === "oyster-daily-media-meter"
+            ? operations.getMeterByName(name)
+            : operations.getByName(name),
+      },
+      OYSTER_DAILY_MEDIA_LIMIT_USD: limit,
+    },
+    {
+      computerId: "computer-media",
+      files: r2FileSource(bucket, "selected-computer/"),
+    },
+  );
+  const fixture = await capabilityFixture({
+    capabilities: ["media.generation"],
+    adapters,
+    authenticate: async () => ({
+      kind: "admitted",
+      principal: {
+        actor: { kind: "member", memberId: "artist" },
+        role: "owner",
+      },
+    }),
+  });
+  const generate = (requestId) =>
+    fixture.app.request("/media/generate", {
+      method: "POST",
+      headers: {
+        "X-Oyster-Installation": "capability-fixture",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ...generation, requestId }),
+    });
+  return { generate, dispatches: () => dispatches };
+}
+
+test("a set daily media limit refuses generation before dispatch with one plain sentence", async (t) => {
+  for (const limit of ["0", "not-a-number", ""]) {
+    const { generate, dispatches } = await dailyLimitFixture(t, limit);
+    const response = await generate("media_request_000000000000000000002");
+    const body = await response.json();
+    const failure = body.failure ?? body;
+    assert.equal(failure.code ?? body.code, "DAILY_LIMIT_REACHED", limit);
+    assert.equal(failure.message ?? failure.error, DAILY_LIMIT_COPY);
+    assert.equal(dispatches(), 0, `limit ${JSON.stringify(limit)}`);
+  }
+});
+
+test("a daily media limit with room admits generation, and an unset var stays unmetered", async (t) => {
+  for (const limit of ["100", undefined]) {
+    const { generate, dispatches } = await dailyLimitFixture(t, limit);
+    const response = await generate("media_request_000000000000000000003");
+    const outcome = await response.json();
+    assert.equal(outcome.kind, "succeeded", JSON.stringify(outcome));
+    assert.equal(dispatches(), 1);
+  }
 });

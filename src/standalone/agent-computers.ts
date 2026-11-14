@@ -7,11 +7,16 @@ import {
   type ComputerGrant,
 } from "@fungi.computer/computer/fleet";
 import {
+  ComputerCommandTooLongError,
   computerCapabilities,
   computerValueSchema,
+  parseComputerExecInput,
 } from "@fungi.computer/computer-contract";
 import type { FilesPort } from "@fungi.computer/knapsack";
-import type { InvocationContext } from "@fungi.computer/mycelium";
+import {
+  CapabilityFailed,
+  type InvocationContext,
+} from "@fungi.computer/mycelium";
 import {
   attachComputerInputSchema,
   detachComputerInputSchema,
@@ -150,6 +155,20 @@ export function standaloneAgentComputerPorts(
       },
       call: async (capabilityId, input, context) => {
         context.signal.throwIfAborted();
+        if (capabilityId === "bash" || capabilityId === "exec") {
+          try {
+            parseComputerExecInput(input);
+          } catch (cause) {
+            // The refusal is the owner's own words to the person and the model.
+            if (cause instanceof ComputerCommandTooLongError)
+              throw new CapabilityFailed({
+                namespace: "computer",
+                operation: capabilityId,
+                cause: { kind: "OperationFailed", message: cause.message },
+              });
+            throw cause;
+          }
+        }
         // tool() retains the native advertised-operation/action mapping and decoders.
         const grant = await access.admit(connection);
         context.signal.throwIfAborted();

@@ -459,10 +459,12 @@ const install = (
   concurrency = 1,
   waitMs?: number,
   report: (message: string) => void = () => undefined,
+  only?: readonly string[],
 ) =>
   installStandaloneAppSet({
     source: checkout,
     concurrency,
+    only,
     url: "https://oyster.test",
     key: "key",
     report,
@@ -991,6 +993,31 @@ it("publishes, builds on the Computer and installs each App's own Release, Tourt
     "GET /api/installations/tourtois/grants",
     "PUT /api/installations/tourtois/grants",
   ]);
+});
+
+it("installs only the named Apps, in starter order, and nothing else", async () => {
+  const calls = oyster();
+  const published: string[] = [];
+  const results = await install(published, 1, undefined, () => undefined, [
+    "prints",
+    "bonsai",
+  ]);
+  expect(published).toEqual(["bonsai", "prints"]);
+  expect(results.installed.map((result) => result.installationId)).toEqual([
+    "bonsai",
+    "prints",
+  ]);
+  expect(
+    calls.filter((call) => call === "POST /api/installations"),
+  ).toHaveLength(2);
+});
+
+it("refuses an unknown App name before building anything", async () => {
+  const calls = oyster();
+  await expect(
+    install([], 1, undefined, () => undefined, ["prints", "printz"]),
+  ).rejects.toThrow("Unknown starter App printz. Choose from: tourtois,");
+  expect(calls).toEqual([]);
 });
 
 it("warns about each App whose recorded UI check did not pass, and still installs it", async () => {

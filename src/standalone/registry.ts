@@ -316,6 +316,16 @@ export abstract class StandaloneRegistry
           expiresAt: Date.now() + 60_000,
           provenance: { actor: memberId },
         });
+      case "stop":
+        if (!this.ownsComputer(input.computerId)) return null;
+        return this.#env.COMPUTER.getByName(
+          input.computerId,
+        ).stopHostedComputer({
+          computerId: input.computerId,
+          actions: new Set(["stop"]),
+          expiresAt: Date.now() + 60_000,
+          provenance: { actor: memberId },
+        });
       case "start":
         if (!this.ownsComputer(input.computerId)) return null;
         return this.#env.COMPUTER.getByName(

@@ -1,3 +1,4 @@
+import { agentCodeExecutionTimeoutMs } from "@fungi.computer/computer-contract";
 import {
   isRetryableProviderRejection,
   normalizeModel,
@@ -16,7 +17,10 @@ import {
   type StandaloneTenancy,
   type StandaloneTenancyEnv,
 } from "./tenancy.js";
-import { AcceptedSchema } from "@fungi.computer/shiitake/client";
+import {
+  AcceptedSchema,
+  bindSessionExtension,
+} from "@fungi.computer/shiitake/client";
 import { createShiitakeClient } from "@fungi.computer/shiitake/client";
 import { ShiitakeError } from "@fungi.computer/shiitake";
 import {
@@ -91,10 +95,6 @@ import {
   type DiscordRefusal,
 } from "./discord-channels.js";
 import {
-  createAgentInstructions,
-  withOwnerInstructions,
-} from "../agent-instructions.js";
-import {
   computerSkillsEmpty,
   createComputerSkillSource,
 } from "./computer-skill-source.js";
@@ -164,9 +164,16 @@ import {
   homeExtension,
   homeGrant,
 } from "@fungi.computer/shiitake-extensions/home/host";
-import { homeContract } from "@fungi.computer/shiitake-extensions/home";
+import {
+  homeContract,
+  homeInstructionsLimit,
+} from "@fungi.computer/shiitake-extensions/home";
+import { resolveHome } from "@fungi.computer/shiitake-extensions/home/host";
 import { DurableObject } from "cloudflare:workers";
-import type { StandaloneComputerEnv } from "./computer.js";
+import {
+  standaloneHomeInstructionsFile,
+  type StandaloneComputerEnv,
+} from "./computer.js";
 import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
 import { agentStoreKeeping } from "./agent-store.js";
 import {
@@ -291,19 +298,44 @@ import type {
 } from "@fungi.computer/mycelium";
 import type {
   OysterAgent,
+  OysterAgentInstructions,
   AgentPolicyActor,
   OysterAgents,
   OysterInboxItem,
   OysterSessionRow,
 } from "../agents.js";
 
+const noHomeInstructions: OysterAgentInstructions = {
+  home: null,
+  content: null,
+  bytes: 0,
+  limit: homeInstructionsLimit,
+};
+
+function homeInstructions(
+  home: string,
+  content: string | null,
+): OysterAgentInstructions {
+  return {
+    home: { name: home },
+    content,
+    bytes: content === null ? 0 : new TextEncoder().encode(content).byteLength,
+    limit: homeInstructionsLimit,
+  };
+}
+
 /** The model door an agent runs on; Shiitake's own contract. */
 export type StandaloneModelSource = CloudflareShiitakeOptions["model"];
+
+/** Shown when the AI Gateway spend limit blocks a model call; same sentence as media. */
+const DAILY_LIMIT_COPY =
+  "Today's spending limit for this Oyster is used up. It resets at 00:00 UTC.";
 
 /** Own transport evidence and exact-message decisions for one model lease. */
 function observedModels(
   model: Model<Api>,
   defaults: SimpleStreamOptions,
+  gatewaySpendLimit = false,
 ): StandaloneModelSource {
   return {
     acquire: ({ signal }) => {
@@ -315,7 +347,14 @@ function observedModels(
       ) => {
         // Pi can include raw response bodies in errorMessage. No provider
         // prose enters a Session, retry journal, model context or diagnostics.
-        const safe = `Model request failed (${rejection?.code ?? "provider_rejected"}). Retry the request.`;
+        // The gateway publishes no body code for a spend-limit block, only 429,
+        // and Oyster configures no gateway rate-limit rule. A 429 through the
+        // gateway therefore means the daily spend limit; retrying cannot help.
+        const spendLimit =
+          gatewaySpendLimit && rejection?.code === "rate-limit";
+        const safe = spendLimit
+          ? DAILY_LIMIT_COPY
+          : `Model request failed (${rejection?.code ?? "provider_rejected"}). Retry the request.`;
         const terminal: AssistantMessage = {
           role: "assistant",
           content: [],
@@ -328,7 +367,7 @@ function observedModels(
           timestamp: message.timestamp,
         };
         safeFailures.set(terminal, safe);
-        if (isRetryableProviderRejection(rejection))
+        if (!spendLimit && isRetryableProviderRejection(rejection))
           retryableMessages.add(terminal);
         return terminal;
       };
@@ -512,7 +551,7 @@ function workersAiModels(
   };
   if (options.reasoning !== undefined)
     streamOptions.reasoning = options.reasoning;
-  return observedModels(normalizeModel(model), streamOptions);
+  return observedModels(normalizeModel(model), streamOptions, true);
 }
 
 /** Where Workers AI requests go: which model, through which gateway. */
@@ -1590,20 +1629,63 @@ export abstract class StandaloneAgentBase<
     );
   }
 
-  private instructionsOwner:
-    ReturnType<typeof createAgentInstructions> | undefined;
-  private ownerInstructions() {
-    return (this.instructionsOwner ??= createAgentInstructions(
-      this.ctx.storage.sql,
-    ));
+  /** Which Home this Agent uses: its recorded choice, else its only attachment. */
+  private async homeComputer(): Promise<
+    Readonly<{ name: string; computerId: string }> | undefined
+  > {
+    const attachments =
+      (await this.preparedComputerSnapshot())?.projection.attachments ?? [];
+    // Home's choice is Agent state; any Session id projects it, run or not.
+    const session = (await this.shiitake()).session("home-choice");
+    const view = bindSessionExtension(session, homeContract).view(
+      await session.read(),
+    );
+    const chosen = resolveHome(
+      view.status === "running" ? view.value : null,
+      attachments,
+    );
+    return attachments.find(
+      ({ attachmentId }) => attachmentId === chosen?.attachmentId,
+    );
   }
-  /** The owner's standing instructions for this Agent; the host admits the owner first. */
-  readInstructions(): string {
-    return this.ownerInstructions().read().instructions;
+  /**
+   * The AGENTS.md on this Agent's Home Computer. The host admits the owner
+   * first; `actor` names who the Computer's grant records.
+   */
+  async readInstructions(actor: string): Promise<OysterAgentInstructions> {
+    const home = await this.homeComputer();
+    if (home === undefined) return noHomeInstructions;
+    const content = await standaloneHomeInstructionsFile(
+      this.env.COMPUTER.getByName(home.computerId),
+      home.computerId,
+      actor,
+    ).read();
+    return homeInstructions(home.name, content);
   }
-  /** Replace them. The next turn follows the new text; a run already going does not change. */
-  writeInstructions(instructions: string): string {
-    return this.ownerInstructions().write(instructions).instructions;
+  /**
+   * Replace it only if it still holds what the owner read; null creates it only
+   * while absent. The next run follows the new text; a run already going does not.
+   */
+  async replaceInstructions(
+    actor: string,
+    expectedContent: string | null,
+    content: string,
+  ): Promise<
+    | OysterAgentInstructions
+    | Readonly<{ error: "conflict" | "too_large" | "no_home" }>
+  > {
+    if (new TextEncoder().encode(content).byteLength > homeInstructionsLimit)
+      return { error: "too_large" };
+    const home = await this.homeComputer();
+    if (home === undefined) return { error: "no_home" };
+    const result = await standaloneHomeInstructionsFile(
+      this.env.COMPUTER.getByName(home.computerId),
+      home.computerId,
+      actor,
+    ).replace(expectedContent, content);
+    return result.kind === "conflict"
+      ? { error: "conflict" }
+      : homeInstructions(home.name, content);
   }
 
   /** Secret-free default of this Agent; stored separately from Session history. */
@@ -1868,16 +1950,19 @@ export abstract class StandaloneAgentBase<
       instructions: this.channelInstructions({
         load: async () => {
           const { appApprovalInstructions } = await import("../mcp.js");
-          return withOwnerInstructions(
-            {
-              revision: "oyster-7",
-              text: instructions + "\n" + appApprovalInstructions,
-            },
-            this.ownerInstructions().read(),
-          );
+          return {
+            revision: "oyster-7",
+            text: instructions + "\n" + appApprovalInstructions,
+          };
         },
       }),
       tools: {
+        // A run outlasts one ten-minute Computer command; waiting for a
+        // sandbox slot keeps its shorter bound.
+        execution: {
+          timeoutMs: agentCodeExecutionTimeoutMs,
+          admissionWaitMs: 180_000,
+        },
         sources: [
           {
             id: "oyster-apps",
@@ -2417,6 +2502,8 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
 
   constructor(ctx: DurableObjectState, env: StandaloneAgentEnv) {
     super(ctx, env);
+    // 0.33.0 kept owner text here; instructions now live in Home's AGENTS.md.
+    ctx.storage.sql.exec("DROP TABLE IF EXISTS agent_instructions");
     this.directory = createAgentDirectory(ctx.storage.sql);
     this.avatars = createAgentAvatarStore(ctx.storage.sql);
     this.computers = createAgentComputers({
@@ -3447,17 +3534,20 @@ export function standaloneAgents(
       if (!(await directory().has(agentId))) return { error: "not_found" };
       return {
         agentId,
-        instructions: await env.AGENTS.getByName(agentId).readInstructions(),
+        ...(await env.AGENTS.getByName(agentId).readInstructions(
+          JSON.stringify(principal),
+        )),
       };
     },
-    setInstructions: async (agentId, instructions, principal) => {
+    setInstructions: async (agentId, edit, principal) => {
       if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
       if (!(await directory().has(agentId))) return { error: "not_found" };
-      return {
-        agentId,
-        instructions:
-          await env.AGENTS.getByName(agentId).writeInstructions(instructions),
-      };
+      const result = await env.AGENTS.getByName(agentId).replaceInstructions(
+        JSON.stringify(principal),
+        edit.expectedContent,
+        edit.content,
+      );
+      return "error" in result ? result : { agentId, ...result };
     },
     setModelChoice: async (agentId, choice, principal) => {
       if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };

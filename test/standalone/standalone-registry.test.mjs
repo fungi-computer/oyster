@@ -196,6 +196,7 @@ test("multiple Computers create list and start retain identities across standalo
   const registryDatabase = new DatabaseSync(":memory:");
   const tenants = new StandaloneTenants(state(tenantsDatabase));
   const started = [];
+  const stopped = [];
   const internetAccess = new Map();
   const keepAwake = new Map();
   const settingsCalls = [];
@@ -219,6 +220,12 @@ test("multiple Computers create list and start retain identities across standalo
         },
         initializeFleetBackings: async (backings) => {
           assert.deepEqual(backings, [{ kind: "platform-container" }]);
+        },
+        stopHostedComputer: async (grant) => {
+          assert.equal(grant.computerId, computerId);
+          assert.deepEqual([...grant.actions], ["stop"]);
+          stopped.push(computerId);
+          return { state: "sleeping" };
         },
         startHostedComputer: async (grant) => {
           assert.equal(grant.computerId, computerId);
@@ -482,6 +489,28 @@ test("multiple Computers create list and start retain identities across standalo
       { error: "owner_required" },
     );
     assert.deepEqual(started, [a.computerId, b.computerId]);
+    assert.deepEqual(
+      await reopened.computerFleet(owner.actor.memberId, {
+        operation: "stop",
+        computerId: a.computerId,
+      }),
+      { state: "sleeping" },
+    );
+    assert.deepEqual(
+      await reopened.computerFleet("foreign-owner", {
+        operation: "stop",
+        computerId: a.computerId,
+      }),
+      { error: "owner_required" },
+    );
+    assert.equal(
+      await reopened.computerFleet(owner.actor.memberId, {
+        operation: "stop",
+        computerId: "foreign",
+      }),
+      null,
+    );
+    assert.deepEqual(stopped, [a.computerId]);
     const unknown = await routes.request("/api/computers/foreign/start", {
       method: "POST",
     });

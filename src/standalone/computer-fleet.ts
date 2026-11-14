@@ -30,7 +30,7 @@ export const standaloneFleetRequestSchema = z.discriminatedUnion("operation", [
     page: computerPageSchema,
   }),
   z.strictObject({
-    operation: z.enum(["read", "resolve", "state", "start", "select"]),
+    operation: z.enum(["read", "resolve", "state", "start", "stop", "select"]),
     computerId: fleetComputerId,
   }),
   z.strictObject({
@@ -222,6 +222,28 @@ export function standaloneComputerFleetRoutes(
       );
       return fleetResponse(result);
     },
+  );
+  routes.get(
+    "/api/computers/:computerId/state",
+    owner,
+    async (context, { principal }) =>
+      fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "state",
+          computerId: context.req.param("computerId"),
+        }),
+      ),
+  );
+  routes.post(
+    "/api/computers/:computerId/stop",
+    owner,
+    async (context, { principal }) =>
+      fleetResponse(
+        await registryFor().computerFleet(principal.actor.memberId, {
+          operation: "stop",
+          computerId: context.req.param("computerId"),
+        }),
+      ),
   );
   // One owner switch per durable Computer setting, read and written alike.
   for (const [path, read, write] of [

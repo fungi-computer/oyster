@@ -56,7 +56,6 @@ export type {
 import {
   agentAvatar,
   agentInstructions,
-  appAgentInstructionsMaxLength,
   agentList,
   agentManage,
   agentRename,
@@ -69,6 +68,16 @@ import type {
   MemberInboxItem,
   MemberInboxSession,
 } from "@fungi.computer/puffball/inbox";
+
+/** An Agent's AGENTS.md on its Home Computer, with the byte limit the host enforces. */
+export type OysterAgentInstructions = Readonly<{
+  /** The Home Computer holding the file; null when the Agent has none. */
+  home: Readonly<{ name: string }> | null;
+  /** The file's text; null when there is no Home or the file does not exist yet. */
+  content: string | null;
+  bytes: number;
+  limit: number;
+}>;
 
 /** One agent as Apps see it, in Agar's `appAgentSchema` shape. */
 export type OysterAgent = Readonly<{
@@ -257,22 +266,29 @@ export type OysterAgents = Readonly<{
   ): Promise<OysterAgent | Readonly<{ error: "not_found" | "not_granted" }>>;
   /** Owner-only, secret-free Agent default; an unknown Agent cannot be configured. */
   readModelChoice(agentId: string): Promise<AgentModelChoice | null>;
-  /** Owner-only read of the standing instructions this Agent follows on every turn. */
+  /** Owner-only read of the AGENTS.md on this Agent's Home Computer. */
   readInstructions(
     agentId: string,
     principal: TenantPrincipal,
   ): Promise<
-    | Readonly<{ agentId: string; instructions: string }>
+    | Readonly<{ agentId: string } & OysterAgentInstructions>
     | Readonly<{ error: "not_found" | "not_granted" }>
   >;
-  /** Owner-only replacement of them; empty clears. Appended after the host's fixed instructions. */
+  /**
+   * Owner-only replacement of it. `expectedContent` is what the owner last read;
+   * null creates the file only while absent. A file the Agent changed since is a
+   * `conflict`, never overwritten.
+   */
   setInstructions(
     agentId: string,
-    instructions: string,
+    edit: Readonly<{ expectedContent: string | null; content: string }>,
     principal: TenantPrincipal,
   ): Promise<
-    | Readonly<{ agentId: string; instructions: string }>
-    | Readonly<{ error: "not_found" | "not_granted" }>
+    | Readonly<{ agentId: string } & OysterAgentInstructions>
+    | Readonly<{
+        error:
+          "not_found" | "not_granted" | "conflict" | "too_large" | "no_home";
+      }>
   >;
   /** Parse the owner's JSON through the deployable Agent's model preference schema. */
   decodeModelChoice(json: string): AgentModelChoice | null;
@@ -366,7 +382,8 @@ const renameSchema = Schema.Struct({
 });
 const avatarInputSchema = z.object({ avatar: agentAvatarSchema });
 const instructionsInputSchema = z.object({
-  instructions: z.string().max(appAgentInstructionsMaxLength),
+  expectedContent: z.string().nullable(),
+  content: z.string(),
 });
 const visitSchema = Schema.Struct({
   agentId: Schema.String,
@@ -668,15 +685,21 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
           const body = instructionsInputSchema.safeParse(
             await context.req.json(),
           );
-          if (!body.success) return refusal(400, "Instructions are too long");
+          if (!body.success) return refusal(400, "Invalid instructions edit");
           const result = await agents.setInstructions(
             agentId,
-            body.data.instructions,
+            body.data,
             principal,
           );
           if ("error" in result)
             return refusal(
-              result.error === "not_found" ? 404 : 403,
+              result.error === "not_found"
+                ? 404
+                : result.error === "not_granted"
+                  ? 403
+                  : result.error === "too_large"
+                    ? 413
+                    : 409,
               result.error,
             );
           return Response.json(result);

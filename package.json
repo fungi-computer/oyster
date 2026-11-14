@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -141,10 +141,6 @@
     "./event-recipients": {
       "types": "./dist/event-recipients.d.ts",
       "import": "./dist/event-recipients.js"
-    },
-    "./agent-instructions": {
-      "types": "./dist/agent-instructions.d.ts",
-      "import": "./dist/agent-instructions.js"
     },
     "./channels/ids": {
       "types": "./dist/channels/ids.d.ts",
@@ -391,6 +387,7 @@
     "test:mcp-fleet": "node test/standalone/mcp-fleet.native.mjs",
     "test:local-backend": "node test/standalone/local-backend.native.mjs",
     "test:first-issue": "node test/standalone/try-first-issue.browser.mjs",
+    "proof:oyster-quote": "node --import tsx test/standalone/oyster-quote.browser.mjs",
     "proof:try-hello": "node test/standalone/try-hello.browser.mjs",
     "capture:tourtois-home": "node test/standalone/tourtois-home.browser.mjs",
     "capture:shell-fork": "OYSTER_PROOF_SHELL_FORK=1 node test/standalone/tourtois-home.browser.mjs",
