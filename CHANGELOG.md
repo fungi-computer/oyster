@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.27.1
+
+### Patch Changes
+
+- Changes since 0.27.0:
+
+  - Updated starter Apps for the Computer release.
+
+- Updated dependencies
+  - @fungi.computer/computer@0.12.1
+
 ## 0.27.0
 
 ### Minor Changes
