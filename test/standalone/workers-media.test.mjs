@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "jsonc-parser";
 import { test } from "node:test";
 import { URL } from "node:url";
+import { TextEncoder } from "node:util";
 import { capabilityFixture } from "../../src/testing/index.ts";
 import { mediaStorage } from "./workers-media.fixture.mjs";
 import { fileCapabilities } from "../../src/files.ts";
@@ -803,4 +804,32 @@ test("a daily media limit with room admits generation, and an unset var stays un
     assert.equal(outcome.kind, "succeeded", JSON.stringify(outcome));
     assert.equal(dispatches(), 1);
   }
+});
+
+test("erase removes a file that landed after the erase and leaves a reused path alone", async () => {
+  const { mediaWrittenDigest } =
+    await import("@fungi.computer/darkroom/server");
+  const { workspaceMediaRemove } =
+    await import("../../src/standalone/media.ts");
+  const files = new Map();
+  const source = {
+    read: (path) => Promise.resolve(files.get(path) ?? null),
+    delete: (path) => {
+      files.delete(path);
+      return Promise.resolve();
+    },
+  };
+  const remove = workspaceMediaRemove(source);
+  const written = new TextEncoder().encode("generated");
+  const sha256 = await mediaWrittenDigest(written);
+  // The generation's file lands after the erase began.
+  files.set("/image.png", written);
+  assert.equal(await remove("/image.png", { sha256 }), "removed");
+  assert.equal(files.has("/image.png"), false);
+  assert.equal(await remove("/image.png", { sha256 }), "absent");
+  // The path was reused for something else.
+  files.set("/image.png", new TextEncoder().encode("someone else's file"));
+  assert.equal(await remove("/image.png", { sha256 }), "not-ours");
+  assert.equal(files.has("/image.png"), true);
+  await assert.rejects(remove("relative.png", { sha256 }));
 });

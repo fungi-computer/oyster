@@ -68,6 +68,7 @@ type FileSource = Readonly<{
   }> | null>;
   read: Promise<Uint8Array<ArrayBufferLike> | null>;
   write: Promise<void>;
+  delete: Promise<void>;
   mkdir: Promise<void>;
   replace: Promise<FileReplaceOutcome>;
 }>;

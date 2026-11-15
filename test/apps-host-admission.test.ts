@@ -216,6 +216,7 @@ async function fixture(
     list: () => Promise.resolve(null),
     read: () => Promise.resolve(new TextEncoder().encode("fixture note")),
     write: () => Promise.reject(new Error("Read-only fixture")),
+    delete: () => Promise.reject(new Error("Read-only fixture")),
     mkdir: () => Promise.reject(new Error("Read-only fixture")),
     replace: () => Promise.reject(new Error("Read-only fixture")),
   });

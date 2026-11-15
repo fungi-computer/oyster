@@ -50,6 +50,8 @@ export type FileSource = Readonly<{
   read(path: string): Promise<Uint8Array | null>;
   /** Create or replace a file. */
   write(path: string, content: Uint8Array): Promise<void>;
+  /** Delete one file; resolves when nothing is left at the path. */
+  delete(path: string): Promise<void>;
   /** Create a directory. */
   mkdir(path: string): Promise<void>;
   /** Write `content` only if the file still holds `expectedContent`. */

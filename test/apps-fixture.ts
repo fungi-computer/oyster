@@ -59,6 +59,7 @@ export const descriptors = fileCapabilities({
   list: () => Promise.resolve(null),
   read: () => Promise.resolve(null),
   write: () => Promise.resolve(),
+  delete: () => Promise.resolve(),
   mkdir: () => Promise.resolve(),
   replace: () => Promise.resolve({ kind: "conflict" }),
 });

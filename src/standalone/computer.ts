@@ -55,6 +55,7 @@ import {
 import {
   ComputerFileConflict,
   ComputerFileMoveError,
+  ComputerFileRemoveError,
   computerExecutionRequestSchema,
   computerValueSchema,
   computerPortInputSchema,
@@ -67,6 +68,7 @@ import {
   mkdirOutputSchema,
   moveInputSchema,
   moveOutputSchema,
+  removeOutputSchema,
   computerPortsOutputSchema,
   computerPortOutputSchema,
   computerPortRemovalOutputSchema,
@@ -166,6 +168,7 @@ export type StandaloneComputerResult =
   | Readonly<{ error: "conflict" | "no_runtime" | "not_found" | "invalid" }>
   | z.output<typeof writeOutputSchema>
   | z.output<typeof moveOutputSchema>
+  | z.output<typeof removeOutputSchema>
   | z.output<typeof mkdirOutputSchema>
   | z.output<typeof computerPortsOutputSchema>
   | z.output<typeof computerPortOutputSchema>
@@ -980,6 +983,18 @@ export class ComputerDO
             };
           throw error;
         }
+      case "files.remove":
+        try {
+          return removeOutputSchema.parse(
+            await this.callAfterAcceptance("remove", input, accept),
+          );
+        } catch (error) {
+          if (error instanceof ComputerFileRemoveError)
+            return {
+              error: error.reason === "missing" ? "not_found" : "invalid",
+            };
+          throw error;
+        }
       case "mkdir":
         return mkdirOutputSchema.parse(
           await this.callAfterAcceptance("mkdir", input, accept),
@@ -1050,6 +1065,22 @@ export class ComputerDO
         this.#accept(authority, "files.writeBytes");
       },
     );
+  }
+
+  /** Delete one file; a path that is already absent is already deleted. */
+  async fileDelete(authority: ComputerGrant, path: string): Promise<void> {
+    try {
+      await this.callAfterAcceptance("remove", { path }, () => {
+        this.#accept(authority, "files.remove");
+      });
+    } catch (error) {
+      if (
+        error instanceof ComputerFileRemoveError &&
+        error.reason === "missing"
+      )
+        return;
+      throw error;
+    }
   }
 
   /** Patch is handled by the Computer's pinned native engine, not by the Agent. */
@@ -1152,6 +1183,7 @@ export function standaloneWorkspace(
         computer().fileList(authority(), path, limit, offset),
       read: (path) => computer().fileRead(authority(), path),
       write: (path, bytes) => computer().fileWrite(authority(), path, bytes),
+      delete: (path) => computer().fileDelete(authority(), path),
       mkdir: async (path) => {
         await computer().value(authority(), "mkdir", { path, recursive: true });
       },

@@ -63,6 +63,9 @@ export function r2FileSource(bucket: R2Bucket, prefix: string): FileSource {
     async write(path, content) {
       await bucket.put(key(path), content);
     },
+    async delete(path) {
+      await bucket.delete(key(path));
+    },
     async mkdir(path) {
       await bucket.put(dirKey(path), new Uint8Array());
     },

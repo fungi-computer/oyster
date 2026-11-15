@@ -24,6 +24,7 @@ import {
   type DailyMediaMeterPort,
   createMediaService,
   readHostReference,
+  removeMediaIfWritten,
   referenceFilename,
   estimateMediaModel,
   mediaPendingSchema,
@@ -286,6 +287,22 @@ function workspacePath(path: string): string {
   return normalized;
 }
 
+/** Erase a written file from the workspace only while it still holds the written bytes. */
+export function workspaceMediaRemove(
+  files: Pick<FileSource, "read" | "delete">,
+): MediaServiceHost["destination"]["remove"] {
+  return async (path, written) => {
+    const target = workspacePath(path);
+    return await removeMediaIfWritten(
+      {
+        read: () => files.read(target),
+        delete: () => files.delete(target),
+      },
+      written.sha256,
+    );
+  };
+}
+
 /** Both the HTTP capability and guest binding construct the existing Darkroom service. */
 function standaloneMediaService(
   env: OysterMediaEnv,
@@ -322,9 +339,7 @@ function standaloneMediaService(
     },
     write: (path: string, bytes: Uint8Array) =>
       files.write(workspacePath(path), bytes),
-    // A Computer has no delete operation, so a file this generation wrote
-    // stays in the workspace; erasure reports it kept.
-    remove: () => Promise.resolve("kept" as const),
+    remove: workspaceMediaRemove(files),
     readAudioReference: (reference: MediaReference) =>
       readWorkspaceReference("audio", reference),
   };

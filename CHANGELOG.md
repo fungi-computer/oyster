@@ -1,5 +1,24 @@
 # @fungi.computer/oyster
 
+## 0.31.0
+
+### Minor Changes
+
+- Changes since 0.30.2:
+
+  - fix(computer): keep files.remove out of the model-facing tool list
+  - fix(oyster): import TextEncoder in the media erase test
+  - feat(computer): add the files.remove operation for Media erase
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer-contract@0.5.0
+  - @fungi.computer/computer@0.13.0
+  - @fungi.computer/parakeet@0.11.37
+
 ## 0.30.2
 
 ### Patch Changes
