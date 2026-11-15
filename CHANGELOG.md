@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.30.1
+
+### Patch Changes
+
+- Changes since 0.30.0:
+
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+  - @fungi.computer/caps@0.11.7
+  - @fungi.computer/parakeet@0.11.35
+
 ## 0.30.0
 
 ### Minor Changes
