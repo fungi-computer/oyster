@@ -16,6 +16,7 @@ import type {
   SkillSource,
 } from "@fungi.computer/shiitake-extensions/skills/source";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
+import { platformSkillFiles } from "../platform-skills.generated.js";
 import { z } from "zod";
 
 /** Each Files call this source makes is its own invocation. */
@@ -37,6 +38,17 @@ export type SkillComputer = Readonly<{
   name: string;
   port: FilesPort;
 }>;
+
+/** The built-in skills this build bundles, by folder name. */
+export type PlatformSkillName =
+  (typeof platformSkillFiles)[number]["path"] extends infer Path
+    ? Path extends `${infer Name}/${string}`
+      ? Name
+      : never
+    : never;
+
+/** Built-in skills have no Computer path; this prefix says so. */
+const builtInDirectory = (name: string) => `built-in: ${name}`;
 
 /** Where the Computer keeps skills, searched in this order; the first name wins. */
 const skillRoots = [".fungi/skills", ".agents/skills"] as const;
@@ -140,19 +152,74 @@ async function findSkillFiles(
   return files.sort();
 }
 
+/** One bundled file's text, or a plain refusal. */
+function bundled(path: string): string {
+  const file = platformSkillFiles.find((candidate) => candidate.path === path);
+  if (file === undefined)
+    throw new SkillSourceError("Built-in skill file does not exist");
+  return file.content;
+}
+
+/** A built-in skill's body or one supporting file, read from the bundle. */
+function readPlatform(
+  name: string,
+  folder: PlatformSkillName,
+  file: string | undefined,
+) {
+  const selected = file ?? "SKILL.md";
+  const content = bundled(`${folder}/${selected}`);
+  const prefix = `${folder}/`;
+  const supportingFiles =
+    selected === "SKILL.md"
+      ? platformSkillFiles
+          .map((candidate) => candidate.path)
+          .filter(
+            (path) => path.startsWith(prefix) && path !== `${prefix}SKILL.md`,
+          )
+          .map((path) => path.slice(prefix.length))
+          .sort()
+      : [];
+  if (selected === "SKILL.md") {
+    const parsed = parseSkill(content, folder);
+    if (parsed.metadata["disable-model-invocation"])
+      throw new Error(`Hidden skill: ${name}`);
+    return {
+      name,
+      file: selected,
+      content: parsed.body,
+      baseDirectory: builtInDirectory(folder),
+      supportingFiles,
+    };
+  }
+  return {
+    name,
+    file: selected,
+    content,
+    baseDirectory: builtInDirectory(folder),
+    supportingFiles,
+  };
+}
+
 /** Discover and load the skills on the Agent's attached Computers. */
 export function createComputerSkillSource(
   options: Readonly<{
-    /** The Computers the Agent may use now; read at each discovery. */
-    computers: () => Promise<readonly SkillComputer[]>;
+    /**
+     * The Computers this Session's run may use now; read at each discovery. A
+     * host that refuses a Session its Computers answers with none.
+     */
+    computers: (sessionId: string) => Promise<readonly SkillComputer[]>;
+    /**
+     * Built-in skills this host offers, after the Computers' own: a Computer
+     * skill of the same name wins and discovery records the collision.
+     */
+    platform: readonly PlatformSkillName[];
   }>,
 ): SkillSource {
-  type Found = Readonly<{
-    computer: SkillComputer;
-    location: string;
-  }>;
-  const scan = async (signal: AbortSignal) => {
-    const computers = await options.computers();
+  type Found =
+    | Readonly<{ kind: "computer"; computer: SkillComputer; location: string }>
+    | Readonly<{ kind: "platform"; folder: PlatformSkillName }>;
+  const scan = async (sessionId: string, signal: AbortSignal) => {
+    const computers = await options.computers(sessionId);
     const several = computers.length > 1;
     const state = newSkillAdmission();
     const homes = new Map<string, Found>();
@@ -183,7 +250,11 @@ export function createComputerSkillSource(
               origin: { kind: "project" },
             });
             if (state.skills.length > before)
-              homes.set(metadata.name, { computer, location: path });
+              homes.set(metadata.name, {
+                kind: "computer",
+                computer,
+                location: path,
+              });
           } catch (cause) {
             signal.throwIfAborted();
             state.diagnostics.push({
@@ -199,6 +270,31 @@ export function createComputerSkillSource(
         }
       }
     }
+    for (const name of options.platform) {
+      const path = `${name}/SKILL.md`;
+      const skillPath = `${builtInDirectory(name)}/SKILL.md`;
+      try {
+        const { metadata } = parseSkill(bundled(path), name);
+        const before = state.skills.length;
+        admitSkill(state, {
+          metadata,
+          directoryName: name,
+          skillPath,
+          location: skillPath,
+          displayLocation: skillPath,
+          origin: { kind: "platform" },
+        });
+        if (state.skills.length > before)
+          homes.set(metadata.name, { kind: "platform", folder: name });
+      } catch (cause) {
+        state.diagnostics.push({
+          path: skillPath,
+          reason: "invalid",
+          message: skillExplanation(cause, "Skill metadata or file is invalid"),
+          cause,
+        });
+      }
+    }
     if (state.skills.length === 0 && state.diagnostics.length === 0)
       state.diagnostics.push(
         skillDiagnostic(
@@ -210,15 +306,21 @@ export function createComputerSkillSource(
     return { catalog: skillCatalogOf(state), homes } as const;
   };
   return {
-    catalog: async (signal): Promise<SkillCatalog> =>
-      (await scan(signal)).catalog,
-    read: async (name, file, signal) => {
+    catalog: async ({ sessionId, signal }): Promise<SkillCatalog> =>
+      (await scan(sessionId, signal)).catalog,
+    read: async ({ sessionId, name, file, signal }) => {
       nameLength.parse(name);
-      const { catalog, homes } = await scan(signal);
+      const { catalog, homes } = await scan(sessionId, signal);
       const home = homes.get(name);
       const found = catalog.skills.find((skill) => skill.name === name);
       if (home === undefined || found === undefined)
         throw new Error(`Unknown or hidden skill: ${name}`);
+      if (home.kind === "platform")
+        return readPlatform(
+          name,
+          home.folder,
+          file === undefined ? undefined : skillFileSchema.parse(file),
+        );
       const baseDirectory = directoryOf(home.location);
       const selected =
         file === undefined ? "SKILL.md" : skillFileSchema.parse(file);

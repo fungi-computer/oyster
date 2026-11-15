@@ -13,6 +13,7 @@ import { cloudflareStorageFixture } from "./cloudflare-storage.fixture.js";
 import {
   computerSkillsEmpty,
   createComputerSkillSource,
+  type PlatformSkillName,
   type SkillComputer,
 } from "../../src/standalone/computer-skill-source.js";
 
@@ -78,7 +79,10 @@ function computer(
 const skill = (name: string, description: string, body = "Do the thing.") =>
   `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`;
 const source = (...computers: SkillComputer[]) =>
-  createComputerSkillSource({ computers: () => Promise.resolve(computers) });
+  createComputerSkillSource({
+    computers: () => Promise.resolve(computers),
+    platform: [],
+  });
 
 describe("skills on an Agent's Computer", () => {
   it("lists a skill folder by name and description, without its body", async () => {
@@ -90,7 +94,7 @@ describe("skills on an Agent's Computer", () => {
         ),
         ".agents/skills/watering/reference/plants.md": "Ferns like shade.",
       }),
-    ).catalog(signal);
+    ).catalog({ sessionId: "session", signal: signal });
     expect(found.skills).toEqual([
       {
         name: "watering",
@@ -116,7 +120,12 @@ describe("skills on an Agent's Computer", () => {
         ".agents/skills/watering/notes.txt": "n",
       }),
     );
-    const loaded = await watering.read("watering", undefined, signal);
+    const loaded = await watering.read({
+      sessionId: "session",
+      name: "watering",
+      file: undefined,
+      signal,
+    });
     expect(loaded).toMatchObject({
       name: "watering",
       file: "SKILL.md",
@@ -124,18 +133,29 @@ describe("skills on an Agent's Computer", () => {
       baseDirectory: "/.agents/skills/watering",
       supportingFiles: ["notes.txt", "reference/plants.md"],
     });
-    const support = await watering.read(
-      "watering",
-      "reference/plants.md",
+    const support = await watering.read({
+      sessionId: "session",
+      name: "watering",
+      file: "reference/plants.md",
       signal,
-    );
+    });
     expect(support.content).toBe("Ferns like shade.");
     await expect(
-      watering.read("watering", "../other/SKILL.md", signal),
+      watering.read({
+        sessionId: "session",
+        name: "watering",
+        file: "../other/SKILL.md",
+        signal,
+      }),
     ).rejects.toThrow();
-    await expect(watering.read("missing", undefined, signal)).rejects.toThrow(
-      "Unknown or hidden skill",
-    );
+    await expect(
+      watering.read({
+        sessionId: "session",
+        name: "missing",
+        file: undefined,
+        signal,
+      }),
+    ).rejects.toThrow("Unknown or hidden skill");
   });
 
   it("refuses a malformed SKILL.md and says why, while the good skills still load", async () => {
@@ -147,7 +167,7 @@ describe("skills on an Agent's Computer", () => {
         ".agents/skills/types/SKILL.md": "---\ndescription: 7\n---\nbody\n",
         ".agents/skills/blank/SKILL.md": "---\nname: blank\n---\nbody\n",
       }),
-    ).catalog(signal);
+    ).catalog({ sessionId: "session", signal: signal });
     expect(found.skills.map(({ name }) => name)).toEqual(["good"]);
     const reasons = Object.fromEntries(
       found.diagnostics.map((item) => [item.path, item.message]),
@@ -175,14 +195,14 @@ describe("skills on an Agent's Computer", () => {
         ".agents/skills/ok/big.md": "y".repeat(130 * 1024),
       }),
     );
-    const found = await roomy.catalog(signal);
+    const found = await roomy.catalog({ sessionId: "session", signal: signal });
     expect(found.skills.map(({ name }) => name)).toEqual(["ok"]);
     expect(
       found.diagnostics.find((item) => item.path.includes("/huge/"))?.message,
     ).toBe("Skill file exceeds the 128 KiB bound");
-    await expect(roomy.read("ok", "big.md", signal)).rejects.toThrow(
-      "Skill file exceeds the 128 KiB bound",
-    );
+    await expect(
+      roomy.read({ sessionId: "session", name: "ok", file: "big.md", signal }),
+    ).rejects.toThrow("Skill file exceeds the 128 KiB bound");
   });
 
   it("lets the first name win, in .fungi/skills before .agents/skills, and says so", async () => {
@@ -191,7 +211,7 @@ describe("skills on an Agent's Computer", () => {
         ".fungi/skills/herdr/SKILL.md": skill("herdr", "The project's own"),
         ".agents/skills/herdr/SKILL.md": skill("herdr", "A shared one"),
       }),
-    ).catalog(signal);
+    ).catalog({ sessionId: "session", signal: signal });
     expect(found.skills.map(({ description }) => description)).toEqual([
       "The project's own",
     ]);
@@ -208,7 +228,7 @@ describe("skills on an Agent's Computer", () => {
           "---\nname: quiet\ndescription: Hidden\ndisable-model-invocation: true\n---\nbody\n",
         ".agents/skills/.cache/stale/SKILL.md": skill("stale", "Stale"),
       }),
-    ).catalog(signal);
+    ).catalog({ sessionId: "session", signal: signal });
     expect(found.skills).toEqual([]);
     expect(found.diagnostics.map(({ reason }) => reason).sort()).toEqual([
       "skipped",
@@ -220,13 +240,18 @@ describe("skills on an Agent's Computer", () => {
     const files = {
       ".agents/skills/watering/SKILL.md": skill("watering", "W"),
     };
-    const [one] = (await source(computer("studio", files)).catalog(signal))
-      .skills;
+    const [one] = (
+      await source(computer("studio", files)).catalog({
+        sessionId: "session",
+        signal: signal,
+      })
+    ).skills;
     expect(one?.location).toBe("/.agents/skills/watering/SKILL.md");
     const [two] = (
-      await source(computer("studio", files), computer("laptop", {})).catalog(
-        signal,
-      )
+      await source(computer("studio", files), computer("laptop", {})).catalog({
+        sessionId: "session",
+        signal: signal,
+      })
     ).skills;
     expect(two?.location).toBe(
       "computer://studio/.agents/skills/watering/SKILL.md",
@@ -235,10 +260,17 @@ describe("skills on an Agent's Computer", () => {
 
   it("finds nothing, quietly, on a Computer without a skills folder or without any Computer", async () => {
     expect(
-      (await source(computer("studio", { "notes.md": "n" })).catalog(signal))
-        .skills,
+      (
+        await source(computer("studio", { "notes.md": "n" })).catalog({
+          sessionId: "session",
+          signal: signal,
+        })
+      ).skills,
     ).toEqual([]);
-    const none = await source().catalog(signal);
+    const none = await source().catalog({
+      sessionId: "session",
+      signal: signal,
+    });
     expect(none.skills).toEqual([]);
     expect(none.diagnostics.map(({ reason }) => reason)).toEqual(["empty"]);
     expect(computerSkillsEmpty).toContain(".agents/skills/<name>/SKILL.md");
@@ -251,11 +283,120 @@ describe("skills on an Agent's Computer", () => {
         skill(`skill-${String(index).padStart(2, "0")}`, "A skill"),
       ]),
     );
-    const found = await source(computer("studio", files)).catalog(signal);
+    const found = await source(computer("studio", files)).catalog({
+      sessionId: "session",
+      signal: signal,
+    });
     expect(found.skills).toHaveLength(64);
     expect(found.diagnostics.some(({ reason }) => reason === "bound")).toBe(
       true,
     );
+  });
+});
+
+const withPlatform = (
+  platform: readonly PlatformSkillName[],
+  ...computers: SkillComputer[]
+) =>
+  createComputerSkillSource({
+    computers: () => Promise.resolve(computers),
+    platform,
+  });
+const request = { sessionId: "session", signal } as const;
+
+describe("built-in skills beside the Computer's", () => {
+  it("lists a built-in skill with the platform origin when there is no Computer", async () => {
+    const found = await withPlatform(["debug-fungi"]).catalog(request);
+    expect(found.skills).toHaveLength(1);
+    expect(found.skills[0]).toMatchObject({
+      name: "debug-fungi",
+      origin: { kind: "platform" },
+      displayLocation: "built-in: debug-fungi/SKILL.md",
+    });
+    expect(found.diagnostics).toEqual([]);
+  });
+
+  it("lets the Agent's own skill win by name, reads the Agent's text, and records the collision", async () => {
+    const mine = withPlatform(
+      ["debug-fungi"],
+      computer("studio", {
+        ".agents/skills/debug-fungi/SKILL.md": skill(
+          "debug-fungi",
+          "My own debugging notes",
+          "OVERRIDE-MARKER",
+        ),
+      }),
+    );
+    const found = await mine.catalog(request);
+    expect(found.skills).toHaveLength(1);
+    expect(found.skills[0]).toMatchObject({
+      description: "My own debugging notes",
+      location: "/.agents/skills/debug-fungi/SKILL.md",
+      origin: { kind: "project" },
+    });
+    // The retained product listed the Agent's skill but read the bundle's text.
+    const loaded = await mine.read({
+      ...request,
+      name: "debug-fungi",
+      file: undefined,
+    });
+    expect(loaded.content).toContain("OVERRIDE-MARKER");
+    expect(loaded.baseDirectory).toBe("/.agents/skills/debug-fungi");
+    expect(found.diagnostics).toEqual([
+      expect.objectContaining({
+        reason: "collision",
+        message: "project skill debug-fungi wins over platform",
+      }),
+    ]);
+  });
+
+  it("lists no built-in skill for a host that offers none", async () => {
+    const found = await withPlatform([]).catalog(request);
+    expect(found.skills).toEqual([]);
+    expect(found.diagnostics.map(({ reason }) => reason)).toEqual(["empty"]);
+  });
+
+  it("serves a built-in supporting file from the bundle and refuses an escaping path", async () => {
+    const builtIn = withPlatform(["debug-fungi"]);
+    const body = await builtIn.read({
+      ...request,
+      name: "debug-fungi",
+      file: undefined,
+    });
+    expect(body.baseDirectory).toBe("built-in: debug-fungi");
+    expect(body.supportingFiles).toContain("REFERENCE.md");
+    const reference = await builtIn.read({
+      ...request,
+      name: "debug-fungi",
+      file: "REFERENCE.md",
+    });
+    expect(reference.content).toContain("Debugging Fungi");
+    await expect(
+      builtIn.read({
+        ...request,
+        name: "debug-fungi",
+        file: "../other/SKILL.md",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      builtIn.read({ ...request, name: "debug-fungi", file: "missing.md" }),
+    ).rejects.toThrow("Built-in skill file does not exist");
+  });
+
+  it("keeps the 64-skill bound with a built-in skill and carries on", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `.agents/skills/skill-${String(index).padStart(2, "0")}/SKILL.md`,
+        skill(`skill-${String(index).padStart(2, "0")}`, "A skill"),
+      ]),
+    );
+    const found = await withPlatform(
+      ["debug-fungi"],
+      computer("studio", files),
+    ).catalog(request);
+    expect(found.skills).toHaveLength(64);
+    expect(found.skills.some(({ name }) => name === "debug-fungi")).toBe(false);
+    expect(found.diagnostics.map(({ reason }) => reason)).toEqual(["bound"]);
   });
 });
 

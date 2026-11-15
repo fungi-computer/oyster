@@ -1917,6 +1917,7 @@ export abstract class StandaloneAgentBase<
       conversationAgents.source(this.controlDirectory()),
       {
         source: createComputerSkillSource({
+          platform: ["debug-fungi", "fungible-computing"],
           computers: async () => {
             await this.preparedComputerSnapshot();
             return readAgentComputerConnections(this.computerConnections()).map(

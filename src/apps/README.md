@@ -57,11 +57,14 @@ live grantors. Duplicate capability grants are rejected rather than combining
 operation and resource selectors into a wider authorization.
 
 The reducer takes host-minted installation/Instance identities and captured
-time. Members may manage installations; only owners approve operations. Upgrades
-intersect existing approvals with the new derived operations by name and
-fingerprint. They never add an operation. `external` App methods always return
-`approval_required`. Method inputs retain the Hub's 64 KiB bound. Oyster admits
-no anonymous caller.
+time. Members may manage installations; only owners and admins approve
+operations. A member's install approves exactly one capability, `app.storage`,
+when the Release declares it, because it reaches only the App's own data; it
+records no approver. Every other capability waits for an owner or admin.
+Upgrades intersect existing approvals with the new derived operations by name
+and fingerprint. They never add an operation. `external` App methods always
+return `approval_required`. Method inputs retain the Hub's 64 KiB bound. Oyster
+admits no anonymous caller.
 
 S2 invocation grants retain the existing `{binding, operations}` shape,
 validated with Puffball's registry. The host passes admitted grants into its

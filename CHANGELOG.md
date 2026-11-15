@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.32.0
+
+### Minor Changes
+
+- Changes since 0.31.2:
+
+  - fix(oyster): regenerate the skill bundle after formatting
+  - fix(oyster): regenerate the skill bundle after formatting
+  - feat(skills): write debug-fungi and fungible-computing, and document skills
+  - feat(hub): offer the agent its built-in and computer skills per session
+  - feat(oyster): bundle built-in skills and admit them beside the computer's
+  - feat(skills): pass the session id into the skill source
+  - feat(oyster): a member install approves app.storage only
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/parakeet@0.12.0
+  - @fungi.computer/shiitake-extensions@0.11.0
+
 ## 0.31.2
 
 ### Patch Changes

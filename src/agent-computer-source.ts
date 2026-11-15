@@ -153,3 +153,10 @@ export function createAgentComputerSurface(): CapabilitySource {
     }),
   });
 }
+
+export {
+  computerSkillsEmpty,
+  createComputerSkillSource,
+  type PlatformSkillName,
+  type SkillComputer,
+} from "./standalone/computer-skill-source.js";

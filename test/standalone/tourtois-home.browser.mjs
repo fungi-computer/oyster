@@ -355,7 +355,7 @@ async function launchApp(page, name) {
   if (await openApps.isVisible()) {
     await openApps.click();
     await page
-      .getByRole("group", { name: "Team Apps", exact: true })
+      .getByRole("group", { name: "Apps", exact: true })
       .getByRole("button", { name, exact: true })
       .click();
   } else {

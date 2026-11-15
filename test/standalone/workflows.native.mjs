@@ -1547,7 +1547,7 @@ try {
         if (await openApps.isVisible()) {
           await openApps.click();
           await uiPage
-            .getByRole("group", { name: "Team Apps", exact: true })
+            .getByRole("group", { name: "Apps", exact: true })
             .locator(
               'button.caps-app-grid-item:not(.opacity-55)[aria-label="Trellis"]',
             )

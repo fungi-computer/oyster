@@ -8,7 +8,7 @@ import {
 } from "../src/apps/installation.js";
 import { declaration, descriptors, release } from "./apps-fixture.js";
 
-it("member install grants nothing and owner install grants the declared ordinary capabilities", async () => {
+it("member install grants only app.storage and owner install grants the declared ordinary capabilities", async () => {
   const declaredOperations = await deriveDeclaredOperations(
     release,
     declaration,
@@ -33,6 +33,46 @@ it("member install grants nothing and owner install grants the declared ordinary
     expect(result.success.approvedGrants.length).toBe(role === "owner" ? 2 : 0);
     expect(result.success.authorityVersion).toBe(1);
   }
+});
+it("a member install approves app.storage and nothing else, with no approver recorded", async () => {
+  const withStorage = Schema.decodeUnknownSync(appDeclarationSchema)({
+    ...declaration,
+    capabilities: ["app.storage", ...declaration.capabilities],
+  });
+  const declaredOperations = await deriveDeclaredOperations(
+    release,
+    withStorage,
+    descriptors,
+  );
+  const install = (role: "owner" | "admin" | "member") => {
+    const result = applyGrantCommand(
+      null,
+      { kind: "install" },
+      {
+        principal: { actor: { kind: "member", memberId: "installer" }, role },
+        expectedVersion: null,
+        declaration: withStorage,
+        declaredOperations,
+        now: 1000,
+      },
+    );
+    if (Result.isFailure(result)) throw new Error(result.failure.code);
+    return result.success;
+  };
+  const member = install("member");
+  expect(member.approvedGrants.map((grant) => grant.capability)).toEqual([
+    "app.storage",
+  ]);
+  expect(member.approvedGrants[0]?.resources).toBe("tenant-scope");
+  expect(member.approval).toBeNull();
+  const owner = install("owner");
+  expect(owner.approvedGrants.map((grant) => grant.capability)).toEqual([
+    "app.storage",
+    "computer.readFile",
+    "computer.writeFile",
+  ]);
+  expect(owner.approval).toMatchObject({ authorityVersion: 1 });
+  expect(install("admin")).toEqual(owner);
 });
 
 it("owner installs leave a third-party full-access shell unapproved", async () => {

@@ -282,26 +282,29 @@ export function applyGrantCommand(
   let approval = current?.approval ?? null;
   switch (command.kind) {
     case "install":
-      grants = approves(context.principal.role)
-        ? context.declaration.capabilities
-            .filter(
-              (capability) =>
-                permissionCatalog[capability].consent === "install" ||
+      // An approver's install approves the install-class set. A member's
+      // install approves only the App's own storage, which touches nothing
+      // beyond the App's own data; every other capability waits for an approver.
+      grants = context.declaration.capabilities
+        .filter(
+          (capability) =>
+            capability === "app.storage" ||
+            (approves(context.principal.role) &&
+              (permissionCatalog[capability].consent === "install" ||
                 (capability === "team.workbenchHost" &&
-                  context.builtInShell === true),
-            )
-            .map((capability): ApprovedGrant => ({
-              capability,
-              capabilityApproved: true,
-              operations: declared(capability),
-              fingerprints: fingerprintsOf(
-                context.declaredOperations,
-                capability,
-                declared(capability),
-              ),
-              resources: "tenant-scope",
-            }))
-        : [];
+                  context.builtInShell === true))),
+        )
+        .map((capability): ApprovedGrant => ({
+          capability,
+          capabilityApproved: true,
+          operations: declared(capability),
+          fingerprints: fingerprintsOf(
+            context.declaredOperations,
+            capability,
+            declared(capability),
+          ),
+          resources: "tenant-scope",
+        }));
       break;
     case "change-grants": {
       for (const { capability, grant } of command.changes) {
@@ -360,7 +363,11 @@ export function applyGrantCommand(
       break;
   }
   if (grants.length === 0) approval = null;
-  else if (command.kind === "install" || command.kind === "change-grants") {
+  else if (
+    (command.kind === "install" && approves(context.principal.role)) ||
+    command.kind === "change-grants"
+  ) {
+    // A member's install records no approval: nobody approved its storage.
     approval = {
       by: context.principal.actor,
       at: context.now,
