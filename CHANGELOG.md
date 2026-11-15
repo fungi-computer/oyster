@@ -1,5 +1,28 @@
 # @fungi.computer/oyster
 
+## 0.30.2
+
+### Patch Changes
+
+- Changes since 0.30.1:
+
+  - fix(darkroom): make erasure durable, scoped and safe for reused destination
+    paths
+  - fix(darkroom): keep prompts out of image metadata and erase every retained
+    result
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.18.0
+  - @fungi.computer/darkroom@0.11.0
+  - @fungi.computer/braid@0.4.19
+  - @fungi.computer/nacre@0.6.6
+  - @fungi.computer/parakeet@0.11.36
+  - @fungi.computer/shiitake@0.18.2
+  - @fungi.computer/workflows-wire@0.4.19
+  - @fungi.computer/shiitake-extensions@0.10.2
+  - @fungi.computer/zookeeper@0.0.32
+
 ## 0.30.1
 
 ### Patch Changes

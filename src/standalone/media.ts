@@ -322,6 +322,9 @@ function standaloneMediaService(
     },
     write: (path: string, bytes: Uint8Array) =>
       files.write(workspacePath(path), bytes),
+    // A Computer has no delete operation, so a file this generation wrote
+    // stays in the workspace; erasure reports it kept.
+    remove: () => Promise.resolve("kept" as const),
     readAudioReference: (reference: MediaReference) =>
       readWorkspaceReference("audio", reference),
   };
@@ -348,6 +351,8 @@ function standaloneMediaService(
   const host = {
     scope: { actorId, namespace: "oyster", owner, destinationId: computerId },
     operations: env.MEDIA_OPERATION,
+    // Prints publishes a shareable file's prompt and strips it on download.
+    embedPrompt: true,
     provider,
     destination: admittedDestination,
   };
