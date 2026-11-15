@@ -13,6 +13,9 @@ import { createAppSurfaceCommandHost } from "@fungi.computer/nacre/command-host"
 // App page: mounts one installed App's sandboxed frame and gives it the
 // capabilities this Oyster host provides. Bundled into `shellScript`.
 import { RpcTarget, RpcStub } from "@fungi.computer/capnweb";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { Toaster, showNotice } from "@fungi.computer/caps/components/toaster";
 import { OysterAgentBrowserHost } from "./agent-browser.js";
 export type { OysterAgentBrowserHost } from "./agent-browser.js";
 import type { WhistleRuntime } from "@fungi.computer/whistle";
@@ -324,6 +327,8 @@ export function oysterShellHandles(config: OysterAppConfig) {
   };
 }
 
+const appNotices = "oyster-app-notices";
+
 /**
  * Mount one installed App's own page: its sandboxed frame and nothing else.
  * Desktop chrome (menus, palette, status) belongs to the trusted shell.
@@ -339,8 +344,14 @@ export async function mountOysterPage(): Promise<AppHost> {
   const commands = createAppSurfaceCommandHost();
   const mount = commands.mount(config.installationId, config.commands);
   const agentBrowser = new OysterAgentBrowserHost(lifetime.signal);
+  // One App fills this page, so its toasts get the page's own Caps Toaster,
+  // mounted when the first one arrives.
+  let notices: ReturnType<typeof createRoot> | undefined;
+  let noticeRoot: HTMLElement | undefined;
   lifetime.own(() => {
     commands.dispose();
+    notices?.unmount();
+    noticeRoot?.remove();
   });
   return connectOysterApp({
     config,
@@ -356,7 +367,16 @@ export async function mountOysterPage(): Promise<AppHost> {
       openNavigation: denied,
       reportFocus: () => Promise.resolve(),
       reportAgentSessionSelection: () => Promise.resolve(),
-      showToast: () => Promise.resolve(),
+      showToast: (notice) => {
+        if (notices === undefined) {
+          noticeRoot = document.createElement("div");
+          document.body.append(noticeRoot);
+          notices = createRoot(noticeRoot);
+          notices.render(createElement(Toaster, { id: appNotices }));
+        }
+        showNotice(notice, appNotices);
+        return Promise.resolve();
+      },
       onDisconnect: () => {
         lifetime.dispose();
         return Promise.resolve();

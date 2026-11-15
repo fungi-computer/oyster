@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.31.2
+
+### Patch Changes
+
+- Changes since 0.31.1:
+
+  - fix(oyster): show App toasts on the standalone App page
+
 ## 0.31.1
 
 ### Patch Changes
