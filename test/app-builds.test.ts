@@ -288,13 +288,20 @@ function fixture(
       };
     },
   };
+  const heads = { count: 0 };
   const owner = fromNodeSqlite(new DatabaseSync(":memory:"));
   const reopen = () =>
     createOysterAppBuilds({
       owner,
       tenantId: "tenant-1",
       computer: { name: "workspace", objectId: computerObjectId, port },
-      artifacts: store,
+      artifacts: {
+        ...store,
+        head: (artifactRef) => {
+          heads.count += 1;
+          return store.head(artifactRef);
+        },
+      },
       templates,
     });
   const builds = reopen();
@@ -311,6 +318,7 @@ function fixture(
   return {
     builds,
     store,
+    heads,
     reopen,
     setHostedBackend: (available: boolean) => {
       hostedBackend = available;
@@ -467,6 +475,158 @@ it("keeps only the last five build logs per App and every job's status", async (
   for (const jobId of kept)
     expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
   expect(kept).toHaveLength(retainedBuildLogs);
+});
+
+it("counts only jobs that stored a log toward the retained five", async () => {
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout: "out\n",
+  });
+  const logged: string[] = [];
+  const buildLogged = async () => {
+    const started = await f.builds.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner",
+    });
+    await started.run();
+    logged.push(started.build.jobId);
+  };
+  for (let index = 0; index < 3; index += 1) await buildLogged();
+  // Jobs that never reach the Computer write no log.
+  const logless: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const started = await f.builds.start({
+      appId,
+      sourceRevision,
+      requestedBy: "owner",
+    });
+    logless.push(started.build.jobId);
+  }
+  for (let index = 0; index < 3; index += 1) await buildLogged();
+  expect(logged).toHaveLength(6);
+  for (const jobId of logged.slice(0, 1))
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(false);
+  for (const jobId of logged.slice(1))
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+  expect(f.store.objects.size).toBe(retainedBuildLogs);
+  for (const jobId of logless) expect(f.reopen().read(jobId)).not.toBeNull();
+});
+
+it("looks for stored logs only until the fifth, then deletes older ones directly", async () => {
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout: "out\n",
+  });
+  const start = () =>
+    f.builds.start({ appId, sourceRevision, requestedBy: "owner" });
+  for (let index = 0; index < 20; index += 1) await (await start()).run();
+  const loglessNewest = 2;
+  for (let index = 0; index < loglessNewest; index += 1) await start();
+  const last = await start();
+  f.heads.count = 0;
+  await last.run();
+  expect(f.heads.count).toBeLessThanOrEqual(retainedBuildLogs + loglessNewest);
+  expect(f.store.objects.size).toBe(retainedBuildLogs);
+});
+
+it("prunes one installation's build logs without touching another installation's", async () => {
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout: "out\n",
+  });
+  const otherAppId = "app_other";
+  const other = normalizeAppPublisherRecipe({
+    appId: parseAppId(otherAppId),
+    recipe: normalized.recipe,
+  });
+  f.builds.registerSource({
+    appId: parseAppId(otherAppId),
+    location: {
+      kind: "installation",
+      installationId: "bonsai",
+      repository: "my-other-fixture",
+    },
+    recipe: other.recipe,
+    buildRecipeDigest: other.buildRecipeDigest,
+  });
+  const run = async (id: string) => {
+    const started = await f.builds.start({
+      appId: id,
+      sourceRevision,
+      requestedBy: "owner",
+    });
+    await started.run();
+    return started.build.jobId;
+  };
+  const otherJobs = [await run(otherAppId), await run(otherAppId)];
+  const firstJobs: string[] = [];
+  for (let index = 0; index < retainedBuildLogs + 2; index += 1)
+    firstJobs.push(await run(appId));
+  // The busier installation pruned its own two oldest logs only.
+  for (const jobId of firstJobs.slice(0, 2))
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(false);
+  for (const jobId of firstJobs.slice(2))
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+  for (const jobId of otherJobs) {
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+    expect(await f.reopen().readLog(jobId)).not.toBeNull();
+  }
+  // Pruning the other installation later leaves the first one's five intact.
+  const more: string[] = [];
+  for (let index = 0; index < retainedBuildLogs; index += 1)
+    more.push(await run(otherAppId));
+  for (const jobId of otherJobs)
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(false);
+  for (const jobId of more)
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+  for (const jobId of firstJobs.slice(2))
+    expect(f.store.objects.has(`artifact:build-log-${jobId}`)).toBe(true);
+});
+
+it("serves a build log only through the owner door and answers others without its bytes", async () => {
+  const stderr = "private compiler failure\n";
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stderr,
+  });
+  const started = await f.builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner",
+  });
+  const { jobId } = await started.run();
+  const routes = standaloneBuildRoutes(() => ({
+    buildBackend: () => Promise.resolve({ kind: "no_backend" }),
+    startBuild: () => Promise.resolve({ kind: "refused", reason: "no_source" }),
+    readBuild: (id) => Promise.resolve(f.reopen().read(id)),
+    readBuildLog: (id) => f.reopen().readLog(id),
+  }));
+  const served = serveHost(
+    routes,
+    (request): Promise<OysterAuthResult> =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: {
+          actor: {
+            kind: "member",
+            memberId: request.headers.get("member") ?? "guest",
+          },
+          role: request.headers.get("member") === "owner" ? "owner" : "member",
+        },
+      }),
+    { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
+  );
+  const get = (id: string, member: string) =>
+    served.request(`https://oyster.test/api/builds/${id}?log`, {
+      headers: { member },
+    });
+  const owned = await get(jobId, "owner");
+  expect(owned.status).toBe(200);
+  expect(await owned.text()).toContain("output");
+  for (const member of ["member", "guest"]) {
+    const refused = await get(jobId, member);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).not.toContain("private");
+  }
+  // An unknown job answers not found, never fabricated bytes.
+  expect((await get("build_unknown", "owner")).status).toBe(404);
 });
 
 it("keeps exactly a 2 MiB head/tail and counts discarded raw bytes, including split UTF-8", async () => {

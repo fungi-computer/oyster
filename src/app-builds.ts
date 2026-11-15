@@ -438,18 +438,26 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
     parseArtifactRef(`artifact:build-log-${jobId}`);
   const logCodec = Schema.fromJsonString(buildJobLogSchema);
   // Job rows and statuses stay; only the older logs of one App are removed.
-  // The ranking is read from the job table each time, so replays, retries and
-  // an owner restart can never delete a log inside the retained five.
+  // The ranking is read from the job table each time and counts only jobs whose
+  // log is stored, so a refused, revoked or expired job takes no slot, and
+  // replays, retries and an owner restart can never delete a log inside the
+  // retained five.
   const pruneLogs = async (appId: string) => {
-    const stale = owner.sql
+    const jobs = owner.sql
       .exec(
-        "SELECT job_id FROM oyster_build_jobs WHERE app_id=? ORDER BY issued_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+        "SELECT job_id FROM oyster_build_jobs WHERE app_id=? ORDER BY issued_at DESC, rowid DESC",
         appId,
-        retainedBuildLogs,
       )
       .toArray();
-    for (const row of stale)
-      await options.artifacts.delete(logRef(decodeJobId(row).job_id));
+    // Look for a stored log only until the fifth is found; every older job's
+    // log is deleted directly, since deleting a missing log is not an error.
+    let kept = 0;
+    for (const row of jobs) {
+      const ref = logRef(decodeJobId(row).job_id);
+      if (kept < retainedBuildLogs) {
+        if ((await options.artifacts.head(ref)) !== null) kept += 1;
+      } else await options.artifacts.delete(ref);
+    }
   };
 
   const publisher = createTeamBuildPublisher({

@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.31.1
+
+### Patch Changes
+
+- Changes since 0.31.0:
+
+  - fix(oyster): bound build log head checks to the newest jobs
+  - fix(oyster): index the pruned log test safely
+  - fix(oyster): count only jobs that stored a log toward the retained five
+  - fix(oyster): prove per-installation build log retention and owner-only reads
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.11.38
+
 ## 0.31.0
 
 ### Minor Changes
