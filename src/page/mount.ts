@@ -21,6 +21,7 @@ export type { OysterAgentBrowserHost } from "./agent-browser.js";
 import type { WhistleRuntime } from "@fungi.computer/whistle";
 import { createPageLifetime } from "./lifetime.js";
 import { computerTargetUrl } from "../computer-target.js";
+export type { OysterAppConfig } from "../page-config.js";
 import * as Schema from "effect/Schema";
 import {
   AppError,
@@ -57,7 +58,7 @@ import {
   registeredCapabilityHandle,
   type CapabilityRegistration,
 } from "./capabilities.js";
-import { capabilityDescriptorSchema } from "../capability-descriptor.js";
+import { oysterAppConfigSchema, type OysterAppConfig } from "../page-config.js";
 import {
   connectAppHost,
   type AppHost,
@@ -66,7 +67,6 @@ import {
 } from "@fungi.computer/agar/host";
 import type { WhistleJsonValue } from "@fungi.computer/whistle";
 import { parseJsonValue } from "@fungi.computer/whistle/wire";
-import { appDeclaredCommandSchema } from "@fungi.computer/puffball/app";
 import { TerminalCapability } from "./terminal.js";
 import {
   ComputerPortsHandle,
@@ -111,27 +111,6 @@ function agentDirectory(
 }
 
 /** Current server-admitted configuration for one installed App page. */
-export const oysterAppConfigSchema = Schema.Struct({
-  workbench: Schema.Boolean,
-  /** The home shell Release's own module, imported top-level; null if it ships none. */
-  shellModuleUrl: Schema.NullOr(Schema.String),
-  storage: Schema.Boolean,
-  /** The Release declares `apps.open`; only an embedding shell can serve it. */
-  appsOpen: Schema.Boolean,
-  computerId: Schema.NullOr(Schema.String),
-  authorityVersion: Schema.Int,
-  commands: Schema.Array(appDeclaredCommandSchema),
-  icon: Schema.NullOr(Schema.String),
-  roles: Schema.Array(Schema.String),
-  installationId: Schema.String,
-  appId: Schema.String,
-  releaseId: Schema.String,
-  uiUrl: Schema.String,
-  backendUrl: Schema.String,
-  methodsUrl: Schema.String,
-  capabilities: Schema.Array(capabilityDescriptorSchema),
-});
-
 async function answer(response: Response): Promise<WhistleJsonValue> {
   if (response.status === 401 || response.status === 403)
     throw new AppError("App permission was denied", {
@@ -385,8 +364,6 @@ export async function mountOysterPage(): Promise<AppHost> {
   });
 }
 
-/** The host-admitted App configuration served by Oyster. */
-export type OysterAppConfig = typeof oysterAppConfigSchema.Type;
 /** One isolated App connection, with the slots this host admitted for it. */
 export type OysterAppConnectionOptions = Readonly<{
   config: OysterAppConfig;

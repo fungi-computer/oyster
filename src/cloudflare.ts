@@ -1,4 +1,7 @@
-import { appMethodReplySchema } from "@fungi.computer/agar/backend";
+import {
+  appBackendComputerHeader,
+  appMethodReplySchema,
+} from "@fungi.computer/agar/backend";
 import { nativeGitFrameMethods } from "@fungi.computer/agar/git-rpc";
 import { rpcHandleSchema, rpcMethod } from "@fungi.computer/agar/rpc";
 import {
@@ -38,8 +41,13 @@ import type {
 import {
   appBackendBindingKinds,
   type AppBackendBindingName,
+  type AppMethodCallContext,
 } from "@fungi.computer/puffball/app";
-import { isAppApiMethodName } from "@fungi.computer/puffball/app-method-runtime";
+import {
+  isAppApiMethodName,
+  parseAppMethodCallContext,
+} from "@fungi.computer/puffball/app-method-runtime";
+import { appMethodSchemas } from "@fungi.computer/forage";
 import {
   createInvocationGate,
   invocationFrameIdSchema,
@@ -47,15 +55,27 @@ import {
   type InvocationGate,
 } from "./invocation.js";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { z } from "zod";
 import type { ResourceRef } from "./apps/installation.js";
-import type { Release } from "@fungi.computer/puffball";
+import type { Release, AppApi } from "@fungi.computer/puffball";
 import {
   BACKEND_CONSTRUCTION_FACET,
   checkBackendConstruction,
 } from "./boot-construction.js";
-import { BootGateError, type UiBootCheckOutcome } from "./boot-gate.js";
+import {
+  BOOT_DEADLINE_MS,
+  BootGateError,
+  type UiBootCheckOutcome,
+} from "./boot-gate.js";
+import { appFacetRequest, appFacetResponse } from "./backend-request.js";
+import {
+  createAppTestCopies,
+  type AppTestCopy,
+  type AppTestCopyAuthority,
+  type AppTestCopyPorts,
+} from "./app-test-copies.js";
 export { checkBackendConstruction } from "./boot-construction.js";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
@@ -446,6 +466,240 @@ export type AppInstanceLoader<FacetClass> = Readonly<{
     getDurableObjectClass: (exportName: string) => FacetClass;
   }>;
 }>;
+
+/** Verified code and its declaration travel together at the copy boundary. */
+export type AppTestCopyBackend = Backend & Readonly<{ api: AppApi | null }>;
+
+/**
+ * Disposable App-data siblings use the same native facade and wire decoder as
+ * live invocation, but no invocation frame, binding factory or live host env.
+ * The surrounding Instance owns current authority and shared alarm scheduling.
+ */
+export function createCloudflareAppTestCopies<FacetClass>(
+  ctx: AppInstanceContext<FacetClass>,
+  loader: AppInstanceLoader<FacetClass> | undefined,
+  ports: Pick<AppTestCopyPorts, "source" | "wake"> &
+    Readonly<{
+      limits?: () => GuestLimits;
+      resolve: (
+        releaseId: AppTestCopy["selection"]["releaseId"],
+      ) => Effect.Effect<AppTestCopyBackend, Error>;
+    }>,
+  limits?: Partial<GuestLimits>,
+) {
+  const name = "test-copy";
+  const instanceId = ctx.id.name;
+  if (!instanceId) throw new Error("Named Instance required");
+  const copies = createAppTestCopies({
+    owner: ctx.storage,
+    now: Date.now,
+    source: () =>
+      ports
+        .source()
+        .pipe(
+          Effect.flatMap((source) =>
+            source !== null && source.instance.instanceId !== instanceId
+              ? Effect.fail(new AppInstanceError("instance_identity_mismatch"))
+              : Effect.succeed(source),
+          ),
+        ),
+    wake: ports.wake,
+    clone: () =>
+      Effect.try({
+        try: () => {
+          if (loader === undefined)
+            throw new AppInstanceError("boot_runner_unavailable");
+          if (ctx.facets.clone === undefined)
+            throw new AppInstanceError("boot_clone_unavailable");
+          ctx.facets.clone("app", name);
+        },
+        catch: (cause) =>
+          cause instanceof AppInstanceError
+            ? cause
+            : new AppInstanceError("boot_clone_unavailable", { cause }),
+      }),
+    purge: () =>
+      Effect.try({
+        try: () => {
+          try {
+            ctx.facets.abort(name, new AppInstanceError("revoked"));
+          } finally {
+            ctx.facets.delete(name);
+          }
+        },
+        catch: (cause) =>
+          new AppInstanceError("boot_cleanup_failed", { cause }),
+      }),
+  });
+  const bounded = <A>(program: Effect.Effect<A, Error>) =>
+    program.pipe(
+      Effect.timeoutOrElse({
+        duration: BOOT_DEADLINE_MS,
+        orElse: () => Effect.fail(new AppInstanceError("expired")),
+      }),
+    );
+  const closeOnFailure = <A>(
+    authority: AppTestCopyAuthority,
+    copyId: string,
+    program: Effect.Effect<A, Error>,
+  ) =>
+    bounded(program).pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit)
+          ? copies.discard(authority, copyId).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
+    );
+  const execute = <A>(
+    authority: AppTestCopyAuthority,
+    copyId: string,
+    invoke: (
+      stub: z.output<typeof facetInvocationSchema>,
+      artifact: AppTestCopyBackend,
+    ) => Promise<A>,
+  ) =>
+    closeOnFailure(
+      authority,
+      copyId,
+      copies.withCopy(authority, copyId, (copy) =>
+        Effect.gen(function* () {
+          const artifact = yield* ports.resolve(copy.selection.releaseId);
+          const budget = guestLimits(ports.limits?.() ?? limits);
+          if (
+            artifact.release.appId !== copy.selection.appId ||
+            artifact.release.releaseId !== copy.selection.releaseId
+          )
+            return yield* Effect.fail(
+              new AppInstanceError("instance_release_mismatch"),
+            );
+          return yield* Effect.tryPromise({
+            try: async () => {
+              if (loader === undefined)
+                throw new AppInstanceError("boot_runner_unavailable");
+              // Native get also memoizes the child class. End prior execution
+              // before selecting the current budget; abort preserves copied SQLite.
+              ctx.facets.abort(name, new AppInstanceError("revoked"));
+              using stub = facetInvocationSchema.parse(
+                ctx.facets.get(name, () => ({
+                  class: loader
+                    .get(
+                      `copy:${instanceId}:${copy.copyId}:${artifact.digest}:${String(budget.cpuMs)}:${String(budget.subRequests)}`,
+                      () => ({
+                        compatibilityDate: artifact.backend.compatibilityDate,
+                        mainModule: "invocation.js",
+                        modules: {
+                          "backend.js": artifact.backend.code,
+                          "invocation.js": facetInvocationModule(
+                            artifact.backend.exportName,
+                          ),
+                          "frame-binding-wire.js": facetFrameBindingModule,
+                        },
+                        env: {},
+                        globalOutbound: null,
+                        limits: budget,
+                      }),
+                    )
+                    .getDurableObjectClass("AppInvocation"),
+                })),
+              );
+              return await invoke(stub, artifact);
+            },
+            catch: (cause) =>
+              cause instanceof AppInstanceError
+                ? cause
+                : cause instanceof Error
+                  ? guestFailure(cause)
+                  : new Error("Test copy execution failed"),
+          });
+        }),
+      ),
+    );
+  return {
+    /** Clone current App data once under the retained request and fixed deadline. */
+    open: (authority: AppTestCopyAuthority, requestId: string) =>
+      bounded(copies.open(authority, requestId)),
+    /** Observe the sibling, retiring expired or unavailable source selections. */
+    inspect: (authority: AppTestCopyAuthority) =>
+      bounded(copies.inspect(authority)),
+    /** Discard only this resource, retaining its latest request receipt. */
+    discard: copies.discard,
+    /** Shared native alarm cleanup; incomplete phases need no source service. */
+    expire: copies.expire,
+    /** Retire the sibling when its owning installation loses authority. */
+    revoke: copies.revoke,
+    /** Run ordinary backend HTTP with bounded bodies and no live bindings. */
+    fetch: (
+      authority: AppTestCopyAuthority,
+      copyId: string,
+      request: Request,
+    ) =>
+      execute(authority, copyId, async (stub) => {
+        const safe = appFacetRequest(request);
+        safe.headers.delete(appBackendComputerHeader);
+        const reply = facetHttpReplySchema.parse(
+          await stub.http(
+            {
+              url: safe.url,
+              method: safe.method,
+              headers: [...safe.headers],
+              body: await readHttpBody(safe.body, requestBodyCeiling),
+            },
+            {},
+          ),
+        );
+        const body = await readHttpBody(reply.body, replyBodyCeiling);
+        return appFacetResponse(
+          new Response(body, {
+            status: reply.status,
+            statusText: reply.statusText,
+            headers: reply.headers,
+          }),
+        );
+      }),
+    /** Use the ordinary typed facade and verified method codecs, without live grants. */
+    call: (
+      authority: AppTestCopyAuthority,
+      copyId: string,
+      method: string,
+      input: Schema.Json,
+      caller: AppMethodCallContext,
+    ) =>
+      execute(authority, copyId, async (stub, artifact) => {
+        const decoded = parseAppMethodCallContext(caller, true);
+        if (
+          decoded.actor.kind !== "member" ||
+          decoded.role !== "owner" ||
+          artifact.api === null ||
+          !isAppApiMethodName(method) ||
+          !Object.hasOwn(artifact.api.methods, method)
+        )
+          throw new AppInstanceError("invalid_invocation_facts");
+        const codec = appMethodSchemas(artifact.api)[method];
+        if (codec === undefined)
+          throw new AppInstanceError("invalid_invocation_facts");
+        // Attribution is not a live call frame: no Computer, workflow or durable lane.
+        const context = parseAppMethodCallContext(
+          {
+            actor: decoded.actor,
+            role: "owner",
+            computerId: null,
+          },
+          true,
+        );
+        const reply = Schema.decodeUnknownSync(Schema.Json)(
+          await stub.invoke(method, [codec.input.parse(input), context], {}),
+        );
+        if (
+          new TextEncoder().encode(JSON.stringify(reply)).byteLength >
+          MAX_APP_REPLY_BYTES
+        )
+          throw new Error("App result too large");
+        const parsed = appMethodReplySchema.parse(reply);
+        if (parsed.kind === "ok") codec.output.parse(parsed.value);
+        return parsed;
+      }),
+  };
+}
 
 /** Stop the shared native App facet at cohort drain or revocation. */
 export function createCloudflareInvocationGate<Host, FacetClass>(

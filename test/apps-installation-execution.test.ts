@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay, scheduler } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { parse, type DefaultTreeAdapterTypes } from "parse5";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
@@ -105,6 +106,7 @@ async function fixture(
       },
     },
   });
+  const releases = new Map([[release.releaseId, release]]);
   /** Another Release of the same App and backend that declares capabilities. */
   const declaringRelease = async (
     releaseId: string,
@@ -120,7 +122,7 @@ async function fixture(
         { capabilities, handlers: [], roles: [] },
       ),
     );
-    return Schema.decodeUnknownSync(releaseSchema)({
+    const next = Schema.decodeUnknownSync(releaseSchema)({
       appId: "app_notes",
       releaseId,
       artifact: {
@@ -129,6 +131,8 @@ async function fixture(
         provenance: release.artifact.provenance,
       },
     });
+    releases.set(next.releaseId, next);
+    return next;
   };
   let reads = 0;
   const artifacts = {
@@ -164,6 +168,7 @@ async function fixture(
   const replyLost = Promise.withResolvers<undefined>();
   const replayDelivery = Promise.withResolvers<undefined>();
   let loseReply = unexpected === "lost-apply-reply";
+  let failApply = false;
   const principal = {
     actor: { kind: "member" as const, memberId: "owner" },
     role: "owner" as const,
@@ -228,7 +233,12 @@ async function fixture(
         Effect.sync(() => {
           snapshot = next;
         }),
-      resolve: () => Effect.succeed(backend),
+      resolve: (id) => {
+        const selected = releases.get(id);
+        return selected === undefined
+          ? Effect.fail(new Error("Fixture Release missing"))
+          : Effect.succeed({ ...backend, release: selected });
+      },
       boot: () =>
         Effect.tryPromise({
           try: async () => {
@@ -299,6 +309,7 @@ async function fixture(
         apply: async (state) => {
           // The Instance RPC itself throws instead of returning an InstanceResult.
           if (
+            failApply ||
             unexpected === "apply-drop-always" ||
             (unexpected === "apply-drop" && ++applyAttempts === 1)
           )
@@ -354,6 +365,19 @@ async function fixture(
     expect(response.status).toBe(200);
     return installationOperationSchema.parse(await response.json());
   };
+  const select = async (selected: typeof release, requestId: string) => {
+    const response = await app.request("/api/installations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+      body: JSON.stringify({ installationId: "notes", release: selected }),
+    });
+    expect(response.status).toBe(202);
+    await runtime.tick();
+    expect(await read(requestId)).toMatchObject({ state: "succeeded" });
+  };
   return {
     database,
     rows,
@@ -362,6 +386,7 @@ async function fixture(
     principal,
     declaringRelease,
     read,
+    select,
     runtime,
     operations,
     replyLost,
@@ -378,6 +403,9 @@ async function fixture(
     prepares: () => prepares,
     applyAttempts: () => applyAttempts,
     reads: () => reads,
+    failApplies: (failing: boolean) => {
+      failApply = failing;
+    },
     replay: async () => {
       const row = rows.get("notes");
       if (row === undefined || instance === undefined)
@@ -388,6 +416,573 @@ async function fixture(
     },
   };
 }
+
+it("rolls back through the host to the prior activated Release without replacing its Instance", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "recovery-first");
+    const instanceId = state.snapshot()?.instanceId;
+    const nextRelease = await state.declaringRelease("rel_next", []);
+    await state.select(nextRelease, "recovery-next");
+    expect(state.snapshot()).toMatchObject({
+      releaseId: nextRelease.releaseId,
+      authorityVersion: 2,
+    });
+    const recovery = await state.app.request(
+      "/api/installations/notes/recovery",
+    );
+    expect(recovery.status).toBe(200);
+    expect(await recovery.json()).toMatchObject({
+      release: state.release,
+      authorityVersion: 2,
+      storeGeneration: "generation",
+    });
+    const admitted = await state.app.request(
+      "/api/installations/notes/rollback",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "recovery-rollback",
+        },
+        body: JSON.stringify({
+          authorityVersion: 2,
+          storeGeneration: "generation",
+        }),
+      },
+    );
+    expect(admitted.status).toBe(202);
+    await state.runtime.tick();
+    expect(await state.read("recovery-rollback")).toMatchObject({
+      state: "succeeded",
+      installation: { release: state.release, instanceId },
+    });
+    expect(state.snapshot()).toMatchObject({
+      instanceId,
+      releaseId: state.release.releaseId,
+      stateSchema: 1,
+      authorityVersion: 3,
+      status: "active",
+    });
+  } finally {
+    state.database.close();
+  }
+});
+
+it("does not claim a test copy on a host without native copy capability", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "copy-source");
+    const before = state.snapshot();
+    const response = await state.app.request(
+      "https://oyster.test/recovery/notes/test-copy",
+      {
+        method: "POST",
+        headers: {
+          Origin: "https://oyster.test",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          requestId: "copy-one",
+          authorityVersion: "1",
+          storeGeneration: "generation",
+        }).toString(),
+      },
+    );
+    expect(response.status).toBe(503);
+    expect(state.snapshot()).toEqual(before);
+  } finally {
+    state.database.close();
+  }
+});
+
+it.each<{
+  name: string;
+  role?: "member";
+  origin?: string;
+  headers?: Record<string, string>;
+  version?: string;
+  generation?: string;
+  extra?: Record<string, string>;
+  status: number;
+}>([
+  {
+    name: "nonowner member",
+    role: "member",
+    origin: "https://oyster.test",
+    status: 403,
+  },
+  {
+    name: "App-mediated owner",
+    origin: "https://oyster.test",
+    headers: { "X-Oyster-Installation": "notes" },
+    status: 403,
+  },
+  { name: "missing origin", status: 403 },
+  { name: "foreign origin", origin: "https://other.test", status: 403 },
+  { name: "null origin", origin: "null", status: 403 },
+  {
+    name: "cross-site browser",
+    origin: "https://oyster.test",
+    headers: { "Sec-Fetch-Site": "cross-site" },
+    status: 403,
+  },
+  {
+    name: "stale authority",
+    origin: "https://oyster.test",
+    version: "2",
+    status: 409,
+  },
+  {
+    name: "replaced store",
+    origin: "https://oyster.test",
+    generation: "replaced",
+    status: 409,
+  },
+  {
+    name: "caller-selected Release",
+    origin: "https://oyster.test",
+    extra: { release: "rel_other" },
+    status: 400,
+  },
+])("refuses $name before touching test copy resources", async (input) => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "copy-source");
+    let calls = 0;
+    const forbidden = () => {
+      calls++;
+      return Promise.reject(new Error("Copy resources must not be reached"));
+    };
+    const app = createOyster({
+      ...state.host,
+      auth:
+        input.role === undefined
+          ? state.host.auth
+          : {
+              ...state.host.auth,
+              authenticate: () =>
+                Promise.resolve({
+                  kind: "admitted",
+                  principal: {
+                    actor: { kind: "member", memberId: "member" },
+                    role: "member",
+                  },
+                }),
+            },
+      instances: {
+        get: (id, limits) => ({
+          ...state.host.instances.get(id, limits),
+          testCopies: {
+            open: forbidden,
+            inspect: forbidden,
+            discard: forbidden,
+            fetch: forbidden,
+            call: forbidden,
+          },
+        }),
+      },
+    });
+    const before = state.snapshot();
+    const headers = new Headers(input.headers);
+    if (input.origin !== undefined) headers.set("Origin", input.origin);
+    const response = await app.request(
+      "https://oyster.test/recovery/notes/test-copy",
+      {
+        method: "POST",
+        headers,
+        body: new URLSearchParams({
+          requestId: "copy-one",
+          authorityVersion: input.version ?? "1",
+          storeGeneration: input.generation ?? "generation",
+          ...input.extra,
+        }),
+      },
+    );
+    expect(response.status).toBe(input.status);
+    expect(calls).toBe(0);
+    expect(state.snapshot()).toEqual(before);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("serves host-owned recovery without loading the selected App or shell assets", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "recovery-first");
+    await state.select(
+      await state.declaringRelease("rel_next", []),
+      "recovery-next",
+    );
+    const host = createOyster({
+      ...state.host,
+      homeInstallationId: "notes",
+      artifacts: {
+        ...state.host.artifacts,
+        get: () => Promise.reject(new Error("Selected App cannot load")),
+      },
+      pageAssets: () => Promise.reject(new Error("Shell assets cannot load")),
+      instances: {
+        get: (id, limits) => {
+          const unavailable = () =>
+            Promise.reject(new Error("Native copy metadata cannot load"));
+          return {
+            ...state.host.instances.get(id, limits),
+            testCopies: {
+              open: unavailable,
+              inspect: unavailable,
+              discard: unavailable,
+              fetch: unavailable,
+              call: unavailable,
+            },
+          };
+        },
+      },
+    });
+    const response = await host.request("/recovery");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const html = await response.text();
+    expect(html).toContain("App recovery");
+    expect(html).toContain("rel_notes");
+    expect(html).toContain("rel_next");
+    expect(html).toContain("Can roll back to");
+    expect(html).toContain("Test copy not available for this App.");
+    expect(html).not.toContain('action="/recovery/notes/rollback"');
+    expect(html).toContain('href="/recovery?confirm=notes"');
+    expect(html.replaceAll(/\s+/gu, " ")).toContain("data stays as it is");
+    const confirming = await (
+      await host.request("/recovery?confirm=notes")
+    ).text();
+    expect(confirming.replaceAll(/\s+/gu, " ")).toContain(
+      "Roll back notes to the previous version?",
+    );
+    expect(confirming).toContain('action="/recovery/notes/rollback"');
+    expect(confirming).toContain("Cancel");
+    const fields = new URLSearchParams();
+    const nodes: DefaultTreeAdapterTypes.Node[] = [parse(confirming)];
+    for (const node of nodes) {
+      if ("childNodes" in node) nodes.push(...node.childNodes);
+      if (!("tagName" in node) || node.tagName !== "input") continue;
+      const attributes = Object.fromEntries(
+        node.attrs.map(({ name, value }) => [name, value]),
+      );
+      if (
+        attributes.type === "hidden" &&
+        attributes.name !== undefined &&
+        attributes.value !== undefined
+      )
+        fields.append(attributes.name, attributes.value);
+    }
+    expect(Object.fromEntries(fields)).toMatchObject({
+      authorityVersion: "2",
+      storeGeneration: "generation",
+    });
+    const submitted = await host.request(
+      "https://oyster.test/recovery/notes/rollback",
+      {
+        method: "POST",
+        headers: { Origin: "https://oyster.test" },
+        body: fields,
+      },
+    );
+    expect(submitted.status).toBe(303);
+    const location = submitted.headers.get("Location");
+    if (location === null) throw new Error("Recovery observation missing");
+    expect(await (await host.request(location)).text()).toContain(
+      "Rolling back notes…",
+    );
+    await state.runtime.tick();
+    const settled = await (await host.request(location)).text();
+    expect(settled).toContain("Rolled back notes");
+    expect(settled).not.toContain("req_");
+    expect(settled).toContain("Check again");
+    expect(state.snapshot()).toMatchObject({
+      releaseId: state.release.releaseId,
+      authorityVersion: 3,
+      status: "active",
+    });
+  } finally {
+    state.database.close();
+  }
+});
+
+it("keeps recovery observations and controls owner-only for an admitted member", async () => {
+  const state = await fixture();
+  try {
+    const app = createOyster({
+      ...state.host,
+      auth: {
+        ...state.host.auth,
+        authenticate: () =>
+          Promise.resolve({
+            kind: "admitted",
+            principal: {
+              actor: { kind: "member", memberId: "peer" },
+              role: "member",
+            },
+          }),
+      },
+    });
+    for (const path of ["/recovery", "/api/installations/notes/recovery"])
+      expect((await app.request(path)).status).toBe(403);
+    for (const path of [
+      "/recovery/notes/rollback",
+      "/api/installations/notes/rollback",
+    ])
+      expect(
+        (
+          await app.request(`https://oyster.test${path}`, {
+            method: "POST",
+            headers: {
+              Origin: "https://oyster.test",
+              "Idempotency-Key": "member-rollback",
+            },
+            body: new URLSearchParams({
+              authorityVersion: "2",
+              storeGeneration: "generation",
+              requestId: "member-rollback",
+            }),
+          })
+        ).status,
+      ).toBe(403);
+    expect(await state.operations.read("member-rollback", "notes")).toBeNull();
+    expect(state.reads()).toBe(0);
+    expect(state.boots()).toBe(0);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("replays a rollback exactly while refusing conflicting retries and stale owner observations", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "recovery-first");
+    await state.select(
+      await state.declaringRelease("rel_next", []),
+      "recovery-next",
+    );
+    const rollback = (
+      requestId: string,
+      authorityVersion = 2,
+      storeGeneration = "generation",
+    ) =>
+      state.app.request("/api/installations/notes/rollback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": requestId,
+        },
+        body: JSON.stringify({ authorityVersion, storeGeneration }),
+      });
+    const accepted = await rollback("recovery-rollback");
+    expect(accepted.status).toBe(202);
+    const pending: unknown = await accepted.json();
+    expect(pending).toMatchObject({ state: "pending" });
+    expect(await (await rollback("recovery-rollback")).json()).toEqual(pending);
+    expect((await rollback("recovery-rollback", 3)).status).toBe(409);
+    await state.runtime.tick();
+    const settled = await state.read("recovery-rollback");
+    expect(settled.state).toBe("succeeded");
+    expect(await (await rollback("recovery-rollback")).json()).toEqual(settled);
+    expect((await rollback("stale-version")).status).toBe(409);
+    expect((await rollback("stale-store", 3, "replaced")).status).toBe(409);
+    expect(await state.operations.read("stale-version", "notes")).toBeNull();
+    expect(await state.operations.read("stale-store", "notes")).toBeNull();
+    expect(state.snapshot()?.authorityVersion).toBe(3);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("uses the latest confirmed activation for rollback after a selection that never activated", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "recovery-first");
+    const good = await state.declaringRelease("rel_good", []);
+    await state.select(good, "recovery-good");
+    state.failApplies(true);
+    const admitted = await state.app.request("/api/installations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "unconfirmed-selection",
+      },
+      body: JSON.stringify({
+        installationId: "notes",
+        release: await state.declaringRelease("rel_unconfirmed", []),
+      }),
+    });
+    expect(admitted.status).toBe(202);
+    await state.runtime.tick();
+    expect(await state.read("unconfirmed-selection")).toMatchObject({
+      state: "refused",
+      code: "installation_not_activated",
+    });
+    state.failApplies(false);
+    expect(state.rows.get("notes")?.release.releaseId).toBe("rel_unconfirmed");
+    const recovery = await state.app.request(
+      "/api/installations/notes/recovery",
+    );
+    expect(await recovery.json()).toMatchObject({
+      release: good,
+      authorityVersion: 3,
+    });
+    const rollback = await state.app.request(
+      "/api/installations/notes/rollback",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "recover-unconfirmed",
+        },
+        body: JSON.stringify({
+          authorityVersion: 3,
+          storeGeneration: "generation",
+        }),
+      },
+    );
+    expect(rollback.status).toBe(202);
+    await state.runtime.tick();
+    expect(await state.read("recover-unconfirmed")).toMatchObject({
+      state: "succeeded",
+      installation: { release: good },
+    });
+    expect(state.snapshot()).toMatchObject({
+      releaseId: good.releaseId,
+      authorityVersion: 4,
+      status: "active",
+    });
+  } finally {
+    state.database.close();
+  }
+});
+
+it("does not invent a recovery target or accept a caller-supplied Release", async () => {
+  const state = await fixture();
+  state.prepareGate.resolve(undefined);
+  state.applyGate.resolve(undefined);
+  try {
+    await state.select(state.release, "only-activation");
+    const recovery = await state.app.request(
+      "/api/installations/notes/recovery",
+    );
+    expect(recovery.status).toBe(200);
+    expect(await recovery.json()).toBeNull();
+    const boots = state.boots();
+    for (const [requestId, extra, status] of [
+      ["missing-target", {}, 503],
+      ["caller-target", { release: state.release }, 400],
+    ] as const) {
+      const response = await state.app.request(
+        "/api/installations/notes/rollback",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": requestId,
+          },
+          body: JSON.stringify({
+            authorityVersion: 1,
+            storeGeneration: "generation",
+            ...extra,
+          }),
+        },
+      );
+      expect(response.status).toBe(status);
+      expect(await state.operations.read(requestId, "notes")).toBeNull();
+    }
+    expect(state.boots()).toBe(boots);
+    expect(state.snapshot()?.authorityVersion).toBe(1);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("refuses cross-origin browser provenance on JSON recovery surfaces", async () => {
+  const state = await fixture();
+  try {
+    const headers: HeadersInit[] = [
+      { Origin: "https://other.test" },
+      { Origin: "null" },
+      { "Sec-Fetch-Site": "cross-site" },
+    ];
+    for (const provenance of headers) {
+      const recovery = await state.app.request(
+        "/api/installations/notes/recovery",
+        {
+          headers: provenance,
+        },
+      );
+      expect(recovery.status).toBe(403);
+      const jsonHeaders = new Headers(provenance);
+      jsonHeaders.set("Content-Type", "text/plain");
+      jsonHeaders.set("Idempotency-Key", "foreign-json");
+      const rollback = await state.app.request(
+        "/api/installations/notes/rollback",
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            authorityVersion: 2,
+            storeGeneration: "generation",
+          }),
+        },
+      );
+      expect(rollback.status).toBe(403);
+    }
+    expect(await state.operations.read("foreign-json", "notes")).toBeNull();
+    expect(state.reads()).toBe(0);
+    expect(state.boots()).toBe(0);
+  } finally {
+    state.database.close();
+  }
+});
+
+it("refuses recovery forms without host-origin provenance or sent through an App", async () => {
+  const state = await fixture();
+  try {
+    const headers: HeadersInit[] = [
+      {},
+      { Origin: "https://other.test" },
+      { Origin: "https://oyster.test", "Sec-Fetch-Site": "cross-site" },
+      { Origin: "https://oyster.test", "X-Oyster-Installation": "notes" },
+    ];
+    for (const provenance of headers) {
+      const response = await state.app.request(
+        "https://oyster.test/recovery/notes/rollback",
+        {
+          method: "POST",
+          headers: provenance,
+          body: new URLSearchParams({
+            authorityVersion: "2",
+            storeGeneration: "generation",
+            requestId: "refused-form",
+          }),
+        },
+      );
+      expect(response.status).toBe(403);
+    }
+    expect(await state.operations.read("refused-form", "notes")).toBeNull();
+    expect(state.reads()).toBe(0);
+    expect(state.boots()).toBe(0);
+  } finally {
+    state.database.close();
+  }
+});
 
 it.each([false, true])(
   "joins actual owner and executor to Instance application (refuse=%s)",

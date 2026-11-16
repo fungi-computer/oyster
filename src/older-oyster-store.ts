@@ -3,12 +3,9 @@ import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 /** The closed error code a refused request carries. */
 export const olderOysterStoreCode = "store_from_older_oyster";
 
-/** Where the reset steps live. */
-const olderOysterStoreGuide =
-  "https://github.com/fungi-computer/oyster#upgrading-from-oyster-02-or-earlier";
-
 /** The one message every refusal shows. */
-export const olderOysterStoreMessage = `This Oyster's data was created by Oyster 0.2 or earlier, which this version cannot read. Reset it (${olderOysterStoreGuide}) or redeploy 0.2.x. Old data is left untouched.`;
+export const olderOysterStoreMessage =
+  "This Oyster's data was created by Oyster 0.2 or earlier, which this version cannot read. Keep the old Worker and its data untouched. Verify the old release before changing it: 0.0.1 needs a release-matched bridge; 0.1/0.2 must archive the reachable set through its own Worker before fresh setup under new names. If you cannot certify an archive, stop and keep the old Worker on its original release. This refusal deleted nothing and restored nothing.";
 
 /** Raised by a store owner that finds data written by Oyster 0.2 or earlier. */
 export class OlderOysterStoreError extends Error {
@@ -59,7 +56,7 @@ export function olderOysterStoreResponse(request: Request): Response {
   const status = 409;
   if (request.headers.get("accept")?.includes("text/html") === true)
     return new Response(
-      `<!doctype html><meta charset="utf-8"><title>Oyster data needs a reset</title><body style="font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem"><h1>Oyster data needs a reset</h1><p>This Oyster's data was created by Oyster 0.2 or earlier, which this version cannot read. Old data is left untouched.</p><p><a href="${olderOysterStoreGuide}">Reset it</a> or redeploy 0.2.x.</p></body>`,
+      `<!doctype html><meta charset="utf-8"><title>Oyster upgrade stopped</title><body style="font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem"><h1>Oyster upgrade stopped</h1><p>${olderOysterStoreMessage}</p></body>`,
       { status, headers: { "content-type": "text/html; charset=utf-8" } },
     );
   return Response.json(

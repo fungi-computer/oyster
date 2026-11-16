@@ -149,6 +149,19 @@ Loader memoization and class lookup; entrypoint access is not required.
 
 ---
 
+### AppTestCopyBackend
+
+```ts
+type AppTestCopyBackend = Backend &
+  Readonly<{
+    api: AppApi | null;
+  }>;
+```
+
+Verified code and its declaration travel together at the copy boundary.
+
+---
+
 ### FrameBindingReply
 
 ```ts
@@ -451,6 +464,50 @@ One native binding factory for both Hub and standalone, preserving RPC values.
 #### Returns
 
 _typeof_ `WorkerEntrypoint`
+
+---
+
+### createCloudflareAppTestCopies()
+
+```ts
+function createCloudflareAppTestCopies<FacetClass>(
+  ctx,
+  loader,
+  ports,
+  limits?,
+): object;
+```
+
+Disposable App-data siblings use the same native facade and wire decoder as live
+invocation, but no invocation frame, binding factory or live host env. The
+surrounding Instance owns current authority and shared alarm scheduling.
+
+#### Type Parameters
+
+| Type Parameter |
+| -------------- |
+| `FacetClass`   |
+
+#### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx`     | [`AppInstanceContext`](#appinstancecontext)\<`FacetClass`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `loader`  | \| `Readonly`\<\{ `get`: (`id`, `configure`) => `Readonly`\<\{ `getDurableObjectClass`: (`exportName`) => `FacetClass`; \}\>; \}\> \| `undefined`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `ports`   | `Pick`\<`Readonly`\<\{ `owner`: `WatchdogSqliteOwner`; `now`: () => `number`; `source`: () => `Effect`\< \| `Readonly`\<\{ `instance`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: ...; `id`: ...; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; `stateSchema`: ... \| ...; `desiredStatus`: ... \| ... \| ...; `status`: ... \| ... \| ... \| ...; \}; `storeGeneration`: `string`; \}\> \| `null`, `Error`\>; `clone`: () => `Effect`\<`void`, `Error`\>; `purge`: () => `Effect`\<`void`, `Error`\>; `wake`: (`at`) => `Effect`\<`void`, `Error`\>; \}\>, `"source"` \| `"wake"`\> & `Readonly`\<\{ `limits?`: () => [`GuestLimits`](#guestlimits); `resolve`: (`releaseId`) => `Effect`\<[`AppTestCopyBackend`](#apptestcopybackend), `Error`\>; \}\> |
+| `limits?` | `Partial`\<`Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+#### Returns
+
+| Name        | Type                                                                                                                                                                                                                                                                                                                                                                                                                       | Default value    | Description                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------ |
+| `open()`    | (`authority`, `requestId`) => `Effect`\<\{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; `copyId`: `string`; `expiresAt`: `number`; \}, `Error` \| [`AppInstanceError`](index.md#appinstanceerror), `never`\>  | -                | Clone current App data once under the retained request and fixed deadline.     |
+| `inspect()` | (`authority`) => `Effect`\< \| \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; `copyId`: `string`; `expiresAt`: `number`; \} \| `null`, `Error` \| [`AppInstanceError`](index.md#appinstanceerror), `never`\> | -                | Observe the sibling, retiring expired or unavailable source selections.        |
+| `discard()` | (`authority`, `copyId`) => `Effect`\<`boolean`, `Error`, `never`\>                                                                                                                                                                                                                                                                                                                                                         | `copies.discard` | Discard only this resource, retaining its latest request receipt.              |
+| `expire()`  | () => `Effect`\<`void`, `Error`, `never`\>                                                                                                                                                                                                                                                                                                                                                                                 | `copies.expire`  | Shared native alarm cleanup; incomplete phases need no source service.         |
+| `revoke()`  | () => `Effect`\<`void`, `Error`, `never`\>                                                                                                                                                                                                                                                                                                                                                                                 | `copies.revoke`  | Retire the sibling when its owning installation loses authority.               |
+| `fetch()`   | (`authority`, `copyId`, `request`) => `Effect`\<`Response`, `Error` \| [`AppInstanceError`](index.md#appinstanceerror), `never`\>                                                                                                                                                                                                                                                                                          | -                | Run ordinary backend HTTP with bounded bodies and no live bindings.            |
+| `call()`    | (`authority`, `copyId`, `method`, `input`, `caller`) => `Effect`\< \| \{ `kind`: `"ok"`; `value`: `JSONType`; \} \| \{ `kind`: `"refused"`; `code`: `"invalid"` \| `"unavailable"` \| `"conflict"` \| `"forbidden"` \| `"not_found"`; `message`: `string`; \}, `Error` \| [`AppInstanceError`](index.md#appinstanceerror), `never`\>                                                                                       | -                | Use the ordinary typed facade and verified method codecs, without live grants. |
 
 ---
 

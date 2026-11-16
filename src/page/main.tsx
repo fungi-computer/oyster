@@ -45,11 +45,10 @@ import {
   connectOysterApp,
   mountOysterPage,
   oysterAppCapabilities,
-  oysterAppConfigSchema,
   oysterShellHandles,
   readOysterPageConfig,
-  type OysterAppConfig,
 } from "./mount.js";
+import { oysterAppConfigSchema, type OysterAppConfig } from "../page-config.js";
 import * as S from "effect/Schema";
 
 const launchSchema = S.Struct({

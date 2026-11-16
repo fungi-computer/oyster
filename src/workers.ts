@@ -4,7 +4,10 @@ import type {
   ApprovalAnswerInput,
   AutoApproveInput,
 } from "@fungi.computer/approvals";
-import type { HostActor } from "@fungi.computer/puffball/app";
+import type {
+  HostActor,
+  AppMethodCallContext,
+} from "@fungi.computer/puffball/app";
 import { approvalCapability } from "./approval-capability.js";
 import { createInstallationStoreGeneration } from "./installation-store-generation.js";
 import {
@@ -114,6 +117,7 @@ import {
 } from "./index.js";
 import {
   createCloudflareAppInstance,
+  createCloudflareAppTestCopies,
   r2ArtifactStore,
   createCloudflareInvocationGate,
   edgeVerifiedObjectCache,
@@ -125,6 +129,7 @@ import {
   type FrameBindingMethod,
   type FrameBindingProps,
 } from "./cloudflare.js";
+import type { AppTestCopy, AppTestCopyAuthority } from "./app-test-copies.js";
 import {
   invocationFactsSchema,
   assertBackgroundBinding,
@@ -1040,6 +1045,21 @@ export class OysterBinding extends oysterBindingEntrypoint(oysterBindings) {}
 
 /** The Instance surface a host reaches, in-process or over its RPC stub. */
 type InstanceTarget = Readonly<{
+  openTestCopy(
+    ...args: Parameters<OysterInstance["openTestCopy"]>
+  ): Promise<InstanceResult<AppTestCopy>>;
+  inspectTestCopy(
+    ...args: Parameters<OysterInstance["inspectTestCopy"]>
+  ): Promise<InstanceResult<AppTestCopy | null>>;
+  discardTestCopy(
+    ...args: Parameters<OysterInstance["discardTestCopy"]>
+  ): Promise<InstanceResult<boolean>>;
+  testCopyBackend(
+    ...args: Parameters<OysterInstance["testCopyBackend"]>
+  ): Promise<Response>;
+  callTestCopy(
+    ...args: Parameters<OysterInstance["callTestCopy"]>
+  ): Promise<InstanceResult<unknown>>;
   prepare(
     ...args: Parameters<OysterInstance["prepare"]>
   ): Promise<
@@ -1072,6 +1092,29 @@ function instanceHandle(
 ): InstanceHandle {
   const { tenantId, origin } = scope;
   return {
+    testCopies: {
+      open: (authority, requestId) =>
+        target.openTestCopy(authority, requestId, tenantId),
+      inspect: (authority) => target.inspectTestCopy(authority, tenantId),
+      discard: (authority, copyId) =>
+        target.discardTestCopy(authority, copyId, tenantId),
+      fetch: (authority, copyId, request) =>
+        target.testCopyBackend(authority, copyId, request, budget, tenantId),
+      call: async (authority, copyId, name, input, caller) => {
+        const reply = await target.callTestCopy(
+          authority,
+          copyId,
+          name,
+          input,
+          caller,
+          budget,
+          tenantId,
+        );
+        return reply.ok
+          ? { ok: true, value: appMethodReplySchema.parse(reply.value) }
+          : reply;
+      },
+    },
     prepare: (state, release) =>
       target.prepare(state, release, budget, { tenantId, origin }),
     apply: (state, release) =>
@@ -1132,6 +1175,9 @@ export class OysterInstance<
   private runtime: AppInstance<OysterInvocationHost>;
   private limits = guestLimits();
   private readonly frames: InvocationGate<OysterInvocationHost>;
+  private readonly testCopies: ReturnType<
+    typeof createCloudflareAppTestCopies<DurableObjectClass>
+  >;
   /** Content-addressed backends are verified once per Instance, not per call. */
   private readonly backends: ReturnType<typeof backendCache>;
   private readonly gitJournal: Promise<
@@ -1158,6 +1204,54 @@ export class OysterInstance<
     this.frames = createCloudflareInvocationGate(ctx, (frame) =>
       this.closeBackground(frame),
     );
+    this.testCopies = createCloudflareAppTestCopies(ctx, env.LOADER, {
+      limits: () => this.limits,
+      source: () =>
+        Effect.tryPromise({
+          try: async () => {
+            const instance = await Effect.runPromise(this.runtime.inspect());
+            if (instance?.owner.id !== this.installationId()) return null;
+            const store = registryInstallations(env, this.scope());
+            const installation = await store.get(instance.owner.id);
+            if (
+              !isCommittedInstallation(
+                installation,
+                { ...instance, status: "enabled" },
+                this.release(instance.releaseId),
+              )
+            )
+              return null;
+            return { instance, storeGeneration: await store.generation() };
+          },
+          catch: (cause) =>
+            cause instanceof Error
+              ? cause
+              : new Error("Copy source unavailable"),
+        }),
+      resolve: (releaseId) =>
+        Effect.tryPromise({
+          try: async () => {
+            const release = this.release(releaseId);
+            const backend = await this.backends(release);
+            if (backend === null) throw new Error("Release has no backend");
+            return {
+              release,
+              ...backend,
+              api: backend.declaration?.api ?? null,
+            };
+          },
+          catch: (cause) =>
+            cause instanceof Error
+              ? cause
+              : new Error("Copy Release unavailable"),
+        }),
+      wake: (at) =>
+        Effect.tryPromise({
+          try: () => this.scheduleWake(at),
+          catch: (cause) =>
+            cause instanceof Error ? cause : new Error("Copy wake unavailable"),
+        }),
+    });
     // Local delivery avoids calling this Instance's own RPC stub from its alarm.
     const instances = {
       get: (instanceId: string) => this.localInstance(instanceId),
@@ -1198,14 +1292,89 @@ export class OysterInstance<
             receipt: { lane: wake.lane, epoch: wake.epoch },
           };
         },
-        scheduleWake: (at) =>
-          ctx.storage.transaction(async (transaction) => {
-            const current = await transaction.getAlarm();
-            if (current === null || at < current)
-              await transaction.setAlarm(at);
-          }),
+        scheduleWake: (at) => this.scheduleWake(at),
       }),
     );
+  }
+  /** Every wake owner shares the native alarm; none may postpone another. */
+  private scheduleWake(at: number): Promise<void> {
+    return this.ctx.storage.transaction(async (transaction) => {
+      const current = await transaction.getAlarm();
+      if (current === null || at < current) await transaction.setAlarm(at);
+    });
+  }
+  /** Open only under the existing Instance serialization and pinned tenant. */
+  openTestCopy(
+    authority: AppTestCopyAuthority,
+    requestId: string,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<InstanceResult<AppTestCopy>> {
+    this.requireTenant(tenantId);
+    return this.frames.exclusive(() =>
+      result(this.testCopies.open(authority, requestId)),
+    );
+  }
+  /** Observation rechecks both applied selection and current registry incarnation. */
+  inspectTestCopy(
+    authority: AppTestCopyAuthority,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<InstanceResult<AppTestCopy | null>> {
+    this.requireTenant(tenantId);
+    return this.frames.exclusive(() =>
+      result(this.testCopies.inspect(authority)),
+    );
+  }
+  /** A delayed discard cannot target a later sibling. */
+  discardTestCopy(
+    authority: AppTestCopyAuthority,
+    copyId: string,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<InstanceResult<boolean>> {
+    this.requireTenant(tenantId);
+    return this.frames.exclusive(() =>
+      result(this.testCopies.discard(authority, copyId)),
+    );
+  }
+  /** Uses the ordinary invocation facade, without live bindings or host context. */
+  async testCopyBackend(
+    authority: AppTestCopyAuthority,
+    copyId: string,
+    request: Request,
+    limits?: GuestLimits,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<Response> {
+    this.requireTenant(tenantId);
+    try {
+      return await this.frames.exclusive(() => {
+        this.runtimeFor(limits);
+        return Effect.runPromise(
+          this.testCopies.fetch(authority, copyId, request),
+        );
+      });
+    } catch (cause) {
+      return Response.json(
+        { error: cause instanceof AppInstanceError ? cause.code : "failed" },
+        { status: cause instanceof AppInstanceError ? 403 : 502 },
+      );
+    }
+  }
+  /** Declared methods share copy isolation, never a live invocation frame or binding env. */
+  callTestCopy(
+    authority: AppTestCopyAuthority,
+    copyId: string,
+    name: string,
+    input: Schema.Json,
+    caller: AppMethodCallContext,
+    limits?: GuestLimits,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<InstanceResult<unknown>> {
+    this.requireTenant(tenantId);
+    return this.frames.exclusive(() => {
+      this.runtimeFor(limits);
+      return result(
+        this.testCopies.call(authority, copyId, name, input, caller),
+      );
+    });
   }
   /** The deployable root's host for one pinned tenant; this plain root is the single owner key. */
   protected hostFor(scope: TenantScope): Promise<OysterHost> {
@@ -1452,7 +1621,13 @@ export class OysterInstance<
   }
   /** Carrier owns retries, dead letters and retained delivery receipts. */
   async alarm(): Promise<void> {
-    await (await this.gitJournal).alarm();
+    // Neither duty may mask the other; the first failure still surfaces.
+    const settled = await Promise.allSettled([
+      this.gitJournal.then((journal) => journal.alarm()),
+      Effect.runPromise(this.testCopies.expire()),
+    ]);
+    const failed = settled.find((outcome) => outcome.status === "rejected");
+    if (failed !== undefined) throw failed.reason;
   }
   /** Installation changes end guest work; a Workflow cancel targets only its run. */
   async revoke(
@@ -1477,6 +1652,7 @@ export class OysterInstance<
       new AppInstanceError("revoked"),
       runId === undefined ? undefined : { runId },
     );
+    if (runId === undefined) await Effect.runPromise(this.testCopies.revoke());
   }
   /** One registry read re-admits a guest binding packet against its frame. */
   private async assertCurrent(
@@ -1711,6 +1887,15 @@ export class OysterInstance<
       async (): Promise<InstanceResult<Instance>> => {
         checkTenant();
         if (!(await committed())) return { ok: false, code: "stale_authority" };
+        try {
+          await Effect.runPromise(this.testCopies.revoke());
+        } catch (cause) {
+          // A stuck test copy must not block the selection that retires it:
+          // it stays closing and the alarm's expiry retries the purge.
+          console.error("Oyster: test copy revoke failed during activation", {
+            causeClass: causeClass(cause),
+          });
+        }
         // These pins attest the committed owner, not successful activation.
         // Persist before boot so a failed first activation can be retried or
         // revoked/deleted without ever claiming an active lifecycle receipt.

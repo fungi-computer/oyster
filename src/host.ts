@@ -1,4 +1,5 @@
 import type { OysterApprovalCall } from "./approval-home.js";
+import type { ZodType } from "zod";
 import type {
   PendingApproval,
   ApprovalApplyResult,
@@ -10,6 +11,7 @@ import {
   InstallationOperationError,
   installationCommandIds,
   installationRequestIdSchema,
+  installationRecoverySelectionSchema,
   installationWaitQuerySchema,
   maxSettlementWaitMs,
   type InstallationOperations,
@@ -21,6 +23,24 @@ import {
   observeInstallation,
   InstallationObservationError,
 } from "./installation-client.js";
+import {
+  installationRecoveryFormSchema,
+  appTestCopyDiscardFormSchema,
+  installationRecoveryPage,
+} from "./installation-recovery-page.js";
+import { sameOriginReadRequest, sameOriginRequest } from "./request-origin.js";
+import {
+  appTestCopySchema,
+  type AppTestCopy,
+  type AppTestCopyAuthority,
+} from "./app-test-copies.js";
+import { appTestCopyPage } from "./app-test-copy-page.js";
+export {
+  appTestCopySchema,
+  appTestCopyAuthoritySchema,
+  type AppTestCopy,
+  type AppTestCopyAuthority,
+} from "./app-test-copies.js";
 
 import {
   instanceRefusalBody,
@@ -107,6 +127,7 @@ import {
   routes,
   serveCapability,
   serveHost,
+  type OwnerPrincipal,
   type ResponseHeaders,
   type ServedTable,
   type RouteDeclaration,
@@ -166,6 +187,7 @@ import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
 import { hostPage, hostPageAsset, type HostPageState } from "./host-page.js";
 import { parseAccept } from "hono/utils/accept";
 import { parseArtifactRef, type AppApi } from "@fungi.computer/puffball";
+import type { AppMethodCallContext } from "@fungi.computer/puffball/app";
 import { isBuildJobLogRef } from "./build/job-log.js";
 
 export {
@@ -258,6 +280,37 @@ export type InstanceResult<T> =
 
 /** One running App Instance, wherever the host runs it. */
 export type InstanceHandle = Readonly<{
+  /** Optional native App-only siblings; absence is an honest unavailable host. */
+  testCopies?: Readonly<{
+    /** Open a bounded snapshot or answer its retained creation request. */
+    open: (
+      authority: AppTestCopyAuthority,
+      requestId: string,
+    ) => Promise<InstanceResult<AppTestCopy>>;
+    /** Observe the current sibling under fresh source and store fences. */
+    inspect: (
+      authority: AppTestCopyAuthority,
+    ) => Promise<InstanceResult<AppTestCopy | null>>;
+    /** Retire only the named resource; delayed discard cannot target a replacement. */
+    discard: (
+      authority: AppTestCopyAuthority,
+      copyId: string,
+    ) => Promise<InstanceResult<boolean>>;
+    /** Serve the copied App backend without live host bindings. */
+    fetch: (
+      authority: AppTestCopyAuthority,
+      copyId: string,
+      request: Request,
+    ) => Promise<Response>;
+    /** Invoke one admitted declared method with owner attribution, not live grants. */
+    call: (
+      authority: AppTestCopyAuthority,
+      copyId: string,
+      name: string,
+      input: OysterJson,
+      caller: AppMethodCallContext,
+    ) => Promise<InstanceResult<AppMethodReply>>;
+  }>;
   /** Check lifecycle and construction without activating or changing Instance state. */
   prepare: (
     state: OwnerState,
@@ -1366,6 +1419,406 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       return admitted instanceof Response
         ? admitted
         : Response.json(admitted, { status: 202 });
+    },
+  );
+
+  table.get("/recovery", owner("direct"), async (context) => {
+    const operations = host.installations.operations;
+    if (operations === undefined)
+      return noStoreRefusal(503, "Installation commands unavailable");
+    try {
+      let operation: InstallationOperation | null = null;
+      if (context.req.query("requestId") !== undefined) {
+        const key = installationRequestIdSchema.safeParse(
+          context.req.query("requestId"),
+        );
+        const id = installationIdSchema.safeParse(
+          context.req.query("installationId"),
+        );
+        if (!key.success || !id.success)
+          return noStoreRefusal(400, "Invalid rollback identity");
+        operation = await operations.read(key.data, id.data);
+        if (operation === null)
+          return noStoreRefusal(404, "Installation request not found");
+      }
+      const installations = (await host.installations.list()).filter(
+        (installation) => installation.status !== "deleted",
+      );
+      const entries = await Promise.all(
+        installations.map(async (installation) => {
+          const entry: Parameters<typeof installationRecoveryPage>[0][number] =
+            {
+              installation,
+              recovery: await operations.recovery(installation.installationId),
+              copy: null,
+              copyAuthority: null,
+            };
+          if (
+            installation.status !== "enabled" ||
+            installation.instanceId === null
+          )
+            return entry;
+          const copies = host.instances.get(
+            installation.instanceId,
+            limits,
+          ).testCopies;
+          if (copies === undefined) return entry;
+          const authority = {
+            selection: selectionOf(installation),
+            storeGeneration: await host.installations.generation(),
+          };
+          let observed;
+          try {
+            observed = await copies.inspect(authority);
+          } catch (cause) {
+            // Optional copy observation must not take down rollback controls.
+            console.error("Oyster recovery: test copy unavailable", {
+              causeClass: causeClass(cause),
+            });
+            return entry;
+          }
+          return observed.ok
+            ? { ...entry, copy: observed.value, copyAuthority: authority }
+            : entry;
+        }),
+      );
+      const confirm = installationIdSchema.safeParse(
+        context.req.query("confirm"),
+      );
+      return await installationRecoveryPage(
+        entries,
+        operation,
+        confirm.success ? confirm.data : null,
+      );
+    } catch (cause) {
+      if (cause instanceof InstallationOperationError)
+        return installationOperationRefusal(cause);
+      throw cause;
+    }
+  });
+
+  table.post(
+    "/recovery/:installationId/rollback",
+    owner("direct"),
+    async (context, { principal }) => {
+      if (!sameOriginRequest(context.req.raw))
+        return noStoreRefusal(403, "Same origin required");
+      const id = installationIdSchema.safeParse(
+        context.req.param("installationId"),
+      );
+      if (!id.success) return noStoreRefusal(400, "Invalid installation id");
+      let form;
+      try {
+        form = installationRecoveryFormSchema.parse(
+          await context.req.parseBody(),
+        );
+      } catch {
+        return noStoreRefusal(400, "Invalid rollback request");
+      }
+      const operations = host.installations.operations;
+      if (operations === undefined)
+        return noStoreRefusal(503, "Installation commands unavailable");
+      try {
+        await operations.admit({
+          ...form,
+          installationId: id.data,
+          actor: principal.actor,
+          intent: "rollback",
+          origin: "owner-direct",
+        });
+        const query = new URLSearchParams({
+          installationId: id.data,
+          requestId: form.requestId,
+        });
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: `/recovery?${query.toString()}`,
+            "Cache-Control": "no-store",
+          },
+        });
+      } catch (cause) {
+        if (cause instanceof InstallationOperationError)
+          return installationOperationRefusal(cause);
+        throw cause;
+      }
+    },
+    {
+      middleware: [
+        bodyLimit({
+          maxSize: 64 * 1024,
+          onError: () => noStoreRefusal(413, "Recovery request too large"),
+        }),
+      ],
+    },
+  );
+
+  const copyOwner = async (
+    context: Context<OysterEnv>,
+    principal: OwnerPrincipal,
+  ) => {
+    // Provenance first: no installation or copy state answers a foreign page.
+    if (
+      context.req.method === "GET"
+        ? !sameOriginReadRequest(context.req.raw)
+        : !sameOriginRequest(context.req.raw)
+    )
+      return noStoreRefusal(403, "Same origin required");
+    const id = installationIdSchema.safeParse(
+      context.req.param("installationId"),
+    );
+    if (!id.success) return noStoreRefusal(400, "Invalid installation id");
+    const installation = await host.installations.get(id.data);
+    if (installation?.status !== "enabled" || installation.instanceId === null)
+      return noStoreRefusal(404, "Enabled App Instance required");
+    const copies = host.instances.get(
+      installation.instanceId,
+      limits,
+    ).testCopies;
+    if (copies === undefined)
+      return noStoreRefusal(503, "Native test copies unavailable");
+    return {
+      principal,
+      installation,
+      copies,
+      authority: {
+        selection: selectionOf(installation),
+        storeGeneration: await host.installations.generation(),
+      },
+    };
+  };
+  const copyForm = async <T>(
+    context: Context<OysterEnv>,
+    schema: ZodType<T>,
+  ) => {
+    try {
+      return schema.parse(await context.req.parseBody());
+    } catch {
+      return noStoreRefusal(400, "Invalid test copy request");
+    }
+  };
+  const copyBodyLimit = {
+    middleware: [
+      bodyLimit({
+        maxSize: 64 * 1024,
+        onError: () => noStoreRefusal(413, "Recovery request too large"),
+      }),
+    ],
+  };
+  table.post(
+    "/recovery/:installationId/test-copy",
+    owner("direct"),
+    async (context, { principal }) => {
+      const copyOwned = await copyOwner(context, principal);
+      if (copyOwned instanceof Response) return copyOwned;
+      const form = await copyForm(context, installationRecoveryFormSchema);
+      if (form instanceof Response) return form;
+      if (
+        form.authorityVersion !==
+          copyOwned.authority.selection.authorityVersion ||
+        form.storeGeneration !== copyOwned.authority.storeGeneration
+      )
+        return noStoreRefusal(409, "Stale copy authority");
+      const opened = await copyOwned.copies.open(
+        copyOwned.authority,
+        form.requestId,
+      );
+      if (!opened.ok) return instanceRefusal(opened.code, opened.causeClass);
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: `/recovery/${copyOwned.installation.installationId}/test-copy/${opened.value.copyId}`,
+          "Cache-Control": "no-store",
+        },
+      });
+    },
+    copyBodyLimit,
+  );
+  table.post(
+    "/recovery/:installationId/test-copy/:copyId/discard",
+    owner("direct"),
+    async (context, { principal }) => {
+      const copyOwned = await copyOwner(context, principal);
+      if (copyOwned instanceof Response) return copyOwned;
+      const form = await copyForm(context, appTestCopyDiscardFormSchema);
+      if (form instanceof Response) return form;
+      if (
+        form.authorityVersion !==
+          copyOwned.authority.selection.authorityVersion ||
+        form.storeGeneration !== copyOwned.authority.storeGeneration ||
+        form.copyId !== context.req.param("copyId")
+      )
+        return noStoreRefusal(409, "Stale copy authority");
+      const discarded = await copyOwned.copies.discard(
+        copyOwned.authority,
+        form.copyId,
+      );
+      if (!discarded.ok)
+        return instanceRefusal(discarded.code, discarded.causeClass);
+      return new Response(null, {
+        status: 303,
+        headers: { Location: "/recovery", "Cache-Control": "no-store" },
+      });
+    },
+    copyBodyLimit,
+  );
+  table.get(
+    "/recovery/:installationId/test-copy/:copyId",
+    owner("direct"),
+    async (context, { principal }) => {
+      const copyOwned = await copyOwner(context, principal);
+      if (copyOwned instanceof Response) return copyOwned;
+      const observed = await copyOwned.copies.inspect(copyOwned.authority);
+      if (!observed.ok)
+        return instanceRefusal(observed.code, observed.causeClass);
+      if (observed.value?.copyId !== context.req.param("copyId"))
+        return noStoreRefusal(404, "Test copy expired or discarded");
+      return appTestCopyPage(
+        copyOwned.installation.installationId,
+        observed.value,
+        (await releaseOf(copyOwned.installation.release)).declaration,
+        (await assets()).page.path,
+      );
+    },
+  );
+  table.put(
+    "/recovery/:installationId/test-copy/:copyId/backend",
+    owner("direct"),
+    async (context, { principal }) => {
+      const copyOwned = await copyOwner(context, principal);
+      if (copyOwned instanceof Response) return copyOwned;
+      const copyId = appTestCopySchema.shape.copyId.safeParse(
+        context.req.param("copyId"),
+      );
+      if (!copyId.success) return noStoreRefusal(400, "Invalid copy id");
+      const request = new Request("https://app.internal/", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "text/plain",
+          [appBackendActorHeader]: oysterPrincipalId(copyOwned.principal),
+        },
+        body: await context.req.text(),
+      });
+      return copyOwned.copies.fetch(copyOwned.authority, copyId.data, request);
+    },
+    {
+      middleware: [
+        bodyLimit({
+          maxSize: maxBackendBody,
+          onError: () => noStoreRefusal(413, "Request too large"),
+        }),
+      ],
+    },
+  );
+  table.post(
+    "/recovery/:installationId/test-copy/:copyId/methods/:name",
+    owner("direct"),
+    async (context, { principal }) => {
+      const copyOwned = await copyOwner(context, principal);
+      if (copyOwned instanceof Response) return copyOwned;
+      const copyId = appTestCopySchema.shape.copyId.safeParse(
+        context.req.param("copyId"),
+      );
+      if (!copyId.success) return noStoreRefusal(400, "Invalid copy id");
+      const release = await releaseOf(copyOwned.installation.release);
+      if (release.api === null)
+        return noStoreRefusal(404, "This App declares no methods");
+      let input: OysterJson;
+      try {
+        input = await methodInput(context.req.raw);
+      } catch (error) {
+        return error instanceof MethodBodyTooLarge
+          ? noStoreRefusal(413, "Request too large")
+          : noStoreRefusal(400, "Method input must be JSON");
+      }
+      const name = context.req.param("name");
+      const admitted = admits(
+        await gateFacts(copyOwned.installation, release, copyOwned.principal),
+        { kind: "method", name, input, via: "ui" },
+      );
+      if (admitted.kind === "refused")
+        return noStoreRefusal(
+          admitted.code === "invalid_input" ? 400 : 403,
+          admitted.code,
+        );
+      const result = await copyOwned.copies.call(
+        copyOwned.authority,
+        copyId.data,
+        name,
+        input,
+        invocationCallerContext(copyOwned.principal, null),
+      );
+      return result.ok
+        ? methodResponse(result.value)
+        : instanceRefusal(result.code, result.causeClass);
+    },
+  );
+
+  table.get(
+    "/api/installations/:installationId/recovery",
+    owner("direct"),
+    async (context) => {
+      if (!sameOriginReadRequest(context.req.raw))
+        return refusal(403, "Cross-origin recovery refused");
+      const id = installationIdSchema.safeParse(
+        context.req.param("installationId"),
+      );
+      if (!id.success) return refusal(400, "Invalid installation id");
+      const operations = host.installations.operations;
+      if (operations === undefined)
+        return refusal(503, "Installation commands unavailable");
+      try {
+        return Response.json(await operations.recovery(id.data));
+      } catch (cause) {
+        if (cause instanceof InstallationOperationError)
+          return installationOperationRefusal(cause);
+        throw cause;
+      }
+    },
+  );
+
+  table.post(
+    "/api/installations/:installationId/rollback",
+    owner("direct"),
+    async (context, { principal }) => {
+      if (!sameOriginReadRequest(context.req.raw))
+        return refusal(403, "Cross-origin recovery refused");
+      const id = installationIdSchema.safeParse(
+        context.req.param("installationId"),
+      );
+      const key = installationRequestIdSchema.safeParse(
+        context.req.header("Idempotency-Key"),
+      );
+      if (!id.success || !key.success)
+        return refusal(400, "Invalid rollback identity");
+      let selection;
+      try {
+        selection = installationRecoverySelectionSchema.parse(
+          await context.req.json(),
+        );
+      } catch {
+        return refusal(400, "Invalid rollback request");
+      }
+      const operations = host.installations.operations;
+      if (operations === undefined)
+        return refusal(503, "Installation commands unavailable");
+      try {
+        return Response.json(
+          await operations.admit({
+            ...selection,
+            requestId: key.data,
+            installationId: id.data,
+            actor: principal.actor,
+            intent: "rollback",
+            origin: "owner-direct",
+          }),
+          { status: 202 },
+        );
+      } catch (cause) {
+        if (cause instanceof InstallationOperationError)
+          return installationOperationRefusal(cause);
+        throw cause;
+      }
     },
   );
 

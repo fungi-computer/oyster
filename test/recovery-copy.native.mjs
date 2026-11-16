@@ -110,6 +110,37 @@ try {
     await delay(500);
   }
   assert.ok(ready, "The real native worker must start");
+  const interactive = await globalThis.fetch(`${origin}/probe?interactive=1`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  const interactiveRaw = await interactive.text();
+  await writeFile(`${work}/interactive-response.json`, interactiveRaw);
+  assert.equal(interactive.status, 200, interactiveRaw);
+  assert.deepEqual(JSON.parse(interactiveRaw), {
+    initial: {
+      value: "S1",
+      supervisorRows: 0,
+      bindings: [],
+      outboundDenied: true,
+    },
+    changed: {
+      value: "S2",
+      supervisorRows: 0,
+      bindings: [],
+      outboundDenied: true,
+    },
+    source: "S1",
+    afterDiscard: null,
+    reopenedValue: null,
+    emittedBudgets: [
+      { cpuMs: 1000, subRequests: 50 },
+      { cpuMs: 250, subRequests: 10 },
+    ],
+    supervisor: [{ value: "selected" }],
+  });
+  console.log(
+    "Native interactive copy PASS: existing invocation facade, copied reads/writes, source/supervisor isolation, no bindings/outbound, discard and empty reopen",
+  );
   for (const { fail, syncFailure, name } of [
     { fail: false, syncFailure: false, name: "copy" },
     { fail: true, syncFailure: true, name: "sync-refusal" },
@@ -144,6 +175,58 @@ try {
   );
   console.log(
     "Native construction-copy PASS: seed, isolation, denial, refusal, empty reopen and overlapping probes",
+  );
+  // The real, unchanged five-minute policy is part of this native qualification.
+  // No test clock, shortened lifetime or direct call to alarm()/expire().
+  const before = Date.now();
+  const alarmStart = await globalThis.fetch(`${origin}/probe?alarm=start`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  assert.equal(alarmStart.status, 200, await alarmStart.clone().text());
+  const alarm = z
+    .strictObject({
+      instanceId: z.string().min(1),
+      expiresAt: z.number().int(),
+      scheduledAt: z.number().int(),
+      initial: z.literal("S1"),
+    })
+    .parse(await alarmStart.json());
+  assert.ok(alarm.expiresAt >= before + 300_000);
+  assert.ok(alarm.expiresAt <= Date.now() + 300_000);
+  assert.equal(alarm.scheduledAt, alarm.expiresAt);
+  console.log(
+    `Waiting for actual native copy expiry at ${new Date(alarm.expiresAt).toISOString()}`,
+  );
+  await delay(Math.max(0, alarm.expiresAt - Date.now()));
+  const deadline = Date.now() + 20_000;
+  const statusUrl = new URL("/probe", origin);
+  statusUrl.searchParams.set("alarm", "status");
+  statusUrl.searchParams.set("instance", alarm.instanceId);
+  let receipt = null;
+  while (Date.now() < deadline) {
+    const status = await globalThis.fetch(statusUrl, {
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    });
+    assert.equal(status.status, 200, await status.clone().text());
+    receipt = await status.json();
+    if (receipt !== null) break;
+    await delay(50);
+  }
+  assert.deepEqual(
+    z
+      .strictObject({
+        copyValue: z.null(),
+        sourceValue: z.literal("S1"),
+      })
+      .parse(receipt),
+    { copyValue: null, sourceValue: "S1" },
+  );
+  await writeFile(
+    `${work}/alarm-response.json`,
+    JSON.stringify({ alarm, receipt }),
+  );
+  console.log(
+    "Native alarm copy PASS: actual five-minute delivery, reconstructed owner cleanup, unchanged live data",
   );
   console.log(`Disposable evidence: ${work}`);
 } finally {

@@ -16,6 +16,7 @@ import type { Installation } from "../src/apps/installation.js";
 import { installationSchema } from "../src/apps/installation.js";
 import { defaultTenant } from "../src/tenant.js";
 import { declaration, descriptors, release } from "./apps-fixture.js";
+import { parseRelease } from "../src/release.js";
 
 const scope = { tenantId: defaultTenant, origin: "https://oyster.test" };
 const admission = {
@@ -104,6 +105,181 @@ const commandCount = (database: DatabaseSync) =>
         .prepare("SELECT count(*) AS count FROM installation_commands")
         .get(),
     ).count;
+
+it("keeps the prior activation after receipt expiry and owner reopening, without crossing scope or store incarnation", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 0, 1));
+  const state = fixture(async (command, port) => {
+    const proposed = await approvedInstallation({
+      release: command.admission.release,
+      declaration: emptyAppDeclaration,
+      installationId: command.installationId,
+      instanceId: command.instanceId,
+    });
+    const installation = {
+      ...proposed,
+      authority: {
+        ...proposed.authority,
+        authorityVersion:
+          (command.baseline?.authority.authorityVersion ?? 0) + 1,
+      },
+    };
+    await port.plan(command.admission.requestId, installation, true);
+    await port.commit(command.admission.requestId, passedUiCheck);
+    return {
+      state: "succeeded",
+      installation,
+      creation: command.creation,
+      uiCheck: passedUiCheck,
+    };
+  });
+  try {
+    const { runtime, port } = await state.make();
+    const second = parseRelease({ ...release, releaseId: "rel_second" });
+    for (const [requestId, selected] of [
+      ["recovery-first", release],
+      ["recovery-second", second],
+      ["recovery-third", parseRelease({ ...release, releaseId: "rel_third" })],
+    ] as const) {
+      await port.admit({ ...admission, requestId, release: selected });
+      await runtime.tick();
+    }
+    clock.mockReturnValue(Date.UTC(2026, 3, 2));
+    await runtime.tick();
+    expect(await port.read("recovery-second", "notes")).toBeNull();
+    const reopened = await state.make();
+    expect(await reopened.port.recovery("notes")).toEqual({
+      release: second,
+      uiCheck: passedUiCheck,
+      authorityVersion: 3,
+      storeGeneration: "fixture-generation",
+    });
+    const otherOrigin = installationOperationsPort(
+      (request) => reopened.runtime.dispatch(request),
+      { ...scope, origin: "https://other.test" },
+    );
+    expect(await otherOrigin.recovery("notes")).toBeNull();
+    state.setGeneration("replaced-store");
+    expect(await reopened.port.recovery("notes")).toBeNull();
+  } finally {
+    clock.mockRestore();
+    state.database.close();
+  }
+});
+
+it("opens an owner stored before recovery records existed, with no rollback target until the next confirmed activation", async () => {
+  const activate: Executor = async (command, port) => {
+    const proposed = await approvedInstallation({
+      release: command.admission.release,
+      declaration: emptyAppDeclaration,
+      installationId: command.installationId,
+      instanceId: command.instanceId,
+    });
+    const installation = {
+      ...proposed,
+      authority: {
+        ...proposed.authority,
+        authorityVersion:
+          (command.baseline?.authority.authorityVersion ?? 0) + 1,
+      },
+    };
+    await port.plan(command.admission.requestId, installation, true);
+    await port.commit(command.admission.requestId, passedUiCheck);
+    return {
+      state: "succeeded",
+      installation,
+      creation: command.creation,
+      uiCheck: passedUiCheck,
+    };
+  };
+  const state = fixture(activate);
+  try {
+    const before = await state.make();
+    await before.port.admit({ ...admission, requestId: "stored-before" });
+    await before.runtime.tick();
+    // The prior release's owner has this journal and no recovery table.
+    state.database.exec("DROP TABLE installation_recovery");
+    const reopened = await state.make();
+    expect(await reopened.port.read("stored-before", "notes")).toMatchObject({
+      state: "succeeded",
+    });
+    expect(await reopened.port.recovery("notes")).toBeNull();
+    const second = parseRelease({ ...release, releaseId: "rel_upgraded" });
+    await reopened.port.admit({
+      ...admission,
+      requestId: "after-upgrade",
+      release: second,
+    });
+    await reopened.runtime.tick();
+    expect(await reopened.port.recovery("notes")).toBeNull();
+    const third = parseRelease({ ...release, releaseId: "rel_twice" });
+    await reopened.port.admit({
+      ...admission,
+      requestId: "after-upgrade-two",
+      release: third,
+    });
+    await reopened.runtime.tick();
+    expect(await reopened.port.recovery("notes")).toMatchObject({
+      release: second,
+    });
+  } finally {
+    state.database.close();
+  }
+});
+
+it("drops an installation's recovery record when the installation is deleted", async () => {
+  const state = fixture(async (command, port) => {
+    const proposed = await approvedInstallation({
+      release: command.admission.release,
+      declaration: emptyAppDeclaration,
+      installationId: command.installationId,
+      instanceId: command.instanceId,
+    });
+    const installation = {
+      ...proposed,
+      status:
+        command.admission.requestId === "delete-it"
+          ? ("deleted" as const)
+          : proposed.status,
+      authority: {
+        ...proposed.authority,
+        authorityVersion:
+          (command.baseline?.authority.authorityVersion ?? 0) + 1,
+      },
+    };
+    await port.plan(command.admission.requestId, installation, true);
+    await port.commit(command.admission.requestId, passedUiCheck);
+    return {
+      state: "succeeded",
+      installation,
+      creation: command.creation,
+      uiCheck: passedUiCheck,
+    };
+  });
+  try {
+    const { runtime, port } = await state.make();
+    for (const requestId of ["keep-1", "keep-2"]) {
+      await port.admit({
+        ...admission,
+        requestId,
+        release: parseRelease({
+          ...release,
+          releaseId: `rel_${requestId.replace("-", "")}`,
+        }),
+      });
+      await runtime.tick();
+    }
+    expect(await port.recovery("notes")).not.toBeNull();
+    await port.admit({ ...admission, requestId: "delete-it" });
+    await runtime.tick();
+    expect(
+      state.database
+        .prepare("SELECT count(*) AS count FROM installation_recovery")
+        .get(),
+    ).toEqual({ count: 0 });
+  } finally {
+    state.database.close();
+  }
+});
 
 it("deletes settled journal entries at 90 days but always retains the latest settled entry per installation", async () => {
   const settledAt = Date.UTC(2026, 0, 1);

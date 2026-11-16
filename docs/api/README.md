@@ -148,9 +148,14 @@ installed Apps are cleared once: Oyster Home asks you to reinstall them with
 `npx @fungi.computer/oyster install-apps`, which restores the Apps and their App
 settings, while each App's own backend database starts empty. Agents, Sessions,
 files and keys are kept. From 0.2 or earlier, Oyster answers every request with
-`409` and `store_from_older_oyster`; deploy under new resource names or tear the
-old one down first. The changelog entry for each release says when it resets
-data.
+`409` and `store_from_older_oyster` and leaves the store untouched. Do not tear
+the old Worker down or deploy over it: verify its release first (0.0.1 needs a
+release-matched bridge; 0.1 and 0.2 are archived through their own Worker before
+a fresh setup under new names). A bridge at the old Worker's name accepts only
+the owner's export request and answers everything else `503 oyster_archiving`.
+The archive workflow is still being built and its registry SQL export is not a
+certified archive, so keep the old Worker and its stores until you have one. The
+changelog entry for each release says when it resets data.
 
 ### Run on celld
 

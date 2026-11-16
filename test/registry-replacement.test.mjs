@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import {
   applyInstallationCommand,
@@ -20,6 +21,7 @@ import { test } from "node:test";
 import { URL, fileURLToPath } from "node:url";
 import { TextEncoder } from "node:util";
 import process from "node:process";
+import console from "node:console";
 import { buildAppApi } from "@fungi.computer/agar/backend-declaration";
 import { appBackend as notesBackend } from "../examples/notes-app/backend/methods.ts";
 import { installApps } from "../dist/standalone/install-apps-cli.js";
@@ -2155,6 +2157,113 @@ for (const schedule of [
     assert.deepEqual(await loser, { ok: false, code: "stale_authority" });
     assert.deepEqual(registry.get(initial.installationId), winner);
     assert.deepEqual(active(), selected);
+  });
+}
+
+test("a test copy that cannot be revoked does not block the selection that retires it", async (t) => {
+  const source = await computerHost(
+    { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
+    null,
+  );
+  const initial = await source.installations.get("context-probe");
+  const { registry, env } = fixture(t, source.artifacts);
+  const generation = registry.generation();
+  const instance = env.INSTANCES.getByName(initial.instanceId);
+  const tenant = { tenantId: defaultTenant, origin: env.OYSTER_ORIGIN };
+  const state = (record) => ({ ...selectionOf(record), status: record.status });
+  assert.deepEqual(await registry.compareAndPut(initial, 0, generation), {
+    ok: true,
+  });
+  assert.equal(
+    (await instance.apply(state(initial), initial.release, undefined, tenant))
+      .ok,
+    true,
+  );
+  const release = { ...initial.release, releaseId: "rel_target" };
+  const verified = await verifyRelease(source.artifacts, release);
+  const declaration = verified.declaration ?? emptyAppDeclaration;
+  const update = applyInstallationCommand(
+    initial,
+    { kind: "select-release", release, releasePin: "pinned" },
+    {
+      by: { kind: "member", memberId: "fixture" },
+      role: "owner",
+      now: 1001,
+      expectedVersion: initial.authority.authorityVersion,
+      identity: initial,
+      declaration,
+      declaredOperations: await deriveDeclaredOperations(
+        release,
+        declaration,
+        source.capabilities ?? [],
+      ),
+    },
+  );
+  if (Result.isFailure(update)) throw new Error(update.failure.code);
+  const next = update.success.next;
+  assert.deepEqual(
+    await registry.compareAndPut(
+      next,
+      initial.authority.authorityVersion,
+      generation,
+    ),
+    {
+      ok: true,
+    },
+  );
+  instance.testCopies = {
+    ...instance.testCopies,
+    revoke: () => Effect.fail(new Error("purge failed")),
+  };
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    const applied = await instance.apply(
+      state(next),
+      next.release,
+      undefined,
+      tenant,
+    );
+    assert.equal(applied.ok, true);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged.length, 1);
+  assert.match(String(logged[0][0]), /test copy revoke failed/);
+});
+
+for (const failing of ["journal", "expiry"]) {
+  test(`the alarm runs the journal and test-copy expiry independently when ${failing} fails`, async (t) => {
+    const source = await computerHost(
+      { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
+      null,
+    );
+    const initial = await source.installations.get("context-probe");
+    const { env } = fixture(t, source.artifacts);
+    const instance = env.INSTANCES.getByName(initial.instanceId);
+    const ran = [];
+    instance.gitJournal = Promise.resolve({
+      alarm: () => {
+        ran.push("journal");
+        return failing === "journal"
+          ? Promise.reject(new Error("journal failed"))
+          : Promise.resolve();
+      },
+    });
+    instance.testCopies = {
+      ...instance.testCopies,
+      expire: () => {
+        ran.push("expiry");
+        return failing === "expiry"
+          ? Effect.fail(new Error("expiry failed"))
+          : Effect.void;
+      },
+    };
+    await assert.rejects(() => instance.alarm(), {
+      message: `${failing} failed`,
+    });
+    assert.deepEqual([...ran].sort(), ["expiry", "journal"]);
   });
 }
 

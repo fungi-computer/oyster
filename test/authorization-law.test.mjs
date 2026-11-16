@@ -758,6 +758,8 @@ test("every host /api route's owner reach is classified", async () => {
     "GET /api/installations direct-or-app",
     "PUT /api/artifacts/:artifactRef direct-or-app",
     "POST /api/installations direct-or-app",
+    "GET /api/installations/:installationId/recovery direct",
+    "POST /api/installations/:installationId/rollback direct",
     "GET /api/installations/:installationId/status direct",
     "GET /api/installations/:installationId/grants direct",
     "PUT /api/installations/:installationId/grants direct",

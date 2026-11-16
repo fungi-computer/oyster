@@ -92,6 +92,16 @@ Admit the selected Agent through the reporting App's existing write door.
 
 ## Type Aliases
 
+### OysterAppConfig
+
+```ts
+type OysterAppConfig = typeof oysterAppConfigSchema.Type;
+```
+
+Host-authored configuration for the ordinary sandboxed App mount.
+
+---
+
 ### OysterAppOpenRouting
 
 ```ts
@@ -105,16 +115,6 @@ type OysterAppOpenRouting = Readonly<{
 
 Role and App opens, routed by the embedding shell; the App never names a
 surface.
-
----
-
-### OysterAppConfig
-
-```ts
-type OysterAppConfig = typeof oysterAppConfigSchema.Type;
-```
-
-The host-admitted App configuration served by Oyster.
 
 ---
 
@@ -151,74 +151,6 @@ const appSandbox: "allow-scripts allow-modals allow-popups allow-forms" =
 ```
 
 The sandbox every installed App frame runs in, shell-mounted or not.
-
----
-
-### oysterAppConfigSchema
-
-```ts
-const oysterAppConfigSchema: Struct<{
-  workbench: Boolean;
-  shellModuleUrl: NullOr<String>;
-  storage: Boolean;
-  appsOpen: Boolean;
-  computerId: NullOr<String>;
-  authorityVersion: Int;
-  commands: $Array<Codec<Readonly<{
-     id: string;
-     title: string;
-     category: string;
-     description?: string;
-     sigil?: string;
-     projections?: Readonly<{
-        bindings?: ... & ...;
-        agent?: ... & ...;
-        help?: Readonly<...>;
-        menu?: Readonly<...>;
-        palette?: Readonly<...>;
-        slash?: ... & ...;
-     }>;
-   }>, Readonly<{
-     id: string;
-     title: string;
-     category: string;
-     description?: string;
-     sigil?: string;
-     projections?: Readonly<{
-        bindings?: ... & ...;
-        agent?: ... & ...;
-        help?: Readonly<...>;
-        menu?: Readonly<...>;
-        palette?: Readonly<...>;
-        slash?: ... & ...;
-     }>;
-  }>, never, never>>;
-  icon: NullOr<String>;
-  roles: $Array<String>;
-  installationId: String;
-  appId: String;
-  releaseId: String;
-  uiUrl: String;
-  backendUrl: String;
-  methodsUrl: String;
-  capabilities: $Array<Struct<{
-     id: String;
-     version: Number;
-     base: String;
-     methods: $Record<String, Union<readonly [Struct<{
-        kind: Literal<...>;
-        method: Literals<...>;
-        path: String;
-      }>, Struct<{
-        kind: Literals<...>;
-        method: Literals<...>;
-        path: String;
-     }>]>>;
-  }>>;
-}>;
-```
-
-Current server-admitted configuration for one installed App page.
 
 ## Functions
 

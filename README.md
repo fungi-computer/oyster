@@ -283,6 +283,65 @@ the low-level Instance, invocation and git ports. Most of the package's other
 entry points are parts that the standalone host and the Fungi Hub assemble; you
 do not need them to run Oyster.
 
+## Recover an App
+
+Open `/recovery` on your Oyster and sign in as its owner. This host-owned page
+and its forms load no App, Shell or page assets, so they remain usable when the
+selected App or home Shell cannot load. The page shows the current Release and
+the prior confirmed activation, including its recorded UI-check outcome.
+`not_checked` is not a passing UI check.
+
+Rollback becomes available once an App has had a new version confirmed after an
+Oyster upgrade: the first such version records the starting point, and the next
+one gives you a version to return to. Until then the page says there is no
+earlier version.
+
+The installation owner retains its latest two distinct confirmed activations,
+independently of expiring request receipts. Rollback chooses the prior
+activation; if a newer selection never completed, it chooses the latest
+confirmed one. The target must still belong to this App, Instance, host scope
+and store incarnation. The owner selects the Release, not the browser.
+
+**Roll back** submits a fresh, idempotent installation command fenced by the
+displayed authority version and store generation. Admission is not completion:
+the redirected observation reports the retained request state; refresh it to see
+settlement. Normal artifact verification, permissions and Instance schema checks
+still apply. Nothing rolls back automatically.
+
+Rollback preserves the Instance and uses **current App data**. It does not
+restore old data, undo completed external effects or provide a state-schema
+migration. The owner API is `GET /api/installations/:installationId/recovery`
+and `POST /api/installations/:installationId/rollback`; the POST takes only
+`authorityVersion` and `storeGeneration`, with an `Idempotency-Key` header.
+These routes reject App-mediated and cross-origin browser requests.
+
+### Try disposable App data
+
+On a native host with App-facet cloning, **Open test copy** snapshots the
+enabled App's current data into one disposable sibling. It is not another
+Installation or product Instance. Its page uses the selected Release's ordinary
+sandboxed App UI and backend/method transports, without loading the editable
+Shell. Creating and discarding the copy still work when App and Shell assets
+cannot load; interacting with its App UI naturally needs that UI's assets.
+
+The copy has no live bindings, Computer, capabilities or outbound network. Its
+SQLite changes never promote into the live App. It expires after five minutes,
+without renewal on retry, and **Discard test copy** retires it sooner. Selection
+or store changes, installation revocation and deletion also retire it. This is
+not a backup, data restoration, schema migration or reversal of external
+effects. Hosts without the native copy service report it unavailable; rollback
+does not depend on that service.
+
+Owner-direct, same-origin forms use `POST /recovery/:installationId/test-copy`
+and `POST /recovery/:installationId/test-copy/:copyId/discard`, fenced by
+`authorityVersion` and `storeGeneration`. Creation takes a `requestId`; discard
+names the host-minted `copyId`. Those identities are separate: replaying an old
+creation request cannot revive a retired resource or let its delayed discard
+retire a later copy. The latest request receipt is retained, not an unbounded
+request history. The copy page is `GET` at that copy's path; its sibling
+`PUT .../backend` and `POST .../methods/:name` doors retain current owner and
+selection admission. No Release or lifetime is caller-selectable.
+
 ## Limits and errors
 
 An App's backend gets 1,000 ms of CPU and 50 subrequests per call unless the

@@ -119,7 +119,7 @@ export const installationOperationSchema = z.discriminatedUnion("state", [
 export type InstallationOperation = z.output<
   typeof installationOperationSchema
 >;
-const installationAdmissionSchema = z.strictObject({
+const directInstallationAdmissionSchema = z.strictObject({
   requestId: installationRequestIdSchema,
   installationId: installationIdSchema,
   release: releaseCodec,
@@ -128,9 +128,44 @@ const installationAdmissionSchema = z.strictObject({
   // A Workflow may reuse the owner's approval, never grant new authority.
   origin: z.enum(["owner-direct", "workflow"]),
 });
+/** The owner selects the recovery Release; the caller only fences its observation. */
+export const installationRecoverySelectionSchema = z.strictObject({
+  authorityVersion: z.number().int().positive(),
+  storeGeneration: z.string().min(1),
+});
+const rollbackAdmissionSchema = installationRecoverySelectionSchema.extend({
+  requestId: installationRequestIdSchema,
+  installationId: installationIdSchema,
+  actor: hostActorSchema,
+  intent: z.literal("rollback"),
+  origin: z.literal("owner-direct"),
+});
+const installationAdmissionSchema = z.discriminatedUnion("intent", [
+  directInstallationAdmissionSchema,
+  rollbackAdmissionSchema,
+]);
+const resolvedAdmissionSchema = z.discriminatedUnion("intent", [
+  directInstallationAdmissionSchema,
+  rollbackAdmissionSchema.extend({ release: releaseCodec }),
+]);
 export type InstallationAdmission = z.output<
   typeof installationAdmissionSchema
 >;
+const activatedReleaseSchema = z.strictObject({
+  release: releaseCodec,
+  uiCheck: uiBootCheckOutcomeSchema,
+});
+const recoveryRecordSchema = z.strictObject({
+  scope: scopeSchema,
+  generation: z.string().min(1),
+  instanceId: ownerCodec(instanceIdSchema).nullable(),
+  current: activatedReleaseSchema,
+  previous: activatedReleaseSchema.nullable(),
+});
+const installationRecoverySchema = installationRecoverySelectionSchema.extend({
+  release: releaseCodec,
+  uiCheck: uiBootCheckOutcomeSchema,
+});
 const planSchema = z
   .strictObject({
     installation: installationSchema,
@@ -146,7 +181,7 @@ const planSchema = z
   );
 /** Retained intent and exact baseline; recovery never re-reduces a newer row. */
 export const retainedInstallationCommandSchema = z.strictObject({
-  admission: installationAdmissionSchema,
+  admission: resolvedAdmissionSchema,
   scope: scopeSchema,
   installationId: installationIdSchema,
   instanceId: ownerCodec(instanceIdSchema),
@@ -174,13 +209,25 @@ const storedCommandSchema = z.union([
   settledInstallationCommandSchema,
 ]);
 type StoredCommand = z.output<typeof storedCommandSchema>;
-const inputDigest = (input: InstallationAdmission) =>
+const inputDigest = (
+  input: InstallationAdmission | RetainedInstallationCommand["admission"],
+) =>
   createHash("sha256")
-    .update(JSON.stringify(installationAdmissionSchema.parse(input)))
+    .update(
+      JSON.stringify(
+        // A resolved rollback adds the owner's Release, not caller input.
+        (input.intent === "rollback"
+          ? rollbackAdmissionSchema.strip()
+          : directInstallationAdmissionSchema
+        ).parse(input),
+      ),
+    )
     .digest("hex");
 
 /** Host-side port; RPC transport and tenant context belong to the adapter. */
 export type InstallationOperations = Readonly<{
+  /** The prior confirmed activation, fenced to the current store and authority. */
+  recovery(installationId: string): Promise<InstallationRecovery | null>;
   /** Accept one command, or replay the retained operation for its request id. */
   admit(input: InstallationAdmission): Promise<InstallationOperation>;
   /** The operation's current state, when it names this installation. */
@@ -213,6 +260,8 @@ export type InstallationOperations = Readonly<{
   ): Promise<InstallationCommit>;
 }>;
 
+export type InstallationRecovery = z.output<typeof installationRecoverySchema>;
+
 /**
  * One owner wait's bound, under ordinary HTTP idle timeouts; an observer that
  * needs longer simply waits again.
@@ -226,6 +275,11 @@ export const installationWaitQuerySchema = z
   .pipe(z.number().int().max(maxSettlementWaitMs))
   .optional();
 const installationOperationRequestSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    action: z.literal("recovery"),
+    scope: scopeSchema,
+    installationId: installationIdSchema,
+  }),
   z.strictObject({
     action: z.literal("admit"),
     scope: scopeSchema,
@@ -267,6 +321,10 @@ export type InstallationOperationRequest = z.output<
   typeof installationOperationRequestSchema
 >;
 const installationOperationReplySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("recovery"),
+    recovery: installationRecoverySchema.nullable(),
+  }),
   z.strictObject({
     kind: z.literal("refused"),
     code: z.enum([
@@ -327,6 +385,12 @@ export function installationOperationsPort(
     return reply;
   };
   return {
+    async recovery(installationId) {
+      const reply = await call({ action: "recovery", scope, installationId });
+      if (reply.kind !== "recovery")
+        throw new InstallationOperationError("unavailable");
+      return reply.recovery;
+    },
     async admit(input) {
       const reply = await call({ action: "admit", scope, input });
       if (reply.kind !== "operation" || reply.operation === null)
@@ -487,6 +551,52 @@ export async function createInstallationOperations(
       WHERE retention_due_at IS NOT NULL`,
   );
   migrateCommandRows(owner);
+  // Two activations per Installation, independent of expiring command history.
+  owner.sql.exec(
+    `CREATE TABLE IF NOT EXISTS installation_recovery (
+      installation_id TEXT PRIMARY KEY, record TEXT NOT NULL
+    ) STRICT`,
+  );
+  const readRecovery = (installationId: string) => {
+    const row = owner.sql
+      .exec(
+        "SELECT record FROM installation_recovery WHERE installation_id=?",
+        installationId,
+      )
+      .toArray()[0];
+    return row === undefined
+      ? null
+      : readStored(
+          recoveryRecordSchema,
+          z.strictObject({ record: z.string() }).parse(row).record,
+        );
+  };
+  const recoveryOf = (
+    installationId: string,
+    scope: RetainedInstallationCommand["scope"],
+  ) => {
+    const current = ports.get(installationId);
+    if (current === null || current.status === "deleted") return null;
+    const recorded = readRecovery(installationId);
+    if (
+      recorded?.generation !== ports.generation() ||
+      recorded.instanceId !== current.instanceId ||
+      !same(recorded.scope, scope)
+    )
+      return null;
+    // An unconfirmed/failed newer selection recovers to the latest activation,
+    // not the release preceding that good activation.
+    const target = same(current.release, recorded.current.release)
+      ? recorded.previous
+      : recorded.current;
+    return target?.release.appId !== current.appId
+      ? null
+      : {
+          ...target,
+          authorityVersion: current.authority.authorityVersion,
+          storeGeneration: recorded.generation,
+        };
+  };
   const load = (requestId: string): StoredCommand | null => {
     const row = owner.sql
       .exec(
@@ -649,6 +759,49 @@ export async function createInstallationOperations(
               state: "unconfirmed",
               outcome: stopped ? settled.outcome : "outcome_unknown",
             };
+      if (
+        result.state === "succeeded" &&
+        result.installation.status === "enabled" &&
+        result.uiCheck !== null &&
+        result.uiCheck.kind !== "failed"
+      ) {
+        const prior = readRecovery(command.installationId);
+        const sameOwner =
+          prior !== null &&
+          prior.generation === command.generation &&
+          prior.instanceId === result.installation.instanceId &&
+          same(prior.scope, command.scope);
+        const activated = {
+          release: result.installation.release,
+          // Preserve not_checked explicitly; activation is not a green UI check.
+          uiCheck: result.uiCheck,
+        };
+        const recorded = recoveryRecordSchema.parse({
+          scope: command.scope,
+          generation: command.generation,
+          instanceId: result.installation.instanceId,
+          current: activated,
+          previous: sameOwner
+            ? same(prior.current.release, activated.release)
+              ? prior.previous
+              : prior.current
+            : null,
+        });
+        owner.sql.exec(
+          `INSERT INTO installation_recovery(installation_id,record) VALUES(?,?)
+            ON CONFLICT(installation_id) DO UPDATE SET record=excluded.record`,
+          command.installationId,
+          JSON.stringify(recorded),
+        );
+      }
+      if (
+        result.state === "succeeded" &&
+        result.installation.status === "deleted"
+      )
+        owner.sql.exec(
+          "DELETE FROM installation_recovery WHERE installation_id=?",
+          command.installationId,
+        );
       const operation = terminalOperationSchema.parse(
         result.state === "succeeded"
           ? {
@@ -759,6 +912,11 @@ export async function createInstallationOperations(
     const scope = tenantScope(request.scope.tenantId, request.scope.origin);
     if (scope.durableName("registry") !== ports.registryName)
       throw new InstallationOperationError("unavailable");
+    if (request.action === "recovery")
+      return {
+        kind: "recovery",
+        recovery: recoveryOf(request.installationId, request.scope),
+      };
     if (request.action === "admit") {
       if (request.input.actor.kind !== "member")
         throw new InstallationOperationError("unavailable");
@@ -771,8 +929,8 @@ export async function createInstallationOperations(
         if (prior !== null) {
           if (
             ("admission" in prior
-              ? !same(prior.admission, request.input)
-              : prior.inputDigest !== inputDigest(request.input)) ||
+              ? inputDigest(prior.admission)
+              : prior.inputDigest) !== inputDigest(request.input) ||
             !same(prior.scope, request.scope)
           )
             throw new InstallationOperationError("request_conflict");
@@ -783,6 +941,24 @@ export async function createInstallationOperations(
         if (scheduled.status === "found")
           throw new InstallationOperationError("unavailable");
         const requested = ports.get(request.input.installationId);
+        const admission = (() => {
+          if (request.input.intent !== "rollback") return request.input;
+          if (
+            requested === null ||
+            requested.status === "deleted" ||
+            requested.authority.authorityVersion !==
+              request.input.authorityVersion ||
+            ports.generation() !== request.input.storeGeneration
+          )
+            throw new InstallationOperationError("stale_authority");
+          const recovery = recoveryOf(
+            request.input.installationId,
+            request.scope,
+          );
+          if (recovery === null)
+            throw new InstallationOperationError("unavailable");
+          return { ...request.input, release: recovery.release };
+        })();
         let installationId = request.input.installationId;
         let creation: RetainedInstallationCommand["creation"] =
           requested === null ? "fresh" : "replacement";
@@ -807,11 +983,11 @@ export async function createInstallationOperations(
           requestId: request.input.requestId,
           requestedInstallationId: request.input.installationId,
           installationId,
-          release: request.input.release,
+          release: admission.release,
           state: "pending",
         });
         save({
-          admission: request.input,
+          admission,
           scope: request.scope,
           installationId,
           instanceId: baseline?.instanceId ?? instanceIds.instance.generate(),

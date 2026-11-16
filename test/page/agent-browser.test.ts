@@ -13,7 +13,8 @@ import type { AppHost } from "@fungi.computer/agar/host";
 import { afterEach, expect, it, vi } from "vitest";
 import { Knapsack, type UiConnection } from "@fungi.computer/knapsack";
 import { z } from "zod";
-import { mountOysterPage, type OysterAppConfig } from "../../src/page/mount.js";
+import { mountOysterPage } from "../../src/page/mount.js";
+import type { OysterAppConfig } from "../../src/page-config.js";
 import {
   discoverUiCommand,
   discoverUiCommands,

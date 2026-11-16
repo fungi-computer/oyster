@@ -42,6 +42,10 @@
     // Seedance, Veo) and the background media retry owner route through.
     // Not a secret: Cloudflare creates the gateway by this id on first use.
     "AI_GATEWAY_ID": "bonsai-preview",
+    // Optional: cap paid image, video and audio spend per UTC day, in US dollars.
+    // Unset means no cap. Needs the MEDIA_OPERATION binding below. Uncomment to
+    // turn it on, then run `wrangler deploy`.
+    // "OYSTER_DAILY_MEDIA_LIMIT_USD": "100",
   },
   "durable_objects": {
     "bindings": [

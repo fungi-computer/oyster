@@ -494,6 +494,62 @@ it.
 ```ts
 installationOperation(input): Promise<
   | {
+  kind: "recovery";
+  recovery:   | {
+     authorityVersion: number;
+     storeGeneration: string;
+     release: {
+        releaseId: ReleaseId;
+        appId: AppId;
+        artifact: {
+           artifactRef: ArtifactRef;
+           artifactDigest: Sha256Digest;
+           provenance: {
+              sourceRevision: SourceRevision;
+              sourceTreeDigest: Sha256Digest;
+              buildRecipeDigest: Sha256Digest;
+           };
+        };
+     };
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "Error"
+              | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      };
+   }
+     | null;
+}
+  | {
   kind: "refused";
   code:   | "request_conflict"
      | "unavailable"
@@ -668,7 +724,7 @@ installationOperation(input): Promise<
   | {
   kind: "command";
   command:   | {
-     admission: {
+     admission:   | {
         requestId: string;
         installationId: string;
         release: {
@@ -698,7 +754,40 @@ installationOperation(input): Promise<
          };
         intent: "install-or-select" | "install-or-remint" | "create-only";
         origin: "workflow" | "owner-direct";
-     };
+      }
+        | {
+        authorityVersion: number;
+        storeGeneration: string;
+        requestId: string;
+        installationId: string;
+        actor:   | {
+           kind: "member";
+           memberId: string;
+         }
+           | {
+           kind: "agent";
+           agentId: string;
+         }
+           | {
+           kind: "team-key";
+           keyId: string;
+         };
+        intent: "rollback";
+        origin: "owner-direct";
+        release: {
+           releaseId: ReleaseId;
+           appId: AppId;
+           artifact: {
+              artifactRef: ArtifactRef;
+              artifactDigest: Sha256Digest;
+              provenance: {
+                 sourceRevision: SourceRevision;
+                 sourceTreeDigest: Sha256Digest;
+                 buildRecipeDigest: Sha256Digest;
+              };
+           };
+        };
+      };
      scope: {
         tenantId: string & Brand<"OysterTenantId">;
         origin: string;
@@ -842,19 +931,35 @@ command for the caller's tenant scope.
 
 ###### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input`   | \| \{ `action`: `"admit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `input`: \{ `requestId`: `string`; `installationId`: `string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `intent`: `"install-or-select"` \| `"install-or-remint"` \| `"create-only"`; `origin`: `"workflow"` \| `"owner-direct"`; \}; \} \| \{ `action`: `"read"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installationId`: `string`; \} \| \{ `action`: `"await"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installationId`: `string`; `waitMs`: `number`; \} \| \{ `action`: `"load"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; \} \| \{ `action`: `"plan"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installation`: \{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `fingerprints`: `Readonly`\<`Record`\<`string`, `string`\>\>; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \}; `hasBackend`: `boolean`; \} \| \{ `action`: `"commit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \| `"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`: \| `"Error"` \| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"`; `finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \} \| `null`; \} |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | \| \{ `action`: `"recovery"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `installationId`: `string`; \} \| \{ `action`: `"admit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `input`: \| \{ `requestId`: `string`; `installationId`: `string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `intent`: `"install-or-select"` \| `"install-or-remint"` \| `"create-only"`; `origin`: `"workflow"` \| `"owner-direct"`; \} \| \{ `authorityVersion`: `number`; `storeGeneration`: `string`; `requestId`: `string`; `installationId`: `string`; `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `intent`: `"rollback"`; `origin`: `"owner-direct"`; \}; \} \| \{ `action`: `"read"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installationId`: `string`; \} \| \{ `action`: `"await"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installationId`: `string`; `waitMs`: `number`; \} \| \{ `action`: `"load"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; \} \| \{ `action`: `"plan"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `installation`: \{ `installationId`: `string`; `instanceId`: [`InstanceId`](index.md#instanceid) \| `null`; `appId`: `AppId`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `releasePin`: `"pinned"` \| `"floating"`; `authority`: \{ `authorityVersion`: `number`; `declaredOperationsDigest`: `Sha256Digest`; `approvedGrants`: readonly `Readonly`\<\{ `capability`: \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`; `capabilityApproved`: `true`; `operations`: readonly `string`[]; `fingerprints`: `Readonly`\<`Record`\<`string`, `string`\>\>; `resources`: \| `"tenant-scope"` \| readonly `Readonly`\<\{ `kind`: ...; `id`: ...; \}\>[]; \}\>[]; `approval`: \| `Readonly`\<\{ `by`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `at`: `number`; `authorityVersion`: `number`; \}\> \| `null`; \}; `status`: `"enabled"` \| `"disabled"` \| `"deleted"`; \}; `hasBackend`: `boolean`; \} \| \{ `action`: `"commit"`; `scope`: \{ `tenantId`: `string` & `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `requestId`: `string`; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`: `"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: \| `"unexpected_candidate_request"` \| `"response_status"` \| `"request_failed"` \| `"page_error"` \| `"candidate_not_mounted"`; `errorName?`: \| `"Error"` \| `"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \| `"TimeoutError"` \| `"Other"`; `finalUrlPath`: `string`; `consoleErrors`: `string`[]; `pageErrors`: `string`[]; `failedRequests`: `object`[]; `droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \| `"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \| `"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \| `"ui_check_not_run_on_host"`; \} \| `null`; \} |
 
 ###### Returns
 
-`Promise`\< \| \{ `kind`: `"refused"`; `code`: \| `"request_conflict"` \|
-`"unavailable"` \| `"stale_authority"` \| `"needs_consent"` \|
-`"stored_operation_invalid"`; \} \| \{ `kind`: `"operation"`; `operation`: \| \{
-`requestId`: `string`; `requestedInstallationId`: `string`; `installationId`:
-`string`; `release`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`:
-\{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`:
-\{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`Promise`\< \| \{ `kind`: `"recovery"`; `recovery`: \| \{ `authorityVersion`:
+`number`; `storeGeneration`: `string`; `release`: \{ `releaseId`: `ReleaseId`;
+`appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`:
+`Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`;
+`sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \};
+\}; `uiCheck`: \| \{ `kind`: `"passed"`; \} \| \{ `kind`: `"failed"`; `code`:
+`"ui_mount_failed"`; `diagnostics?`: \{ `failedPredicate`: \|
+`"unexpected_candidate_request"` \| `"response_status"` \| `"request_failed"` \|
+`"page_error"` \| `"candidate_not_mounted"`; `errorName?`: \| `"Error"` \|
+`"TypeError"` \| `"RangeError"` \| `"SyntaxError"` \| `"AbortError"` \|
+`"TimeoutError"` \| `"Other"`; `finalUrlPath`: `string`; `consoleErrors`:
+`string`[]; `pageErrors`: `string`[]; `failedRequests`: `object`[];
+`droppedCount`: `number`; \}; \} \| \{ `kind`: `"not_checked"`; `code`: \|
+`"boot_runner_unavailable"` \| `"boot_browser_binding_missing"` \|
+`"boot_clone_unavailable"` \| `"boot_timeout"` \| `"boot_cleanup_failed"` \|
+`"ui_check_not_run_on_host"`; \}; \} \| `null`; \} \| \{ `kind`: `"refused"`;
+`code`: \| `"request_conflict"` \| `"unavailable"` \| `"stale_authority"` \|
+`"needs_consent"` \| `"stored_operation_invalid"`; \} \| \{ `kind`:
+`"operation"`; `operation`: \| \{ `requestId`: `string`;
+`requestedInstallationId`: `string`; `installationId`: `string`; `release`: \{
+`releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
+`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
 `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"refused"`; `status`:
 `number`; `code`: `string`; \} \| \{ `requestId`: `string`;
 `requestedInstallationId`: `string`; `installationId`: `string`; `release`: \{
@@ -899,7 +1004,7 @@ command for the caller's tenant scope.
 `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
 `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
 `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `state`: `"pending"`; \} \|
-`null`; \} \| \{ `kind`: `"command"`; `command`: \| \{ `admission`: \{
+`null`; \} \| \{ `kind`: `"command"`; `command`: \| \{ `admission`: \| \{
 `requestId`: `string`; `installationId`: `string`; `release`: \{ `releaseId`:
 `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`;
 `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`:
@@ -908,7 +1013,15 @@ command for the caller's tenant scope.
 `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`:
 `"team-key"`; `keyId`: `string`; \}; `intent`: `"install-or-select"` \|
 `"install-or-remint"` \| `"create-only"`; `origin`: `"workflow"` \|
-`"owner-direct"`; \}; `scope`: \{ `tenantId`: `string` &
+`"owner-direct"`; \} \| \{ `authorityVersion`: `number`; `storeGeneration`:
+`string`; `requestId`: `string`; `installationId`: `string`; `actor`: \| \{
+`kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`:
+`string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `intent`:
+`"rollback"`; `origin`: `"owner-direct"`; `release`: \{ `releaseId`:
+`ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`;
+`artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`:
+`SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`:
+`Sha256Digest`; \}; \}; \}; \}; `scope`: \{ `tenantId`: `string` &
 `Brand`\<`"OysterTenantId"`\>; `origin`: `string`; \}; `installationId`:
 `string`; `instanceId`: [`InstanceId`](index.md#instanceid); `generation`:
 `string`; `baseline`: \| \{ `installationId`: `string`; `instanceId`:
@@ -1597,6 +1710,231 @@ DurableObject<Env>.constructor
 ```
 
 #### Methods
+
+##### openTestCopy()
+
+```ts
+openTestCopy(
+   authority,
+   requestId,
+   tenantId?
+): Promise<InstanceResult<{
+  selection: {
+     instanceId: InstanceId;
+     owner: {
+        kind: "installation" | "deployment";
+        id: string;
+     };
+     appId: AppId;
+     releaseId: ReleaseId;
+     authorityVersion: number;
+  };
+  storeGeneration: string;
+  copyId: string;
+  expiresAt: number;
+}>>;
+```
+
+Open only under the existing Instance serialization and pinned tenant.
+
+###### Parameters
+
+| Parameter                              | Type                                                                                                                                                                                                                                                            | Default value           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `authority`                            | \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; \} | `undefined`             |
+| `authority.selection`                  | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}                                                  | `...`                   |
+| `authority.selection.instanceId`       | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                             | `instanceIdSchema`      |
+| `authority.selection.owner`            | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                               | `ownerSchema`           |
+| `authority.selection.owner.kind`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                              | `...`                   |
+| `authority.selection.owner.id`         | `string`                                                                                                                                                                                                                                                        | `Schema.NonEmptyString` |
+| `authority.selection.appId`            | `AppId`                                                                                                                                                                                                                                                         | `appIdSchema`           |
+| `authority.selection.releaseId`        | `ReleaseId`                                                                                                                                                                                                                                                     | `releaseIdSchema`       |
+| `authority.selection.authorityVersion` | `number`                                                                                                                                                                                                                                                        | `...`                   |
+| `authority.storeGeneration`            | `string`                                                                                                                                                                                                                                                        | `...`                   |
+| `requestId`                            | `string`                                                                                                                                                                                                                                                        | `undefined`             |
+| `tenantId`                             | `string` & `Brand`\<`"OysterTenantId"`\>                                                                                                                                                                                                                        | `defaultTenant`         |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\<\{ `selection`: \{
+`instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`:
+`"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`;
+`releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`:
+`string`; `copyId`: `string`; `expiresAt`: `number`; \}\>\>
+
+##### inspectTestCopy()
+
+```ts
+inspectTestCopy(authority, tenantId?): Promise<InstanceResult<
+  | {
+  selection: {
+     instanceId: InstanceId;
+     owner: {
+        kind: "installation" | "deployment";
+        id: string;
+     };
+     appId: AppId;
+     releaseId: ReleaseId;
+     authorityVersion: number;
+  };
+  storeGeneration: string;
+  copyId: string;
+  expiresAt: number;
+}
+| null>>;
+```
+
+Observation rechecks both applied selection and current registry incarnation.
+
+###### Parameters
+
+| Parameter                              | Type                                                                                                                                                                                                                                                            | Default value           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `authority`                            | \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; \} | `undefined`             |
+| `authority.selection`                  | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}                                                  | `...`                   |
+| `authority.selection.instanceId`       | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                             | `instanceIdSchema`      |
+| `authority.selection.owner`            | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                               | `ownerSchema`           |
+| `authority.selection.owner.kind`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                              | `...`                   |
+| `authority.selection.owner.id`         | `string`                                                                                                                                                                                                                                                        | `Schema.NonEmptyString` |
+| `authority.selection.appId`            | `AppId`                                                                                                                                                                                                                                                         | `appIdSchema`           |
+| `authority.selection.releaseId`        | `ReleaseId`                                                                                                                                                                                                                                                     | `releaseIdSchema`       |
+| `authority.selection.authorityVersion` | `number`                                                                                                                                                                                                                                                        | `...`                   |
+| `authority.storeGeneration`            | `string`                                                                                                                                                                                                                                                        | `...`                   |
+| `tenantId`                             | `string` & `Brand`\<`"OysterTenantId"`\>                                                                                                                                                                                                                        | `defaultTenant`         |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\< \| \{ `selection`: \{
+`instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`:
+`"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`;
+`releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`:
+`string`; `copyId`: `string`; `expiresAt`: `number`; \} \| `null`\>\>
+
+##### discardTestCopy()
+
+```ts
+discardTestCopy(
+   authority,
+   copyId,
+   tenantId?
+): Promise<InstanceResult<boolean>>;
+```
+
+A delayed discard cannot target a later sibling.
+
+###### Parameters
+
+| Parameter                              | Type                                                                                                                                                                                                                                                            | Default value           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `authority`                            | \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; \} | `undefined`             |
+| `authority.selection`                  | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}                                                  | `...`                   |
+| `authority.selection.instanceId`       | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                             | `instanceIdSchema`      |
+| `authority.selection.owner`            | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                               | `ownerSchema`           |
+| `authority.selection.owner.kind`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                              | `...`                   |
+| `authority.selection.owner.id`         | `string`                                                                                                                                                                                                                                                        | `Schema.NonEmptyString` |
+| `authority.selection.appId`            | `AppId`                                                                                                                                                                                                                                                         | `appIdSchema`           |
+| `authority.selection.releaseId`        | `ReleaseId`                                                                                                                                                                                                                                                     | `releaseIdSchema`       |
+| `authority.selection.authorityVersion` | `number`                                                                                                                                                                                                                                                        | `...`                   |
+| `authority.storeGeneration`            | `string`                                                                                                                                                                                                                                                        | `...`                   |
+| `copyId`                               | `string`                                                                                                                                                                                                                                                        | `undefined`             |
+| `tenantId`                             | `string` & `Brand`\<`"OysterTenantId"`\>                                                                                                                                                                                                                        | `defaultTenant`         |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\<`boolean`\>\>
+
+##### testCopyBackend()
+
+```ts
+testCopyBackend(
+   authority,
+   copyId,
+   request,
+   limits?,
+   tenantId?
+): Promise<Response>;
+```
+
+Uses the ordinary invocation facade, without live bindings or host context.
+
+###### Parameters
+
+| Parameter                               | Type                                                                                                                                                                                                                                                            | Default value           |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `authority`                             | \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; \} | `undefined`             |
+| `authority.selection`                   | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}                                                  | `...`                   |
+| `authority.selection.instanceId`        | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                             | `instanceIdSchema`      |
+| `authority.selection.owner`             | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                               | `ownerSchema`           |
+| `authority.selection.owner.kind?`       | `"installation"` \| `"deployment"`                                                                                                                                                                                                                              | `...`                   |
+| `authority.selection.owner.id?`         | `string`                                                                                                                                                                                                                                                        | `Schema.NonEmptyString` |
+| `authority.selection.appId?`            | `AppId`                                                                                                                                                                                                                                                         | `appIdSchema`           |
+| `authority.selection.releaseId?`        | `ReleaseId`                                                                                                                                                                                                                                                     | `releaseIdSchema`       |
+| `authority.selection.authorityVersion?` | `number`                                                                                                                                                                                                                                                        | `...`                   |
+| `authority.storeGeneration?`            | `string`                                                                                                                                                                                                                                                        | `...`                   |
+| `copyId?`                               | `string`                                                                                                                                                                                                                                                        | `undefined`             |
+| `request?`                              | `Request`                                                                                                                                                                                                                                                       | `undefined`             |
+| `limits?`                               | `Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>                                                                                                                                                                                                 | `undefined`             |
+| `tenantId?`                             | `string` & `Brand`\<`"OysterTenantId"`\>                                                                                                                                                                                                                        | `defaultTenant`         |
+
+###### Returns
+
+`Promise`\<`Response`\>
+
+##### callTestCopy()
+
+```ts
+callTestCopy(
+   authority,
+   copyId,
+   name,
+   input,
+   caller,
+   limits?,
+   tenantId?
+): Promise<InstanceResult<unknown>>;
+```
+
+Declared methods share copy isolation, never a live invocation frame or binding
+env.
+
+###### Parameters
+
+| Parameter                               | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Default value           |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `authority`                             | \{ `selection`: \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}; `storeGeneration`: `string`; \}                                                                                                                                                                                                                                                                                                                                                                                                | `undefined`             |
+| `authority.selection`                   | \{ `instanceId`: [`InstanceId`](index.md#instanceid); `owner`: \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}; `appId`: `AppId`; `releaseId`: `ReleaseId`; `authorityVersion`: `number`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `...`                   |
+| `authority.selection.instanceId`        | [`InstanceId`](index.md#instanceid)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `instanceIdSchema`      |
+| `authority.selection.owner`             | \{ `kind`: `"installation"` \| `"deployment"`; `id`: `string`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `ownerSchema`           |
+| `authority.selection.owner.kind`        | `"installation"` \| `"deployment"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `...`                   |
+| `authority.selection.owner.id`          | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `Schema.NonEmptyString` |
+| `authority.selection.appId?`            | `AppId`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `appIdSchema`           |
+| `authority.selection.releaseId?`        | `ReleaseId`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `releaseIdSchema`       |
+| `authority.selection.authorityVersion?` | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `...`                   |
+| `authority.storeGeneration?`            | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `...`                   |
+| `copyId?`                               | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `name?`                                 | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `input?`                                | `Json`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `undefined`             |
+| `caller?`                               | \{ `computerId`: `string` \| `null`; `actor`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; `backgroundLane?`: `string`; `backgroundOrigin?`: \{ `method`: `string`; `seal`: `string`; \}; `role?`: `"member"` \| `"owner"` \| `"admin"`; `soleMember?`: `true`; `workflow?`: \{ `workflowId`: `string`; `runId`: `string`; `nodeId`: `string`; `armedBy`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; \}; `idempotencyKey?`: `string`; \} | `undefined`             |
+| `caller.computerId?`                    | `string` \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `undefined`             |
+| `caller.actor?`                         | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `undefined`             |
+| `caller.backgroundLane?`                | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.backgroundOrigin?`              | \{ `method`: `string`; `seal`: `string`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `undefined`             |
+| `caller.backgroundOrigin.method?`       | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.backgroundOrigin.seal?`         | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.role?`                          | `"member"` \| `"owner"` \| `"admin"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `undefined`             |
+| `caller.soleMember?`                    | `true`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `undefined`             |
+| `caller.workflow?`                      | \{ `workflowId`: `string`; `runId`: `string`; `nodeId`: `string`; `armedBy`: \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}; \}                                                                                                                                                                                                                                                                                                                                                                                                                         | `undefined`             |
+| `caller.workflow.workflowId?`           | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.workflow.runId?`                | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.workflow.nodeId?`               | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `caller.workflow.armedBy?`              | \| \{ `kind`: `"member"`; `memberId`: `string`; \} \| \{ `kind`: `"agent"`; `agentId`: `string`; \} \| \{ `kind`: `"team-key"`; `keyId`: `string`; \}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `undefined`             |
+| `caller.idempotencyKey?`                | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `undefined`             |
+| `limits?`                               | `Readonly`\<\{ `cpuMs`: `number`; `subRequests`: `number`; \}\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `undefined`             |
+| `tenantId?`                             | `string` & `Brand`\<`"OysterTenantId"`\>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `defaultTenant`         |
+
+###### Returns
+
+`Promise`\<[`InstanceResult`](host.md#instanceresult)\<`unknown`\>\>
 
 ##### bindingCall()
 

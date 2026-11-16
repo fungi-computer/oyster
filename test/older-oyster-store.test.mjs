@@ -83,14 +83,23 @@ test("a flat installation row is refused with 409 store_from_older_oyster, never
   const body = await api.json();
   assert.equal(body.error, olderOysterStoreCode);
   assert.match(body.message, /Oyster 0\.2 or earlier/);
-  assert.match(body.message, /Reset it/);
+  assert.match(body.message, /verify the old release/i);
+  assert.match(body.message, /0\.0\.1.*bridge/);
+  assert.match(body.message, /0\.1\/0\.2.*own Worker/);
+  assert.match(body.message, /archive.*fresh setup/i);
+  assert.match(body.message, /deleted nothing and restored nothing/i);
+  assert.doesNotMatch(body.message, /reset|delete (?:it|the|this)|tear down/i);
   const page = await createOysterWorker().fetch(
     new globalThis.Request(`${origin}/`, { headers: { accept: "text/html" } }),
     workerEnv(registry),
   );
   assert.equal(page.status, 409);
   assert.match(page.headers.get("content-type"), /text\/html/);
-  assert.match(await page.text(), /Oyster 0\.2 or earlier/);
+  const html = await page.text();
+  assert.match(html, /Oyster 0\.2 or earlier/);
+  assert.match(html, /archive.*fresh setup/i);
+  assert.match(html, /deleted nothing and restored nothing/i);
+  assert.doesNotMatch(html, /reset|delete (?:it|the|this)|tear down/i);
 });
 
 test("refusal leaves the older registry and build rows and schemas unchanged", async () => {

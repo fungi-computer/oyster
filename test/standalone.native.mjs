@@ -5,11 +5,11 @@
 //   node test/standalone.native.mjs                 # workerd (wrangler dev)
 //   CELLD_PLATFORM_CELLD=$(…/pinned-celld.sh) \
 //     node --import …/wrangler-on-celld.mjs test/standalone.native.mjs  # celld
-/* global URL, fetch, setTimeout, console, process */
+/* global URL, URLSearchParams, fetch, setTimeout, console, process, AbortSignal */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -21,6 +21,9 @@ import { parseArgs } from "node:util";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { z } from "zod";
 import { installRelease, packRelease } from "../dist/pack.js";
+import { installationSchema } from "../dist/apps/installation.js";
+import { installationOperationSchema } from "../dist/installation-operations.js";
+import { observeInstallation } from "../dist/installation-client.js";
 import { proveMcp } from "./mcp.native.mjs";
 import { ApprovalViewSchema } from "@fungi.computer/approvals";
 import * as Schema from "effect/Schema";
@@ -35,6 +38,9 @@ await mkdir(`${root}.botanical`, { recursive: true });
 const work = await mkdtemp(`${root}.botanical/standalone-`);
 const key = randomBytes(24).toString("hex");
 const runtime = process.env.CELLD_PLATFORM_CELLD ? "celld" : "workerd";
+// The production-alarm witness is Worker console output. The maintained celld
+// adapter hides it by default; request its ordinary logs, not a new proof door.
+if (runtime === "celld") process.env.CELLD_PLATFORM_LOGS = "1";
 let passed = false;
 
 async function freePort() {
@@ -158,7 +164,7 @@ try {
     installationId: "notes",
   });
   assert.equal(installed.status, 201, await installed.clone().text());
-  const installation = await installed.json();
+  const installation = installationSchema.parse(await installed.json());
   assert.equal(installation.status, "enabled");
 
   // File routes re-check the live Release and installation on every request.
@@ -340,6 +346,7 @@ try {
 
   // 8. A person signs in and uses the App in a browser.
   const browser = await launchIsolatedChromium(chromium, portsOf(origin));
+  let copyBackendUrl = "";
   try {
     const page = await browser.newPage();
     const capture = async (view) => {
@@ -389,6 +396,234 @@ try {
       "the plain host page owns no command chord",
     );
     await capture("");
+
+    // Recovery is a host page/form, even with every App and Shell asset blocked.
+    // Rollback changes code selection, not the live App facet's SQLite.
+    const nextDirectory = `${work}/recovery-release`;
+    await cp(releaseDirectory, nextDirectory, { recursive: true });
+    await writeFile(
+      `${nextDirectory}/release.json`,
+      JSON.stringify({ ...release, releaseId: "rel_notes2" }),
+    );
+    const upgraded = await installRelease({
+      directory: nextDirectory,
+      url: origin,
+      key,
+      installationId: "notes",
+    });
+    assert.equal(upgraded.status, 200, await upgraded.clone().text());
+    const selected = installationSchema.parse(await upgraded.json());
+    assert.equal(selected.instanceId, installation.instanceId);
+    await page.route("**/*", (route) => {
+      const url = new URL(route.request().url());
+      return url.origin === origin && url.pathname.startsWith("/recovery")
+        ? route.continue()
+        : route.abort();
+    });
+    await page.goto(`${origin}/recovery`);
+    assert.equal(
+      await page.getByRole("heading", { level: 1 }).textContent(),
+      "App recovery",
+    );
+    await page.getByRole("link", { name: "Roll back", exact: true }).click();
+    await page.getByRole("button", { name: "Roll back", exact: true }).click();
+    await page.waitForURL(`${origin}/recovery?requestId=*`);
+    const requestId = new URL(page.url()).searchParams.get("requestId");
+    assert.ok(requestId, "The form redirects to its correlated observation");
+    const signal = AbortSignal.timeout(20_000);
+    const outcome = await observeInstallation({
+      requestId,
+      initial: null,
+      signal,
+      read: async () => {
+        const response = await fetch(
+          `${origin}/api/installations/notes/status?${new URLSearchParams({ requestId }).toString()}`,
+          { headers: auth, signal },
+        );
+        assert.equal(response.status, 200);
+        return installationOperationSchema.parse(await response.json());
+      },
+    });
+    assert.equal(outcome.state, "succeeded");
+    assert.equal(outcome.installation?.release.releaseId, release.releaseId);
+    assert.equal(outcome.installation?.instanceId, installation.instanceId);
+    assert.equal(
+      outcome.installation?.authority.authorityVersion,
+      selected.authority.authorityVersion + 1,
+    );
+    await page.getByRole("link", { name: "Check again" }).click();
+    await page.getByText("Rolled back notes").waitFor();
+    assert.deepEqual(await (await call("readNote", {})).json(), {
+      text: "from the browser",
+    });
+    console.log(
+      `standalone Oyster on ${runtime}: host form rollback preserves the Instance and native App SQLite, without App/Shell assets`,
+    );
+
+    // Even with every App/Shell asset still blocked, the owner can create and
+    // discard the native sibling through ordinary host-owned forms.
+    const oldCreation = new URLSearchParams({
+      requestId: await page
+        .locator(
+          'form[action="/recovery/notes/test-copy"] input[name=requestId]',
+        )
+        .inputValue(),
+      authorityVersion: await page
+        .locator(
+          'form[action="/recovery/notes/test-copy"] input[name=authorityVersion]',
+        )
+        .inputValue(),
+      storeGeneration: await page
+        .locator(
+          'form[action="/recovery/notes/test-copy"] input[name=storeGeneration]',
+        )
+        .inputValue(),
+    });
+    await page
+      .getByRole("button", { name: "Open test copy", exact: true })
+      .click();
+    await page.waitForURL(`${origin}/recovery/notes/test-copy/*`);
+    const oldCopyUrl = page.url();
+    const oldDiscard = new URLSearchParams({
+      copyId: await page.locator("input[name=copyId]").inputValue(),
+      authorityVersion: await page
+        .locator("input[name=authorityVersion]")
+        .inputValue(),
+      storeGeneration: await page
+        .locator("input[name=storeGeneration]")
+        .inputValue(),
+    });
+    assert.equal(
+      await page.getByRole("button", { name: "Discard test copy" }).count(),
+      1,
+    );
+    await page.getByRole("button", { name: "Discard test copy" }).click();
+    await page.waitForURL(`${origin}/recovery`);
+    await page.unroute("**/*");
+    await page.route("**/ui-entry/**", (route) => route.abort());
+
+    // The ordinary App mount connects to the sibling doors, not the live
+    // backend or editable Shell. Its SQLite writes never promote into live data.
+    await page
+      .getByRole("button", { name: "Open test copy", exact: true })
+      .click();
+    await page.waitForURL(`${origin}/recovery/notes/test-copy/*`);
+    await app.locator("#status").filter({ hasText: "Connected" }).waitFor();
+    assert.equal(await app.locator("#note").inputValue(), "from the browser");
+    await app.locator("#note").fill("only in the test copy");
+    await app.locator("#save").click();
+    await app.locator("#status").filter({ hasText: "Saved" }).waitFor();
+    assert.deepEqual(await (await call("readNote", {})).json(), {
+      text: "from the browser",
+    });
+    const discardedCopy = `${page.url()}/backend`;
+    await page.getByRole("button", { name: "Discard test copy" }).click();
+    await page.waitForURL(`${origin}/recovery`);
+    const readDiscarded = await fetch(discardedCopy, {
+      method: "PUT",
+      headers: { ...auth, Origin: origin, "Content-Type": "text/plain" },
+      body: JSON.stringify({ method: "readNote", input: {} }),
+    });
+    assert.equal(readDiscarded.status, 403);
+    const replayed = await fetch(`${origin}/recovery/notes/test-copy`, {
+      method: "POST",
+      headers: { ...auth, Origin: origin },
+      body: oldCreation,
+      redirect: "manual",
+    });
+    assert.equal(replayed.status, 303);
+    const replayLocation = replayed.headers.get("Location");
+    assert.ok(replayLocation);
+    assert.notEqual(new URL(replayLocation, origin).href, oldCopyUrl);
+    assert.equal(
+      (
+        await fetch(`${oldCopyUrl}/discard`, {
+          method: "POST",
+          headers: { ...auth, Origin: origin },
+          body: oldDiscard,
+          redirect: "manual",
+        })
+      ).status,
+      303,
+    );
+    await page.goto(new URL(replayLocation, origin).href);
+    await app.locator("#status").filter({ hasText: "Connected" }).waitFor();
+    assert.equal(await app.locator("#note").inputValue(), "from the browser");
+    copyBackendUrl = `${page.url()}/backend`;
+    const copyMethod = (name, input) =>
+      fetch(`${page.url()}/methods/${name}`, {
+        method: "POST",
+        headers: {
+          ...auth,
+          Origin: origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      });
+    const typedRead = await copyMethod("readNote", {});
+    assert.equal(typedRead.status, 200, await typedRead.clone().text());
+    assert.deepEqual(await typedRead.json(), { text: "from the browser" });
+    assert.equal((await copyMethod("saveNote", { text: 1 })).status, 400);
+    assert.equal((await copyMethod("constructor", {})).status, 403);
+    const typedWrite = await copyMethod("saveNote", {
+      text: "from the typed copy",
+    });
+    assert.equal(typedWrite.status, 200, await typedWrite.clone().text());
+    assert.deepEqual(await (await copyMethod("readNote", {})).json(), {
+      text: "from the typed copy",
+    });
+    assert.deepEqual(await (await call("readNote", {})).json(), {
+      text: "from the browser",
+    });
+    console.log(
+      `standalone Oyster on ${runtime}: host forms without App/Shell assets, interactive native sibling reads/writes, unchanged live SQLite, discard and fresh sibling passed`,
+    );
+
+    // No copy observation/request during either wait: only the actual
+    // production owner's alarm can publish these read-only fixture receipts.
+    const expiryCopyId = new URL(page.url()).pathname.split("/").at(-1);
+    assert.ok(expiryCopyId);
+    const earlyDeadline = Date.now() + 20_000;
+    while (
+      !output.includes(`Oyster native copy alarm active ${expiryCopyId}`)
+    ) {
+      assert.ok(
+        Date.now() < earlyDeadline,
+        "Production copy admission must preserve the independent earlier wake",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const expiryDeadline = Date.now() + 5 * 60 * 1_000 + 20_000;
+    while (
+      !output.includes(`Oyster native copy alarm closed ${expiryCopyId}`)
+    ) {
+      assert.ok(
+        Date.now() < expiryDeadline,
+        "Production shared alarm must retire the copy at its fixed deadline",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    assert.equal(
+      (
+        await fetch(copyBackendUrl, {
+          method: "PUT",
+          headers: { ...auth, Origin: origin, "Content-Type": "text/plain" },
+          body: JSON.stringify({ method: "readNote", input: {} }),
+        })
+      ).status,
+      403,
+    );
+    console.log(
+      `standalone Oyster on ${runtime}: production shared alarm preserved the early wake, re-armed the fixed lifetime and retired the idle copy`,
+    );
+
+    // Keep the existing deletion proof on a fresh, still-active sibling.
+    await page.goto(`${origin}/recovery`);
+    await page
+      .getByRole("button", { name: "Open test copy", exact: true })
+      .click();
+    await page.waitForURL(`${origin}/recovery/notes/test-copy/*`);
+    copyBackendUrl = `${page.url()}/backend`;
   } finally {
     await browser.close();
   }
@@ -404,6 +639,17 @@ try {
     204,
   );
   assert.equal((await call("readNote", {})).status, 404);
+  assert.equal(
+    (
+      await fetch(copyBackendUrl, {
+        method: "PUT",
+        headers: { ...auth, Origin: origin, "Content-Type": "text/plain" },
+        body: JSON.stringify({ method: "readNote", input: {} }),
+      })
+    ).status,
+    404,
+    "deleted owners cannot reach a retained copy",
+  );
   console.log(
     `standalone Oyster on ${runtime}: install, named-key MCP approval + owner-admin denial, App UI MCP readback, methods, backend, capability file read and delete passed`,
   );
@@ -412,5 +658,8 @@ try {
   wrangler.kill("SIGTERM");
   await stopped;
   if (passed) await rm(work, { recursive: true, force: true });
-  else console.error("Native proof state preserved at " + work);
+  else {
+    await writeFile(`${work}/worker.log`, output.replaceAll(key, "[redacted]"));
+    console.error("Native proof state preserved at " + work);
+  }
 }

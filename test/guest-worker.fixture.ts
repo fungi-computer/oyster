@@ -71,7 +71,7 @@ export class OysterRegistry extends RuntimeRegistry {
   }
 }
 
-/** The native proof verifies host configuration reaches the real Worker Loader. */
+/** Instrument the real owner: guest budgets, shared wake delivery and expiry. */
 export class OysterInstance extends RuntimeInstance {
   constructor(ctx: DurableObjectState, env: OysterWorkerEnv) {
     super(ctx, {
@@ -89,6 +89,29 @@ export class OysterInstance extends RuntimeInstance {
         load: (code) => env.LOADER.load(code),
       },
     });
+  }
+
+  override async openTestCopy(
+    ...args: Parameters<RuntimeInstance["openTestCopy"]>
+  ) {
+    // Another owner's earlier wake must survive admission's five-minute wake.
+    await this.ctx.storage.setAlarm(Date.now() + 1_000);
+    return super.openTestCopy(...args);
+  }
+
+  override async alarm(): Promise<void> {
+    await super.alarm();
+    // Read only after the production shared owner delivered both alarm quanta.
+    // SQLite's JSON decoder observes the retained phase, without lazy inspect.
+    const row = this.ctx.storage.sql
+      .exec<{ copy_id: string; phase: string }>(
+        `SELECT json_extract(record,'$.copyId') AS copy_id,
+                json_extract(record,'$.phase') AS phase
+         FROM app_test_copy WHERE id=1`,
+      )
+      .toArray()[0];
+    if (row !== undefined)
+      console.log("Oyster native copy alarm", row.phase, row.copy_id);
   }
 }
 

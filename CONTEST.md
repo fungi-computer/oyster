@@ -137,6 +137,10 @@ or passed with `--var`):
   `"tourtois"` in the shipped config.
 - `OYSTER_COMPUTER_ID` — the Computer workspace id Shed and Inkcap share;
   `"workspace"` in the shipped config.
+- `OYSTER_DAILY_MEDIA_LIMIT_USD` — optional daily cap on paid image, video and
+  audio spend, in US dollars (unset means no cap). Set it on any Oyster whose
+  owner key others use. See
+  [Cap daily media spending](https://docs.fungi.computer/guides/run-your-own-oyster/#cap-daily-media-spending).
 
 **Secrets:** `OYSTER_OWNER_KEY` (24+ characters; `wrangler secret put`, never
 committed or printed by any script) is the only one Bonsai's standalone config

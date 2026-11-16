@@ -1,5 +1,35 @@
 # @fungi.computer/oyster
 
+## 0.33.0
+
+### Minor Changes
+
+- Changes since 0.32.0:
+
+  - feat(oyster): add export-only upgrade bridges and a read-only preflight
+  - fix(oyster): replace older-store reset advice with safe archive guidance
+  - fix(oyster): settle the alarm duties without catch blocks
+  - feat(oyster): plain recovery copy with a rollback confirm step, and harden
+    revoke, alarm and delete
+  - feat(oyster): style the recovery and test-copy pages without assets
+  - feat(oyster): add disposable App-data test copies
+  - fix(oyster): decode recovery forms through Hono
+  - feat(oyster): add host-owned app rollback
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.18.1
+  - @fungi.computer/darkroom@0.11.1
+  - @fungi.computer/braid@0.4.20
+  - @fungi.computer/nacre@0.6.7
+  - @fungi.computer/parakeet@0.12.1
+  - @fungi.computer/shiitake@0.18.3
+  - @fungi.computer/workflows-wire@0.4.20
+  - @fungi.computer/shiitake-extensions@0.11.1
+  - @fungi.computer/zookeeper@0.0.33
+
 ## 0.32.0
 
 ### Minor Changes

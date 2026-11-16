@@ -74,6 +74,26 @@ readonly code:
 
 ## Type Aliases
 
+### AppTestCopyAuthority
+
+```ts
+type AppTestCopyAuthority = z.output<typeof appTestCopyAuthoritySchema>;
+```
+
+Exact source selection and store incarnation observed by the owner.
+
+---
+
+### AppTestCopy
+
+```ts
+type AppTestCopy = z.output<typeof appTestCopySchema>;
+```
+
+Observed sibling identity and nonrenewing deadline, never live host grants.
+
+---
+
 ### CapabilityMethodKind
 
 ```ts
@@ -214,6 +234,19 @@ The result of one Instance operation; refusals carry Oyster's error code.
 
 ```ts
 type InstanceHandle = Readonly<{
+  testCopies?: Readonly<{
+    open: (authority, requestId) => Promise<InstanceResult<AppTestCopy>>;
+    inspect: (authority) => Promise<InstanceResult<AppTestCopy | null>>;
+    discard: (authority, copyId) => Promise<InstanceResult<boolean>>;
+    fetch: (authority, copyId, request) => Promise<Response>;
+    call: (
+      authority,
+      copyId,
+      name,
+      input,
+      caller,
+    ) => Promise<InstanceResult<AppMethodReply>>;
+  }>;
   prepare: (
     state,
     release,
@@ -500,6 +533,60 @@ One host's declared routes and the one way to serve them.
 
 ```ts
 type InstallationOperations = Readonly<{
+  recovery: Promise<
+     | {
+     authorityVersion: number;
+     storeGeneration: string;
+     release: {
+        releaseId: Schema.refine<ReleaseId, Schema.String>;
+        appId: Schema.refine<AppId, Schema.String>;
+        artifact: Schema.Struct<{
+           artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+           artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+           provenance: Schema.Struct<{
+              sourceRevision: Schema.refine<..., ...>;
+              sourceTreeDigest: Schema.refine<..., ...>;
+              buildRecipeDigest: Schema.refine<..., ...>;
+           }>;
+        }>;
+     };
+     uiCheck:   | {
+        kind: "passed";
+      }
+        | {
+        kind: "failed";
+        code: "ui_mount_failed";
+        diagnostics?: {
+           failedPredicate:   | "unexpected_candidate_request"
+              | "response_status"
+              | "request_failed"
+              | "page_error"
+              | "candidate_not_mounted";
+           errorName?:   | "Error"
+              | "TypeError"
+              | "RangeError"
+              | "SyntaxError"
+              | "AbortError"
+              | "TimeoutError"
+              | "Other";
+           finalUrlPath: string;
+           consoleErrors: string[];
+           pageErrors: string[];
+           failedRequests: object[];
+           droppedCount: number;
+        };
+      }
+        | {
+        kind: "not_checked";
+        code:   | "boot_runner_unavailable"
+           | "boot_browser_binding_missing"
+           | "boot_clone_unavailable"
+           | "boot_timeout"
+           | "boot_cleanup_failed"
+           | "ui_check_not_run_on_host";
+      };
+   }
+    | null>;
   admit: Promise<
      | {
      requestId: string;
@@ -975,20 +1062,16 @@ type InstallationOperations = Readonly<{
     | null>;
   load: Promise<
      | {
-     admission: {
+     admission:   | {
         requestId: string;
         installationId: string;
         release: {
            releaseId: Schema.refine<ReleaseId, Schema.String>;
            appId: Schema.refine<AppId, Schema.String>;
            artifact: Schema.Struct<{
-              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
-              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
-              provenance: Schema.Struct<{
-                 sourceRevision: ...;
-                 sourceTreeDigest: ...;
-                 buildRecipeDigest: ...;
-              }>;
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
            }>;
         };
         actor:   | {
@@ -1005,7 +1088,36 @@ type InstallationOperations = Readonly<{
          };
         intent: "install-or-select" | "install-or-remint" | "create-only";
         origin: "workflow" | "owner-direct";
-     };
+      }
+        | {
+        authorityVersion: number;
+        storeGeneration: string;
+        requestId: string;
+        installationId: string;
+        actor:   | {
+           kind: z.ZodMiniLiteral<"member">;
+           memberId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"agent">;
+           agentId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"team-key">;
+           keyId: z.ZodMiniString<string>;
+         };
+        intent: "rollback";
+        origin: "owner-direct";
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<..., ...>;
+              artifactDigest: Schema.refine<..., ...>;
+              provenance: Schema.Struct<...>;
+           }>;
+        };
+      };
      scope: {
         tenantId: string & Brand<"OysterTenantId">;
         origin: string;
@@ -1124,7 +1236,7 @@ type InstallationOperations = Readonly<{
    }
     | null>;
   plan: Promise<{
-     admission: {
+     admission:   | {
         requestId: string;
         installationId: string;
         release: {
@@ -1134,9 +1246,9 @@ type InstallationOperations = Readonly<{
               artifactRef: Schema.refine<ArtifactRef, Schema.String>;
               artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
               provenance: Schema.Struct<{
-                 sourceRevision: Schema.refine<..., ...>;
-                 sourceTreeDigest: Schema.refine<..., ...>;
-                 buildRecipeDigest: Schema.refine<..., ...>;
+                 sourceRevision: ...;
+                 sourceTreeDigest: ...;
+                 buildRecipeDigest: ...;
               }>;
            }>;
         };
@@ -1154,7 +1266,40 @@ type InstallationOperations = Readonly<{
          };
         intent: "install-or-select" | "install-or-remint" | "create-only";
         origin: "workflow" | "owner-direct";
-     };
+      }
+        | {
+        authorityVersion: number;
+        storeGeneration: string;
+        requestId: string;
+        installationId: string;
+        actor:   | {
+           kind: z.ZodMiniLiteral<"member">;
+           memberId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"agent">;
+           agentId: z.ZodMiniString<string>;
+         }
+           | {
+           kind: z.ZodMiniLiteral<"team-key">;
+           keyId: z.ZodMiniString<string>;
+         };
+        intent: "rollback";
+        origin: "owner-direct";
+        release: {
+           releaseId: Schema.refine<ReleaseId, Schema.String>;
+           appId: Schema.refine<AppId, Schema.String>;
+           artifact: Schema.Struct<{
+              artifactRef: Schema.refine<ArtifactRef, Schema.String>;
+              artifactDigest: Schema.refine<Sha256Digest, Schema.String>;
+              provenance: Schema.Struct<{
+                 sourceRevision: ...;
+                 sourceTreeDigest: ...;
+                 buildRecipeDigest: ...;
+              }>;
+           }>;
+        };
+      };
      scope: {
         tenantId: string & Brand<"OysterTenantId">;
         origin: string;
@@ -1381,6 +1526,70 @@ holds only bytes that already matched its digest, so a hit is served without
 another store read or hash.
 
 ## Variables
+
+### appTestCopyAuthoritySchema
+
+```ts
+const appTestCopyAuthoritySchema: ZodObject<
+  {
+    selection: ZodPipe<
+      ZodUnknown,
+      ZodTransform<
+        {
+          instanceId: InstanceId;
+          owner: {
+            kind: "installation" | "deployment";
+            id: string;
+          };
+          appId: AppId;
+          releaseId: ReleaseId;
+          authorityVersion: number;
+        },
+        unknown
+      >
+    >;
+    storeGeneration: ZodString;
+  },
+  $strict
+>;
+```
+
+A test copy is fenced to the same store and owner selection as its source.
+
+---
+
+### appTestCopySchema
+
+```ts
+const appTestCopySchema: ZodObject<
+  {
+    selection: ZodPipe<
+      ZodUnknown,
+      ZodTransform<
+        {
+          instanceId: InstanceId;
+          owner: {
+            kind: "installation" | "deployment";
+            id: string;
+          };
+          appId: AppId;
+          releaseId: ReleaseId;
+          authorityVersion: number;
+        },
+        unknown
+      >
+    >;
+    storeGeneration: ZodString;
+    copyId: ZodString;
+    expiresAt: ZodNumber;
+  },
+  $strict
+>;
+```
+
+Host-owned identity and fixed deadline of one disposable App-data sibling.
+
+---
 
 ### capabilityMethodKindSchema
 
