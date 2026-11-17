@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.35.1
+
+### Patch Changes
+
+- Changes since 0.35.0:
+
+  - Updated starter Apps for the Shiitake release.
+  - Updated starter Apps for the Mule release.
+
+- Updated dependencies
+  - @fungi.computer/shiitake@0.19.2
+  - @fungi.computer/knapsack@0.4.15
+  - @fungi.computer/mycelium@0.4.2
+  - @fungi.computer/parakeet@0.12.4
+  - @fungi.computer/shiitake-extensions@0.11.4
+  - @fungi.computer/zookeeper@0.0.36
+  - @fungi.computer/computer@0.14.1
+  - @fungi.computer/computer-contract@0.5.2
+  - @fungi.computer/braid@0.4.23
+  - @fungi.computer/veil@0.7.6
+  - @fungi.computer/workflows-wire@0.4.23
+
 ## 0.35.0
 
 ### Minor Changes
