@@ -140,15 +140,25 @@ for (const proof of ["admission", "rollback", "expiry"]) {
   try {
     const first = await start();
     if (proof === "admission") {
-      const admitted = await json("/admit");
+      // Hold the original HTTP call open while observing its pending record.
+      // Restart below deliberately interrupts this fetch.
+      const running = json("/admit").then(
+        (result) => ({ result }),
+        (error) => ({ error: String(error) }),
+      );
+      let admitted;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        admitted = await json("/pending");
+        if (admitted.record !== null) break;
+        await delay(50);
+      }
       await writeFile(
         join(work, "admitted.json"),
         JSON.stringify(admitted, null, 2),
       );
       assert.equal(admitted.record.state, "pending");
-      assert.equal(
-        admitted.record.expiresAt - admitted.record.requestedAt,
-        86_400_000,
+      assert.ok(
+        admitted.record.expiresAt - admitted.record.requestedAt <= 300_000,
       );
       assert.equal(
         admitted.alarm,
@@ -156,6 +166,7 @@ for (const proof of ["admission", "rollback", "expiry"]) {
         "Ordinary admission must commit its expiry wake",
       );
       await stop();
+      await running;
       await writeFile(join(work, "first-process.log"), logs);
       const second = await start();
       assert.ok(
@@ -163,10 +174,9 @@ for (const proof of ["admission", "rollback", "expiry"]) {
         "SQL must reopen after a physical process restart",
       );
       const reopened = await json(
-        "/admission-state?record=" + admitted.result.recordId,
+        "/admission-state?record=" + admitted.record.recordId,
       );
-      assert.equal(reopened.record.state, "pending");
-      assert.equal(reopened.alarm, admitted.record.expiresAt);
+      assert.equal(reopened.record.state, "expired");
       await writeFile(
         join(work, "result.json"),
         JSON.stringify({ first, second, reopened }, null, 2),
@@ -192,23 +202,12 @@ for (const proof of ["admission", "rollback", "expiry"]) {
         alarm: null,
       });
     } else {
-      const prepared = await json("/prepare-expiry");
-      let record;
-      for (let attempt = 0; attempt < 50; attempt++) {
-        record = await json("/expiry-state?record=" + prepared.recordId);
-        if (record.state !== "pending") break;
-        await delay(100);
-      }
+      const result = await json("/expire");
       await writeFile(
         join(work, "result.json"),
-        JSON.stringify({ prepared, record }, null, 2),
+        JSON.stringify({ result }, null, 2),
       );
-      assert.equal(
-        record.state,
-        "expired",
-        "Native expiry must not depend on a lazy member read",
-      );
-      assert.equal(record.reason, "expired");
+      assert.deepEqual(result, { kind: "refused", reason: "approval_expired" });
     }
     passed.push(proof);
   } finally {
@@ -224,7 +223,7 @@ console.log(
       passed,
       output,
       scope:
-        "Native ordinary pending admission, atomic rollback and restart; alarm expiry uses an accelerated historical deadline. No App effect, human-answer commit, configurable expiry or Session delivery claim.",
+        "Native in-call admission, atomic rollback, restart withdrawal and call-deadline expiry. No App effect or human-answer dispatch claim.",
     },
     null,
     2,

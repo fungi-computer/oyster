@@ -46,7 +46,10 @@ import {
   type StandaloneTenancyEnv,
 } from "./tenancy.js";
 export { StandaloneTenants } from "./tenancy.js";
-import { standalonePreviewRequest } from "./preview.js";
+import {
+  standalonePreviewRequest,
+  standalonePortEntryRoutes,
+} from "./preview.js";
 import {
   standaloneMachineLinkRoutes,
   type StandaloneMachineLinkBindings,
@@ -207,7 +210,13 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
     },
     // Operator source seeding and owner builds share the one owner guard.
     ownerRoutes: (env, scope) =>
-      standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope)),
+      standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope)).include(
+        standalonePortEntryRoutes({
+          ownsComputer: (id) => tenantRegistry(env, scope).ownsComputer(id),
+          issue: (id, ownerId, port) =>
+            env.COMPUTER.getByName(id).issuePortConnect(ownerId, port),
+        }),
+      ),
   });
   return root;
 };
@@ -311,12 +320,8 @@ export default {
       request,
       env,
       (computerId) => computerRegistry(env).ownsComputer(computerId),
-      (computerId, signature, port, service) =>
-        env.COMPUTER.getByName(computerId).portPreview(
-          signature,
-          port,
-          service,
-        ),
+      (computerId, port, incoming) =>
+        env.COMPUTER.getByName(computerId).portPreview(port, incoming),
     );
     if (preview !== null) return preview;
     const ingress = onBoxVmIngress(request, env, env.COMPUTER);

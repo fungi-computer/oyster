@@ -98,3 +98,18 @@ it("passes the Agent's durable archive flag into the common Shiitake door", asyn
     database.close();
   }
 });
+
+it("gives an Oyster Agent skills but no setup.finish, so the setup skill never reaches the money line", async () => {
+  await withProbe(
+    () => 100_000_000,
+    ({ extensions }) => {
+      const ids = extensions.roster.map(({ manifest }) => manifest.id);
+      // The skills extension serves the built-in setup-fungi skill; the Hub
+      // alone adds a tool that ends a setup allowance.
+      expect(ids).toContain("botanical-skills");
+      expect(
+        ids.filter((id) => /setup|finish|billing|credit/u.test(id)),
+      ).toEqual([]);
+    },
+  );
+});

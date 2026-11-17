@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
-import { fileURLToPath, URL } from "node:url";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import * as z from "zod";
 import { expect, it, vi } from "vitest";
@@ -12,9 +12,8 @@ import {
 import { trialWorkerConfiguration } from "../../src/standalone/try-worker.js";
 
 it("serves a loopback trial with secret custody and no debugger, then closes it", async () => {
-  const scratch = fileURLToPath(new URL("../../.botanical/", import.meta.url));
-  await mkdir(scratch, { recursive: true });
-  const directory = await mkdtemp(join(scratch, "trial-worker-"));
+  const directory = await mkdtemp(join(tmpdir(), "oyster-trial-worker-"));
+  const previousCwd = process.cwd();
   vi.stubEnv("HOME", join(directory, "home"));
   const reservation = createServer();
   await new Promise<void>((resolve) =>
@@ -29,6 +28,10 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
   );
   let worker: Awaited<ReturnType<typeof unstable_startWorker>> | undefined;
   try {
+    // A standalone trial owns its working directory. Running local Artifacts
+    // from Botanical's checkout instead makes its private Git initialization
+    // inherit the repository's hook guard, which correctly refuses it.
+    process.chdir(directory);
     await writeFile(
       join(directory, "wrangler.jsonc"),
       JSON.stringify({
@@ -73,11 +76,14 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
       ).json(),
     ).toEqual({ admitted: true, origin: url, backend: "local" });
     // Git storage runs in Wrangler's local simulator: a trial needs no Cloudflare account.
-    expect(
-      await (
-        await fetch(`${url}/git`, { signal: AbortSignal.timeout(15_000) })
-      ).json(),
-    ).toEqual({ created: "trial-probe", branch: "main" });
+    const git = await fetch(`${url}/git`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    expect(git.status).toBe(200);
+    expect(await git.json()).toEqual({
+      created: "trial-probe",
+      branch: "main",
+    });
     expect(await worker.inspectorUrl).toBeUndefined();
     expect(worker.config.bindings?.OYSTER_OWNER_KEY?.type).toBe("secret_text");
     expect(worker.config.dev.server?.hostname).toBe("127.0.0.1");
@@ -88,6 +94,7 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
     ).rejects.toThrow();
   } finally {
     await worker?.dispose();
+    process.chdir(previousCwd);
     await rm(directory, { recursive: true, force: true });
     vi.unstubAllEnvs();
   }

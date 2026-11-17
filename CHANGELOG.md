@@ -1,5 +1,74 @@
 # @fungi.computer/oyster
 
+## 0.34.0
+
+### Minor Changes
+
+- Changes since 0.33.0:
+
+  - fix(oyster): bound cancellation retention to the live call deadline
+  - fix(approvals): align App display metadata with its catalog
+  - fix(oyster): validate approval output and preserve early cancellation
+  - fix(agents): explain typed quota limits without retry advice
+  - fix(oyster): complete App approvals in the originating call
+  - fix(oyster): hide a switch only for the typed unavailable reply
+  - fix(gills): a missing required Gill parameter names the picker to open
+  - fix(oyster): a trial's Computer has no Settings switches, and one definition
+  - fix(oyster): list a local trial's Computer in Settings
+  - fix(hub): answer a waiting App write in its own call
+  - feat(oyster): make the setup-fungi hand-off host-neutral
+  - feat(oyster): seed the starter's first-run section and offer setup-fungi,
+    with no money
+  - feat(oyster): setup-fungi skill and Hub starter first-run seed
+  - fix: isolate Oyster previews and refuse sibling requests
+  - fix(oyster): allow the admitted preview redirect in browsers
+  - fix(oyster): drop the type assertion; keep the meter guard
+  - fix(oyster): keep the optional meter type, assert the DO serves it
+  - fix(oyster): call the daily meter stub's methods directly
+  - fix(oyster): show failed permission saves as toasts and fix the proof's row
+    data
+  - fix(oyster): satisfy typed lint in preview admission and fixtures
+  - perf(oyster): load preview site parsing on demand
+  - fix(oyster): version App documents with their sandbox policy
+  - fix(oyster): open reusable preview links through owner admission
+  - feat(oyster): reuse standalone Release UI verdicts
+  - feat(oyster): admit private port previews through owner sessions
+  - feat(hub): mount the shared Permissions view in Settings
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.18.2
+  - @fungi.computer/caps@0.12.0
+  - @fungi.computer/computer@0.14.0
+  - @fungi.computer/darkroom@0.11.2
+  - @fungi.computer/nacre@0.7.0
+  - @fungi.computer/parakeet@0.12.2
+  - @fungi.computer/shiitake-extensions@0.11.2
+  - @fungi.computer/shiitake@0.19.0
+  - @fungi.computer/veil@0.7.5
+  - @fungi.computer/watchdog@0.1.4
+  - @fungi.computer/braid@0.4.21
+  - @fungi.computer/workflows-wire@0.4.21
+  - @fungi.computer/knapsack@0.4.14
+  - @fungi.computer/mycelium@0.4.1
+  - @fungi.computer/zookeeper@0.0.34
+  - @fungi.computer/bird-dog@0.3.7
+  - @fungi.computer/carrier@0.2.5
+  - @fungi.computer/puffball@0.9.1
+  - @fungi.computer/computer-contract@0.5.1
+  - @fungi.computer/seam@0.2.6
+  - @fungi.computer/forage@0.3.10
+
 ## 0.33.0
 
 ### Minor Changes

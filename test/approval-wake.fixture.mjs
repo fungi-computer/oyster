@@ -1,16 +1,9 @@
 /* global URL, Response */
 import { OysterRegistry } from "../dist/workers.js";
-import {
-  ApprovalLedger,
-  ApprovalRecordSchema,
-} from "@fungi.computer/approvals";
-import * as Schema from "effect/Schema";
+import { ApprovalLedger } from "@fungi.computer/approvals";
 
 const pin = { tenantId: "default", origin: "https://oyster.test" };
 const actor = { kind: "member", memberId: "owner" };
-const decodeStored = Schema.decodeUnknownSync(
-  Schema.fromJsonString(ApprovalRecordSchema),
-);
 
 /** Native admission/expiry proof only; no App dispatch or Session delivery stand-in. */
 export class NativeApprovalRegistry extends OysterRegistry {
@@ -32,7 +25,7 @@ export class NativeApprovalRegistry extends OysterRegistry {
       "INSERT INTO proof_boots VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET boots=boots+1",
     );
   }
-  async admit(rollback = false) {
+  async admit(rollback = false, waitMs = 300_000) {
     await this.approvalSetAutoApprove(pin, actor, {
       scope: { agentId: null },
       family: { module: null, access: "write" },
@@ -49,41 +42,19 @@ export class NativeApprovalRegistry extends OysterRegistry {
         authorityFence: "previously-admitted-native-target",
         idempotencyKey: "native-admission-wake",
         input: { text: "pending intent only" },
+        deadlineAt: Date.now() + 30_000 + waitMs,
       });
-      if (result.kind !== "pending_approval")
-        throw Error("Expected native pending admission");
-      return {
-        result,
-        record: this.ledger().get(result.recordId),
-        alarm: await this.ctx.storage.getAlarm(),
-      };
+      return result;
     } finally {
       this.failCommit = false;
     }
   }
-  async prepareExpiry() {
-    const admitted = await this.admit();
-    const deadline = Date.now() + 50;
-    // An accelerated historical deadline exercises the real alarm's expiry
-    // owner. This is not a claim of a configurable native expiry producer.
-    this.ctx.storage.sql.exec(
-      "UPDATE approval_records SET record_json=json_set(record_json, '$.expiresAt', ?) WHERE record_id=?",
-      deadline,
-      admitted.result.recordId,
-    );
-    await this.ctx.storage.setAlarm(deadline);
-    return { recordId: admitted.result.recordId, deadline };
-  }
-  expiryState(recordId) {
-    // Deliberately do not call ledger.get: that would lazily expire the record
-    // and conceal a missing native expiry wake.
-    const row = this.ctx.storage.sql
-      .exec(
-        "SELECT record_json FROM approval_records WHERE record_id=?",
-        recordId,
-      )
-      .one();
-    return decodeStored(row.record_json);
+  async pending() {
+    const page = await this.approvalList(pin, actor, { state: "pending" });
+    return {
+      record: page.items[0]?.record ?? null,
+      alarm: await this.ctx.storage.getAlarm(),
+    };
   }
   async storedState() {
     return {
@@ -100,6 +71,7 @@ export class NativeApprovalRegistry extends OysterRegistry {
     };
   }
   async admissionState(recordId) {
+    await this.approvalList(pin, actor, {});
     return {
       record: this.ledger().get(recordId),
       alarm: await this.ctx.storage.getAlarm(),
@@ -125,6 +97,7 @@ export class NativeApprovalRegistry extends OysterRegistry {
 const routes = new Map([
   ["/ready", async (stub) => ({ boots: await stub.boots() })],
   ["/admit", (stub) => stub.admit()],
+  ["/pending", (stub) => stub.pending()],
   [
     "/rollback",
     async (stub) => {
@@ -140,11 +113,7 @@ const routes = new Map([
     "/admission-state",
     (stub, url) => stub.admissionState(url.searchParams.get("record")),
   ],
-  ["/prepare-expiry", (stub) => stub.prepareExpiry()],
-  [
-    "/expiry-state",
-    (stub, url) => stub.expiryState(url.searchParams.get("record")),
-  ],
+  ["/expire", (stub) => stub.admit(false, 200)],
 ]);
 
 export default {

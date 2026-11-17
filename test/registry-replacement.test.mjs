@@ -39,6 +39,7 @@ import { createOyster, installOrSelect } from "../dist/host.js";
 import { sha256, parseRelease, verifyRelease } from "../dist/release.js";
 import { defaultTenant, tenantScope } from "../dist/tenant.js";
 import { OysterApprovalHome } from "../dist/approval-home.js";
+import { pendingRecord } from "./native-approval-host.fixture.mjs";
 import { computerHost } from "./computer-host.fixture.mjs";
 import { withBackendConstruction } from "./boot-construction.fixture.ts";
 import { BootGateError } from "../dist/boot-gate.js";
@@ -323,6 +324,8 @@ function fixture(t, artifacts, guest, failedConstructions = 0, backendFor) {
 }
 
 test("Registry idle retention shares the consumed alarm with approvals and preserves approval reconciliation on deletion failure", async (t) => {
+  let stop = () => Promise.resolve();
+  t.after(() => stop());
   let now = Date.UTC(2026, 0, 1);
   t.mock.method(Date, "now", () => now);
   let artifactReads = 0;
@@ -404,7 +407,7 @@ test("Registry idle retention shares the consumed alarm with approvals and prese
       ),
     commit: (write) => write(),
   });
-  const pending = await staging.submit({
+  const call = {
     actor,
     installationId: "historical-notes",
     sessionId: null,
@@ -413,14 +416,16 @@ test("Registry idle retention shares the consumed alarm with approvals and prese
     authorityFence: "historically-admitted-generation",
     idempotencyKey: "approval-before-retention",
     input: { text: "do not dispatch" },
-  });
-  assert.equal(pending.kind, "pending_approval");
+    deadlineAt: Date.now() + 60_000,
+  };
+  const running = staging.submit(call);
+  stop = () => staging.cancel(call);
+  const approval = await pendingRecord(staging);
   const ledger = new ApprovalLedger({
     owner: storage,
     home: { kind: "oyster", id: defaultTenant },
     now: Date.now,
   });
-  const approval = ledger.get(pending.recordId);
   assert.ok(approval.expiresAt < Date.UTC(2026, 3, 1));
   await storage.deleteAlarm();
   await reopened.alarm();
@@ -433,7 +438,12 @@ test("Registry idle retention shares the consumed alarm with approvals and prese
   now = Date.UTC(2026, 3, 1);
   await storage.deleteAlarm();
   await assert.rejects(() => reopened.alarm(), /registry retention fault/);
-  assert.equal(ledger.get(pending.recordId).state, "expired");
+  assert.equal(ledger.get(approval.recordId).state, "expired");
+  await staging.reconcile();
+  assert.deepEqual(await running, {
+    kind: "refused",
+    reason: "approval_expired",
+  });
   assert.equal(await storage.getAlarm(), null);
   database.exec("DROP TRIGGER fail_registry_retention");
   await reopened.alarm();

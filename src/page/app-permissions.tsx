@@ -249,6 +249,9 @@ function PermissionEditor({
   const asked = useRef<ReadonlySet<PermissionGroup["id"]> | null>(null);
   const describeId = useId();
   const mounted = useRef(true);
+  /** Failures and flow notices are toasts, never text that reflows the form. */
+  const toastError = (text: string) =>
+    toast.error(text, { toasterId: describeId, closeButton: true });
   const retire = useCallback(() => {
     setRetired(true);
     setUncertain(false);
@@ -301,7 +304,7 @@ function PermissionEditor({
       console.error("App permissions surrounding-screen refresh failed", cause);
       if (!mounted.current) return;
       setRefreshNeeded(true);
-      setMessage(
+      toastError(
         "Permissions saved. The surrounding screen could not refresh.",
       );
     }
@@ -346,13 +349,13 @@ function PermissionEditor({
         }
         if (result === "unconfirmed") {
           setUncertain(true);
-          setMessage(
+          toastError(
             "The change could not be confirmed. Review current permissions before trying again.",
           );
           return;
         }
         if (result === "refused") {
-          setMessage(
+          toastError(
             "This permission change was refused. No approval was confirmed.",
           );
           return;
@@ -390,14 +393,15 @@ function PermissionEditor({
         ),
       );
       setUncertain(false);
-      setMessage(
+      toast.warning(
         "Current permissions loaded. Review your edits before saving again.",
+        { toasterId: describeId, closeButton: true },
       );
     } catch (cause) {
       console.error("App permissions could not be confirmed", cause);
       if (isMounted()) {
         setUncertain(true);
-        setMessage(
+        toastError(
           "The change could not be confirmed. Review current permissions before trying again.",
         );
       }
@@ -611,18 +615,15 @@ function PermissionEditor({
       )}
       {showFooter && (
         <FormFooter divider={false}>
-          {message !== null &&
-            (saved && !uncertain && !refreshNeeded ? (
-              <Status
-                role="status"
-                size="compact"
-                glyph="dot"
-                tone="success"
-                label={message}
-              />
-            ) : (
-              <span role="status">{message}</span>
-            ))}
+          {message !== null && saved && !uncertain && !refreshNeeded && (
+            <Status
+              role="status"
+              size="compact"
+              glyph="dot"
+              tone="success"
+              label={message}
+            />
+          )}
           {refreshNeeded && (
             <Button
               type="button"

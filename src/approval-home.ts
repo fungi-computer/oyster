@@ -8,7 +8,6 @@ import {
   type ApprovalAdmission,
   type ApprovalHome,
   type Approvals,
-  type PendingApproval,
   type ApprovalApplyResult,
 } from "@fungi.computer/approvals";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
@@ -19,6 +18,8 @@ import type { HostActor } from "@fungi.computer/puffball/app";
 import type { TenantScope } from "./tenant.js";
 import { sha256 } from "./release.js";
 import type { AppSurfaceCache } from "./mcp.js";
+
+const cancellationPruneLimit = 128;
 
 const identity = z.string().min(1).max(256);
 const targetSchema = z.strictObject({
@@ -32,17 +33,59 @@ const callSchema = targetSchema.extend({
   authorityFence: identity,
   idempotencyKey: identity,
   input: z.json(),
+  deadlineAt: z.number().int().nonnegative(),
 });
 /** Host-generated App call metadata; the operation's input contains no actor or approval choice. */
 export type OysterApprovalCall = z.output<typeof callSchema>;
+/** The originating call receives the output or this terminal decision, never a pending notice. */
+export type OysterApprovalResult =
+  | Exclude<ApprovalApplyResult, { kind: "refused" }>
+  | Readonly<{ kind: "denied"; by: string; note?: string; message: string }>
+  | Readonly<{
+      kind: "refused";
+      reason:
+        | Exclude<
+            Extract<ApprovalApplyResult, { kind: "refused" }>["reason"],
+            "expired"
+          >
+        | "approval_expired"
+        | "cancelled";
+      denialNote?: string;
+    }>;
+
+/** Ledger lifecycle names stay internal; every tool uses the same expiry code. */
+function callOutcome(result: ApprovalApplyResult): OysterApprovalResult {
+  return result.kind === "refused"
+    ? {
+        ...result,
+        reason:
+          result.reason === "expired" ? "approval_expired" : result.reason,
+      }
+    : result;
+}
+
+function callKey(call: OysterApprovalCall): string {
+  return JSON.stringify([
+    call.actor,
+    call.installationId,
+    call.sessionId,
+    call.operation,
+    call.idempotencyKey,
+  ]);
+}
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 const intentRow = Schema.decodeUnknownSync(
   Schema.Struct({ target_json: Schema.String }),
+);
+const wakeRow = Schema.decodeUnknownSync(
+  Schema.Struct({ at: Schema.NullOr(Schema.Number) }),
 );
 
 /** The registry's durable App effect home. Mycelium still owns operation/schema invocation. */
 export class OysterApprovalHome {
   readonly ledger: ApprovalLedger;
+  private readonly active = new Map<string, AbortController>();
+  private readonly waiting = new Map<string, () => void>();
   // The home's artifact store and capability configuration are fixed, unlike
   // the authority read fresh from current() for every recheck and dispatch.
   private surfaces: AppSurfaceCache | undefined;
@@ -61,10 +104,22 @@ export class OysterApprovalHome {
     host.owner.sql.exec(
       "CREATE TABLE IF NOT EXISTS oyster_approval_targets (record_id TEXT PRIMARY KEY, target_json TEXT NOT NULL) STRICT",
     );
+    // A cancellation is terminal intent for this call identity, even if its
+    // submit RPC arrives later or this home restarts before it arrives.
+    host.owner.sql.exec(
+      "CREATE TABLE IF NOT EXISTS oyster_approval_cancellations (call_key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL) STRICT",
+    );
+    host.owner.sql.exec(
+      "CREATE INDEX IF NOT EXISTS oyster_approval_cancellations_expiry ON oyster_approval_cancellations (expires_at)",
+    );
+    this.pruneCancellations();
     this.ledger = this.createLedger();
     // A new native home represents boot, before any live call can claim work.
     while (this.ledger.recoverClaims().length > 0) {
       // Each bounded batch settles part of the finite orphan set.
+    }
+    while (this.ledger.withdrawWaiting() > 0) {
+      // No waiting call survived this native home's restart.
     }
   }
 
@@ -75,11 +130,83 @@ export class OysterApprovalHome {
     return new ApprovalLedger({ ...host, persistIntent });
   }
 
-  async submit(
-    raw: OysterApprovalCall,
-  ): Promise<PendingApproval | ApprovalApplyResult> {
+  async submit(raw: OysterApprovalCall): Promise<OysterApprovalResult> {
     // Maintained decoder snapshots the host's serialized call before any await.
     const call = callSchema.parse(raw);
+    // This check survives deletion of the marker: an expired envelope can
+    // never register fresh work, including an automatically approved write.
+    if (call.deadlineAt <= Date.now())
+      return { kind: "refused", reason: "approval_expired" };
+    const key = callKey(call);
+    if (
+      this.host.owner.sql
+        .exec(
+          "SELECT call_key FROM oyster_approval_cancellations WHERE call_key = ?",
+          key,
+        )
+        .toArray().length > 0
+    )
+      return { kind: "refused", reason: "cancelled" };
+    if (this.active.has(key)) return { kind: "refused", reason: "in-flight" };
+    const controller = new AbortController();
+    this.active.set(key, controller);
+    try {
+      return await this.run(call, controller.signal);
+    } finally {
+      this.active.delete(key);
+    }
+  }
+
+  /** Trusted host cancellation, pinned to the same caller and operation identity. */
+  async cancel(raw: OysterApprovalCall): Promise<void> {
+    const call = callSchema.parse(raw);
+    const key = callKey(call);
+    await this.host.commit(
+      () => {
+        this.pruneCancellations();
+        this.host.owner.sql.exec(
+          "INSERT OR IGNORE INTO oyster_approval_cancellations (call_key, expires_at) VALUES (?, ?)",
+          key,
+          call.deadlineAt,
+        );
+        this.active.get(key)?.abort();
+        return Promise.resolve();
+      },
+      () => this.nextWakeAt(),
+    );
+  }
+
+  private pruneCancellations(): void {
+    this.host.owner.sql.exec(
+      "DELETE FROM oyster_approval_cancellations WHERE call_key IN (SELECT call_key FROM oyster_approval_cancellations WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)",
+      Date.now(),
+      cancellationPruneLimit,
+    );
+  }
+
+  private nextWakeAt(): number | null {
+    const cancellation = wakeRow(
+      this.host.owner.sql
+        .exec("SELECT MIN(expires_at) AS at FROM oyster_approval_cancellations")
+        .toArray()[0],
+    ).at;
+    const approval = this.ledger.nextWakeAt();
+    if (cancellation === null) return approval;
+    return approval === null ? cancellation : Math.min(approval, cancellation);
+  }
+
+  private async run(
+    call: OysterApprovalCall,
+    signal: AbortSignal,
+  ): Promise<OysterApprovalResult> {
+    const cancelled = () => signal.aborted;
+    const expiresAt = Math.min(
+      Date.now() + 5 * 60_000,
+      call.deadlineAt - 30_000,
+    );
+    if (cancelled()) return { kind: "refused", reason: "cancelled" };
+    if (call.deadlineAt <= Date.now())
+      return { kind: "refused", reason: "approval_expired" };
     const actor = call.actor;
     const target = targetSchema.parse({
       actor: call.actor,
@@ -119,16 +246,61 @@ export class OysterApprovalHome {
           authorityFence: call.authorityFence,
           idempotencyKey: call.idempotencyKey,
           inputJson: JSON.stringify(call.input),
+          expiresAt,
         }),
-      () => ledger.nextWakeAt(),
+      () => this.nextWakeAt(),
     );
-    if (staged.kind === "refused") return staged;
-    // Only this call's own policy approval applies inline; a retry reports
-    // status and leaves every other approved record to the home's work loop.
-    if (!staged.created || staged.record.state !== "approved")
-      return ledger.outcome(staged.record);
-    // The native commit is complete before any external effect can run.
-    return ledger.applyInline(staged.record.recordId, this.execution());
+    if (staged.kind === "refused") return callOutcome(staged);
+    const recordId = staged.record.recordId;
+    try {
+      if (ledger.get(recordId)?.state === "pending" && !cancelled())
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", finish);
+            this.waiting.delete(recordId);
+            resolve();
+          };
+          const timer = setTimeout(finish, Math.max(0, expiresAt - Date.now()));
+          this.waiting.set(recordId, finish);
+          signal.addEventListener("abort", finish, { once: true });
+          // The answer may have arrived while the native commit was finishing.
+          if (cancelled() || ledger.get(recordId)?.state !== "pending")
+            finish();
+        });
+      if (cancelled()) return { kind: "refused", reason: "cancelled" };
+      const record = ledger.get(recordId);
+      if (
+        record?.state === "denied" &&
+        record.reason === "declined" &&
+        record.by?.kind === "human"
+      ) {
+        const by = record.by.memberId;
+        const denied = {
+          kind: "denied",
+          by,
+          message: `Denied by ${by}.${record.denialNote === undefined ? "" : ` User-provided note: ${JSON.stringify(record.denialNote)}`}`,
+        } satisfies OysterApprovalResult;
+        return record.denialNote === undefined
+          ? denied
+          : { ...denied, note: record.denialNote };
+      }
+      if (record?.state === "pending" || record?.state === "expired")
+        return { kind: "refused", reason: "approval_expired" };
+      if (
+        record?.state === "approved" &&
+        record.by?.kind !== "policy" &&
+        Date.now() >= expiresAt
+      )
+        return { kind: "refused", reason: "approval_expired" };
+      // Native commit completed before the waiting caller claims the effect.
+      const deadlineAt = Math.min(call.deadlineAt, Date.now() + 30_000);
+      return callOutcome(
+        await ledger.apply(recordId, this.execution(signal, deadlineAt)),
+      );
+    } finally {
+      ledger.withdraw(recordId);
+    }
   }
 
   /** Bind each read/decision to current membership, not the renderer's actor bytes. */
@@ -156,18 +328,20 @@ export class OysterApprovalHome {
             (await this.resolve(record, actor)).kind === "authorized",
         };
       },
-      decision: async (recordId) => {
-        await this.ledger.apply(recordId, this.execution());
+      decision: (recordId) => {
+        this.waiting.get(recordId)?.();
+        return Promise.resolve();
       },
     });
   }
 
-  /** One native alarm quantum; apply owns the fresh grant/fence check and single claim. */
-  async reconcile(): Promise<number | null> {
+  /** Alarms expire records only. They never execute a former call's effect. */
+  reconcile(): Promise<number | null> {
+    this.pruneCancellations();
     this.ledger.expirePending();
-    for (const recordId of this.ledger.pendingApplications())
-      await this.ledger.apply(recordId, this.execution());
-    return this.ledger.nextWakeAt();
+    for (const [recordId, finish] of this.waiting)
+      if (this.ledger.get(recordId)?.state !== "pending") finish();
+    return Promise.resolve(this.nextWakeAt());
   }
 
   private async resolve(record: ApprovalRecord, answerer?: HostActor) {
@@ -267,10 +441,19 @@ export class OysterApprovalHome {
     };
   }
 
-  private execution(): ApprovalApplyHost {
+  private execution(
+    callerSignal: AbortSignal,
+    deadlineAt: number,
+  ): ApprovalApplyHost {
+    const signal = AbortSignal.any([
+      callerSignal,
+      AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())),
+    ]);
     return {
       recheck: async (record) => {
+        signal.throwIfAborted();
         const current = await this.resolve(record);
+        signal.throwIfAborted();
         return current.kind === "refused"
           ? current
           : { kind: "authorized", authorityFence: current.fence };
@@ -278,11 +461,10 @@ export class OysterApprovalHome {
       dispatch: async ({ record, input }) => {
         // Reconstruct again at dispatch; never widen a captured operation or fence.
         const current = await this.resolve(record);
+        signal.throwIfAborted();
         if (current.kind === "refused") return current;
         if (current.fence !== record.authorityFence)
           return { kind: "refused", reason: "not-granted" };
-        const deadlineAt = Date.now() + 30_000;
-        const signal = AbortSignal.timeout(30_000);
         const output = await invokeModuleOperation(
           current.module,
           record.operation,

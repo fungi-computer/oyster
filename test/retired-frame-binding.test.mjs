@@ -159,6 +159,7 @@ test(
           installationOperation: (request) =>
             registry.installationOperation(request),
           storageBackend: (...args) => registry.storageBackend(...args),
+          bootUiResult: (input) => registry.bootUiResult(input),
         }),
       },
       INSTANCES: {

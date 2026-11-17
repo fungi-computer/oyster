@@ -646,7 +646,10 @@ test("desktop Gill exposes missing placement and host-only Computer choices with
     });
   const missing = await send({ viewId: "context" });
   assert.equal(missing.status, 200);
-  assert.equal((await missing.json()).reason, "params_required");
+  const refusal = await missing.json();
+  assert.equal(refusal.reason, "params_required");
+  // The desktop can offer its picker only if the host names the parameter.
+  assert.deepEqual(refusal.recovery, { kind: "configure", param: "computer" });
   assert.deepEqual(
     await (await send({ viewId: "context", options: "computer" })).json(),
     { options: [{ value: "computer_fixture", label: "computer_fixture" }] },

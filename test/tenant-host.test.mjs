@@ -301,6 +301,7 @@ test("per-boot tenant scope selects the exact origin and registry for backend-pl
         }
         const registry = registryDatabases.get(name);
         return {
+          bootUiResult: (input) => registry.bootUiResult(input),
           bootCapability(input) {
             registryCalls.push({
               name,

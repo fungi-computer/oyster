@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createStarterLedger,
   ensureStarterAgent,
+  seedStarterHome,
   starterAgent,
   type StarterAgentHost,
 } from "../../src/starter-agent.js";
@@ -157,5 +158,67 @@ describe("starter Agent laws", () => {
     expect(directory.list(grant)).toHaveLength(0);
     failure = null;
     expect(await ensureStarterAgent(host())).toBe("created");
+  });
+
+  it("seeds Home once for the created starter, and only then records it", async () => {
+    const { host } = team();
+    const seeded: string[] = [];
+    const seeding: StarterAgentHost = {
+      ...host(),
+      seedHome: (agentId) => {
+        seeded.push(agentId);
+        expect(
+          createStarterLedger(fromNodeSqlite(database).sql).read(),
+        ).toMatchObject({ outcome: "seed-pending", agentId });
+        return Promise.resolve();
+      },
+    };
+    expect(await ensureStarterAgent(seeding)).toBe("created");
+    expect(await ensureStarterAgent(seeding)).toBe("already-offered");
+    expect(seeded).toHaveLength(1);
+    expect(
+      createStarterLedger(fromNodeSqlite(database).sql).read(),
+    ).toMatchObject({ outcome: "created", agentId: seeded[0] });
+  });
+
+  it("retries a failed Home seed for the same Agent and never makes a second", async () => {
+    const { directory, host } = team();
+    let broken = true;
+    const seeded: string[] = [];
+    const seeding: StarterAgentHost = {
+      ...host(),
+      seedHome: (agentId) => {
+        if (broken) return Promise.reject(new Error("Home unavailable"));
+        seeded.push(agentId);
+        return Promise.resolve();
+      },
+    };
+    expect(await ensureStarterAgent(seeding)).toBe("failed");
+    expect(reports).toHaveLength(1);
+    expect(
+      createStarterLedger(fromNodeSqlite(database).sql).read(),
+    ).toMatchObject({ outcome: "seed-pending" });
+    broken = false;
+    expect(await ensureStarterAgent(seeding)).toBe("created");
+    expect(directory.list(grant)).toHaveLength(1);
+    expect(seeded).toEqual([directory.list(grant)[0]?.agentId]);
+    expect(await ensureStarterAgent(seeding)).toBe("already-offered");
+    expect(seeded).toHaveLength(1);
+  });
+
+  it("writes the first-run section only to a missing AGENTS.md", async () => {
+    const homes = new Map<string, string>();
+    const writeIfMissing = (path: string, content: string) => {
+      if (!homes.has(path)) homes.set(path, content);
+      return Promise.resolve();
+    };
+    await seedStarterHome(writeIfMissing);
+    const seeded = homes.get("AGENTS.md") ?? "";
+    expect(seeded).toContain("## First conversation");
+    expect(seeded).toContain('skill.load({name: "setup-fungi"})');
+    expect(seeded).toContain("delete this section");
+    homes.set("AGENTS.md", "mine");
+    await seedStarterHome(writeIfMissing);
+    expect(homes.get("AGENTS.md")).toBe("mine");
   });
 });

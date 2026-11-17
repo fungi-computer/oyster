@@ -1,3 +1,4 @@
+import { PortAccessError } from "@fungi.computer/computer/port-access";
 import {
   attachedBackendId,
   computerSizeSchema,
@@ -152,6 +153,7 @@ export type StandaloneComputerEnv = ComputerEnv &
     KEYS: DurableObjectNamespace<OysterKeys>;
     OYSTER_ORIGIN?: string;
     OYSTER_PREVIEW_ORIGIN?: string;
+    OYSTER_PREVIEW_DOMAIN?: string;
     OYSTER_OWNER_NAME?: string;
   }>;
 
@@ -625,20 +627,19 @@ export class ComputerDO
     await this.#previewInstallation(selector);
   }
 
-  #previewOwner() {
+  async #previewOwner() {
     if (this.#preview !== undefined) return this.#preview;
-    const origins = previewOrigins(this.previewBindings);
+    const origins = await previewOrigins(this.previewBindings);
     if (origins === null) throw new PreviewRefused();
+    await this.listPortsAfterAcceptance(() => undefined);
     this.#preview = createStandalonePreview(
       this.state.storage,
       this.#id(),
-      origins.preview,
+      origins,
       {
-        current: (selector) => this.#currentPreview(selector),
-        accept: (selector) => {
-          this.#accept(this.#previewGrant(selector.ownerId), "listPorts");
+        accept: (ownerId) => {
+          this.#accept(this.#previewGrant(ownerId), "listPorts");
         },
-        list: (accept) => this.listPortsAfterAcceptance(accept),
         forward: (port, request, accept) =>
           this.portPreviewAfterAcceptance(port, request, accept),
       },
@@ -711,7 +712,7 @@ export class ComputerDO
     };
   }
 
-  /** Issue preview tickets for every exposed port, or refuse typed. */
+  /** List reusable owner entry URLs for every exposed port, or refuse typed. */
   async portPreviews(
     authority: ComputerGrant,
     selectorInput: PreviewSelector,
@@ -722,7 +723,8 @@ export class ComputerDO
         value: await this.#portPreviews(authority, selectorInput),
       };
     } catch (cause) {
-      if (cause instanceof PreviewRefused) return previewRefusal;
+      if (cause instanceof PreviewRefused || cause instanceof PortAccessError)
+        return previewRefusal;
       throw cause;
     }
   }
@@ -745,19 +747,27 @@ export class ComputerDO
     for (const port of ports.ports) {
       projected.push({
         port,
-        ...(await this.#previewOwner().issue(selector, port)),
+        previewUrl: (await this.#previewOwner()).entry(port),
         openMode: "external-only",
       });
     }
     return Schema.decodeUnknownSync(computerPortsSchema)({ ports: projected });
   }
 
-  async portPreview(
-    signature: string,
-    port: number,
-    request: Request,
-  ): Promise<Response> {
-    return this.#previewOwner().fetch(signature, port, request);
+  async issuePortConnect(ownerId: string, port: number) {
+    const owner = await (await standaloneTenancy(this.previewBindings)).owner();
+    if (owner?.actor.memberId !== ownerId) return null;
+    try {
+      return await (await this.#previewOwner()).issueOwner(ownerId, port);
+    } catch (cause) {
+      if (cause instanceof PreviewRefused || cause instanceof PortAccessError)
+        return null;
+      throw cause;
+    }
+  }
+
+  async portPreview(port: number, request: Request): Promise<Response> {
+    return (await this.#previewOwner()).fetch(port, request);
   }
 
   #id(): string {
@@ -1237,7 +1247,7 @@ export function standaloneComputerCapabilities(
     "/ports",
     owner("direct-or-app"),
     async (context, { principal }) => {
-      if (previewOrigins(env) === null)
+      if ((await previewOrigins(env)) === null)
         return context.json({ error: "port_previews_not_configured" });
       const { installation } = context.env;
       const ownerId = oysterPrincipalId(principal);
@@ -1442,7 +1452,7 @@ export const computerFrameMethods: ComputerFrameMethods = {
   },
 } satisfies FrameBindingMethods<StandaloneComputerResult>;
 
-/** Owner-only preview tickets carry the verified frame's Installation selection. */
+/** Owner-only preview issuance checks the verified frame's Installation selection. */
 async function computerPreviewInvocation(
   env: StandaloneComputerEnv,
   frame: InvocationFrame<OysterInvocationHost>,

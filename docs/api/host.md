@@ -94,6 +94,45 @@ Observed sibling identity and nonrenewing deadline, never live host grants.
 
 ---
 
+### OysterApprovalResult
+
+```ts
+type OysterApprovalResult =
+  | Exclude<
+      ApprovalApplyResult,
+      {
+        kind: "refused";
+      }
+    >
+  | Readonly<{
+      kind: "denied";
+      by: string;
+      note?: string;
+      message: string;
+    }>
+  | Readonly<{
+      kind: "refused";
+      reason:
+        | Exclude<
+            Extract<
+              ApprovalApplyResult,
+              {
+                kind: "refused";
+              }
+            >["reason"],
+            "expired"
+          >
+        | "approval_expired"
+        | "cancelled";
+      denialNote?: string;
+    }>;
+```
+
+The originating call receives the output or this terminal decision, never a
+pending notice.
+
+---
+
 ### CapabilityMethodKind
 
 ```ts
@@ -405,17 +444,7 @@ Variables: TimingVariables;
 ```ts
 type OysterHost = Readonly<{
   approvals?: Readonly<{
-     submit: Promise<
-        | {
-        kind: Schema.Literal<"pending_approval">;
-        recordId: Schema.String;
-        description: Schema.Struct<{
-           title: Schema.String;
-           inputBytes: Schema.Int;
-           inputSha256: Schema.String;
-        }>;
-      }
-       | ApprovalApplyResult>;
+     submit: Promise<OysterApprovalResult>;
   }>;
   workflows?: (principal) => Promise<
      | {

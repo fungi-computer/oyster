@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { defaultTenant, tenantScope } from "@fungi.computer/oyster/tenant";
+import { computerList, computerReadFile } from "@fungi.computer/agar/computer";
+import { createAppBuild } from "@fungi.computer/puffball/app";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -42,6 +44,12 @@ const { serveHost } = await import("../../src/authorization.ts");
 const { normalizeAppPublisherRecipe } =
   await import("../../src/build-contract.ts");
 const { createOysterAppBuilds } = await import("../../src/app-builds.ts");
+const { approvedInstallation } =
+  await import("../../src/testing/installation.ts");
+const { applyInstallationCommand, deriveDeclaredOperations } =
+  await import("../../src/apps/index.ts");
+const { sha256, parseRelease } = await import("../../src/release.ts");
+const Result = await import("effect/Result");
 hooks.deregister();
 
 /** The standalone root's one composition at the default tenant, reached through a root door. */
@@ -53,17 +61,17 @@ class RootDoor extends StandaloneAgent {
 const rootHost = (env) =>
   new RootDoor({}, env).hostAt(tenantScope(defaultTenant, env.OYSTER_ORIGIN));
 
-test("preview ingress routes the ticket's owned Computer, not the mutable selected Computer", async () => {
+test("preview ingress routes the hostname’s owned Computer, not the mutable selected Computer", async () => {
   const targets = [];
   const env = {
     OYSTER_ORIGIN: "https://fleet.test",
-    OYSTER_PREVIEW_ORIGIN: "https://ports.test",
-    OYSTER_COMPUTER_ID: "default-workspace",
+    OYSTER_PREVIEW_DOMAIN: "ports.test",
+    OYSTER_COMPUTER_ID: "workspace",
     REGISTRY: {
       getByName: (name) => {
         assert.equal(name, "registry");
         return {
-          ownsComputer: (id) => ["default-workspace", "A", "B"].includes(id),
+          ownsComputer: (id) => ["workspace", "a", "b"].includes(id),
         };
       },
     },
@@ -71,29 +79,25 @@ test("preview ingress routes the ticket's owned Computer, not the mutable select
       getByName: (computerId) => {
         targets.push(computerId);
         return {
-          portPreview: async (signature, port, request) => {
-            assert.equal(signature, "a".repeat(20));
+          portPreview: async (port, request) => {
             assert.equal(port, 3000);
-            assert.equal(request.url, "http://localhost/docs?q=1");
-            assert.equal(request.headers.has("Authorization"), false);
-            assert.equal(request.headers.has("Cookie"), false);
+            assert.equal(new globalThis.URL(request.url).pathname, "/docs");
+            assert.equal(request.headers.has("Authorization"), true);
+            assert.equal(request.headers.has("Cookie"), true);
             return new globalThis.Response(computerId);
           },
         };
       },
     },
   };
-  for (const id of ["default-workspace", "A", "B", "A"]) {
+  for (const id of ["workspace", "a", "b", "a"]) {
     const response = await standaloneWorker.fetch(
-      new globalThis.Request(
-        `https://ports.test/preview/${id}/3000/${"a".repeat(20)}/docs?q=1`,
-        {
-          headers: {
-            Authorization: "Bearer must-not-forward",
-            Cookie: "must-not-forward",
-          },
+      new globalThis.Request(`https://${id}-3000.ports.test/docs?q=1`, {
+        headers: {
+          Authorization: "Bearer must-not-forward",
+          Cookie: "must-not-forward",
         },
-      ),
+      }),
       env,
       {},
     );
@@ -101,14 +105,12 @@ test("preview ingress routes the ticket's owned Computer, not the mutable select
     assert.equal(await response.text(), id);
   }
   const foreign = await standaloneWorker.fetch(
-    new globalThis.Request(
-      `https://ports.test/preview/foreign/3000/${"a".repeat(20)}/docs?q=1`,
-    ),
+    new globalThis.Request("https://foreign-3000.ports.test/docs?q=1"),
     env,
     {},
   );
   assert.equal(foreign.status, 404);
-  assert.deepEqual(targets, ["default-workspace", "A", "B", "A"]);
+  assert.deepEqual(targets, ["workspace", "a", "b", "a"]);
 });
 
 test("public egress reads the live Computer named by host props, never a guest's Computer hint", async (context) => {
@@ -190,6 +192,206 @@ function state(database) {
     blockConcurrencyWhile: (work) => work(),
   };
 }
+
+/** Real standalone root, tenancy and registry; only native Computer/R2 ports are fixtures. */
+async function standaloneFilesFixture(t, granted) {
+  const tenantsDatabase = new DatabaseSync(":memory:");
+  const registryDatabase = new DatabaseSync(":memory:");
+  t.after(() => {
+    registryDatabase.close();
+    tenantsDatabase.close();
+  });
+  const tenants = new StandaloneTenants(state(tenantsDatabase));
+  const artifacts = new Map();
+  const bytes = new globalThis.TextEncoder().encode("Trial Computer file\n");
+  const listing = {
+    path: "/workspace",
+    entries: [
+      { name: "proof.txt", type: "file", size: bytes.length, modifiedAt: 0 },
+    ],
+    nextOffset: null,
+  };
+  const calls = [];
+  const env = {
+    OYSTER_ORIGIN: "http://127.0.0.1:8787",
+    OYSTER_OWNER_KEY: "standalone-files-fixture-owner-key",
+    OYSTER_OWNER_NAME: "owner",
+    OYSTER_COMPUTER_ID: "workspace",
+    OYSTER_COMPUTER_BACKEND: "local",
+    TENANTS: { getByName: () => tenants },
+    RELEASES: {
+      get: async (ref) => {
+        assert.ok(artifacts.has(ref), "Only Release artifacts belong in R2");
+        return { arrayBuffer: async () => artifacts.get(ref).slice().buffer };
+      },
+      list: () => assert.fail("Trial files must not use the R2 fallback"),
+    },
+    COMPUTER: {
+      getByName: (computerId) => ({
+        fileList: async (grant, path, limit, offset) => {
+          calls.push({ computerId, operation: "list" });
+          assert.equal(grant.computerId, "workspace");
+          assert.deepEqual(
+            { path, limit, offset },
+            {
+              path: "/workspace",
+              limit: 10,
+              offset: 0,
+            },
+          );
+          return listing;
+        },
+        fileRead: async (grant, path) => {
+          calls.push({ computerId, operation: "read" });
+          assert.equal(grant.computerId, "workspace");
+          assert.equal(path, "/workspace/proof.txt");
+          return bytes;
+        },
+      }),
+    },
+  };
+  const registry = new RootRegistry(state(registryDatabase), env);
+  env.REGISTRY = { getByName: () => registry };
+  const host = await rootHost(env);
+  const contracts = [computerList, computerReadFile];
+  const descriptors = contracts.map((contract) => {
+    const registered = host.capabilities.filter(({ id }) => id === contract.id);
+    assert.equal(
+      registered.length,
+      1,
+      `${contract.id} is registered exactly once`,
+    );
+    assert.equal(registered[0].version, contract.version);
+    return registered[0];
+  });
+  const declaration = {
+    capabilities: contracts.map(({ id }) => id),
+    handlers: [],
+    roles: [],
+  };
+  const uiBytes = new globalThis.TextEncoder().encode(
+    "<!doctype html><title>Files proof</title>",
+  );
+  const uiDigest = await sha256(uiBytes);
+  artifacts.set("artifact:files-proof-ui", uiBytes);
+  const ui = {
+    artifactRef: "artifact:files-proof-ui",
+    digest: uiDigest,
+    mediaType: "text/html; charset=utf-8",
+    byteLength: uiBytes.length,
+    version: uiDigest,
+  };
+  const root = new globalThis.TextEncoder().encode(
+    JSON.stringify(createAppBuild(ui, null, declaration)),
+  );
+  const digest = await sha256(root);
+  artifacts.set("artifact:files-proof", root);
+  const release = parseRelease({
+    appId: "app_files",
+    releaseId: "rel_files",
+    artifact: {
+      artifactRef: "artifact:files-proof",
+      artifactDigest: digest,
+      provenance: {
+        sourceRevision: "git:" + "a".repeat(40),
+        sourceTreeDigest: digest,
+        buildRecipeDigest: digest,
+      },
+    },
+  });
+  let installation = await approvedInstallation({
+    installationId: "files-proof",
+    instanceId: instanceIds.instance.generate(),
+    release,
+    declaration,
+    descriptors,
+  });
+  if (!granted) {
+    const revoked = applyInstallationCommand(
+      installation,
+      {
+        kind: "change-grants",
+        changes: contracts.map(({ id }) => ({ capability: id, grant: null })),
+      },
+      {
+        by: { kind: "member", memberId: "fixture-owner" },
+        role: "owner",
+        expectedVersion: installation.authority.authorityVersion,
+        declaration,
+        declaredOperations: await deriveDeclaredOperations(
+          release,
+          declaration,
+          descriptors,
+        ),
+        now: 1002,
+        identity: installation,
+      },
+    );
+    assert.ok(Result.isSuccess(revoked));
+    installation = revoked.success.next;
+  }
+  assert.deepEqual(
+    await host.installations.compareAndPut(
+      installation,
+      0,
+      await host.installations.generation(),
+    ),
+    { ok: true },
+  );
+  const request = (contract, method, query) => {
+    const descriptor = descriptors.find(({ id }) => id === contract.id);
+    const wire = descriptor.methods[method];
+    const url = new globalThis.URL(
+      descriptor.base + wire.path,
+      env.OYSTER_ORIGIN,
+    );
+    url.search = new globalThis.URLSearchParams(query).toString();
+    return standaloneWorker.fetch(
+      new globalThis.Request(url, {
+        method: wire.method,
+        headers: {
+          Authorization: `Bearer ${env.OYSTER_OWNER_KEY}`,
+          "X-Oyster-Installation": installation.installationId,
+        },
+      }),
+      env,
+      {},
+    );
+  };
+  return { request, calls, listing, bytes };
+}
+
+test("a granted standalone App lists and reads the trial Computer through Agar's file contracts", async (t) => {
+  const fixture = await standaloneFilesFixture(t, true);
+  const listed = await fixture.request(computerList, "list", {
+    path: "/workspace",
+    limit: "10",
+    offset: "0",
+  });
+  assert.equal(listed.status, 200);
+  assert.deepEqual(await listed.json(), fixture.listing);
+  const read = await fixture.request(computerReadFile, "open", {
+    path: "/workspace/proof.txt",
+  });
+  assert.equal(read.status, 200);
+  assert.deepEqual(new Uint8Array(await read.arrayBuffer()), fixture.bytes);
+  assert.deepEqual(fixture.calls, [
+    { computerId: "workspace", operation: "list" },
+    { computerId: "workspace", operation: "read" },
+  ]);
+});
+
+test("a standalone App declaring files without grants cannot list or read the trial Computer", async (t) => {
+  const fixture = await standaloneFilesFixture(t, false);
+  for (const [contract, method, query] of [
+    [computerList, "list", { path: "/workspace", limit: "10", offset: "0" }],
+    [computerReadFile, "open", { path: "/workspace/proof.txt" }],
+  ]) {
+    const response = await fixture.request(contract, method, query);
+    assert.equal(response.status, 403);
+  }
+  assert.deepEqual(fixture.calls, []);
+});
 
 test("multiple Computers create list and start retain identities across standalone registry restart", async () => {
   const tenantsDatabase = new DatabaseSync(":memory:");

@@ -24,5 +24,4 @@ When a call does not work, find out why before you call it again.
    `exitCode` and `stderr`.
 
 `REFERENCE.md` in this folder lists the limits that most often explain a
-failure, and what a refusal, a `pending_approval` result and a missing Home
-mean.
+failure, and what a refusal, an approval wait and a missing Home mean.

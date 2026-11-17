@@ -53,6 +53,10 @@ it("ends a saved Granite run with tool guidance before opening any provider door
     );
     expect(lease.retryable(result)).toBe(false);
     expect(result.content).toEqual([]);
+    expect(result.modelFailure).toEqual({
+      provider: "cloudflare-workers-ai",
+      cause: { code: "tools_unsupported" },
+    });
   } finally {
     await lease.release();
   }

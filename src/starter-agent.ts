@@ -16,10 +16,20 @@ export const starterAgent = {
   requestId: "starter-agent:v1",
 } as const;
 
+/** Seed only a missing Home file; the host supplies an atomic create-if-absent. */
+export async function seedStarterHome(
+  writeIfMissing: (path: string, content: string) => Promise<void>,
+): Promise<void> {
+  await writeIfMissing(
+    "AGENTS.md",
+    '## First conversation\nYour person is new to Fungi. In your first conversation, load the\n`setup-fungi` skill with skill.load({name: "setup-fungi"}) and follow it.\nWhen setup is finished, delete this section.\n',
+  );
+}
+
 /** What the ledger remembers: that the starter was settled, never to be offered again. */
 export type StarterLedgerRow = Readonly<{
   version: number;
-  outcome: "created" | "team-not-empty";
+  outcome: "seed-pending" | "created" | "team-not-empty";
   agentId: string | null;
   at: number;
 }>;
@@ -27,7 +37,7 @@ export type StarterLedgerRow = Readonly<{
 /** One row per Team in the host's own SQLite. */
 export type StarterLedgerStore = Readonly<{
   read(): StarterLedgerRow | undefined;
-  /** First write wins; a later one is ignored. */
+  /** First write wins, except completing the same pending starter's seed. */
   record(row: StarterLedgerRow): void;
 }>;
 
@@ -53,6 +63,8 @@ export type StarterAgentHost = Readonly<{
     name: string;
     requestId: string;
   }): Promise<StarterCreateResult>;
+  /** Hosts with a Home seed it atomically; failure leaves a retryable ledger row. */
+  seedHome?(agentId: string): Promise<void>;
   /** Where a failed attempt is reported; the caller's read never fails. */
   report?(cause: unknown): void;
   now?(): number;
@@ -69,7 +81,7 @@ export type StarterOutcome =
 
 const ledgerRowSchema = z.strictObject({
   version: z.number().int(),
-  outcome: z.enum(["created", "team-not-empty"]),
+  outcome: z.enum(["seed-pending", "created", "team-not-empty"]),
   agent_id: z.string().nullable(),
   at: z.number(),
 });
@@ -99,7 +111,7 @@ export function createStarterLedger(
     },
     record(row) {
       sql.exec(
-        "INSERT INTO starter_agent(id, version, outcome, agent_id, at) VALUES(1, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO starter_agent(id, version, outcome, agent_id, at) VALUES(1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET outcome = excluded.outcome WHERE starter_agent.outcome = 'seed-pending' AND excluded.outcome = 'created' AND starter_agent.agent_id = excluded.agent_id",
         row.version,
         row.outcome,
         row.agentId,
@@ -129,7 +141,15 @@ export function ensureStarterAgent(
 async function settle(host: StarterAgentHost): Promise<StarterOutcome> {
   try {
     if (!host.isOwner()) return "not-owner";
-    if ((await host.ledger.read()) !== undefined) return "already-offered";
+    const previous = await host.ledger.read();
+    if (previous !== undefined) {
+      if (previous.outcome !== "seed-pending") return "already-offered";
+      if (previous.agentId === null || host.seedHome === undefined)
+        throw new Error("Pending starter has no Home seed owner");
+      await host.seedHome(previous.agentId);
+      await host.ledger.record({ ...previous, outcome: "created" });
+      return "created";
+    }
     const at = (host.now ?? Date.now)();
     if ((await host.agentCount()) > 0) {
       await host.ledger.record({
@@ -145,6 +165,15 @@ async function settle(host: StarterAgentHost): Promise<StarterOutcome> {
       requestId: starterAgent.requestId,
     });
     if (result.status === "unfunded") return "unfunded";
+    if (host.seedHome !== undefined) {
+      await host.ledger.record({
+        version: starterAgent.version,
+        outcome: "seed-pending",
+        agentId: result.agentId,
+        at,
+      });
+      await host.seedHome(result.agentId);
+    }
     await host.ledger.record({
       version: starterAgent.version,
       outcome: "created",

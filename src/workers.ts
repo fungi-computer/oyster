@@ -35,9 +35,10 @@ import {
   BOOT_DEADLINE_MS,
   BOOT_TRANSPORT_GRACE_MS,
   readBootUi,
+  uiBootCheckOutcomeSchema,
   type UiBootCheckOutcome,
 } from "./boot-gate.js";
-import { checkBootPage } from "./browser/boot.js";
+import { BOOT_CHECK_VERSION, checkBootPage } from "./browser/boot.js";
 import { bindingSessions, type BrowserBinding } from "./browser/sessions.js";
 import { registryInstallations } from "./internal/registry-installations.js";
 import { migrateInstallationRows } from "./installation-migration.js";
@@ -106,7 +107,11 @@ import { DurableObject, type WorkerEntrypoint } from "cloudflare:workers";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type { Release } from "@fungi.computer/puffball";
+import {
+  parseReleaseId,
+  parseSha256Digest,
+  type Release,
+} from "@fungi.computer/puffball";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import {
   AppInstanceError,
@@ -244,12 +249,18 @@ const bootCapabilityRows = z.array(
   }),
 );
 
+const recordedBootOutcome = uiBootCheckOutcomeSchema.refine(
+  (outcome) => outcome.kind !== "not_checked",
+  "An inconclusive UI check is not a Release verdict",
+);
+const bootResultRow = z.strictObject({ record: z.string() });
+
 const approvalHomePinRow = Schema.Struct({
   tenant_id: tenantIdSchema,
   origin: Schema.String,
 });
 
-/** The installation registry: one SQLite-backed Durable Object per Oyster. */
+/** Installation metadata and UI verdicts in one SQLite-backed Durable Object per tenant. */
 export class OysterRegistry<
   Env extends OysterWorkerEnv = OysterWorkerEnv,
 > extends DurableObject<Env> {
@@ -274,6 +285,14 @@ export class OysterRegistry<
     call: OysterApprovalCall,
   ) {
     return this.approvalHome(pin).submit(call);
+  }
+
+  /** Cancellation has the same trusted host identity as submission, never App input. */
+  approvalCancel(
+    pin: Readonly<{ tenantId: string; origin: string }>,
+    call: OysterApprovalCall,
+  ) {
+    return this.approvalHome(pin).cancel(call);
   }
 
   private approvalHome(pin: Readonly<{ tenantId: string; origin: string }>) {
@@ -322,7 +341,7 @@ export class OysterRegistry<
     return this.#approval;
   }
 
-  /** Recover approved work from the durable home, not a last-request memory pin. */
+  /** Expire approvals; no alarm may dispatch a waiting call's App write. */
   private async approvalAlarm(): Promise<void> {
     const raw = this.ctx.storage.sql
       .exec("SELECT tenant_id, origin FROM oyster_approval_home WHERE id = 1")
@@ -401,6 +420,9 @@ export class OysterRegistry<
     this.#installationStore = createInstallationStoreGeneration(ctx.storage);
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS boot_capabilities (id TEXT PRIMARY KEY, token_digest TEXT NOT NULL, expires_at INTEGER NOT NULL, record TEXT NOT NULL) STRICT",
+    );
+    ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS oyster_boot_results (origin TEXT NOT NULL, release_id TEXT NOT NULL, artifact_digest TEXT NOT NULL, check_version TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (origin, release_id, artifact_digest, check_version)) STRICT",
     );
     ensureAppSourceTables(ctx.storage.sql);
     this.#installationOperations = createInstallationOperations({
@@ -813,6 +835,57 @@ export class OysterRegistry<
   private decode(row: unknown): Installation {
     const { record } = Schema.decodeUnknownSync(recordRow)(row);
     return installationSchema.parse(JSON.parse(record));
+  }
+
+  /** Trusted host verdicts, local to this tenant, origin, Release and check version. */
+  bootUiResult(
+    input: Readonly<{
+      tenantId: string;
+      origin: string;
+      releaseId: string;
+      artifactDigest: string;
+      checkVersion: string;
+    }> &
+      (
+        | Readonly<{ kind: "read" }>
+        | Readonly<{
+            kind: "record";
+            outcome: Exclude<UiBootCheckOutcome, { kind: "not_checked" }>;
+          }>
+      ),
+  ): UiBootCheckOutcome | null {
+    const scope = tenantScope(
+      Schema.decodeUnknownSync(tenantIdSchema)(input.tenantId),
+      input.origin,
+    );
+    if (this.ctx.id.name !== scope.durableName("registry"))
+      throw new Error("Boot result namespace does not match tenant");
+    const releaseId = parseReleaseId(input.releaseId);
+    const artifactDigest = parseSha256Digest(input.artifactDigest);
+    const checkVersion = z.string().min(1).parse(input.checkVersion);
+    if (input.kind === "record") {
+      const outcome = recordedBootOutcome.parse(input.outcome);
+      this.ctx.storage.sql.exec(
+        "INSERT INTO oyster_boot_results (origin, release_id, artifact_digest, check_version, record) VALUES (?, ?, ?, ?, ?) ON CONFLICT (origin, release_id, artifact_digest, check_version) DO NOTHING",
+        scope.origin,
+        releaseId,
+        artifactDigest,
+        checkVersion,
+        JSON.stringify(outcome),
+      );
+    }
+    const row = this.ctx.storage.sql
+      .exec(
+        "SELECT record FROM oyster_boot_results WHERE origin = ? AND release_id = ? AND artifact_digest = ? AND check_version = ?",
+        scope.origin,
+        releaseId,
+        artifactDigest,
+        checkVersion,
+      )
+      .toArray()[0];
+    return row === undefined
+      ? null
+      : recordedBootOutcome.parse(JSON.parse(bootResultRow.parse(row).record));
   }
 
   /** Issue, resolve, or revoke one bounded capability without storing its token. */
@@ -2096,7 +2169,9 @@ export function serveOysterBootCapability(
 /**
  * The standalone UI boot check: the Worker's own BROWSER binding opens the
  * pinned `/_boot/` page on the host-selected origin, with a capability in
- * that tenant's registry. Without a BROWSER binding the UI is not checked.
+ * that tenant's registry. Definitive results survive separate installations
+ * and registry restarts, but never cross an origin, tenant or check version.
+ * Without a BROWSER binding an unchecked UI remains not checked.
  */
 function oysterBootUi(
   env: OysterWorkerEnv,
@@ -2106,8 +2181,18 @@ function oysterBootUi(
   const capabilities = registryBootCapabilities(env, scope);
   const sessions =
     env.BROWSER === undefined ? null : bindingSessions(env.BROWSER);
-  return (release) =>
-    reportBootPage({
+  const registry = () => env.REGISTRY.getByName(scope.durableName("registry"));
+  return async (release) => {
+    const key = {
+      tenantId: scope.tenantId,
+      origin: scope.origin,
+      releaseId: release.releaseId,
+      artifactDigest: release.artifact.artifactDigest,
+      checkVersion: BOOT_CHECK_VERSION,
+    };
+    const recorded = await registry().bootUiResult({ ...key, kind: "read" });
+    if (recorded !== null) return recordedBootOutcome.parse(recorded);
+    const outcome = await reportBootPage({
       origin: scope.origin,
       check:
         sessions === null ? null : (target) => checkBootPage(sessions, target),
@@ -2116,6 +2201,11 @@ function oysterBootUi(
       capabilities,
       now: Date.now,
     });
+    if (outcome.kind === "not_checked") return outcome;
+    return recordedBootOutcome.parse(
+      await registry().bootUiResult({ ...key, kind: "record", outcome }),
+    );
+  };
 }
 
 /**
@@ -2148,11 +2238,25 @@ export function oysterWorkerHost(
   });
   let host: OysterHost = {
     approvals: {
-      submit: (call) =>
-        registry().approvalSubmit(
-          { tenantId: scope.tenantId, origin: scope.origin },
-          call,
-        ),
+      submit: async (call, signal) => {
+        const cancelled = () => signal.aborted;
+        if (cancelled()) return { kind: "refused", reason: "cancelled" };
+        const home = registry();
+        const result = home.approvalSubmit(pin, call);
+        const aborted = Promise.withResolvers<undefined>();
+        const onAbort = () => {
+          aborted.resolve(undefined);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          if (cancelled()) onAbort();
+          await Promise.race([result, aborted.promise]);
+          if (cancelled()) await home.approvalCancel(pin, call);
+          return await result;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+        }
+      },
     },
     auth,
     workbench: {

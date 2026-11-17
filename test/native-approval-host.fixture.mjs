@@ -3,6 +3,7 @@ import { after } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
 import { registerHooks } from "node:module";
+import { setTimeout as delay } from "node:timers/promises";
 import { fromNodeSqlite as sqliteOwner } from "@fungi.computer/watchdog/node-sqlite";
 import { OysterApprovalHome } from "../dist/approval-home.js";
 import { defaultTenant, tenantScope } from "../dist/tenant.js";
@@ -23,6 +24,18 @@ hooks.deregister();
 
 const storeOwners = new WeakMap();
 const nativeHosts = new WeakMap();
+
+/** Observe the real public capability while its caller remains unresolved. */
+export async function pendingRecord(home) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const page = await home
+      .capability({ kind: "member", memberId: "owner" })
+      .list({ state: "pending" });
+    if (page.items[0]) return page.items[0].record;
+    await delay(10);
+  }
+  throw new Error("Approval did not become pending");
+}
 
 /** Current host composition: real native approval home and current member admission. */
 export function approvalHost(host) {

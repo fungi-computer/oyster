@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { computerSizeSchema } from "@fungi.computer/computer/backing";
-import {
-  PendingApprovalSchema,
-  ApprovalRefusalSchema,
-} from "@fungi.computer/approvals";
+import { ApprovalRefusalSchema } from "@fungi.computer/approvals";
+import { oysterApprovalDeadlineAt } from "./approval-deadline.js";
 import { admits } from "./apps/gate.js";
 import {
   createMcpWorkflowControl,
@@ -20,6 +18,7 @@ import {
 } from "./invocation.js";
 import { guestLimits } from "./guest-policy.js";
 import {
+  BadResponse,
   Mycelium,
   type CapabilitySource,
   type Grants,
@@ -72,9 +71,9 @@ export type OysterMcpCatalogSnapshot = Readonly<{
 export const appApprovalInstructions = [
   "A write (including Effect: external) may instead return AppApprovalResult:",
   "type AppApprovalResult =",
-  '  | { kind: "pending_approval"; recordId: string; description: { title: string; inputBytes: number; inputSha256: string } }',
+  '  | { kind: "denied"; by: string; note?: string; message: string }',
   '  | { kind: "refused"; reason: string; denialNote?: string };',
-  "On pending_approval, tell the person it is waiting for their approval; do not retry.",
+  "A write needing approval waits in this call. Approval returns its output; denial or expiry returns here, never as a Session message.",
 ].join("\n");
 
 const fleetIds = defineIdFamily({
@@ -567,6 +566,7 @@ export async function oysterAppSnapshot(
       effect: "read" | "write" | "external",
       input: MyceliumJsonValue,
       context: InvocationContext,
+      declaredOutput: ReturnType<typeof appJsonSchema>,
       direct: () => Promise<OysterJson>,
     ): Promise<OysterJson> => {
       if (mode === "direct" || effect === "read") return direct();
@@ -575,37 +575,61 @@ export async function oysterAppSnapshot(
       const fence = fences[id];
       if (fence === undefined)
         throw new Error("App snapshot has no operation authority fence");
-      const result = await host.approvals.submit({
-        actor,
-        installationId: installation.installationId,
-        sessionId,
-        operation: name,
-        access: effect,
-        authorityFence: fence,
-        idempotencyKey: await sha256(
-          new TextEncoder().encode(
-            JSON.stringify([
-              context.executionId,
-              context.toolCallId,
-              context.operationOrdinal ?? 0,
-            ]),
+      const result = await host.approvals.submit(
+        {
+          actor,
+          installationId: installation.installationId,
+          sessionId,
+          operation: name,
+          access: effect,
+          authorityFence: fence,
+          idempotencyKey: await sha256(
+            new TextEncoder().encode(
+              JSON.stringify([
+                context.executionId,
+                context.toolCallId,
+                context.operationOrdinal ?? 0,
+              ]),
+            ),
           ),
-        ),
-        input,
-      });
-      return result.kind === "applied" ? result.output : result;
+          input,
+          deadlineAt: oysterApprovalDeadlineAt(context.deadlineAt),
+        },
+        context.signal,
+      );
+      if (result.kind !== "applied") return result;
+      // App data must not take the host-only approval branch of the public
+      // output union, even when the App declares a permissive object schema.
+      if (isApprovalResult(result.output))
+        throw new BadResponse({
+          reason: "App output cannot impersonate an approval decision",
+          rawCause: undefined,
+        });
+      const output = declaredOutput.safeParse(result.output);
+      if (!output.success)
+        throw new BadResponse({
+          reason: "Capability output failed its declared schema",
+          rawCause: output.error,
+        });
+      return output.data;
     };
     const toolOperations = Object.entries(methods).map(([name, method]) => {
       operationEffects[name] = method.effect;
+      const declaredOutput = appJsonSchema(method.output);
       const appMethod = Mycelium.operation({
         replay: "unsafe",
         access: method.effect === "read" ? "read" : "write",
         description: `${method.description}\nEffect: ${method.effect}.`,
         input: appJsonSchema(method.input),
-        output: outputFor(appJsonSchema(method.output), method.effect),
+        output: outputFor(declaredOutput, method.effect),
         execute: (input, context) =>
-          runOperation(name, method.effect, input, context, () =>
-            callAppMethod(name, method.effect, input, context.signal),
+          runOperation(
+            name,
+            method.effect,
+            input,
+            context,
+            declaredOutput,
+            () => callAppMethod(name, method.effect, input, context.signal),
           ),
       });
       return [name, appMethod] as const;
@@ -642,6 +666,7 @@ export async function oysterAppSnapshot(
                       compiled.effect,
                       input,
                       context,
+                      tool.output,
                       () => {
                         // The declaring App owns every field below except
                         // `requestId` (this call's own identity) and `input`
@@ -1003,8 +1028,23 @@ export function oysterMcpCatalogLoad(
     };
   };
 }
-const isPendingApproval = Schema.is(PendingApprovalSchema);
-const isApprovalRefusal = Schema.is(ApprovalRefusalSchema);
+const isApprovalResult = Schema.is(
+  Schema.Union([
+    ApprovalRefusalSchema.check(
+      Schema.makeFilter((value) => value.reason !== "expired"),
+    ),
+    Schema.Struct({
+      kind: Schema.Literal("refused"),
+      reason: Schema.Literals(["cancelled", "approval_expired"]),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("denied"),
+      by: Schema.String,
+      note: Schema.optionalKey(Schema.String),
+      message: Schema.String,
+    }),
+  ]),
+);
 
 /** Approval results are a host contract, not part of each App's declaration. */
 function approvalOutput(
@@ -1014,7 +1054,7 @@ function approvalOutput(
     "~standard": {
       ...declared["~standard"],
       validate: (value) =>
-        isPendingApproval(value) || isApprovalRefusal(value)
+        isApprovalResult(value)
           ? { value }
           : declared["~standard"].validate(value),
     },

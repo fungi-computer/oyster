@@ -146,11 +146,11 @@ One isolated App connection, with the slots this host admitted for it.
 ### appSandbox
 
 ```ts
-const appSandbox: "allow-scripts allow-modals allow-popups allow-forms" =
-  "allow-scripts allow-modals allow-popups allow-forms";
+const appSandbox: "allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-forms" =
+  "allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-forms";
 ```
 
-The sandbox every installed App frame runs in, shell-mounted or not.
+Apps stay opaque; external tabs need their own origin for preview cookies.
 
 ## Functions
 

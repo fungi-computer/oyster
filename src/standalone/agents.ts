@@ -3,6 +3,7 @@ import {
   isRetryableProviderRejection,
   normalizeModel,
   observeProviderStatus,
+  providerDisplayNames,
   streamModel,
   type ProviderRejection,
 } from "@fungi.computer/mule/effect";
@@ -249,6 +250,7 @@ import {
 import {
   createStarterLedger,
   ensureStarterAgent,
+  seedStarterHome,
   type StarterLedgerRow,
   type StarterLedgerStore,
 } from "../starter-agent.js";
@@ -305,6 +307,14 @@ import type {
   OysterSessionRow,
 } from "../agents.js";
 
+/** The starter has no Home yet: the owner has not attached a Computer. The seed waits for one. */
+class StarterHomePending extends Error {
+  constructor() {
+    super("The starter Agent has no Home Computer yet");
+    this.name = "StarterHomePending";
+  }
+}
+
 const noHomeInstructions: OysterAgentInstructions = {
   home: null,
   content: null,
@@ -354,7 +364,9 @@ function observedModels(
           gatewaySpendLimit && rejection?.code === "rate-limit";
         const safe = spendLimit
           ? DAILY_LIMIT_COPY
-          : `Model request failed (${rejection?.code ?? "provider_rejected"}). Retry the request.`;
+          : rejection?.code === "usage-limit-reached"
+            ? `${providerDisplayNames.get(model.provider) ?? model.provider} usage limit reached.`
+            : `Model request failed (${rejection?.code ?? "provider_rejected"}). Retry the request.`;
         const terminal: AssistantMessage = {
           role: "assistant",
           content: [],
@@ -364,6 +376,12 @@ function observedModels(
           usage: message.usage,
           stopReason: message.stopReason,
           errorMessage: safe,
+          ...(!spendLimit && {
+            modelFailure: {
+              provider: model.provider,
+              cause: rejection ?? { code: "request_failed" },
+            },
+          }),
           timestamp: message.timestamp,
         };
         safeFailures.set(terminal, safe);
@@ -475,6 +493,7 @@ const setupRequiredFailure =
 function refusedModels(
   model: Model<Api>,
   reason: string,
+  code: "setup_required" | "tools_unsupported",
 ): StandaloneModelSource {
   return {
     acquire: () => {
@@ -507,6 +526,7 @@ function refusedModels(
             },
             stopReason: "error",
             errorMessage: reason,
+            modelFailure: { provider: model.provider, cause: { code } },
             timestamp: Date.now(),
           };
           failed.add(terminal);
@@ -1742,6 +1762,7 @@ export abstract class StandaloneAgentBase<
       return refusedModels(
         normalizeModel(modelChoice),
         "Model request failed (tools_unsupported). Pick a model marked tools.",
+        "tools_unsupported",
       );
     if (choice.keySource === "byok" && choice.keyId !== undefined) {
       await this.admitKey(choice);
@@ -1805,7 +1826,11 @@ export abstract class StandaloneAgentBase<
       throw new AgentModelRefused("key_not_connected");
     // The AI binding is declared everywhere; only a Cloudflare account answers it.
     if (!cloudflareAccountReady(this.env))
-      return refusedModels(normalizeModel(modelChoice), setupRequiredFailure);
+      return refusedModels(
+        normalizeModel(modelChoice),
+        setupRequiredFailure,
+        "setup_required",
+      );
     let options: WorkersAiOptions = { model: modelChoice.id };
     if (this.env.OYSTER_AI_GATEWAY !== undefined)
       options = { ...options, gateway: this.env.OYSTER_AI_GATEWAY };
@@ -1917,7 +1942,7 @@ export abstract class StandaloneAgentBase<
       conversationAgents.source(this.controlDirectory()),
       {
         source: createComputerSkillSource({
-          platform: ["debug-fungi", "fungible-computing"],
+          platform: ["debug-fungi", "fungible-computing", "setup-fungi"],
           computers: async () => {
             await this.preparedComputerSnapshot();
             return readAgentComputerConnections(this.computerConnections()).map(
@@ -3501,7 +3526,25 @@ export function standaloneAgents(
           );
           return { status: "created", agentId: agent.agentId };
         },
+        // No money step on Oyster: the owner brings their own model, so the
+        // seed is only the first-run section, written to a Home that has no
+        // AGENTS.md. A Home the owner already wrote to is left as it is.
+        seedHome: async (agentId) => {
+          await seedStarterHome(async (path, content) => {
+            if (path !== "AGENTS.md")
+              throw new Error(`The starter seeds only AGENTS.md, not ${path}`);
+            const result = await env.AGENTS.getByName(
+              agentId,
+            ).replaceInstructions(JSON.stringify(principal), null, content);
+            if (!("error" in result)) return;
+            if (result.error === "conflict") return;
+            if (result.error === "no_home") throw new StarterHomePending();
+            throw new Error(`Starter Home seed refused: ${result.error}`);
+          });
+        },
         report: (cause) => {
+          // Waiting for the owner to attach a Computer is not a failure.
+          if (cause instanceof StarterHomePending) return;
           console.warn(
             JSON.stringify({
               event: "starter_agent_failed",

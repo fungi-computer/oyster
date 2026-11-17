@@ -11,6 +11,8 @@ import * as console from "node:console";
 import { URL } from "node:url";
 const { Response, Request, Headers } = globalThis;
 import { chromium } from "playwright";
+import { build as bundle } from "esbuild";
+import { shellStyles } from "../../dist/page-script.js";
 import {
   launchIsolatedChromium,
   portsOf,
@@ -19,11 +21,6 @@ import * as z from "zod";
 import * as Result from "effect/Result";
 import { createAppBuild } from "@fungi.computer/puffball/app";
 import { assetBuildMediaType } from "@fungi.computer/puffball/assets";
-import {
-  createOyster,
-  sha256,
-  verifyRelease,
-} from "@fungi.computer/oyster/host";
 import { ownerKeyAuth } from "../../src/auth.ts";
 import { computerSlots } from "@fungi.computer/oyster/computer";
 import { instanceIds, selectionOf } from "@fungi.computer/oyster";
@@ -47,6 +44,10 @@ const hooks = registerHooks({
     return nextResolve(specifier, context);
   },
 });
+const { createOyster, sha256, verifyRelease } =
+  await import("../../src/host.ts");
+const { standalonePortEntryRoutes } =
+  await import("../../src/standalone/preview.ts");
 const { ComputerDO, standaloneComputerCapabilities } =
   await import("../../src/standalone/computer.ts");
 const { default: worker } = await import("../../src/standalone/worker.ts");
@@ -131,6 +132,7 @@ let installation = null;
 const ownerKey = randomBytes(32).toString("hex");
 const calls = [];
 let previewOrigin;
+const previewDomain = "preview.example.net";
 const database = new DatabaseSync(":memory:");
 const tenantsDatabase = new DatabaseSync(":memory:");
 const tenantValues = new Map();
@@ -148,10 +150,6 @@ const secrets = new Map();
 let exposed = true;
 let forwarded = 0;
 class BrowserComputer extends ComputerDO {
-  listPortsAfterAcceptance(accept) {
-    accept();
-    return Promise.resolve({ ports: exposed ? [3000] : [] });
-  }
   portPreviewAfterAcceptance(port, request, accept) {
     if (!exposed) return Promise.resolve(new Response(null, { status: 404 }));
     accept();
@@ -159,9 +157,11 @@ class BrowserComputer extends ComputerDO {
     assert.equal(request.headers.has("cookie"), false);
     assert.equal(request.headers.has("authorization"), false);
     forwarded++;
+    if (new URL(request.url).pathname !== "/")
+      return new Response(null, { status: 404 });
     return Promise.resolve(
       new Response(
-        `<h1>Passive preview</h1><p>hi</p><a href="/api/owner-probe" target="_self">Hostile self navigation</a><a href="${canonicalOrigin}/api/owner-probe" target="_self">Hostile owner navigation</a><a href="/apps/owner-probe" target="_top">Hostile top navigation</a><a href="/login" target="_parent">Hostile parent navigation</a><form method="post" action="/api/owner-probe"><button>Hostile form</button></form><script>document.body.dataset.scriptExecuted="yes";fetch("/api/owner-probe");opener.document.body.dataset.escape="yes";</script>`,
+        `<h1>Private preview</h1><p>hi</p><a href="/api/owner-probe" target="_self">Hostile self navigation</a><a href="${canonicalOrigin}/api/owner-probe" target="_self">Hostile owner navigation</a><a href="/apps/owner-probe" target="_top">Hostile top navigation</a><a href="/login" target="_parent">Hostile parent navigation</a><form method="post" action="/api/owner-probe"><button>Hostile form</button></form><script>document.body.dataset.scriptExecuted="yes";fetch("/api/owner-probe");opener.document.body.dataset.escape="yes";</script>`,
         {
           headers: {
             "Content-Type": "text/html",
@@ -173,7 +173,7 @@ class BrowserComputer extends ComputerDO {
     );
   }
 }
-let artifactBarrier;
+
 const env = {
   OYSTER_OWNER_KEY: ownerKey,
   OYSTER_COMPUTER_ID: "workspace",
@@ -187,7 +187,6 @@ const env = {
   },
   RELEASES: {
     get: async (ref) => {
-      await artifactBarrier?.();
       const bytes = artifacts.get(ref);
       return bytes === undefined
         ? null
@@ -214,6 +213,7 @@ const native = new BrowserComputer(
   },
   env,
 );
+await native.exposePort({ port: 3000 });
 env.COMPUTER = {
   getByName: (id) => {
     assert.equal(id, "workspace");
@@ -245,10 +245,16 @@ const server = createServer(
         bearer: headers.has("authorization"),
       });
       let response;
-      if (url.origin === previewOrigin)
+      if (
+        url.hostname === previewDomain ||
+        url.hostname.endsWith(`.${previewDomain}`)
+      )
         response = await worker.fetch(request, env, {});
       else response = await app.fetch(request);
-      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.writeHead(response.status, {
+        ...Object.fromEntries(response.headers),
+        "set-cookie": response.headers.getSetCookie(),
+      });
       outgoing.end(Buffer.from(await response.arrayBuffer()));
     } catch (cause) {
       console.error("Popup fixture failed", cause);
@@ -261,10 +267,10 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = z
   .object({ port: z.number().int().positive() })
   .parse(server.address());
-canonicalOrigin = `https://oyster.shiit.app:${address.port}`;
-previewOrigin = `https://oyster-contest.levi-fe0.workers.dev:${address.port}`;
+canonicalOrigin = "https://oyster.shiit.app";
+previewOrigin = `https://workspace-3000.${previewDomain}`;
 env.OYSTER_ORIGIN = canonicalOrigin;
-env.OYSTER_PREVIEW_ORIGIN = previewOrigin;
+env.OYSTER_PREVIEW_DOMAIN = previewDomain;
 const owner = await (await standaloneTenancy(env)).owner();
 assert.ok(owner);
 const capabilities = standaloneComputerCapabilities(env, {
@@ -301,21 +307,38 @@ const commit = (command) => {
     throw new Error(`Preview fixture approval refused: ${result.failure.code}`);
   installation = result.success.next;
 };
-commit({ kind: "install", release, releasePin: "pinned", grants: [] });
+commit({ kind: "install", release, releasePin: "pinned" });
 commit({
-  kind: "set-grants",
-  grants: declaredOperations.capabilities.map((row) => ({
-    ...row,
-    resources: "tenant-scope",
-  })),
+  kind: "change-grants",
+  changes: declaredOperations.capabilities.map(
+    ({ capability, operations }) => ({
+      capability,
+      grant: { operations, resources: "tenant-scope" },
+    }),
+  ),
 });
-const advanceAuthority = () => {
-  const before = selectionOf(installation).authorityVersion;
-  commit({ kind: "set-status", status: "disabled" });
-  commit({ kind: "set-status", status: "enabled" });
-  assert.notEqual(selectionOf(installation).authorityVersion, before);
-};
+// A standalone App page has no desktop chrome. Retain its real mount and
+// expose the public host action used by Tourtois to open Shed's Ports tray.
+const pageBundle = await bundle({
+  stdin: {
+    contents: `import { mountOysterPage } from "@fungi.computer/oyster/page";
+      globalThis.previewProofHost = await mountOysterPage();`,
+    resolveDir: new URL("../../", import.meta.url).pathname,
+  },
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  define: { OYSTER_SHELL_STYLES: JSON.stringify(shellStyles) },
+  minify: true,
+  write: false,
+});
 const app = createOyster({
+  pageScript: pageBundle.outputFiles[0].text,
+  ownerRoutes: standalonePortEntryRoutes({
+    ownsComputer: async (id) => id === "workspace",
+    issue: (_id, ownerId, port) => native.issuePortConnect(ownerId, port),
+  }),
   auth: ownerKeyAuth(ownerKey, owner.actor.memberId),
   computerId: "workspace",
   artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
@@ -330,18 +353,18 @@ const app = createOyster({
   },
   capabilities,
 });
-// With OYSTER_PREVIEW_ORIGIN correctly naming previewOrigin, that host stays
+// With OYSTER_PREVIEW_DOMAIN correctly naming previewOrigin, that host stays
 // fenced off from the normal router even when the rest of the pair (the
 // owner origin) is broken or missing — misconfiguration never falls through.
 for (const invalid of [
-  { OYSTER_ORIGIN: undefined, OYSTER_PREVIEW_ORIGIN: previewOrigin },
-  { OYSTER_ORIGIN: "not an origin", OYSTER_PREVIEW_ORIGIN: previewOrigin },
+  { OYSTER_ORIGIN: undefined, OYSTER_PREVIEW_DOMAIN: previewDomain },
+  { OYSTER_ORIGIN: "not an origin", OYSTER_PREVIEW_DOMAIN: previewDomain },
 ]) {
   Object.assign(env, invalid);
   assert.equal(
     (await worker.fetch(new Request(`${canonicalOrigin}/login`), env, {}))
       .status,
-    200,
+    500,
   );
   assert.equal(
     (
@@ -351,39 +374,62 @@ for (const invalid of [
         {},
       )
     ).status,
-    401,
+    500,
   );
   assert.equal(
     (await worker.fetch(new Request(`${previewOrigin}/login`), env, {})).status,
     404,
   );
 }
-// A preview configured at an unrelated origin never makes previewOrigin
-// special: nothing names it as the preview tunnel, so it is left to the
-// normal router like any other Host, same as before preview was configured.
+// An unconfigured preview host reaches the tenant owner's origin fence.
 env.OYSTER_ORIGIN = canonicalOrigin;
-env.OYSTER_PREVIEW_ORIGIN = "https://unrelated.example";
+env.OYSTER_PREVIEW_DOMAIN = "unrelated.example";
 assert.equal(
   (await worker.fetch(new Request(`${previewOrigin}/login`), env, {})).status,
-  200,
+  404,
 );
 env.OYSTER_ORIGIN = canonicalOrigin;
-env.OYSTER_PREVIEW_ORIGIN = previewOrigin;
+env.OYSTER_PREVIEW_DOMAIN = previewDomain;
 const browser = await launchIsolatedChromium(
   chromium,
-  portsOf(canonicalOrigin),
+  portsOf(`https://127.0.0.1:${address.port}`),
   {
     args: [
-      "--host-resolver-rules=MAP oyster.shiit.app 127.0.0.1,MAP oyster-contest.levi-fe0.workers.dev 127.0.0.1",
+      `--host-resolver-rules=MAP oyster.shiit.app:443 127.0.0.1:${address.port},MAP *.${previewDomain}:443 127.0.0.1:${address.port},MAP ${previewDomain}:443 127.0.0.1:${address.port}`,
       "--no-proxy-server",
     ],
   },
 );
+// A fresh page avoids races with Chromium's internal error-page navigation
+// after an empty refusal. It retains the browser context's real cookie rules.
+async function responseStatus(page, url) {
+  const probe = await page.context().newPage();
+  try {
+    const received = probe.waitForResponse(
+      (response) =>
+        response.url() === url && response.request().isNavigationRequest(),
+    );
+    await probe.goto(url).catch((cause) => {
+      if (!String(cause).includes("net::ERR_HTTP_RESPONSE_CODE_FAILURE"))
+        throw cause;
+    });
+    return (await received).status();
+  } finally {
+    await probe.close();
+  }
+}
+
 try {
-  for (const width of [1440, 390]) {
+  for (const { width, height, colorScheme } of [
+    { width: 1440, height: 900, colorScheme: "light" },
+    { width: 1440, height: 900, colorScheme: "dark" },
+    { width: 390, height: 844, colorScheme: "light" },
+    { width: 390, height: 844, colorScheme: "dark" },
+  ]) {
     const context = await browser.newContext({
       ignoreHTTPSErrors: true,
-      viewport: { width, height: 900 },
+      viewport: { width, height },
+      colorScheme,
     });
     const page = await context.newPage();
     await page.goto(`${canonicalOrigin}/login`);
@@ -392,31 +438,61 @@ try {
       page.waitForURL(`${canonicalOrigin}/`),
       page.getByRole("button", { name: "Sign in", exact: true }).click(),
     ]);
+    const appDocument = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        url.pathname.startsWith("/ui/shed/") &&
+        response.request().resourceType() === "document"
+      );
+    });
     await page.goto(`${canonicalOrigin}/apps/shed/`);
+    const documentResponse = await appDocument;
+    const sandbox = new URL(documentResponse.url()).searchParams.get("sandbox");
+    assert.ok(sandbox?.includes("allow-popups-to-escape-sandbox"));
+    const documentPolicy =
+      documentResponse.headers()["content-security-policy"];
+    assert.ok(documentPolicy.endsWith(`sandbox ${sandbox}`));
     const frame = page.frameLocator("#oyster-app");
-    await page.getByRole("button", { name: /Ports/u }).click();
+    await frame.getByText("Terminal unavailable", { exact: true }).waitFor();
+    await page.waitForFunction(() => globalThis.previewProofHost !== undefined);
+    assert.equal(
+      await page.evaluate(() =>
+        globalThis.previewProofHost.activateStatus({ itemId: "ports" }),
+      ),
+      true,
+    );
     const button = frame.getByRole("button", {
       name: "Open preview of port 3000",
       exact: true,
     });
     await button.waitFor();
     await page.screenshot({
-      path: new URL(`before-${width}.png`, work).pathname,
+      path: new URL(`before-${width}-${colorScheme}.png`, work).pathname,
     });
+    let connectUrl;
+    const recordConnect = (request) => {
+      const url = new URL(request.url());
+      if (url.origin === previewOrigin && url.searchParams.has("token"))
+        connectUrl = url.href;
+    };
+    context.on("request", recordConnect);
     const popupPromise = page.waitForEvent("popup", { timeout: 3000 });
     await button.click();
     const popup = await popupPromise;
     await popup
-      .getByRole("heading", { name: "Passive preview", exact: true })
+      .getByRole("heading", { name: "Private preview", exact: true })
       .waitFor();
-    const ticketUrl = popup.url();
+    context.off("request", recordConnect);
+    assert.ok(connectUrl);
+    const previewUrl = popup.url();
+    assert.equal(new URL(previewUrl).searchParams.has("token"), false);
     assert.equal(await popup.evaluate(() => globalThis.opener === null), true);
     assert.equal(
       await popup.locator("body").getAttribute("data-script-executed"),
-      null,
+      "yes",
     );
     await popup.screenshot({
-      path: new URL(`popup-${width}.png`, work).pathname,
+      path: new URL(`popup-${width}-${colorScheme}.png`, work).pathname,
     });
     assert.equal(
       await frame.locator('iframe[title="Preview · port 3000"]').count(),
@@ -424,7 +500,7 @@ try {
     );
     assert.equal(
       await page.locator("#oyster-app").getAttribute("sandbox"),
-      "allow-scripts allow-modals allow-popups allow-forms",
+      "allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-forms",
     );
     assert.ok(
       !(await context.cookies(previewOrigin)).some(
@@ -436,17 +512,16 @@ try {
       .getByRole("button", { name: "Hostile form", exact: true })
       .click();
     await popup.waitForLoadState("networkidle");
-    assert.equal(
-      calls.length,
-      bodyProbe,
-      "Sandbox must block the actual form request",
+    assert.ok(
+      calls.slice(bodyProbe).some((call) => call.path === "/api/owner-probe"),
+      "The active page's form reaches only the fenced preview origin",
     );
     for (const label of [
       "Hostile self navigation",
       "Hostile top navigation",
       "Hostile parent navigation",
     ]) {
-      await popup.goto(ticketUrl);
+      await popup.goto(previewUrl);
       const navigation = popup.waitForResponse(
         (response) =>
           response.url().startsWith(previewOrigin) && response.status() === 404,
@@ -454,17 +529,21 @@ try {
       await popup.getByRole("link", { name: label, exact: true }).click();
       await navigation;
     }
-    await popup.goto(ticketUrl);
+    await popup.goto(previewUrl);
     const ownerProbe = calls.length;
     await popup
       .getByRole("link", { name: "Hostile owner navigation", exact: true })
       .click();
     await popup.waitForLoadState("networkidle");
+    const hostileRequests = calls
+      .slice(ownerProbe)
+      .filter(
+        (call) =>
+          call.host === "oyster.shiit.app" && call.path === "/api/owner-probe",
+      );
+    assert.ok(hostileRequests.length > 0);
     assert.ok(
-      calls
-        .slice(ownerProbe)
-        .filter((call) => call.host === "oyster.shiit.app")
-        .every((call) => !call.cookie && !call.bearer),
+      hostileRequests.every((call) => !call.cookie && !call.bearer),
       "Preview navigation must not carry the owner credential",
     );
     for (const path of [
@@ -476,85 +555,56 @@ try {
       "/__vm/lab/ws",
     ]) {
       const before = forwarded;
-      const result = await popup.goto(`${previewOrigin}${path}`);
-      assert.equal(result?.status(), 404);
+      assert.equal(
+        await responseStatus(popup, `https://${previewDomain}${path}`),
+        404,
+      );
       assert.equal(forwarded, before);
     }
-    const invalid = new URL(ticketUrl);
-    invalid.pathname = invalid.pathname.replace(
-      /\/[a-z2-7]{20}\//u,
-      "/aaaaaaaaaaaaaaaaaaaa/",
-    );
-    assert.equal((await popup.goto(invalid.href))?.status(), 403);
-    const wrongPort = new URL(ticketUrl);
-    wrongPort.pathname = wrongPort.pathname.replace("/3000/", "/3001/");
-    assert.equal((await popup.goto(wrongPort.href))?.status(), 403);
+    const wrongPort = new URL(previewUrl);
+    wrongPort.hostname = wrongPort.hostname.replace("-3000.", "-3001.");
+    assert.equal(await responseStatus(popup, wrongPort.href), 401);
+    // A session belongs to the owner and Computer, not the App used to open it.
     const originalInstallation = installation;
-    installation = {
-      ...installation,
-      instanceId: instanceIds.instance.generate(),
-    };
-    assert.equal((await popup.goto(ticketUrl))?.status(), 403);
-    installation = originalInstallation;
-    const beforeDrift = forwarded;
-    advanceAuthority();
-    assert.equal((await popup.goto(ticketUrl))?.status(), 403);
-    assert.equal(forwarded, beforeDrift, "Stale authority must not forward");
-    installation = originalInstallation;
     commit({ kind: "set-status", status: "disabled" });
-    assert.equal((await popup.goto(ticketUrl))?.status(), 403);
+    assert.equal(await responseStatus(popup, previewUrl), 200);
     installation = originalInstallation;
-    for (const change of ["disable", "version"]) {
-      const reading = Promise.withResolvers();
-      const release = Promise.withResolvers();
-      const before = forwarded;
-      artifactBarrier = () => {
-        reading.resolve();
-        return release.promise;
-      };
-      const navigation = popup.goto(ticketUrl);
-      await reading.promise;
-      if (change === "disable")
-        commit({ kind: "set-status", status: "disabled" });
-      else advanceAuthority();
-      release.resolve();
-      try {
-        assert.equal((await navigation)?.status(), 403);
-        assert.equal(
-          forwarded,
-          before,
-          "Revocation during artifact verification must precede physical forwarding",
-        );
-      } finally {
-        artifactBarrier = undefined;
-        installation = originalInstallation;
-      }
-    }
-    exposed = false;
-    assert.equal((await popup.goto(ticketUrl))?.status(), 404);
-    exposed = true;
     const noOwner = await browser.newContext({ ignoreHTTPSErrors: true });
     const bearerPage = await noOwner.newPage();
     assert.equal(
-      (await bearerPage.goto(ticketUrl))?.status(),
-      200,
-      "Valid scoped bearer works without an owner session, as explicitly approved",
+      await responseStatus(bearerPage, previewUrl),
+      401,
+      "A stable preview URL carries no authority",
+    );
+    assert.equal(
+      await responseStatus(bearerPage, connectUrl),
+      401,
+      "A connect URL cannot be replayed",
     );
     await noOwner.close();
     const clock = Date.now;
     try {
       Date.now = () => clock() + 10 * 60_000;
-      assert.equal((await popup.goto(ticketUrl))?.status(), 403);
+      assert.equal(await responseStatus(popup, previewUrl), 200);
+      Date.now = () => clock() + 61 * 60_000;
+      assert.equal(await responseStatus(popup, previewUrl), 401);
     } finally {
       Date.now = clock;
     }
     assert.ok(
       calls
-        .filter((call) => call.host === "oyster-contest.levi-fe0.workers.dev")
-        .every((call) => !call.cookie && !call.bearer),
+        .filter((call) => call.host.endsWith(`.${previewDomain}`))
+        .every((call) => !call.bearer),
+    );
+    database.exec("DELETE FROM computer_exposed_ports WHERE port = 3000");
+    exposed = false;
+    assert.equal(await responseStatus(popup, previewUrl), 401);
+    exposed = true;
+    database.exec(
+      "INSERT INTO computer_exposed_ports (port, process_id) VALUES (3000,NULL)",
     );
     await page.screenshot({
-      path: new URL(`after-${width}.png`, work).pathname,
+      path: new URL(`after-${width}-${colorScheme}.png`, work).pathname,
     });
     await context.close();
   }
@@ -565,16 +615,16 @@ try {
         calls,
         popupGate: "pass",
         forwarded,
-        nativeTickets: "persisted local SQLite",
+        portSessions: "persisted local SQLite",
         productionWorker: "actual source preview fence",
-        physicalPort: "fake inventory/HTTP only",
+        physicalPort: "real exposure inventory; fake HTTP only",
       },
       null,
       2,
     ),
   );
   console.log(
-    "Actual Oyster shell / captured Shed opaque UI / persisted ticket / Worker-fenced popup gate PASS; physical port I/O fake",
+    "Oyster owner entry / captured Shed opaque UI / public host status action / persisted session / Worker-fenced popup gate PASS; physical port I/O fake",
   );
 } finally {
   await browser.close();

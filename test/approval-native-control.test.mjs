@@ -10,6 +10,7 @@ import { ownerKeyAuth } from "../dist/auth.js";
 import { OysterApprovalHome } from "../dist/approval-home.js";
 import { defaultTenant, tenantScope } from "../dist/tenant.js";
 import { computerHost } from "./computer-host.fixture.mjs";
+import { pendingRecord } from "./native-approval-host.fixture.mjs";
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -24,6 +25,104 @@ const hooks = registerHooks({
 });
 const { OysterRegistry, oysterWorkerHost } = await import("../dist/workers.js");
 hooks.deregister();
+
+for (const early of [false, true])
+  test(
+    `standalone host forwards cancellation ${early ? "before Registry submit registers" : "while Registry waits"}`,
+    { timeout: 5000 },
+    async (t) => {
+      const database = new DatabaseSync(":memory:");
+      t.after(() => database.close());
+      const key = "native-cancel-owner-secret-123456789";
+      let home;
+      const registration = Promise.withResolvers();
+      const cancellation = Promise.withResolvers();
+      const registry = {
+        get: () => null,
+        approvalSubmit: async (_pin, call) => {
+          if (early) await registration.promise;
+          return home.submit(call);
+        },
+        approvalCancel: async (_pin, call) => {
+          await home.cancel(call);
+          cancellation.resolve();
+        },
+      };
+      const native = oysterWorkerHost(
+        {
+          OYSTER_OWNER_KEY: key,
+          OYSTER_ORIGIN: "https://oyster.test",
+          RELEASES: {},
+          REGISTRY: { getByName: () => registry },
+        },
+        ownerKeyAuth(key),
+      );
+      home = new OysterApprovalHome({
+        owner: fromNodeSqlite(database),
+        scope: tenantScope(defaultTenant, "https://oyster.test"),
+        current: async () => native,
+        commit: (write) => write(),
+      });
+      // The target need not be present: cancellation must never try to dispatch it.
+      home.ledger.setAutoApprove(
+        {
+          scope: { agentId: null },
+          family: { module: null, access: "write" },
+          enabled: false,
+        },
+        {
+          kind: "human",
+          memberId: "owner",
+          role: "owner",
+          actingForAgent: false,
+          mayUseOperation: true,
+        },
+      );
+      const controller = new globalThis.AbortController();
+      const call = {
+        actor: { kind: "member", memberId: "owner" },
+        installationId: "notes",
+        sessionId: null,
+        operation: "saveNote",
+        access: "write",
+        authorityFence: "generation-1",
+        idempotencyKey: "cancel-invocation",
+        input: {},
+        deadlineAt: Date.now() + 60_000,
+      };
+      const running = native.approvals.submit(call, controller.signal);
+      t.after(() => controller.abort());
+      const record = early ? undefined : await pendingRecord(home);
+      controller.abort();
+      if (early) {
+        await cancellation.promise;
+        // A new owner still sees terminal cancellation before the delayed RPC.
+        home = new OysterApprovalHome({
+          owner: fromNodeSqlite(database),
+          scope: tenantScope(defaultTenant, "https://oyster.test"),
+          current: async () => native,
+          commit: (write) => write(),
+        });
+        registration.resolve();
+      }
+      assert.deepEqual(await running, { kind: "refused", reason: "cancelled" });
+      if (record !== undefined)
+        assert.equal(home.ledger.get(record.recordId).state, "expired");
+      else
+        assert.equal(
+          (
+            await home
+              .capability({ kind: "member", memberId: "owner" })
+              .list({})
+          ).items.length,
+          0,
+        );
+      assert.deepEqual(await native.approvals.submit(call, controller.signal), {
+        kind: "refused",
+        reason: "cancelled",
+      });
+    },
+  );
 
 test("native Oyster HTTP controls persist owner policy through the real registry and recheck the owner", async (t) => {
   const database = new DatabaseSync(":memory:");
@@ -147,9 +246,16 @@ test("native Oyster HTTP controls persist owner policy through the real registry
   );
 });
 
-test("a cold native Registry alarm settles historical approved work using current requester authority", async (t) => {
+test("a cold native Registry withdraws an approved call instead of dispatching it", async (t) => {
   const database = new DatabaseSync(":memory:");
-  t.after(() => database.close());
+  let stop = () => Promise.resolve();
+  t.after(async () => {
+    try {
+      await stop();
+    } finally {
+      database.close();
+    }
+  });
   const storage = fromNodeSqlite(database);
   const context = { id: { name: "registry" }, storage };
   let dispatches = 0;
@@ -185,7 +291,7 @@ test("a cold native Registry alarm settles historical approved work using curren
       ),
     commit: (write) => write(),
   });
-  const staged = await staging.submit({
+  const call = {
     actor,
     installationId: "revoked-notes",
     sessionId: null,
@@ -194,14 +300,16 @@ test("a cold native Registry alarm settles historical approved work using curren
     authorityFence: "historically-admitted-generation",
     idempotencyKey: "approved-before-claim",
     input: { text: "never dispatch revoked target" },
-  });
-  assert.equal(staged.kind, "pending_approval");
+    deadlineAt: Date.now() + 60_000,
+  };
+  const running = staging.submit(call);
+  stop = () => staging.cancel(call);
   const ledger = new ApprovalLedger({
     owner: storage,
     home: { kind: "oyster", id: "default" },
     now: Date.now,
   });
-  const record = ledger.get(staged.recordId);
+  const record = await pendingRecord(staging);
   // Historical eligibility is fixture state. The current installation is absent;
   // recovery must perform the real host check rather than trusting this answer.
   const answered = ledger.answer(
@@ -222,21 +330,34 @@ test("a cold native Registry alarm settles historical approved work using curren
   assert.equal(ledger.get(record.recordId).state, "approved");
   registry = new OysterRegistry(context, env);
   await registry.alarm();
-  assert.equal(ledger.get(record.recordId).state, "denied");
-  assert.equal(ledger.get(record.recordId).reason, "not-granted");
+  assert.equal(ledger.get(record.recordId).state, "expired");
+  assert.equal(ledger.get(record.recordId).reason, "expired");
   assert.equal(dispatches, 0);
   await registry.alarm();
   assert.equal(dispatches, 0);
+  await staging.reconcile();
+  assert.deepEqual(await running, {
+    kind: "refused",
+    reason: "approval_expired",
+  });
 });
 
 test("a retried Oyster request after a member approval never claims or answers inline", async (t) => {
   const database = new DatabaseSync(":memory:");
-  t.after(() => database.close());
+  let stop = () => Promise.resolve();
+  t.after(async () => {
+    try {
+      await stop();
+    } finally {
+      database.close();
+    }
+  });
   const storage = fromNodeSqlite(database);
   const env = {
     OYSTER_OWNER_KEY: "native-retry-owner-secret-123456789",
     OYSTER_ORIGIN: "https://oyster.test",
     RELEASES: {},
+    REGISTRY: { getByName: () => ({ get: () => null }) },
     INSTANCES: {
       getByName: () => assert.fail("A retried request must not dispatch"),
     },
@@ -279,10 +400,11 @@ test("a retried Oyster request after a member approval never claims or answers i
     authorityFence: "generation-1",
     idempotencyKey: "retry-after-approval",
     input: { text: "approved once" },
+    deadlineAt: Date.now() + 60_000,
   };
-  const pending = await home.submit(call);
-  assert.equal(pending.kind, "pending_approval");
-  const record = ledger.get(pending.recordId);
+  const running = home.submit(call);
+  stop = () => home.cancel(call);
+  const record = await pendingRecord(home);
   assert.equal(
     ledger.answer(
       {
@@ -300,9 +422,14 @@ test("a retried Oyster request after a member approval never claims or answers i
     ).kind,
     "answered",
   );
-  // The home's work loop owns this apply; the retry only reports status.
-  assert.deepEqual(await home.submit(call), pending);
-  assert.equal(ledger.get(pending.recordId).state, "approved");
+  assert.deepEqual(await home.submit(call), {
+    kind: "refused",
+    reason: "in-flight",
+  });
+  assert.equal(ledger.get(record.recordId).state, "approved");
+  await home.cancel(call);
+  assert.deepEqual(await running, { kind: "refused", reason: "cancelled" });
+  assert.equal(ledger.get(record.recordId).state, "expired");
 });
 
 test("a cold native Registry recovers every orphan claim beyond one batch without dispatch", async (t) => {
@@ -347,7 +474,7 @@ test("a cold native Registry recovers every orphan claim beyond one batch withou
     assert.equal(staged.kind, "record");
     records.push(staged.record.recordId);
     // Policy-approved calls can claim concurrently before the old isolate exits.
-    void ledger.applyInline(staged.record.recordId, {
+    void ledger.apply(staged.record.recordId, {
       recheck: () => new Promise(() => undefined),
       dispatch: () =>
         assert.fail("The stopped authority read never dispatches"),

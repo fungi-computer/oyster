@@ -324,16 +324,12 @@ test("App calls validate input and declared output while accepting host approval
       },
     }),
   });
-  const pending = {
-    kind: "pending_approval",
-    recordId: "approval-wide",
-    description: {
-      title: "Wide write",
-      inputBytes: 4,
-      inputSha256: "b".repeat(64),
-    },
+  const denied = {
+    kind: "denied",
+    by: "owner",
+    message: "Denied by owner.",
   };
-  let approval = pending;
+  let approval = denied;
   // Faithful host-port outcomes; the native approval suites own ledger policy
   // and dispatch. This seam proves the acquired operation's output decoder.
   host.approvals = { submit: async () => approval };
@@ -363,7 +359,7 @@ test("App calls validate input and declared output while accepting host approval
       _tag: "BadResponse",
       reason: "Capability output failed its declared schema",
     });
-    assert.deepEqual(await invoke("method1", null), pending);
+    assert.deepEqual(await invoke("method1", null), denied);
     approval = {
       kind: "refused",
       reason: "declined",

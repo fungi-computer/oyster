@@ -121,7 +121,12 @@ const hooks = registerHooks({
 });
 const { createCloudflareAppInstance } = await import("../dist/cloudflare.js");
 hooks.deregister();
-function nativeFixture(t, limits, initialFailure) {
+function nativeFixture(
+  t,
+  limits,
+  initialFailure,
+  bootUi = () => Promise.resolve(null),
+) {
   let failure = initialFailure;
   const aborts = [];
   const database = new DatabaseSync(":memory:");
@@ -193,7 +198,7 @@ function nativeFixture(t, limits, initialFailure) {
         },
       }),
     () => ({}),
-    () => Promise.resolve(null),
+    bootUi,
     limits,
   );
   const gate = createInvocationGate({
@@ -544,4 +549,27 @@ test("host method refusals forward only the available closed cause class", async
     if (causeClass !== undefined) diagnostic.causeClass = causeClass;
     assert.deepEqual(logs.at(-1), ["AppInstance failure", diagnostic]);
   }
+});
+
+test("a reused UI verdict never skips backend construction on prepare or apply", async (t) => {
+  let uiReads = 0;
+  const recordedUi = () => {
+    uiReads++;
+    return Promise.resolve({ kind: "passed" });
+  };
+  for (let index = 0; index < 2; index++) {
+    const fixture = nativeFixture(t, undefined, undefined, recordedUi);
+    const state = { ...fixture.selected, status: "enabled" };
+    assert.deepEqual(await Effect.runPromise(fixture.instance.prepare(state)), {
+      kind: "passed",
+    });
+    await Effect.runPromise(fixture.instance.apply(state));
+    assert.equal(fixture.probes.length, 2);
+    assert.ok(fixture.probes.every((probe) => probe.completed));
+  }
+  assert.equal(
+    uiReads,
+    2,
+    "each preparation reads the verdict; apply still constructs without another UI read",
+  );
 });

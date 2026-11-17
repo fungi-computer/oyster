@@ -1285,9 +1285,7 @@ function fixture() {
                 ports: [
                   {
                     port: 3000,
-                    previewUrl:
-                      "https://oyster-contest.levi-fe0.workers.dev/preview/fixture/",
-                    expiresAt: Date.now() + 60_000,
+                    previewUrl: "https://workspace-3000.preview.example.net/",
                     openMode: "external-only",
                   },
                 ],
@@ -1613,7 +1611,7 @@ test("a canonical owner principal can request the frozen installation port previ
     ["ports"],
   );
   env.OYSTER_ORIGIN = "https://oyster.shiit.app";
-  env.OYSTER_PREVIEW_ORIGIN = "https://oyster-contest.levi-fe0.workers.dev";
+  env.OYSTER_PREVIEW_DOMAIN = "preview.example.net";
   const routes = serveCapability(
     standaloneComputerCapabilities(
       env,
@@ -2125,7 +2123,7 @@ test("standalone frame preview requires the owner role and selects by the admitt
   assert.equal(accepted.status, 200);
   assert.equal(
     (await accepted.json()).previewUrl,
-    "https://oyster-contest.levi-fe0.workers.dev/preview/fixture/",
+    "https://workspace-3000.preview.example.net/",
   );
   assert.equal(calls[0].actor, "owner:member_canonical_owner");
   assert.deepEqual(calls[0].selector, {
@@ -2228,7 +2226,7 @@ test("the Computer owner issues port previews to the live canonical owner member
   const tenants = new StandaloneTenants(kvState(tenantsDatabase, "registry"));
   const env = {
     OYSTER_ORIGIN: "https://oyster.shiit.app",
-    OYSTER_PREVIEW_ORIGIN: "https://oyster-contest.levi-fe0.workers.dev",
+    OYSTER_PREVIEW_DOMAIN: "preview.example.net",
     OYSTER_OWNER_NAME: "levi",
     OYSTER_OWNER_KEY: "computer-preview-owner-key-24-characters",
     OYSTER_COMPUTER_ID: "workspace",
@@ -2249,13 +2247,8 @@ test("the Computer owner issues port previews to the live canonical owner member
       },
     },
   };
-  class ExposedPort extends ComputerDO {
-    listPortsAfterAcceptance(accept) {
-      accept();
-      return Promise.resolve({ ports: [8099] });
-    }
-  }
-  const computer = new ExposedPort(kvState(computerDatabase, "workspace"), env);
+  const computer = new ComputerDO(kvState(computerDatabase, "workspace"), env);
+  await computer.exposePort({ port: 8099 });
   const owner = await (await standaloneTenancy(env)).owner();
   assert.ok(owner);
   assert.notEqual(owner.actor.memberId, env.OYSTER_OWNER_NAME);
@@ -2280,10 +2273,24 @@ test("the Computer owner issues port previews to the live canonical owner member
   assert.equal(ports.length, 1);
   assert.equal(ports[0].port, 8099);
   assert.equal(ports[0].openMode, "external-only");
-  assert.match(
+  assert.equal(
     ports[0].previewUrl,
-    /^https:\/\/oyster-contest\.levi-fe0\.workers\.dev\/preview\/workspace\/8099\/[a-z2-7]{20}\/$/u,
+    "https://oyster.shiit.app/computers/workspace/ports/8099",
   );
+  // Polling must not mint credentials, and the same listed link is reusable.
+  for (let poll = 0; poll < 70; poll++) {
+    const again = await previews(owner.actor.memberId);
+    assert.equal(again.kind, "ok");
+    assert.equal(again.value.ports[0].previewUrl, ports[0].previewUrl);
+  }
+  assert.equal(
+    computerDatabase
+      .prepare("SELECT COUNT(*) AS n FROM computer_port_connect")
+      .get().n,
+    0,
+  );
+  assert.ok(await computer.issuePortConnect(owner.actor.memberId, 8099));
+  assert.equal(await computer.issuePortConnect("not-owner", 8099), null);
   // The configured sign-in label and any other member id are refused typed.
   const refused = {
     kind: "refused",

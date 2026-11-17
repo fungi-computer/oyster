@@ -1,9 +1,9 @@
-import type { OysterApprovalCall } from "./approval-home.js";
-import type { ZodType } from "zod";
 import type {
-  PendingApproval,
-  ApprovalApplyResult,
-} from "@fungi.computer/approvals";
+  OysterApprovalCall,
+  OysterApprovalResult,
+} from "./approval-home.js";
+export type { OysterApprovalResult };
+import type { ZodType } from "zod";
 import { hostGateFacts, releaseCache } from "./internal/host-gate.js";
 import type { WorkflowControl } from "./workflows.js";
 import type { ComputerControlPort } from "./computer-control-port.js";
@@ -419,10 +419,11 @@ export type OysterEnv = { Variables: TimingVariables };
 export type OysterHost = Readonly<{
   /** Native approval home. A host without one cannot execute App tool writes. */
   approvals?: Readonly<{
-    /** Stage an admitted operation; only the native home may apply it. */
+    /** Wait for a decision and return the native home's in-call result. */
     submit(
       call: OysterApprovalCall,
-    ): Promise<PendingApproval | ApprovalApplyResult>;
+      signal: AbortSignal,
+    ): Promise<OysterApprovalResult>;
   }>;
   /**
    * Host-bound Workflow control; absence exposes no Workflow authority.
@@ -2138,7 +2139,9 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         facts.declaredOperations,
         "team.workbenchHost",
       ) !== null;
-    const uiUrl = `/ui/${installation.installationId}/${installation.release.releaseId}/`;
+    const uiPath = `/ui/${installation.installationId}/${installation.release.releaseId}/`;
+    // Immutable App documents also carry the host's sandbox policy.
+    const uiUrl = `${uiPath}?${new URLSearchParams({ sandbox: appSandbox }).toString()}`;
     const config = {
       workbench,
       // The home shell's own code: the module its Release ships beside
@@ -2185,7 +2188,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
             )
             .map(
               (asset) =>
-                `<link rel="modulepreload" href="${escapeHtml(`${uiUrl.slice(0, -1)}${asset.path}`)}">`,
+                `<link rel="modulepreload" href="${escapeHtml(`${uiPath.slice(0, -1)}${asset.path}`)}">`,
             )
             .join("")
         : "";
@@ -2369,6 +2372,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           rows: [],
           reason: "params_required",
           error: `Choose a ${missing.kind}`,
+          recovery: { kind: "configure", param: missing.key },
         });
       const authority = invocationAuthorityOf(installation, release);
       const grants = scopedBindings(authority.grants, method, "read");

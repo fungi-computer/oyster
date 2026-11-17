@@ -2,13 +2,10 @@
   "$schema": "../../../node_modules/wrangler/config-schema.json",
   // The config behind the live https://oyster.shiit.app/ contest demo: the
   // same standalone Worker as wrangler.jsonc, deployed under its own name so
-  // it answers on two origins — the custom domain below (OYSTER_ORIGIN, what
-  // the owner signs in on) and this Worker's own workers.dev address
-  // (OYSTER_PREVIEW_ORIGIN, the passive Ports-preview tunnel; see
-  // standalone/preview.ts). Without a second, distinct origin configured,
-  // Ports previews stay disabled — that's wrangler.jsonc's situation today,
-  // and is not a bug: a single-domain deploy has nowhere to isolate preview
-  // traffic from the owner's own session. Deploy with
+  // it answers on the owner domain and its workers.dev address. The retired
+  // OYSTER_PREVIEW_ORIGIN is fenced off, not an active preview tunnel.
+  // Ports previews remain disabled until OYSTER_PREVIEW_DOMAIN has separate
+  // wildcard TLS and routing on another registrable site. Deploy with
   // `npx wrangler deploy --config wrangler.contest.jsonc`; this still needs
   // the "oyster.shiit.app" custom domain attached to the "oyster-contest"
   // Worker name in the account that owns it, and OYSTER_OWNER_KEY set with

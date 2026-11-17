@@ -106,10 +106,30 @@ export function mediaStorage(t, bucketBindings = ["APP_ARTIFACTS"], provider) {
             }
           },
         });
-        meters.set(name, {
+        const methods = {
           dailyAdmit: async (input) => meter.admit(input),
           dailySettle: async (input) => meter.settle(input),
-        });
+        };
+        // A Workers RPC stub: any property is a remote method named by its
+        // path, so `stub.dailyAdmit.call(stub, input)` asks for "dailyAdmit.call".
+        const rpcStub = new Proxy(
+          {},
+          {
+            get: (_target, property) => {
+              const remote = (path) =>
+                new Proxy(() => undefined, {
+                  get: (_fn, next) => remote(`${path}.${String(next)}`),
+                  apply: async (_fn, _this, args) => {
+                    if (!Object.hasOwn(methods, path))
+                      throw new Error(`The RPC target has no method ${path}`);
+                    return methods[path](...args);
+                  },
+                });
+              return remote(String(property));
+            },
+          },
+        );
+        meters.set(name, rpcStub);
       }
       return meters.get(name);
     },

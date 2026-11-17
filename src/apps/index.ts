@@ -49,6 +49,7 @@ export {
   grantRequestFor,
   pendingCapabilities,
   type GrantRequestDecision,
+  appCallTargetName,
   type ResourceOption,
 } from "./permissions.js";
 export {

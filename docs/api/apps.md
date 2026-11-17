@@ -2400,3 +2400,24 @@ longer listed by the host.
 #### Returns
 
 [`PermissionScreen`](#permissionscreen)
+
+---
+
+### appCallTargetName()
+
+```ts
+function appCallTargetName(directory, appId): string;
+```
+
+The directory's display name for an App-call target, else the shared plain copy.
+
+#### Parameters
+
+| Parameter   | Type                                                                                                                                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `directory` | \| `Readonly`\<\{ `apps`: readonly `Readonly`\<\{ `appId`: `string`; `displayName?`: `string`; \}\>[]; `installing?`: readonly `Readonly`\<\{ `appId?`: `string`; `displayName`: `string`; \}\>[]; \}\> \| `null` |
+| `appId`     | `string`                                                                                                                                                                                                          |
+
+#### Returns
+
+`string`

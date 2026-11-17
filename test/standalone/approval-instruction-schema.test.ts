@@ -25,18 +25,19 @@ function declaration(instructions: string): string {
 function contract(instructions: string): string {
   return `
 import type {
-  PendingApprovalSchema,
   ApprovalRefusalSchema,
 } from "@fungi.computer/approvals";
+import type { OysterApprovalResult } from "../../src/host.js";
 ${declaration(instructions)}
-type Pending = typeof PendingApprovalSchema.Type;
+type Denied = Extract<OysterApprovalResult, { kind: "denied" }>;
 type Refusal = typeof ApprovalRefusalSchema.Type;
 // Guidance describes mutable JSON, not the owner's readonly representation.
-type Mutable<T> = { -readonly [K in keyof T]:
-  T[K] extends object ? Mutable<T[K]> : T[K] };
+type Mutable<T> = T extends object
+  ? { -readonly [K in keyof T]: Mutable<T[K]> }
+  : T;
 // The approved display intentionally says reason: string. Runtime keeps the
 // owning closed refusal vocabulary; no other field or optionality is widened.
-type Expected = Mutable<Pending | (Omit<Refusal, "reason"> & { reason: string })>;
+type Expected = Mutable<Denied | (Omit<Refusal, "reason"> & { reason: string })>;
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
   (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -49,8 +50,8 @@ it("keeps approval guidance fields and optionality aligned with the owning schem
   const cases = [
     { name: "current", text: appApprovalInstructions, valid: true },
     {
-      name: "missing-record-id",
-      text: appApprovalInstructions.replace("recordId: string; ", ""),
+      name: "missing-denier",
+      text: appApprovalInstructions.replace("by: string; ", ""),
       valid: false,
     },
     {
@@ -59,8 +60,8 @@ it("keeps approval guidance fields and optionality aligned with the owning schem
       valid: false,
     },
     {
-      name: "optional-description-title",
-      text: appApprovalInstructions.replace("title: string", "title?: string"),
+      name: "required-user-note",
+      text: appApprovalInstructions.replace("note?: string", "note: string"),
       valid: false,
     },
   ];

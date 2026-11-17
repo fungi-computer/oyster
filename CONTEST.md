@@ -217,13 +217,31 @@ your own Oyster from this public repository.
 
 ## Shed's Ports previews
 
-`apps/bonsai/wrangler.contest.jsonc` is the contest deployment config: the same
-standalone Worker as `wrangler.jsonc`, deployed under the name `oyster-contest`
-with the `oyster.shiit.app` custom domain route attached, so it answers on two
-origins. Shed's Ports tray (open a terminal, run a server on a port, Expose it)
-needs that second origin — `OYSTER_PREVIEW_ORIGIN`, this Worker's own
-`workers_dev` address — to isolate the previewed page from the owner's own
-session; see Bonsai's README (`apps/bonsai/README.md`, "Shed's Ports previews").
-The quick start's single-domain deploy has no second origin to put that var on,
-so Ports previews stay off there — Shed's terminal, files and Expose/Unexpose
-all still work without it.
+Active previews require `OYSTER_PREVIEW_DOMAIN`: a bare domain with wildcard TLS
+and a Worker route, on a different registrable site from `OYSTER_ORIGIN`.
+Without it, Ports previews stay off; terminal, files and Expose/Unexpose still
+work. The retired `OYSTER_PREVIEW_ORIGIN` is recognized only to refuse traffic.
+
+Private port previews exchange a one-time connect URL for a one-hour owner
+session. The stable owner entry is
+`<OYSTER_ORIGIN>/computers/<computerId>/ports/<port>`. Opening it requires the
+existing Oyster owner sign-in. A copied preview URL does not sign another
+browser in.
+
+Set `OYSTER_PREVIEW_DOMAIN` to a bare domain with wildcard TLS and a Worker
+route to use a separate flat hostname per Computer and port. Fleet IDs map
+`computer_<id>` to `computer-<id>-<port>.<domain>`; configured standalone IDs
+must be lowercase alphanumeric labels. The complete label must fit 63 bytes.
+Shared-origin path previews are disabled. Reopen old links through Shed's Ports
+tray after configuring the isolated domain. Sessions are bound to one port.
+Requests from sibling preview hosts and WebSockets without an exact matching
+Origin are refused.
+
+The separate registrable-site requirement includes private suffixes such as
+`workers.dev`. JavaScript and WebSockets can pass through after admission. Owner
+credentials and all app cookies are still stripped; forwarded apps that require
+cookie logins are not supported yet. This configuration does not create DNS
+records, certificates or Worker routes.
+
+Owner sign-out does not revoke existing preview sessions. They expire after one
+hour; removing the exposed port revokes them immediately.

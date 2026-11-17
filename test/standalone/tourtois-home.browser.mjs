@@ -321,7 +321,8 @@ async function installChild(installationId, displayName) {
   assert.equal(operation.state, "succeeded", JSON.stringify(operation));
   assert.equal(operation.creation, "fresh");
 }
-const appFrameSandbox = "allow-scripts allow-modals allow-popups allow-forms";
+const appFrameSandbox =
+  "allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-forms";
 const paneOf = (page, name) =>
   page.locator(`.tourtois-app-pane[aria-label="${name}"]`);
 const childOf = (page, name) =>

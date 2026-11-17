@@ -501,13 +501,23 @@ it.each(["accepted", "refused", "unconfirmed", "stale", "viewer"] as const)(
       );
     } else {
       expect(document.body.textContent).not.toContain("Grove can now");
-      expect(container.textContent).toContain(
+      const expected =
         outcome === "refused"
           ? "was refused"
           : outcome === "stale"
             ? "Current permissions loaded"
-            : "could not be confirmed",
-      );
+            : "could not be confirmed";
+      // A refusal, an unconfirmed save and a stale rebase are toasts: none of
+      // them adds text to the form, whose layout must not reflow.
+      const toasts = [...document.querySelectorAll("[data-sonner-toast]")]
+        .map((toast) => toast.textContent)
+        .join(" ");
+      expect(toasts).toContain(expected);
+      const inline = [...container.querySelectorAll('[role="status"]')]
+        .filter((node) => node.closest("[data-sonner-toaster]") === null)
+        .map((node) => node.textContent)
+        .join(" ");
+      expect(inline).not.toContain(expected);
     }
   },
 );

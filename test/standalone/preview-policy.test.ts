@@ -1,262 +1,364 @@
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
+import { z } from "zod";
+import { afterEach, describe, expect, it } from "vitest";
+import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
+import { serveHost } from "../../src/authorization.js";
 import {
-  passivePreviewResponse,
+  createStandalonePreview,
   previewOrigins,
+  standalonePortEntryRoutes,
   standalonePreviewRequest,
+  type StandalonePreviewEnv,
 } from "../../src/standalone/preview.js";
 
-const origins = {
-  owner: "https://oyster.shiit.app",
-  preview: "https://oyster-contest.levi-fe0.workers.dev",
-};
 const env = {
-  OYSTER_ORIGIN: origins.owner,
-  OYSTER_PREVIEW_ORIGIN: origins.preview,
+  OYSTER_ORIGIN: "https://owner.example.com",
+  OYSTER_PREVIEW_DOMAIN: "preview.example.net",
 };
-const signature = "a".repeat(20);
+const previewOrigin = "https://workspace-5173.preview.example.net";
+const databases: DatabaseSync[] = [];
+afterEach(() => {
+  for (const database of databases.splice(0)) database.close();
+});
+async function fixture(
+  bindings: StandalonePreviewEnv = env,
+  computerId = "workspace",
+  forward?: (request: Request) => Promise<Response>,
+) {
+  const database = new DatabaseSync(":memory:");
+  databases.push(database);
+  const storage = fromNodeSqlite(database);
+  storage.sql.exec(
+    "CREATE TABLE computer_exposed_ports (port INTEGER PRIMARY KEY, process_id TEXT)",
+  );
+  storage.sql.exec(
+    "INSERT INTO computer_exposed_ports VALUES (5173,NULL), (5174,NULL)",
+  );
+  const origins = await previewOrigins(bindings);
+  if (origins === null)
+    throw new Error("Fixture preview configuration rejected");
+  const seen: Request[] = [];
+  const preview = createStandalonePreview(storage, computerId, origins, {
+    accept: (ownerId) => {
+      if (ownerId !== "owner") throw new Error("Fixture requires owner");
+    },
+    forward: async (_port, request, accept) => {
+      accept();
+      seen.push(request);
+      if (forward !== undefined) return forward(request);
+      return new Response("export const active = true", {
+        headers: {
+          "Content-Type": "text/javascript",
+          "Set-Cookie": "app=fixture; Secure",
+        },
+      });
+    },
+  });
+  const ownsComputer = (id: string) => Promise.resolve(id === computerId);
+  const fetch = async (request: Request) => {
+    const result = await standalonePreviewRequest(
+      request,
+      bindings,
+      ownsComputer,
+      (_id, port, incoming) => preview.fetch(port, incoming),
+    );
+    if (result === null)
+      throw new Error("Fixture request escaped the preview fence");
+    return result;
+  };
+  const entry = (signedIn: boolean) =>
+    serveHost(
+      standalonePortEntryRoutes({
+        ownsComputer,
+        issue: (_id, ownerId, port) => preview.issueOwner(ownerId, port),
+      }),
+      () =>
+        Promise.resolve(
+          signedIn
+            ? {
+                kind: "admitted",
+                principal: {
+                  actor: { kind: "member", memberId: "owner" },
+                  role: "owner",
+                },
+              }
+            : { kind: "refused", status: 401 },
+        ),
+      { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
+    );
+  return { storage, preview, fetch, seen, entry };
+}
+function session(response: Response) {
+  return response.headers.get("set-cookie")?.split(";")[0] ?? "";
+}
 
-describe("standalone preview-only origin fence", () => {
-  it("requires the explicit approved origin pair and does not infer it from a request", () => {
-    expect(previewOrigins({})).toBeNull();
-    expect(
-      previewOrigins({
-        OYSTER_ORIGIN: origins.owner,
-        OYSTER_PREVIEW_ORIGIN: origins.preview,
-      }),
-    ).toEqual(origins);
-    // The pair is config, not a fixed literal: any distinct, well-formed
-    // origin pair the operator configures is honored, not just this one.
-    const otherOrigins = {
-      owner: "https://bonsai-preview.levi-fe0.workers.dev",
-      preview: "https://bonsai-preview-other.levi-fe0.workers.dev",
-    };
-    expect(
-      previewOrigins({
-        OYSTER_ORIGIN: otherOrigins.owner,
-        OYSTER_PREVIEW_ORIGIN: otherOrigins.preview,
-      }),
-    ).toEqual(otherOrigins);
-    for (const preview of [
-      origins.owner,
-      `${origins.preview}/api`,
-      "http://oyster-contest.levi-fe0.workers.dev",
+describe("Oyster private port previews", () => {
+  it("requires isolated hosts on a different site and fences broken configurations", async () => {
+    expect(await previewOrigins(env)).toEqual({
+      owner: env.OYSTER_ORIGIN,
+      preview: "https://preview.example.net",
+    });
+    for (const domain of [
+      "other.example.com",
+      "preview.example.net/api",
+      "preview.example.net:443",
+      "localhost",
     ])
       expect(
-        previewOrigins({
-          OYSTER_ORIGIN: origins.owner,
-          OYSTER_PREVIEW_ORIGIN: preview,
+        await previewOrigins({ ...env, OYSTER_PREVIEW_DOMAIN: domain }),
+      ).toBeNull();
+    for (const [owner, domain] of [
+      ["https://one.account.workers.dev", "two.account.workers.dev"],
+      ["https://one.project.pages.dev", "two.project.pages.dev"],
+    ])
+      expect(
+        await previewOrigins({
+          OYSTER_ORIGIN: owner,
+          OYSTER_PREVIEW_DOMAIN: domain,
         }),
       ).toBeNull();
-    expect(
-      previewOrigins({ OYSTER_PREVIEW_ORIGIN: origins.preview }),
-    ).toBeNull();
-    expect(
-      previewOrigins({
-        OYSTER_ORIGIN: "not an origin",
-        OYSTER_PREVIEW_ORIGIN: origins.preview,
-      }),
-    ).toBeNull();
-  });
-  it("refuses every non-preview path and non-read method without entering a forwarder", async () => {
-    // Nothing configured OYSTER_PREVIEW_ORIGIN at all, or at a host other
-    // than this one: that host is not a security fence on a literal — it
-    // just leaves routing to the caller, like any other unmatched origin.
-    for (const unconfigured of [
-      {},
-      {
-        OYSTER_ORIGIN: origins.owner,
-        OYSTER_PREVIEW_ORIGIN: "https://unrelated.example",
-      },
-    ])
-      expect(
-        await standalonePreviewRequest(
-          new Request(`${origins.preview}/login`),
-          unconfigured,
-          (id) => Promise.resolve(id === "workspace"),
-          () => {
-            throw new Error(
-              "Unconfigured preview must never enter the forwarder",
-            );
-          },
-        ),
-      ).toBeNull();
-    // Once a host IS the configured preview tunnel, it stays fenced off from
-    // the normal router even if the rest of the pair (the owner origin) is
-    // separately broken or missing — misconfiguration never falls through.
-    for (const brokenOwner of [
-      { OYSTER_PREVIEW_ORIGIN: origins.preview },
-      {
-        OYSTER_ORIGIN: "not an origin",
-        OYSTER_PREVIEW_ORIGIN: origins.preview,
-      },
-      {
-        OYSTER_ORIGIN: origins.preview,
-        OYSTER_PREVIEW_ORIGIN: origins.preview,
-      },
-    ])
-      expect(
-        (
-          await standalonePreviewRequest(
-            new Request(`${origins.preview}/login`),
-            brokenOwner,
-            (id) => Promise.resolve(id === "workspace"),
-            () => {
-              throw new Error("Forbidden forwarding");
-            },
-          )
-        )?.status,
-      ).toBe(404);
-    for (const path of [
-      "/",
-      "/api",
-      "/apps",
-      "/ui/shed",
-      "/login",
-      "/mcp",
-      "/__vm/lab/ws",
-      "/preview/workspace/3000/bad/",
-      "/preview/other/3000/" + signature + "/",
-      "/preview/workspace/3000/" + signature + "/../../../../../api",
-    ])
-      expect(
-        (
-          await standalonePreviewRequest(
-            new Request(origins.preview + path),
-            env,
-            (id) => Promise.resolve(id === "workspace"),
-            () => {
-              throw new Error("Forbidden forwarding");
-            },
-          )
-        )?.status,
-      ).toBe(404);
-    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-      expect(
-        (
-          await standalonePreviewRequest(
-            new Request(
-              `${origins.preview}/preview/workspace/3000/${signature}/`,
-              { method },
-            ),
-            env,
-            (id) => Promise.resolve(id === "workspace"),
-            () => {
-              throw new Error("Forbidden forwarding");
-            },
-          )
-        )?.status,
-      ).toBe(404);
-  });
-  it("forwards only service-relative paths while removing ambient credentials", async () => {
-    const seen: Request[] = [];
-    const response = await standalonePreviewRequest(
-      new Request(
-        `${origins.preview}/preview/workspace/3000/${signature}/docs?a=1`,
-        {
-          headers: {
-            Cookie: "fixture-private",
-            Authorization: "Bearer fixture-private",
-            Host: "fixture.invalid",
-          },
+    for (const bindings of [
+      { OYSTER_PREVIEW_DOMAIN: env.OYSTER_PREVIEW_DOMAIN },
+      { ...env, OYSTER_ORIGIN: "broken" },
+    ]) {
+      const result = await standalonePreviewRequest(
+        new Request(`${previewOrigin}/login`),
+        bindings,
+        () => Promise.resolve(true),
+        () => {
+          throw new Error("Must not forward");
         },
-      ),
-      env,
-      (id) => Promise.resolve(id === "workspace"),
-      (computerId, ticket, port, request) => {
-        expect(computerId).toBe("workspace");
-        expect(ticket).toBe(signature);
-        expect(port).toBe(3000);
-        seen.push(request);
-        return Promise.resolve(new Response("hi"));
-      },
-    );
-    expect(response?.status).toBe(200);
-    expect(seen[0]?.url).toBe("http://localhost/docs?a=1");
-    expect(seen[0]?.headers.has("Cookie")).toBe(false);
-    expect(seen[0]?.headers.has("Authorization")).toBe(false);
-    expect(seen[0]?.headers.has("Host")).toBe(false);
-  });
-  it("leaves the canonical owner origin to its existing router", async () => {
+      );
+      expect(result?.status).toBe(404);
+    }
     expect(
       await standalonePreviewRequest(
-        new Request(`${origins.owner}/api`),
+        new Request(env.OYSTER_ORIGIN),
         env,
-        (id) => Promise.resolve(id === "workspace"),
+        () => Promise.resolve(true),
         () => {
-          throw new Error("Not a preview");
+          throw new Error("Must not forward");
         },
       ),
     ).toBeNull();
+  });
+  it("refuses retired shared-origin paths, including cross-Computer and Service Worker requests", async () => {
+    const legacy = {
+      OYSTER_ORIGIN: env.OYSTER_ORIGIN,
+      OYSTER_PREVIEW_ORIGIN: "https://shared.example.net",
+    };
+    expect(await previewOrigins(legacy)).toBeNull();
+    for (const computer of ["a", "b"]) {
+      const result = await standalonePreviewRequest(
+        new Request(
+          `${legacy.OYSTER_PREVIEW_ORIGIN}/preview/${computer}/5173/sw.js`,
+          {
+            headers: {
+              cookie: "__Host-fungi-port-b=fixture",
+              "Service-Worker": "script",
+            },
+          },
+        ),
+        legacy,
+        () => Promise.resolve(true),
+        () => {
+          throw new Error("Shared previews must never forward");
+        },
+      );
+      expect(result?.status).toBe(404);
+      expect(result?.headers.has("Service-Worker-Allowed")).toBe(false);
+    }
+  });
+  it("admits the owner through entry, single-use exchange and a clean URL; serves active assets without credentials", async () => {
+    const f = await fixture();
+    const entryUrl = `${env.OYSTER_ORIGIN}/computers/workspace/ports/5173`;
+    const document = await f.entry(false).request(entryUrl);
+    expect(document.status).toBe(200);
+    expect(document.headers.get("Cross-Origin-Opener-Policy")).toBe(
+      "same-origin",
+    );
+    expect(await document.text()).toContain('method="post"');
+    expect(document.headers.get("Content-Security-Policy")).toContain(
+      "frame-ancestors 'none'",
+    );
+    expect(
+      (await f.entry(false).request(entryUrl, { method: "POST" })).status,
+    ).toBe(401);
+    const entry = await f.entry(true).request(entryUrl, { method: "POST" });
+    expect(entry.status).toBe(302);
+    const connect = z.string().parse(entry.headers.get("location"));
+    const exchanged = await f.fetch(new Request(connect));
+    expect(exchanged.status).toBe(302);
+    const clean = z.string().parse(exchanged.headers.get("location"));
+    expect(new URL(clean).searchParams.has("token")).toBe(false);
+    expect((await f.fetch(new Request(connect))).status).toBe(401);
+    expect((await f.fetch(new Request(clean))).status).toBe(401);
+    const response = await f.fetch(
+      new Request(`${clean}main.js?keep=1`, {
+        headers: {
+          cookie: session(exchanged),
+          authorization: "Bearer fixture",
+          "cf-access-jwt-assertion": "fixture",
+        },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/javascript");
+    expect(response.headers.has("Content-Security-Policy")).toBe(false);
+    expect(response.headers.has("Set-Cookie")).toBe(false);
+    expect(f.seen[0]?.url).toBe("http://localhost/main.js?keep=1");
+    for (const header of ["cookie", "authorization", "cf-access-jwt-assertion"])
+      expect(f.seen[0]?.headers.has(header)).toBe(false);
+    expect(
+      (
+        await f
+          .entry(true)
+          .request(`${env.OYSTER_ORIGIN}/computers/unknown/ports/5173`, {
+            method: "POST",
+          })
+      ).status,
+    ).toBe(404);
+  });
+  it("forwards admitted writes and revokes access on unexpose", async () => {
+    const f = await fixture();
+    const issued = await f.preview.issueOwner("owner", 5173);
+    const exchange = await f.fetch(new Request(issued.previewUrl));
+    const cookie = session(exchange);
+    const url = `${previewOrigin}/api`;
+    expect(
+      (
+        await f.fetch(
+          new Request(url, {
+            method: "POST",
+            body: "fixture",
+            headers: { cookie, "sec-fetch-site": "same-origin" },
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(await f.seen[0]?.text()).toBe("fixture");
+    expect(
+      (
+        await f.fetch(
+          new Request(url, {
+            method: "POST",
+            body: "fixture",
+            headers: { cookie, "sec-fetch-site": "same-site" },
+          }),
+        )
+      ).status,
+    ).toBe(401);
+    expect(f.seen).toHaveLength(1);
+    f.storage.sql.exec("DELETE FROM computer_exposed_ports WHERE port = 5173");
+    expect(
+      (await f.fetch(new Request(url, { headers: { cookie } }))).status,
+    ).toBe(401);
+  });
+  it("uses stable flat hosts and keeps host sessions bound to their port", async () => {
+    const bindings = {
+      OYSTER_ORIGIN: env.OYSTER_ORIGIN,
+      OYSTER_PREVIEW_DOMAIN: "preview.example.net",
+    };
+    const f = await fixture(bindings, "computer_abc123");
+    const issued = await f.preview.issueOwner("owner", 5173);
+    expect(new URL(issued.previewUrl).hostname).toBe(
+      "computer-abc123-5173.preview.example.net",
+    );
+    const exchange = await f.fetch(new Request(issued.previewUrl));
+    const cookie = session(exchange);
+    expect(cookie.startsWith("__Host-fungi-port=")).toBe(true);
+    expect(
+      (
+        await f.fetch(
+          new Request(
+            "https://computer-abc123-5173.preview.example.net/main.js",
+            { headers: { cookie } },
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await f.fetch(
+          new Request("https://computer-abc123-5174.preview.example.net/", {
+            headers: { cookie },
+          }),
+        )
+      ).status,
+    ).toBe(401);
+    expect(f.seen[0]?.url).toBe("http://localhost/main.js");
+  });
+  it("rejects unknown Computers and invalid host ports without forwarding", async () => {
+    const f = await fixture();
+    for (const host of [
+      "preview.example.net",
+      "other-5173.preview.example.net",
+      "workspace-0.preview.example.net",
+      "workspace-65536.preview.example.net",
+      "workspace-05173.preview.example.net",
+      "workspace-1e3.preview.example.net",
+    ])
+      expect((await f.fetch(new Request(`https://${host}/`))).status).toBe(404);
+    expect(f.seen).toHaveLength(0);
   });
 });
 
-describe("passive preview response boundary", () => {
-  it("owns the sandbox and strips supplier cookies, identity and relaxation headers", async () => {
-    const response = await passivePreviewResponse(
-      new Response("<h1>hi</h1>", {
-        headers: {
-          "Content-Type": "text/html",
-          "Set-Cookie": "fixture-private",
-          "Clear-Site-Data": '"*"',
-          "Access-Control-Allow-Origin": "*",
-          "Content-Security-Policy": "sandbox allow-scripts allow-same-origin",
-          "X-Private": "fixture-private",
-        },
-      }),
-    );
-    expect(response.headers.get("Content-Security-Policy")).toContain(
-      "sandbox;",
-    );
-    expect(response.headers.get("Content-Security-Policy")).not.toContain(
-      "allow-scripts",
-    );
-    for (const header of [
-      "Set-Cookie",
-      "Clear-Site-Data",
-      "Access-Control-Allow-Origin",
-      "X-Private",
-    ])
-      expect(response.headers.has(header)).toBe(false);
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
-    expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
-    expect(response.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-    expect(await response.text()).toBe("<h1>hi</h1>");
+it("serves real Vite assets on an isolated private preview host", async () => {
+  const base = "/";
+  const area = fileURLToPath(
+    new URL("../../../../.botanical/", import.meta.url).href,
+  );
+  const directory = await mkdtemp(`${area}oyster-vite-`);
+  const server = await createServer({
+    root: directory,
+    base,
+    configFile: false,
+    logLevel: "silent",
+    server: { host: "127.0.0.1", port: 0 },
   });
-  it("refuses redirects, Refresh and executable/non-document responses", async () => {
-    expect(
-      (
-        await passivePreviewResponse(
-          new Response(null, {
-            status: 302,
-            headers: { Location: origins.owner },
-          }),
-        )
-      ).status,
-    ).toBe(502);
-    expect(
-      (
-        await passivePreviewResponse(
-          new Response("hi", {
-            headers: {
-              "Content-Type": "text/html",
-              Refresh: "0;url=" + origins.owner,
-            },
-          }),
-        )
-      ).status,
-    ).toBe(502);
-    for (const type of [
-      "text/javascript",
-      "application/json",
-      "image/svg+xml",
-      "application/octet-stream",
-    ])
-      expect(
-        (
-          await passivePreviewResponse(
-            new Response("hi", { headers: { "Content-Type": type } }),
-          )
-        ).status,
-      ).toBe(415);
-  });
+  try {
+    await writeFile(
+      `${directory}/index.html`,
+      '<html><body><script type="module" src="/main.js"></script></body></html>',
+    );
+    await writeFile(
+      `${directory}/main.js`,
+      'document.body.dataset.preview = "vite-preview-proof";',
+    );
+    await server.listen();
+    const address = z
+      .object({ port: z.number() })
+      .parse(server.httpServer?.address());
+    const f = await fixture(env, "workspace", (request) => {
+      const target = new URL(request.url);
+      target.hostname = "127.0.0.1";
+      target.port = String(address.port);
+      return fetch(new Request(target, request), { redirect: "manual" });
+    });
+    const issued = await f.preview.issueOwner("owner", 5173);
+    const exchange = await f.fetch(new Request(issued.previewUrl));
+    expect(exchange.status).toBe(302);
+    const headers = { cookie: session(exchange) };
+    const url = z.string().parse(exchange.headers.get("location"));
+    expect(url).toBe(`${previewOrigin}${base}`);
+    const page = await f.fetch(new Request(url, { headers }));
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain(`${base}main.js`);
+    expect(html).toContain(`${base}@vite/client`);
+    const script = await f.fetch(new Request(`${url}main.js`, { headers }));
+    expect(script.status).toBe(200);
+    expect(await script.text()).toContain("vite-preview-proof");
+    const client = await f.fetch(
+      new Request(`${url}@vite/client`, { headers }),
+    );
+    expect(client.status).toBe(200);
+    await client.body?.cancel();
+  } finally {
+    await server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -80,6 +80,9 @@ function fleetStatus(
       case "no_runtime":
       case "partial_init":
         return 503;
+      case "unavailable":
+        // The Computer has no such switch: a conflict with its kind, not a fault.
+        return 409;
       default:
         return 409;
     }

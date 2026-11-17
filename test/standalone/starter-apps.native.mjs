@@ -27,7 +27,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 
-import { URL, URLPattern, fileURLToPath } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import * as z from "zod";
 import { parse as parseJsonc } from "jsonc-parser";
 import * as Schema from "effect/Schema";
@@ -68,13 +68,13 @@ assert.deepEqual(
 
 const repository = fileURLToPath(new URL("../../../../", import.meta.url));
 const bonsai = fileURLToPath(new URL("../../", import.meta.url));
-const origins = previewOrigins({
+const origins = await previewOrigins({
   OYSTER_ORIGIN: process.env.OYSTER_ORIGIN,
-  OYSTER_PREVIEW_ORIGIN: process.env.OYSTER_PREVIEW_ORIGIN,
+  OYSTER_PREVIEW_DOMAIN: process.env.OYSTER_PREVIEW_DOMAIN,
 });
 assert.ok(
   origins,
-  "Supply distinct authorized HTTPS OYSTER_ORIGIN/OYSTER_PREVIEW_ORIGIN ingress to this disposable Worker",
+  "Supply distinct authorized HTTPS OYSTER_ORIGIN/OYSTER_PREVIEW_DOMAIN ingress to this disposable Worker",
 );
 const { port, vars: computerVars } = await labComputer();
 const provider = await workflowGitProvider();
@@ -97,7 +97,7 @@ const vars = {
   ...computerVars,
   OYSTER_OWNER_KEY: key,
   OYSTER_ORIGIN: origins.owner,
-  OYSTER_PREVIEW_ORIGIN: origins.preview,
+  OYSTER_PREVIEW_DOMAIN: new URL(origins.preview).hostname,
   GIT_ORIGIN: provider.origin,
 };
 const redact = (text) =>
@@ -481,8 +481,28 @@ try {
       const port = ports.ports.find((port) => port.port === 3000);
       assert.ok(port);
       assert.equal(port.openMode, "external-only");
-      assert.equal(new URL(port.previewUrl).origin, origins.preview);
-      tickets.push({ computerId: computer.computerId, url: port.previewUrl });
+      assert.equal(new URL(port.previewUrl).origin, origins.owner);
+      const entry = await globalThis.fetch(port.previewUrl, {
+        method: "POST",
+        redirect: "manual",
+        headers: auth,
+      });
+      assert.equal(entry.status, 302);
+      const connectUrl = entry.headers.get("location");
+      assert.ok(connectUrl);
+      const exchange = await globalThis.fetch(connectUrl, {
+        redirect: "manual",
+      });
+      assert.equal(exchange.status, 302);
+      const url = exchange.headers.get("location");
+      const cookie = exchange.headers.get("set-cookie")?.split(";")[0];
+      assert.ok(url && cookie);
+      assert.equal(new URL(url).searchParams.has("token"), false);
+      assert.equal(
+        (await globalThis.fetch(connectUrl, { redirect: "manual" })).status,
+        401,
+      );
+      tickets.push({ computerId: computer.computerId, url, cookie });
     }
     const previewEcho = z.object({
       computerId: z.string(),
@@ -497,7 +517,7 @@ try {
           redirect: "error",
           headers: {
             Authorization: `Bearer ${key}`,
-            Cookie: `oyster_session=${key}`,
+            Cookie: `${ticket.cookie}; oyster_session=${key}`,
             "Proxy-Authorization": `Bearer ${key}`,
           },
         });
@@ -508,7 +528,7 @@ try {
         assert.equal(echo.headers.cookie, undefined);
         assert.equal(echo.headers["proxy-authorization"], undefined);
         assert.equal(echo.url, "/");
-        assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+        assert.equal(response.headers.get("Cache-Control"), "no-store");
         assert.equal(response.headers.get("Set-Cookie"), null);
         const previous = lastPreviewRequests.get(ticket.computerId);
         if (previous !== undefined)
@@ -520,19 +540,15 @@ try {
         lastPreviewRequests.set(ticket.computerId, echo.requests);
       }
     };
-    // These are A/B tickets issued while B is selected. Consume before and
+    // These are A/B sessions issued while B is selected. Read before and
     // after a real Worker restart over the same durable state, not a new ID.
     await readTickets();
     const mismatched = new URL(tickets[0].url);
-    const target = new URLPattern({
-      pathname: "/preview/:computerId/:port/:signature/*",
-    }).exec(mismatched);
-    assert.ok(target);
-    mismatched.pathname = `/preview/${encodeURIComponent(b.computerId)}/${target.pathname.groups.port}/${target.pathname.groups.signature}/`;
+    mismatched.hostname = `${b.computerId.replace("computer_", "computer-")}-3000.${new URL(origins.preview).hostname}`;
     const refusedTicket = await globalThis.fetch(mismatched, {
       redirect: "error",
     });
-    assert.equal(refusedTicket.status, 403);
+    assert.equal(refusedTicket.status, 401);
     worker.kill("SIGTERM");
     await stopped;
     ({ child: worker, stopped } = startWorker());

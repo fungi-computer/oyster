@@ -3506,7 +3506,7 @@ test("the agent host captures one App source per acquisition and retains agent a
   assert.doesNotMatch(text, /\["/u, "no bracket call syntax in the prompt");
   assert.equal(text.match(/type AppApprovalResult/gu)?.length, 1);
   const waitForApproval =
-    "On pending_approval, tell the person it is waiting for their approval; do not retry.";
+    "A write needing approval waits in this call. Approval returns its output; denial or expiry returns here, never as a Session message.";
   assert.equal(text.split(waitForApproval).length - 1, 1);
   assert.ok(
     text.includes(
@@ -3514,7 +3514,7 @@ test("the agent host captures one App source per acquisition and retains agent a
         waitForApproval,
     ),
   );
-  assert.match(text, /kind: "pending_approval"; recordId: string/u);
+  assert.match(text, /kind: "denied"; by: string/u);
   assert.match(text, /kind: "refused"; reason: string; denialNote\?: string/u);
   const acquired = [];
   let legacyApproval = false;
@@ -4053,6 +4053,12 @@ for (const binding of [false, true]) {
     { status: 529, code: "overloaded_error", retryable: true },
     { status: 400, code: "invalid_request", retryable: false },
     { status: 429, code: "insufficient_quota", retryable: false },
+    { status: 429, code: "usage_limit_reached", retryable: false },
+    {
+      status: 429,
+      code: "subscription_sharing_usage_limit_exceeded",
+      retryable: false,
+    },
     { status: 429, code: "rate_limit_exceeded", retryable: true },
   ]) {
     test(`typed provider decisions for ${binding ? "AI binding" : "Luna"} ${code}`, async (context) => {
@@ -4104,6 +4110,33 @@ for (const binding of [false, true]) {
         assert.equal(lease.retryable(terminal), expectRetryable);
         const result = await response.result();
         assert.equal(result.stopReason, "error");
+        if (
+          [
+            "insufficient_quota",
+            "usage_limit_reached",
+            "subscription_sharing_usage_limit_exceeded",
+          ].includes(code)
+        ) {
+          assert.equal(
+            result.errorMessage,
+            binding
+              ? "Cloudflare Workers AI usage limit reached."
+              : "OpenAI usage limit reached.",
+          );
+          assert.deepEqual(result.modelFailure, {
+            provider: binding ? "cloudflare-workers-ai" : "openai",
+            cause: {
+              code: "usage-limit-reached",
+              ...(code !== "subscription_sharing_usage_limit_exceeded" && {
+                cause: "quota",
+              }),
+            },
+          });
+          assert.equal(lease.failureReason(result), result.errorMessage);
+          assert.doesNotMatch(result.errorMessage, /retry|try again/iu);
+        } else if (!(binding && code === "rate_limit_exceeded")) {
+          assert.match(result.errorMessage, /Retry the request\./u);
+        }
         assert.equal(requests, 1);
         assert.equal(lease.retryable(result), expectRetryable);
         assert.equal(

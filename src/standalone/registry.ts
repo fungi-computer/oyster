@@ -50,7 +50,9 @@ import type { ComputerEnv } from "@fungi.computer/computer";
 import {
   createFleetComputers,
   ComputerInventoryError,
+  type FleetComputer,
 } from "@fungi.computer/computer/fleet";
+import { defaultComputerSize } from "@fungi.computer/computer/backing";
 import {
   standaloneFleetRequestSchema,
   type StandaloneFleetRequest,
@@ -241,33 +243,25 @@ export abstract class StandaloneRegistry
         ).initializeFleetBackings(backings, created.size);
         return created;
       }
-      case "list":
-        return this.#computers.list(input.page);
+      case "list": {
+        // A trial's Computer is configured, not created: report it ahead of
+        // the fleet without a row, as the picker does.
+        const configured = this.#localConfigured();
+        return configured === null
+          ? this.#computers.list(input.page)
+          : this.#withConfigured(input.page, configured);
+      }
       case "choices": {
         // The configured build Computer is an existing supported workspace,
         // not a fabricated fleet creation receipt. Keep its UI row outside inventory.
-        const { limit, offset } = input.page;
-        const first = offset === 0;
-        const configured = {
-          computerId: this.#env.OYSTER_COMPUTER_ID,
-          name: this.#env.OYSTER_COMPUTER_ID,
-        };
-        if (first && limit === 1)
-          return {
-            computers: [configured],
-            nextOffset: this.#computers.count() > 0 ? 1 : null,
-          };
-        const page = this.#computers.list({
-          limit: limit - (first ? 1 : 0),
-          offset: Math.max(0, offset - 1),
-        });
-        return {
-          computers: first ? [configured, ...page.computers] : page.computers,
-          nextOffset: page.nextOffset === null ? null : page.nextOffset + 1,
-        };
+        const { computerId, name } = this.#configured();
+        return this.#withConfigured(input.page, { computerId, name });
       }
       case "read":
-        return this.#computers.read(input.computerId);
+        return (
+          this.#computers.read(input.computerId) ??
+          this.#trialComputer(input.computerId)
+        );
       case "resolve":
         // Context may name the configured build Computer, which has no fleet
         // creation receipt. Keep canonical-owner admission above this lookup.
@@ -276,7 +270,8 @@ export abstract class StandaloneRegistry
           : null;
       case "read-internet-access":
       case "set-internet-access": {
-        if (this.#computers.read(input.computerId) === null) return null;
+        if (this.#computers.read(input.computerId) === null)
+          return this.#withoutSwitches(input.computerId);
         const computer = this.#env.COMPUTER.getByName(input.computerId);
         return {
           enabled: await computer.internetAccess(
@@ -288,7 +283,8 @@ export abstract class StandaloneRegistry
       }
       case "read-keep-awake":
       case "set-keep-awake": {
-        if (this.#computers.read(input.computerId) === null) return null;
+        if (this.#computers.read(input.computerId) === null)
+          return this.#withoutSwitches(input.computerId);
         const computer = this.#env.COMPUTER.getByName(input.computerId);
         return {
           enabled: await computer.keepAwake(
@@ -301,7 +297,9 @@ export abstract class StandaloneRegistry
       case "detach-local":
         return this.#machines(memberId, input);
       case "select": {
-        const computer = this.#computers.read(input.computerId);
+        const computer =
+          this.#computers.read(input.computerId) ??
+          this.#trialComputer(input.computerId);
         if (computer === null) return null;
         await this.#fleetStorage.put("selected-computer", input.computerId);
         return computer;
@@ -337,6 +335,67 @@ export abstract class StandaloneRegistry
           provenance: { actor: memberId },
         });
     }
+  }
+
+  /**
+   * The one definition of the configured Computer, however a caller meets it
+   * (picker row, inventory row, ownership, default). It was never created
+   * through the fleet, so it has no inventory row and no recorded creation
+   * time.
+   */
+  #configured(): FleetComputer {
+    const computerId = this.#env.OYSTER_COMPUTER_ID;
+    return {
+      computerId,
+      name: computerId,
+      size: defaultComputerSize,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
+  /** The configured Computer as a local trial's inventory entry; hosted fleets list only what they created. */
+  #localConfigured(): FleetComputer | null {
+    return this.#env.OYSTER_COMPUTER_BACKEND === "local"
+      ? this.#configured()
+      : null;
+  }
+
+  #trialComputer(computerId: string): FleetComputer | null {
+    const configured = this.#localConfigured();
+    return configured?.computerId === computerId ? configured : null;
+  }
+
+  /**
+   * A trial's Computer is the owner's own machine: it has no sleep to keep
+   * off and no egress policy to switch, so its Settings switches are
+   * unavailable rather than missing.
+   */
+  #withoutSwitches(computerId: string) {
+    return this.#trialComputer(computerId) === null
+      ? null
+      : ({ error: "unavailable" } as const);
+  }
+
+  /** One page of the configured Computer ahead of the fleet's own. */
+  #withConfigured<Configured>(
+    { limit, offset }: Readonly<{ limit: number; offset: number }>,
+    configured: Configured,
+  ) {
+    const first = offset === 0;
+    if (first && limit === 1)
+      return {
+        computers: [configured],
+        nextOffset: this.#computers.count() > 0 ? 1 : null,
+      };
+    const page = this.#computers.list({
+      limit: limit - (first ? 1 : 0),
+      offset: Math.max(0, offset - 1),
+    });
+    return {
+      computers: first ? [configured, ...page.computers] : page.computers,
+      nextOffset: page.nextOffset === null ? null : page.nextOffset + 1,
+    };
   }
 
   /** Attached machines of one owned Computer; the Computer holds the rows. */
@@ -383,11 +442,14 @@ export abstract class StandaloneRegistry
   /** A durable selection snapshot; the configured default remains the App build Computer. */
   async selectedComputer(): Promise<string> {
     const selected = await this.#fleetStorage.get("selected-computer");
-    if (selected === undefined) return this.#env.OYSTER_COMPUTER_ID;
+    if (selected === undefined) return this.#configured().computerId;
     const computerId = Schema.decodeUnknownSync(Schema.NonEmptyString)(
       selected,
     );
-    if (this.#computers.read(computerId) === null)
+    if (
+      this.#computers.read(computerId) === null &&
+      this.#trialComputer(computerId) === null
+    )
       throw new Error("Selected Computer is missing");
     return computerId;
   }
@@ -395,7 +457,7 @@ export abstract class StandaloneRegistry
   /** Frame dispatch checks inventory ownership, not a mutable UI selection. */
   ownsComputer(computerId: string): boolean {
     return (
-      computerId === this.#env.OYSTER_COMPUTER_ID ||
+      computerId === this.#configured().computerId ||
       this.#computers.read(computerId) !== null
     );
   }

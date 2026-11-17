@@ -375,6 +375,8 @@ function standaloneMediaService(
     return createMediaService({ ...host, metering: "unmetered" });
   const meter = env.MEDIA_OPERATION.getByName(DAILY_METER_NAME);
   const { dailyAdmit, dailySettle } = meter;
+  // On an RPC stub this never fires (every name reads as a function); it only
+  // names the misconfiguration for a non-RPC binding.
   if (dailyAdmit === undefined || dailySettle === undefined)
     throw new Error(
       "OYSTER_DAILY_MEDIA_LIMIT_USD needs a MEDIA_OPERATION object that serves the daily meter.",
@@ -383,8 +385,11 @@ function standaloneMediaService(
     ...host,
     metering: createDailyMediaMetering(
       {
-        dailyAdmit: (input) => dailyAdmit.call(meter, input),
-        dailySettle: (input) => dailySettle.call(meter, input),
+        // Call the stub's methods directly: on a Workers RPC stub every property
+        // is a remote method path, so `dailyAdmit.call(meter, ...)` would ask the
+        // object for a method named "dailyAdmit.call".
+        dailyAdmit: (input) => dailyAdmit(input),
+        dailySettle: (input) => dailySettle(input),
       },
       limit,
     ),

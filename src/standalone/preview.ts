@@ -1,9 +1,15 @@
 import * as Schema from "effect/Schema";
 import * as z from "zod";
-import { ComputerPortPreview } from "@fungi.computer/computer/preview";
+import {
+  ComputerPortAccess,
+  PortAccessError,
+} from "@fungi.computer/computer/port-access";
 import { selectionSchema } from "../index.js";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import { computerPortInputSchema } from "@fungi.computer/computer-contract";
+import { owner, publicRoute, routes } from "../authorization.js";
+import { html } from "hono/html";
+import type { OysterEnv } from "../host.js";
 
 export const previewSelectorSchema = Schema.Struct({
   ownerId: Schema.NonEmptyString,
@@ -12,12 +18,17 @@ export const previewSelectorSchema = Schema.Struct({
   artifactDigest: sha256DigestSchema,
 });
 export type PreviewSelector = Schema.Schema.Type<typeof previewSelectorSchema>;
-export type PreviewOrigins = Readonly<{ owner: string; preview: string }>;
+export type PreviewOrigins = Readonly<{
+  owner: string;
+  preview: string;
+}>;
 export type StandalonePreviewEnv = Readonly<{
   OYSTER_ORIGIN?: string;
+  /** Retired shared origin: recognized only to refuse traffic, never serve it. */
   OYSTER_PREVIEW_ORIGIN?: string;
+  /** Bare domain with wildcard TLS and routing supplied by the operator. */
+  OYSTER_PREVIEW_DOMAIN?: string;
 }>;
-
 const originSchema = z.lazy(() =>
   z
     .url()
@@ -32,51 +43,71 @@ const originSchema = z.lazy(() =>
         !url.hash,
     ),
 );
-
-export function previewOrigins(
-  env: StandalonePreviewEnv,
-): PreviewOrigins | null {
-  if (env.OYSTER_PREVIEW_ORIGIN === undefined) return null;
-  const parsed = z
-    .object({ owner: originSchema, preview: originSchema })
-    .safeParse({
-      owner: env.OYSTER_ORIGIN,
-      preview: env.OYSTER_PREVIEW_ORIGIN,
-    });
-  if (!parsed.success) return null;
-  const { owner, preview } = parsed.data;
-  // The preview tunnel must be a distinct origin from the canonical owner
-  // origin: it carries no cookies and no owner credential, so it cannot be
-  // the same origin the owner signs in on. Which two origins those are is a
-  // deploy-time choice (this Worker's own custom domain plus its workers.dev
-  // address, or any other pair the operator actually controls) — never a
-  // literal this module hard-codes.
-  if (owner.origin === preview.origin) return null;
-  return { owner: owner.origin, preview: preview.origin };
-}
-
-/**
- * The configured preview tunnel origin alone, independent of whether the
- * owner origin also validates. Once an operator points OYSTER_PREVIEW_ORIGIN
- * at a host, that host is always treated as preview-only and never falls
- * through to the normal router — even if the rest of the config (the owner
- * origin) is separately broken. Only a host nothing configured as preview
- * is left to the caller's own routing.
- */
-function configuredPreviewOrigin(env: StandalonePreviewEnv): string | null {
+function configuredPreview(env: StandalonePreviewEnv) {
+  if (env.OYSTER_PREVIEW_DOMAIN !== undefined) {
+    const parsed = originSchema.safeParse(
+      `https://${env.OYSTER_PREVIEW_DOMAIN}`,
+    );
+    return parsed.success &&
+      parsed.data.hostname === env.OYSTER_PREVIEW_DOMAIN &&
+      !parsed.data.port
+      ? { preview: parsed.data, mode: "host" as const }
+      : null;
+  }
   const parsed = originSchema.safeParse(env.OYSTER_PREVIEW_ORIGIN);
-  return parsed.success ? parsed.data.origin : null;
+  return parsed.success
+    ? { preview: parsed.data, mode: "path" as const }
+    : null;
+}
+export async function previewOrigins(
+  env: StandalonePreviewEnv,
+): Promise<PreviewOrigins | null> {
+  const owner = originSchema.safeParse(env.OYSTER_ORIGIN);
+  const configured = configuredPreview(env);
+  if (!owner.success || configured?.mode !== "host") return null;
+  const { getDomain } = await import("tldts");
+  const site = (url: URL) =>
+    getDomain(url.hostname, { allowPrivateDomains: true });
+  const ownerSite = site(owner.data);
+  const previewSite = site(configured.preview);
+  if (ownerSite === null || previewSite === null || ownerSite === previewSite)
+    return null;
+  return {
+    owner: owner.data.origin,
+    preview: configured.preview.origin,
+  };
 }
 
-/**
- * The native Computer's preview port. `current` re-proves the selector's
- * owner and Installation against live authority before every issue and
- * every forwarded request.
- */
+export class PreviewRefused extends Error {}
+
+// The retained flat hostname uses the Computer's non-secret identity. Fleet
+// IDs have a computer_ prefix; configured standalone IDs can be simple labels.
+const hostnameComputer = z.string().regex(/^(?:computer_)?[a-z0-9]+$/u);
+function previewUrl(
+  origins: PreviewOrigins,
+  computerId: string,
+  port: number,
+): URL {
+  if (!hostnameComputer.safeParse(computerId).success)
+    throw new PreviewRefused();
+  const label = `${computerId.replace("computer_", "computer-")}-${String(port)}`;
+  if (label.length > 63) throw new PreviewRefused();
+  const result = new URL(origins.preview);
+  result.hostname = `${label}.${result.hostname}`;
+  return result;
+}
+function entryUrl(
+  origins: PreviewOrigins,
+  computerId: string,
+  port: number,
+): string {
+  return new URL(
+    `/computers/${encodeURIComponent(computerId)}/ports/${String(port)}`,
+    origins.owner,
+  ).href;
+}
 export type PreviewNative = Readonly<{
-  current: (selector: PreviewSelector) => Promise<void>;
-  accept: (selector: PreviewSelector) => void;
-  list: (accept: () => void) => Promise<{ ports: number[] }>;
+  accept: (ownerId: string) => void;
   forward: (
     port: number,
     request: Request,
@@ -84,108 +115,50 @@ export type PreviewNative = Readonly<{
   ) => Promise<Response>;
 }>;
 
-export class PreviewRefused extends Error {}
-
 export function createStandalonePreview(
-  storage: ConstructorParameters<typeof ComputerPortPreview>[0],
+  storage: ConstructorParameters<typeof ComputerPortAccess>[0],
   computerId: string,
-  origin: string,
+  origins: PreviewOrigins,
   native: PreviewNative,
 ) {
-  const tickets = new ComputerPortPreview(storage, {
-    selector: previewSelectorSchema,
-    previewUrl: (signature, base) => `${base}/${signature}/`,
-    accept: native.accept,
-    listPorts: native.list,
-    forward: native.forward,
-    portDenied: () => {
-      throw new PreviewRefused();
-    },
-    dispatchFailure: (cause) => {
-      if (cause instanceof PreviewRefused)
-        return new Response(null, { status: 403 });
-      console.error("Standalone preview native dispatch failed", cause);
-      return new Response(null, { status: 502 });
-    },
-    invalidClaims: () => {
-      console.error("Standalone preview ticket claims refused");
-    },
-  });
+  const access = new ComputerPortAccess(storage);
+  const issueOwner = async (ownerId: string, port: number) => {
+    const target = previewUrl(origins, computerId, port);
+    const token = await access.issue(port, { ownerId }, () => {
+      native.accept(ownerId);
+    });
+    target.searchParams.set("token", token);
+    return { previewUrl: target.href };
+  };
   return {
-    async issue(selector: PreviewSelector, port: number) {
-      await native.current(selector);
-      return tickets.issueAfterAcceptance(
-        selector,
-        port,
-        `${origin}/preview/${encodeURIComponent(computerId)}/${String(port)}`,
-      );
+    issueOwner,
+    entry(port: number) {
+      return entryUrl(origins, computerId, port);
     },
-    async fetch(
-      signature: string,
-      port: number,
-      request: Request,
-    ): Promise<Response> {
-      return tickets.dispatchSigned(
-        signature,
-        request,
-        async (selector, selectedPort, incoming) => {
-          if (selectedPort !== port) return new Response(null, { status: 403 });
-          try {
-            await native.current(selector);
-            return await passivePreviewResponse(
-              await tickets.dispatch(selector, port, incoming),
-            );
-          } catch (cause) {
-            if (cause instanceof PreviewRefused)
-              return new Response(null, { status: 403 });
-            console.error(
-              "Standalone preview current authority check failed",
-              cause,
-            );
-            return new Response(null, { status: 503 });
-          }
-        },
-      );
+    async fetch(port: number, request: Request): Promise<Response> {
+      const target = previewUrl(origins, computerId, port);
+      const incoming = new URL(request.url);
+      if (
+        incoming.origin !== target.origin ||
+        !incoming.pathname.startsWith(target.pathname)
+      )
+        return new Response(null, { status: 404 });
+      return access
+        .gate(port, entryUrl(origins, computerId, port), async (admitted) => {
+          const service = new URL("http://localhost");
+          service.pathname = incoming.pathname;
+          service.search = incoming.search;
+          const headers = new Headers(admitted.headers);
+          headers.delete("host");
+          return native.forward(
+            port,
+            new Request(service, new Request(admitted, { headers })),
+            () => undefined,
+          );
+        })
+        .fetch(request);
     },
   };
-}
-
-export async function passivePreviewResponse(
-  response: Response,
-): Promise<Response> {
-  if (
-    response.status < 200 ||
-    response.status >= 300 ||
-    response.headers.has("Refresh")
-  ) {
-    await response.body?.cancel();
-    return new Response(null, {
-      status:
-        response.headers.has("Refresh") ||
-        (response.status >= 300 && response.status < 400)
-          ? 502
-          : response.status,
-    });
-  }
-  const contentType = response.headers
-    .get("Content-Type")
-    ?.split(";")[0]
-    ?.trim()
-    .toLowerCase();
-  if (contentType !== "text/html" && contentType !== "text/plain") {
-    await response.body?.cancel();
-    return new Response(null, { status: 415 });
-  }
-  const headers = new Headers({
-    "Content-Type": `${contentType}; charset=utf-8`,
-    "Content-Security-Policy":
-      "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    "Cache-Control": "no-store",
-    "X-Robots-Tag": "noindex, nofollow",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-  });
-  return new Response(response.body, { status: response.status, headers });
 }
 
 export async function standalonePreviewRequest(
@@ -194,73 +167,115 @@ export async function standalonePreviewRequest(
   ownsComputer: (computerId: string) => Promise<boolean>,
   forward: (
     computerId: string,
-    signature: string,
     port: number,
     request: Request,
   ) => Promise<Response>,
 ): Promise<Response | null> {
   const incoming = new URL(request.url);
-  const previewHost = configuredPreviewOrigin(env);
-  // A host nothing configured as the preview tunnel is left to the caller's
-  // own routing, like any other Host this module doesn't recognize.
-  if (previewHost === null || incoming.origin !== previewHost) return null;
-  // Past this point the Host is the configured preview tunnel: it never
-  // falls through to the normal router, even if the rest of the pair (the
-  // owner origin) turns out to be broken — the checks below just decide
-  // 403/404/503 vs. forwarding.
+  const configured = configuredPreview(env);
+  if (configured === null) return null;
+  const matches =
+    configured.mode === "path"
+      ? incoming.origin === configured.preview.origin
+      : incoming.hostname === configured.preview.hostname ||
+        incoming.hostname.endsWith(`.${configured.preview.hostname}`);
+  if (!matches) return null;
+  const origins = await previewOrigins(env);
   if (
-    !["GET", "HEAD"].includes(request.method) ||
-    request.headers.has("Upgrade")
+    origins === null ||
+    incoming.protocol !== "https:" ||
+    incoming.port !== configured.preview.port
   )
     return new Response(null, { status: 404 });
-  const path = new URLPattern({
-    pathname: "/preview/:computerId/:port/:signature/*",
-  }).exec(incoming)?.pathname.groups;
-  if (path === undefined) return new Response(null, { status: 404 });
-  if (previewOrigins(env) === null) return new Response(null, { status: 404 });
-  const ticket = z
+  const pattern = new URLPattern({
+    hostname: `:computerId-:port([0-9]{1,5}).${configured.preview.hostname}`,
+  }).exec(incoming)?.hostname.groups;
+  if (pattern === undefined) return new Response(null, { status: 404 });
+  const parsed = z
     .object({
-      computerId: z.string().min(1),
-      port: z.string().regex(/^[0-9]{1,5}$/u),
-      signature: z.string().regex(/^[a-z2-7]{20}$/u),
-      "0": z.string(),
+      computerId: z.string().min(1).max(768),
+      port: z.string().regex(/^[1-9][0-9]{0,4}$/u),
     })
-    .safeParse(path);
-  if (!ticket.success) return new Response(null, { status: 404 });
-  let computerId: string;
-  try {
-    computerId = decodeURIComponent(ticket.data.computerId);
-  } catch (cause) {
-    if (cause instanceof URIError) return new Response(null, { status: 404 });
-    throw cause;
-  }
-  if (
-    computerId.length === 0 ||
-    computerId.length > 256 ||
-    encodeURIComponent(computerId) !== ticket.data.computerId
-  )
-    return new Response(null, { status: 404 });
-  const input = computerPortInputSchema.safeParse({
-    port: Number(ticket.data.port),
+    .safeParse(pattern);
+  if (!parsed.success) return new Response(null, { status: 404 });
+  const computerId = parsed.data.computerId.replace(/^computer-/u, "computer_");
+  const port = computerPortInputSchema.safeParse({
+    port: Number(parsed.data.port),
   });
-  if (!input.success || String(input.data.port) !== ticket.data.port)
+  if (!port.success || computerId.length > 256)
     return new Response(null, { status: 404 });
   if (!(await ownsComputer(computerId)))
     return new Response(null, { status: 404 });
-  const service = new URL("http://localhost");
-  service.pathname = `/${ticket.data["0"]}`;
-  service.search = incoming.search;
-  const headers = new Headers(request.headers);
-  for (const name of ["cookie", "authorization", "proxy-authorization", "host"])
-    headers.delete(name);
-  return forward(
-    computerId,
-    ticket.data.signature,
-    input.data.port,
-    new Request(service, {
-      method: request.method,
-      headers,
-      signal: request.signal,
-    }),
-  );
+  return forward(computerId, port.data.port, request);
+}
+
+/** Establish a top-level same-site document before the owner's Strict-cookie POST. */
+export function standalonePortEntryRoutes(
+  ports: Readonly<{
+    ownsComputer: (computerId: string) => Promise<boolean>;
+    issue: (
+      computerId: string,
+      ownerId: string,
+      port: number,
+    ) => Promise<{ previewUrl: string } | null>;
+  }>,
+) {
+  const path = "/computers/:computerId/ports/:port";
+  return routes<OysterEnv>()
+    .get(
+      path,
+      publicRoute(
+        "a preview entry document; only the owner-admitted POST issues a token",
+      ),
+      (context) => {
+        context.header("Cache-Control", "no-store");
+        context.header("Referrer-Policy", "no-referrer");
+        context.header("Cross-Origin-Opener-Policy", "same-origin");
+        // Chromium applies form-action to the POST redirect as well. The fixed
+        // same-origin form must be able to finish on the HTTPS preview site.
+        context.header(
+          "Content-Security-Policy",
+          "default-src 'none'; script-src 'unsafe-inline'; form-action https:; frame-ancestors 'none'; base-uri 'none'",
+        );
+        return context.html(
+          html`<!doctype html><title>Open preview</title>
+            <main>
+              <form method="post" action="${context.req.path}">
+                <button>Open preview</button>
+              </form>
+              <script>
+                document.forms[0].requestSubmit();
+              </script>
+            </main>`,
+        );
+      },
+    )
+    .post(path, owner("direct"), async (context, { principal }) => {
+      const computerId = context.req.param("computerId");
+      const portParam = context.req.param("port");
+      const port = computerPortInputSchema.safeParse({
+        port: Number(portParam),
+      });
+      if (
+        !/^[1-9][0-9]{0,4}$/u.test(portParam) ||
+        !port.success ||
+        !(await ports.ownsComputer(computerId))
+      )
+        return context.body(null, 404);
+      try {
+        const issued = await ports.issue(
+          computerId,
+          principal.actor.memberId,
+          port.data.port,
+        );
+        if (issued === null) return context.body(null, 404);
+        context.header("Cache-Control", "no-store");
+        context.header("Referrer-Policy", "no-referrer");
+        return context.redirect(issued.previewUrl, 302);
+      } catch (cause) {
+        if (cause instanceof PreviewRefused || cause instanceof PortAccessError)
+          return context.body(null, 404);
+        throw cause;
+      }
+    });
 }
