@@ -1,7 +1,7 @@
 import { homePageFixture } from "./home-page.fixture.mjs";
 import { computerHost } from "./computer-host.fixture.mjs";
 import { standalonePermissionResources } from "../dist/standalone/permission-resources.js";
-/* global Response */
+/* global Response, URL */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HTTPException } from "hono/http-exception";
@@ -113,6 +113,40 @@ test("root selects an ordinary installed home without a particular App identity"
   });
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("Location"), "/apps/desktop/");
+});
+
+test("App UI documents carry the popup sandbox in their CSP and their immutable URL", async () => {
+  // #946: popups leave the inherited sandbox so previews get their own origin;
+  // the App frame itself stays opaque and never gains same-origin.
+  const intended = [
+    "allow-scripts",
+    "allow-modals",
+    "allow-popups",
+    "allow-popups-to-escape-sandbox",
+    "allow-forms",
+  ];
+  const app = await homePageFixture();
+  const config = await (
+    await app.request("/apps/desktop/", {
+      headers: { Authorization: "owner", Accept: "application/json" },
+    })
+  ).json();
+  const uiUrl = new URL(config.uiUrl, "https://owner.test");
+  assert.equal(uiUrl.pathname, "/ui/desktop/rel_desktop/");
+  assert.deepEqual(uiUrl.searchParams.get("sandbox")?.split(" "), intended);
+  const ui = await app.request(`${uiUrl.pathname}${uiUrl.search}`);
+  assert.equal(ui.status, 200);
+  const directives = ui.headers
+    .get("Content-Security-Policy")
+    .split(";")
+    .map((directive) => directive.trim().split(/\s+/u));
+  const sandboxes = directives.filter(([name]) => name === "sandbox");
+  assert.equal(sandboxes.length, 1);
+  assert.deepEqual(sandboxes[0].slice(1), intended);
+  assert.deepEqual(
+    directives.find(([name]) => name === "frame-ancestors"),
+    ["frame-ancestors", "http://localhost"],
+  );
 });
 
 test("only owner-direct grants HTML permits same-origin framing; the shell and App sandbox stay fenced", async () => {

@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.37.1
+
+### Patch Changes
+
+- Changes since 0.37.0:
+
+  - fix(computer): refuse same-site sibling Origin and Referer at the port gate
+
+- Updated dependencies
+  - @fungi.computer/computer@0.14.4
+
 ## 0.37.0
 
 ### Minor Changes

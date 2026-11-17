@@ -80,6 +80,14 @@ export async function previewOrigins(
 
 export class PreviewRefused extends Error {}
 
+// Public suffix rules only: a private-suffix preview domain still makes every
+// workspace-* host one site, so the gate refuses siblings that browsers might
+// treat as separate sites. Loaded on demand like previewOrigins' parser.
+async function publicSite() {
+  const { getDomain } = await import("tldts");
+  return (url: URL) => getDomain(url.hostname, { allowPrivateDomains: false });
+}
+
 // The retained flat hostname uses the Computer's non-secret identity. Fleet
 // IDs have a computer_ prefix; configured standalone IDs can be simple labels.
 const hostnameComputer = z.string().regex(/^(?:computer_)?[a-z0-9]+$/u);
@@ -143,8 +151,12 @@ export function createStandalonePreview(
         !incoming.pathname.startsWith(target.pathname)
       )
         return new Response(null, { status: 404 });
+      const policy = {
+        entryUrl: entryUrl(origins, computerId, port),
+        site: await publicSite(),
+      };
       return access
-        .gate(port, entryUrl(origins, computerId, port), async (admitted) => {
+        .gate(port, policy, async (admitted) => {
           const service = new URL("http://localhost");
           service.pathname = incoming.pathname;
           service.search = incoming.search;

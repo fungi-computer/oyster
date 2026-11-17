@@ -304,6 +304,83 @@ describe("Oyster private port previews", () => {
       expect((await f.fetch(new Request(`https://${host}/`))).status).toBe(404);
     expect(f.seen).toHaveLength(0);
   });
+  it("keeps WebSocket upgrades on the isolated host session-bound, credential-free and sibling-fenced", async () => {
+    const f = await fixture();
+    const exchange = await f.fetch(
+      new Request((await f.preview.issueOwner("owner", 5173)).previewUrl),
+    );
+    const cookie = session(exchange);
+    // Vite's HMR client owns this token; Node cannot construct a 101, so the
+    // fixture's 200 stands for the service's upgrade answer.
+    const socket = `${previewOrigin}/?token=vite-hmr-token`;
+    const upgrade = (headers: Record<string, string>) =>
+      f.fetch(
+        new Request(socket, {
+          headers: { upgrade: "websocket", ...headers },
+        }),
+      );
+    const refused: Record<string, string>[] = [
+      { origin: previewOrigin },
+      { cookie },
+      { cookie, origin: "https://workspace-5174.preview.example.net" },
+      { cookie, origin: previewOrigin, referer: "https://www.example.net/" },
+      { cookie, origin: "null" },
+      { cookie, origin: previewOrigin, "sec-fetch-site": "same-site" },
+    ];
+    for (const headers of refused)
+      expect((await upgrade(headers)).status, JSON.stringify(headers)).toBe(
+        401,
+      );
+    expect(f.seen).toHaveLength(0);
+    const admitted = await upgrade({
+      cookie,
+      origin: previewOrigin,
+      referer: `${previewOrigin}/`,
+      authorization: "Bearer fixture",
+      "cf-access-jwt-assertion": "fixture",
+    });
+    expect(admitted.status).toBe(200);
+    expect(admitted.headers.has("Set-Cookie")).toBe(false);
+    expect(f.seen).toHaveLength(1);
+    const forwarded = f.seen[0];
+    expect(forwarded?.url).toBe("http://localhost/?token=vite-hmr-token");
+    expect(forwarded?.headers.get("upgrade")).toBe("websocket");
+    for (const header of ["cookie", "authorization", "cf-access-jwt-assertion"])
+      expect(forwarded?.headers.has(header)).toBe(false);
+  });
+  it("treats every host under a multi-label public suffix preview domain as one site", async () => {
+    const bindings = {
+      OYSTER_ORIGIN: env.OYSTER_ORIGIN,
+      OYSTER_PREVIEW_DOMAIN: "preview.example.co.uk",
+    };
+    const f = await fixture(bindings);
+    const exchange = await f.fetch(
+      new Request((await f.preview.issueOwner("owner", 5173)).previewUrl),
+    );
+    const cookie = session(exchange);
+    const asset = (headers: Record<string, string>) =>
+      f.fetch(
+        new Request("https://workspace-5173.preview.example.co.uk/main.js", {
+          headers: { cookie, ...headers },
+        }),
+      );
+    const siblings: Record<string, string>[] = [
+      { origin: "https://workspace-5174.preview.example.co.uk" },
+      { referer: "https://other-80.preview.example.co.uk/" },
+      { origin: "https://www.example.co.uk" },
+      { referer: "%" },
+    ];
+    for (const headers of siblings)
+      expect((await asset(headers)).status, JSON.stringify(headers)).toBe(401);
+    const admitted: Record<string, string>[] = [
+      {},
+      { origin: "https://workspace-5173.preview.example.co.uk" },
+      { origin: "https://another.co.uk" },
+      { referer: env.OYSTER_ORIGIN },
+    ];
+    for (const headers of admitted)
+      expect((await asset(headers)).status, JSON.stringify(headers)).toBe(200);
+  });
 });
 
 it("serves real Vite assets on an isolated private preview host", async () => {
