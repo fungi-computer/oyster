@@ -3432,6 +3432,7 @@ test("the agent host captures one App source per acquisition and retains agent a
       getByName: () => ({
         generation: async () => generation(),
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
+        computerName: async () => null,
         list: async () => {
           reads += 1;
           return rows;
@@ -3700,6 +3701,7 @@ test("the Agent tool host derives the same App catalog as the MCP host for Compu
       getByName: () => ({
         generation: async () => generation(),
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
+        computerName: async () => null,
         list: async () => rows,
         get: async (installationId) =>
           rows.find((row) => row.installationId === installationId) ?? null,
@@ -3815,6 +3817,7 @@ test("an Agent's App tools reach only its pinned tenant's registry", async (t) =
         return {
           generation: async () => generation(),
           selectedComputer: async () => env.OYSTER_COMPUTER_ID,
+          computerName: async () => null,
           list: async () => [],
         };
       },

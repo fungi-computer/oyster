@@ -11,6 +11,7 @@ export const oysterAppConfigSchema = Schema.Struct({
   /** The Release declares `apps.open`; only an embedding shell can serve it. */
   appsOpen: Schema.Boolean,
   computerId: Schema.NullOr(Schema.String),
+  computerName: Schema.optional(Schema.NullOr(Schema.String)),
   authorityVersion: Schema.Int,
   commands: Schema.Array(appDeclaredCommandSchema),
   icon: Schema.NullOr(Schema.String),

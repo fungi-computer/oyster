@@ -15,6 +15,28 @@ import { loadPageAssets, PageAssetsLoadError } from "../dist/page-assets.js";
 import { sha256 } from "../dist/release.js";
 import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
 
+test("App configuration publishes the host-selected name, never a query label or ID fallback", async () => {
+  for (const [computerId, computerName, expected] of [
+    ["computer-one", "Workshop", "Workshop"],
+    ["computer-one", undefined, null],
+    [undefined, "Unselected name", null],
+  ]) {
+    const host = await computerHost(
+      { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
+      computerId,
+    );
+    const app = createOyster({ ...host, computerName });
+    const response = await app.request(
+      "/apps/context-probe/?computerId=other&computerName=Forged",
+      { headers: { Accept: "application/json" } },
+    );
+    assert.equal(response.status, 200);
+    const config = await response.json();
+    assert.equal(config.computerId, computerId ?? null);
+    assert.equal(config.computerName, expected);
+  }
+});
+
 test("every Oyster page a person opens in a tab carries the Fungi sigil, under a policy that lets it load", async () => {
   const host = await computerHost(
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },

@@ -493,6 +493,7 @@ async function openOysterApp(
         version: 1,
         value: {
           computerId: config.computerId,
+          computerName: config.computerName,
           focus: { editing: false, surface: null },
           openRequest: options.openRequest ?? null,
           visibility: "visible",

@@ -101,6 +101,35 @@ const workspace = {
   createdAt: 0,
   updatedAt: 0,
 };
+
+test("App context names come from the configured Computer or its fleet entry", async () => {
+  for (const backend of ["local", undefined]) {
+    const { registry, fleet } = await trial(backend);
+    const choices = await fleet({
+      operation: "choices",
+      page: { limit: 10, offset: 0 },
+    });
+    assert.equal(registry.computerName("workspace"), choices.computers[0].name);
+    assert.equal(registry.computerName("not-in-this-fleet"), null);
+    const created = await fleet({
+      operation: "create",
+      request: {
+        name: "Workshop",
+        size: "default",
+        requestId: "named-computer",
+      },
+    });
+    assert.equal(registry.computerName(created.computerId), "Workshop");
+    assert.notEqual(created.computerId, "Workshop");
+    // The captured selection, not whichever Computer is now the default.
+    await fleet({ operation: "select", computerId: created.computerId });
+    assert.equal(registry.computerName("workspace"), choices.computers[0].name);
+    assert.equal(
+      registry.computerName(await registry.selectedComputer()),
+      "Workshop",
+    );
+  }
+});
 const everything = { limit: 100, offset: 0 };
 
 test("a local trial lists its configured Computer in Settings", async () => {

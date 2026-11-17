@@ -2122,6 +2122,7 @@ export class OysterInstance<
 /** One host-selected workspace shared by App context and capability adapters. */
 export type OysterWorkspace = Readonly<{
   computerId: string;
+  computerName?: string | null;
   files: FileSource;
   /** Caller-scoped Computer calls; file-only workspaces omit it. */
   computer?: OysterHost["computer"];
@@ -2301,7 +2302,11 @@ export function oysterWorkerHost(
       backgroundOriginKey: () => backgroundOriginKey(originSecret.value),
     };
   if (options.workspace !== undefined)
-    host = { ...host, computerId: options.workspace.computerId };
+    host = {
+      ...host,
+      computerId: options.workspace.computerId,
+      computerName: options.workspace.computerName ?? null,
+    };
   if (options.workspace?.computer !== undefined)
     host = { ...host, computer: options.workspace.computer };
   if (options.appToolPolicy !== undefined)

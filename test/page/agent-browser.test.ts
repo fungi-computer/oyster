@@ -207,8 +207,12 @@ it.each([
       vi.stubGlobal("window", parent);
     }
     pending = [mounting, connecting];
-    expect(postParent).toHaveBeenCalledOnce();
+    expect(postParent.mock.calls).toEqual([
+      [{ type: "fungi.app.ready.v3", protocolVersion: 3 }, "*"],
+      [{ type: "fungi.app.ready", protocolVersion: 2 }, "*"],
+    ]);
     expect(postChild).toHaveBeenCalledOnce();
+    expect(postChild.mock.calls[0]?.[0]).toMatchObject({ protocolVersion: 3 });
     [host, app] = await Promise.all([mounting, connecting]);
     const handler = vi.fn(() => "scene updated");
     const remove = await app.commands.register(command, handler);

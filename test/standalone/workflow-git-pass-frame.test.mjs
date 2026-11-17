@@ -40,7 +40,10 @@ async function standaloneGit() {
     OYSTER_OWNER_KEY: "local-workflow-git-owner-key",
     OYSTER_COMPUTER_ID: "workspace",
     REGISTRY: {
-      getByName: () => ({ selectedComputer: async () => "workspace" }),
+      getByName: () => ({
+        selectedComputer: async () => "workspace",
+        computerName: async () => null,
+      }),
     },
     WORKFLOW_RUNS: {
       getByName(library) {

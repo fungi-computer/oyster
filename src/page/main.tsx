@@ -341,6 +341,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
           // there, and it moves, clips and stacks with that window.
           options.container.appendChild(frame);
           let contextVersion = 1;
+          let computerName = childConfig.computerName;
           // Absent facts mean an older or simpler host; Apps read that as unknown.
           let setupFacts = await readSetup(options.setup);
           let rightStates = await readRights(childConfig.installationId);
@@ -433,6 +434,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
               version: ++contextVersion,
               value: {
                 computerId: target.computerId,
+                computerName,
                 focus: { editing: false, surface: null },
                 visibility: frame.hidden ? "hidden" : "visible",
                 openRequest: target.openRequest,
@@ -467,6 +469,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                 version: ++contextVersion,
                 value: {
                   computerId: target.computerId,
+                  computerName,
                   focus: { editing: false, surface: null },
                   visibility,
                   openRequest: target.openRequest,
@@ -491,6 +494,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                   version: ++contextVersion,
                   value: {
                     computerId: fresh.computerId,
+                    computerName: fresh.computerName,
                     focus: { editing: false, surface: null },
                     visibility: frame.hidden ? "hidden" : "visible",
                     openRequest: next.openRequest,
@@ -505,6 +509,7 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
                 openRequest: next.openRequest,
                 computerId: fresh.computerId,
               });
+              computerName = fresh.computerName;
             },
           };
         },

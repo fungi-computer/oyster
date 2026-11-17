@@ -112,10 +112,13 @@ import {
   type StandaloneRegistryGit,
 } from "./registry.js";
 
-/** The registry uses the same root, with its own in-process Computer selection. */
+/** The registry reads both Computer identity fields in process, never by self RPC. */
 export class OysterRegistry extends BaseRegistry {
   readonly #rootEnv: StandaloneEnv;
-  readonly #root = standaloneRoot(() => this.selectedComputer());
+  readonly #root = standaloneRoot(async () => {
+    const computerId = await this.selectedComputer();
+    return { computerId, computerName: this.computerName(computerId) };
+  });
   constructor(
     state: DurableObjectState,
     env: StandaloneEnv,
@@ -135,7 +138,12 @@ export { StandaloneEventDelivery as OysterWebhooks } from "./instance.js";
 export { AgentDirectory } from "./agents.js";
 
 /** The one composition root: every door reaches a tenant's host through `hostFor`. */
-const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
+const standaloneRoot = (
+  selectComputer: (
+    registry: ReturnType<typeof tenantRegistry>,
+    incoming?: Parameters<typeof standaloneComputerSelection>[1],
+  ) => Promise<{ computerId: string; computerName: string | null }>,
+) => {
   const root: OysterGitRoot<StandaloneEnv> = oysterGitRoot<StandaloneEnv>({
     tenancy: (env) => ({
       resolve: async (request) =>
@@ -167,12 +175,17 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
             principal.actor.memberId,
           )
         : null,
-    workspace: async (env, keysLive, scope, request) =>
-      standaloneWorkspace(
-        env,
-        keysLive,
-        await selectComputer(tenantRegistry(env, scope), request),
-      ),
+    workspace: async (env, keysLive, scope, request) => {
+      const registry = tenantRegistry(env, scope);
+      const { computerId, computerName } = await selectComputer(
+        registry,
+        request,
+      );
+      return {
+        ...standaloneWorkspace(env, keysLive, computerId),
+        computerName,
+      };
+    },
     capabilities: (env, workspace) => [
       ...standaloneComputerCapabilities(env, workspace),
       ...workersMedia(env, workspace),
@@ -220,7 +233,10 @@ const standaloneRoot = (selectComputer: typeof standaloneComputerSelection) => {
   });
   return root;
 };
-const oysterRoot = standaloneRoot(standaloneComputerSelection);
+const oysterRoot = standaloneRoot(async (registry, incoming) => {
+  const computerId = await standaloneComputerSelection(registry, incoming);
+  return { computerId, computerName: await registry.computerName(computerId) };
+});
 export class OysterMcp extends createOysterGitMcpOwner(oysterRoot) {}
 /** Background wakes readmit members through this root's tenancy, as HTTP and MCP do. */
 export class StandaloneInstance extends ComputerInstance<StandaloneEnv> {

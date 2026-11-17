@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.35.0
+
+### Minor Changes
+
+- Changes since 0.34.0:
+
+  - fix(oyster): read the registry's Computer name in process
+  - fix(agar): negotiate new Apps down to published protocol-2 hosts
+  - fix(agar): serve published protocol-2 Apps without new context fields
+  - feat(oyster): carry the selected Computer name into App context
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/agar@0.19.0
+  - @fungi.computer/braid@0.4.22
+  - @fungi.computer/darkroom@0.11.3
+  - @fungi.computer/nacre@0.7.1
+  - @fungi.computer/parakeet@0.12.3
+  - @fungi.computer/shiitake@0.19.1
+  - @fungi.computer/workflows-wire@0.4.22
+  - @fungi.computer/shiitake-extensions@0.11.3
+  - @fungi.computer/zookeeper@0.0.35
+
 ## 0.34.0
 
 ### Minor Changes

@@ -764,6 +764,7 @@ async function instanceBinding(
       getByName: () => ({
         ownsComputer: (computerId) => computerId === env.OYSTER_COMPUTER_ID,
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
+        computerName: async () => null,
         get: async () => {
           registryReads += 1;
           return {

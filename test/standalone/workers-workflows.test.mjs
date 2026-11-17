@@ -174,6 +174,7 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     REGISTRY: {
       getByName: () => ({
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
+        computerName: async () => null,
         get: async (installationId) =>
           installations.get(installationId) ?? null,
         list: async () => [...installations.values()],

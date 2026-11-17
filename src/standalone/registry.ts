@@ -454,6 +454,15 @@ export abstract class StandaloneRegistry
     return computerId;
   }
 
+  /** Name for the host's captured selection, from the same owner as the picker. */
+  computerName(computerId: string): string | null {
+    const configured = this.#configured();
+    const computer =
+      this.#computers.read(computerId) ??
+      (configured.computerId === computerId ? configured : null);
+    return computer?.name ?? null;
+  }
+
   /** Frame dispatch checks inventory ownership, not a mutable UI selection. */
   ownsComputer(computerId: string): boolean {
     return (

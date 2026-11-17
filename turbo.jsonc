@@ -6,6 +6,12 @@
     "lint": {
       "dependsOn": ["build"],
     },
+    "test:nightly": {
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/tooling/proof-runner/agar-v2-app.fixture.mjs",
+      ],
+    },
     // The standalone host's tests install the starter Apps from their sources
     // and read their built pages, and its worker tests load the celld runtime
     // adapters.
@@ -20,6 +26,7 @@
       ],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tooling/proof-runner/agar-v2-app.fixture.mjs",
         "$TURBO_ROOT$/tooling/repository/scripts/{test-file-pool,proof-budget}.{mjs,d.mts}",
         "$TURBO_ROOT$/tooling/proof-runner/proof-time-bound.sh",
         "$TURBO_ROOT$/tooling/proof-runner/{isolated-chromium,owned-loopback,socket-relay}.mjs",

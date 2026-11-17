@@ -450,6 +450,8 @@ export type OysterHost = Readonly<{
   bootUi: (release: Release) => Promise<UiBootCheckOutcome>;
   /** Fixed Computer selected by the host; request input never selects it. */
   computerId?: string;
+  /** The selected Computer's name from its owner; never derived from its ID. */
+  computerName?: string | null;
   /** The fixed Computer's advertised calls for one admitted caller, or null
    * when the caller holds no Computer access (for a key, without its own
    * `computer.use` grant). The Computer owner accepts each call against the
@@ -2142,6 +2144,10 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     const uiPath = `/ui/${installation.installationId}/${installation.release.releaseId}/`;
     // Immutable App documents also carry the host's sandbox policy.
     const uiUrl = `${uiPath}?${new URLSearchParams({ sandbox: appSandbox }).toString()}`;
+    const computerId = invocationCallerContext(
+      principal,
+      host.computerId ?? null,
+    ).computerId;
     const config = {
       workbench,
       // The home shell's own code: the module its Release ships beside
@@ -2157,8 +2163,8 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         host.workbench !== undefined &&
         (declaration?.storage?.length ?? 0) > 0,
       appsOpen: declaration?.capabilities.includes("apps.open") === true,
-      computerId: invocationCallerContext(principal, host.computerId ?? null)
-        .computerId,
+      computerId,
+      computerName: computerId === null ? null : (host.computerName ?? null),
 
       authorityVersion: installation.authority.authorityVersion,
       capabilities,

@@ -494,6 +494,7 @@ type OysterHost = Readonly<{
   instances: InstanceDirectory;
   bootUi: (release) => Promise<UiBootCheckOutcome>;
   computerId?: string;
+  computerName?: string | null;
   computer?: (principal) => KnapsackComputer | null | Promise<KnapsackComputer | null>;
   appToolPolicy?: (actor) =>
      | AppToolPolicy

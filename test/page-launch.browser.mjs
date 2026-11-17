@@ -5,6 +5,8 @@ import { test } from "node:test";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { launchIsolatedChromium } from "../../../tooling/proof-runner/isolated-chromium.mjs";
+import { agarV2AppSource } from "../../../tooling/proof-runner/agar-v2-app.fixture.mjs";
+import { agarV2HostSource } from "./agar-v2-host.fixture.mjs";
 import { Hono } from "hono";
 import {
   createAppBuild,
@@ -163,10 +165,91 @@ test("Oyster assets compile their own WASM while remote fetch and JavaScript eva
   }
 });
 
-test("the emitted App page launches Agar with the admitted Computer or null", async () => {
+test("the emitted App page launches Agar with the admitted Computer ID and name or null", () =>
+  assertContextLaunch(false));
+test("a published protocol-2 App mounts on Oyster without computerName", () =>
+  assertContextLaunch(true));
+
+test("a current App negotiates protocol 2 with a frozen old host without computerName", async () => {
+  const bundles = await Promise.all(
+    [
+      agarV2HostSource,
+      `import { connectApp } from "@fungi.computer/agar";
+      try {
+        const app = await connectApp({host:"parent"});
+        await app.ui.showToast({message:"The App is running"});
+        const context = app.context.get();
+        window.parent.postMessage({type:"fixture.result", value:{
+          status:"running", context,
+          hasName:Object.hasOwn(context, "computerName"),
+          nameIsUndefined:context.computerName === undefined,
+        }}, "*");
+      } catch (cause) {
+        window.parent.postMessage({type:"fixture.result",
+          value:{status:"failed", error:String(cause)}}, "*");
+      }`,
+    ].map((contents) =>
+      build({
+        stdin: {
+          contents,
+          resolveDir: new globalThis.URL("..", import.meta.url).pathname,
+        },
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+      }),
+    ),
+  );
+  const browser = await launchIsolatedChromium(chromium, [], {
+    headless: true,
+  });
+  try {
+    const page = await browser.newPage();
+    await page.route("**/*", async (route) => {
+      const url = new globalThis.URL(route.request().url());
+      const host = url.hostname === "old-host.test";
+      await route.fulfill(
+        url.pathname === "/main.js"
+          ? {
+              contentType: "text/javascript",
+              body: bundles[host ? 0 : 1].outputFiles[0].text,
+            }
+          : {
+              contentType: "text/html",
+              body: `<!doctype html><body>${host ? "<iframe></iframe>" : ""}<script type="module" src="/main.js"></script>`,
+            },
+      );
+    });
+    await page.goto("http://old-host.test/");
+    await page.waitForFunction(
+      () =>
+        globalThis.window.frozenHost?.status === "failed" ||
+        globalThis.window.guestResult,
+    );
+    const result = await page.evaluate(() => ({
+      host: globalThis.window.frozenHost,
+      app: globalThis.window.guestResult,
+    }));
+    assert.equal(result.host.status, "connected", result.host.error);
+    assert.deepEqual(result.host.readyVersions, [2]);
+    assert.deepEqual(result.host.connectVersions, [2]);
+    assert.equal(result.app.status, "running", result.app.error);
+    assert.equal(result.app.context.computerId, "old-host-computer");
+    assert.equal(result.app.hasName, false);
+    assert.equal(result.app.nameIsUndefined, true);
+    assert.equal(result.host.toasts[0].message, "The App is running");
+  } finally {
+    await browser.close();
+  }
+});
+
+async function assertContextLaunch(previous) {
   const guest = await build({
     stdin: {
-      contents: `import { connectApp } from "@fungi.computer/agar";
+      contents: previous
+        ? agarV2AppSource
+        : `import { connectApp } from "@fungi.computer/agar";
         const app = await connectApp({ host: "parent" });
         document.body.textContent = JSON.stringify(app.context.get());`,
       resolveDir: new globalThis.URL("..", import.meta.url).pathname,
@@ -180,21 +263,39 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
     headless: true,
   });
   try {
-    for (const [computerId, principal, expected] of [
+    for (const [
+      computerId,
+      principal,
+      expected,
+      computerName,
+      expectedName,
+    ] of [
       [
         "host-selected-computer",
         { actor: { kind: "member", memberId: "owner" }, role: "owner" },
         "host-selected-computer",
+        "Workshop",
+        "Workshop",
+      ],
+      [
+        "host-selected-computer",
+        { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+        "host-selected-computer",
+        undefined,
+        null,
       ],
       [
         undefined,
         { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+        null,
+        "Not selected",
         null,
       ],
     ]) {
       const host = await computerHost(principal, computerId);
       const app = createOyster({
         ...host,
+        computerName,
         capabilities: [
           {
             ...computerSlots.ports,
@@ -226,8 +327,15 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
           "http://oyster.test/apps/context-probe/?computerId=guest-computer",
         );
         const frame = page.frameLocator("#oyster-app").locator("body");
-        await frame.filter({ hasText: '"computerId"' }).waitFor();
-        assert.equal(JSON.parse(await frame.innerText()).computerId, expected);
+        await frame.filter({ hasText: /"computerId"|"PROTOCOL"/ }).waitFor();
+        const result = JSON.parse(await frame.innerText());
+        if (previous)
+          assert.equal(result.status, "connected", JSON.stringify(result));
+        const context = previous ? result.context : result;
+        assert.equal(context.computerId, expected);
+        assert.equal(context.computerName, previous ? undefined : expectedName);
+        if (previous)
+          assert.equal(Object.hasOwn(context, "computerName"), false);
       } finally {
         await page.close();
       }
@@ -235,7 +343,7 @@ test("the emitted App page launches Agar with the admitted Computer or null", as
   } finally {
     await browser.close();
   }
-});
+}
 
 test("host browser actions save exact bytes and copy text from an opaque App click", async () => {
   const guest = await build({

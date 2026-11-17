@@ -1730,7 +1730,8 @@ for (const expected of ["installed", "needs_consent"]) {
     "only an explicit Workflow operation selects a published build as " +
       expected +
       " without self RPC",
-    async () => {
+    { timeout: 5_000 },
+    async (t) => {
       const { OysterRegistry: RootRegistry, OysterInstallationExecutor } =
         await import("../../src/standalone/worker.ts");
       const { setImmediate: nextTurn } = await import("node:timers/promises");
@@ -1761,6 +1762,7 @@ for (const expected of ["installed", "needs_consent"]) {
               );
             return {
               selectedComputer: forbidden,
+              computerName: forbidden,
               get: forbidden,
               generation: forbidden,
               compareAndPut: forbidden,
@@ -1831,37 +1833,29 @@ for (const expected of ["installed", "needs_consent"]) {
          */
         const settle = async (requestId, start) => {
           const running = start();
-          while (
-            (
-              await registry.installationOperation({
-                action: "load",
-                scope,
-                requestId,
-              })
-            ).command === null
-          )
-            await nextTurn();
-          await registry.alarm();
-          return running;
+          const stop = new globalThis.AbortController();
+          const signal = globalThis.AbortSignal.any([t.signal, stop.signal]);
+          const drive = async () => {
+            while (
+              (
+                await registry.installationOperation({
+                  action: "load",
+                  scope,
+                  requestId,
+                })
+              ).command === null
+            )
+              await nextTurn(undefined, { signal });
+            await registry.alarm();
+            return running;
+          };
+          try {
+            // A refusal or rejection before admission must also finish the fixture.
+            return await Promise.race([running, drive()]);
+          } finally {
+            stop.abort();
+          }
         };
-        /** A refusal answers before the owner ever admits a command. */
-        const refusedBeforeAdmission = (requestId, running) =>
-          Promise.race([
-            running,
-            (async () => {
-              while (
-                (
-                  await registry.installationOperation({
-                    action: "load",
-                    scope,
-                    requestId,
-                  })
-                ).command === null
-              )
-                await nextTurn();
-              return { admitted: requestId };
-            })(),
-          ]);
         registryState.waitUntil = () =>
           assert.fail("The stored build is already published");
         registry = new RootRegistry(registryState, env);
@@ -2026,17 +2020,23 @@ for (const expected of ["installed", "needs_consent"]) {
           },
         ]) {
           const targetBefore = registry.get(selection.target);
-          const refused = await refusedBeforeAdmission(
-            "workflow-build:" + build.jobId,
-            registry.installWorkflowBuild(
-              build.jobId,
-              selection.target,
-              selection.release,
-              owner.actor.memberId,
-              selection.caller ?? "bonsai",
-            ),
+          const refused = await registry.installWorkflowBuild(
+            build.jobId,
+            selection.target,
+            selection.release,
+            owner.actor.memberId,
+            selection.caller ?? "bonsai",
           );
           assert.equal(refused.status, 409, selection.reason);
+          assert.deepEqual(
+            await registry.installationOperation({
+              action: "load",
+              scope,
+              requestId: "workflow-build:" + build.jobId,
+            }),
+            { kind: "command", command: null },
+            "A refusal must not admit an installation command",
+          );
           assert.deepEqual(registry.get("my-app"), before, selection.reason);
           assert.deepEqual(
             registry.get(selection.target),

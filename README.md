@@ -1,5 +1,66 @@
 # Oyster by Fungi (`@fungi.computer/oyster`)
 
+Oyster gives you a desktop of apps that you and your AI agents can use on your
+own computer or Cloudflare account.
+
+![The light-theme desktop running in the local workbench](docs/media/readme-desktop-1280.png)
+
+## Quick start
+
+With Node 24 or newer and Git installed, run:
+
+```sh
+npx @fungi.computer/oyster try
+```
+
+Open the sign-in link it gives you. The desktop starts at
+`http://127.0.0.1:8787` with a Hello App, then builds the other starter Apps in
+the background. Press Ctrl-C to stop. Run the same command inside `my-oyster` to
+restart.
+
+## Common tasks
+
+### Keep a trial running on another port
+
+Use `npx @fungi.computer/oyster try --port 8788`. Add `--no-open` if you want to
+open the browser yourself. [Local trial details](#local-trial-details) explain
+where your files and logs live.
+
+### Put it on your Cloudflare account
+
+Follow [Deploy to Cloudflare](#deploy-to-cloudflare). The trial already contains
+the Worker and its binding configuration.
+
+### Connect a coding agent
+
+[Create a named key and add the MCP endpoint](#connect-your-agents). Each
+installed App becomes something the agent can call.
+
+### Recover a broken App
+
+Open `/recovery` and sign in as the owner. [Recovery](#recover-an-app) works
+without loading the App or desktop, and explains when rollback is available.
+
+### Build a smaller host
+
+Start with [`createOysterWorker`](#build-your-own-host) if you want the App host
+without the full desktop, Computer and git setup.
+
+<details>
+<summary>See the desktop at phone width</summary>
+
+![The same desktop workbench at 390 pixels wide](docs/media/readme-desktop-390.png)
+
+</details>
+
+<!-- Capture: 2026-11-17, source 18c3145d6874aaf873cecb863c150da1b6e64ca0.
+Ladle desktop--hero, light theme, 1280x720 and 390x844. Local fixture data,
+real Tourtois UI. Captured with Playwright following scripts/capture-listing-art.mjs. -->
+
+## Reference
+
+### Overview
+
 Fungi is an open-source workspace for AI agents: Apps that people and agents
 both use, Computers that keep their files, and permissions the system checks.
 Try it with one command, run it on your own Cloudflare account, or let us host
@@ -24,7 +85,7 @@ There are three ways in, from least to most code:
 3. **Build your own host** with `createOysterWorker` when you want only part of
    it.
 
-## Quick start: try it on your computer
+## Local trial details
 
 No Cloudflare account, Docker or payment. You need Node 24 or newer and Git.
 
