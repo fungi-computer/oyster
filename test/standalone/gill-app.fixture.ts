@@ -22,6 +22,7 @@ export const backend = defineAppBackend<GillFacet>({
   },
   gills: [
     defineAppGill({
+      view: "rows",
       id: "saved",
       title: "Saved rows",
       source: "entries",

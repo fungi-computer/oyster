@@ -217,7 +217,11 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
     const gill = app?.gills.find(
       (item) => item.id === request.viewId && item.desktop !== undefined,
     );
-    if (app === undefined || gill === undefined || app.installationId === null)
+    if (
+      app === undefined ||
+      gill?.view !== "rows" ||
+      app.installationId === null
+    )
       throw unavailable("that desktop Gill");
     return { request, gill, installationId: app.installationId };
   };

@@ -63,6 +63,7 @@ async function fixture(
   twoOrigins = false,
   ungrantedOrigin = false,
   shell = false,
+  legacyRoot = false,
 ) {
   const ui = new TextEncoder().encode("<!doctype html><title>Notes</title>");
   const uiRef = parseArtifactRef("artifact:notes-ui");
@@ -187,8 +188,30 @@ async function fixture(
         mediaType: "application/vnd.fungi.app-backend+json",
       }
     : null;
+  if (legacyRoot)
+    declaration = Schema.decodeUnknownSync(appDeclarationSchema)({
+      ...declaration,
+      gills: [{ view: "rows", id: "inbox", title: "Inbox", source: "read" }],
+    });
   const build = createAppBuild(uiBuild, backendBuild, declaration);
-  const root = new TextEncoder().encode(JSON.stringify(build));
+  // A root published before Gill views existed named none: its bytes are the
+  // immutable, digest-addressed record, so the view is stripped from them.
+  const written = JSON.stringify(
+    legacyRoot && build.declaration?.gills !== undefined
+      ? {
+          ...build,
+          declaration: {
+            ...build.declaration,
+            gills: build.declaration.gills.flatMap((gill) =>
+              gill.view === "rows"
+                ? [{ id: gill.id, title: gill.title, source: gill.source }]
+                : [],
+            ),
+          },
+        }
+      : build,
+  );
+  const root = new TextEncoder().encode(written);
   const release = parseRelease({
     appId: "app_notes",
     releaseId: "rel_notes",
@@ -648,6 +671,28 @@ it("reserves build-log artifact refs from owner uploads without blocking opaque 
   const ui = new TextEncoder().encode("<h1>App UI</h1>");
   expect((await upload(uiRef, ui)).status).toBe(204);
   expect(await host.artifacts.get(uiRef)).toEqual(ui);
+});
+
+it("installs and resolves a stored Release root written before Gill views existed", async () => {
+  const f = await fixture(true, false, false, false, false, true);
+  const rootBytes = await f.host.artifacts.get(f.release.artifact.artifactRef);
+  if (rootBytes === null) throw new Error("Seeded root missing");
+  const stored = new TextDecoder().decode(rootBytes);
+  expect(stored).toContain('"gills":[{"id":"inbox"');
+  expect(stored).not.toContain('"view"');
+  // Decoding names the view; the stored bytes keep their digest.
+  const resolved = await hostModule.resolveBackend(f.host.artifacts, f.release);
+  expect(resolved?.declaration?.gills).toEqual([
+    { id: "inbox", view: "rows", title: "Inbox", source: "read" },
+  ]);
+  expect(await sha256(rootBytes)).toBe(f.release.artifact.artifactDigest);
+  const verified = await hostModule.verifyRelease(f.host.artifacts, f.release);
+  expect(verified.declaration?.gills?.[0]).toMatchObject({ view: "rows" });
+  // The whole install path admits the same root.
+  const record = await f.install();
+  expect(record.release.artifact.artifactDigest).toBe(
+    f.release.artifact.artifactDigest,
+  );
 });
 
 it("records the owner's explicit operation approval at the installation HTTP boundary", async () => {

@@ -59,6 +59,28 @@ it("hands Shiitake a storage-pressure check over the Agent's own measured store"
   );
 });
 
+it("offers the self-identity capability in the standalone runtime", async () => {
+  await withProbe(
+    () => 0,
+    async ({ tools }) => {
+      const sources =
+        tools !== undefined && "sandbox" in tools ? (tools.sources ?? []) : [];
+      const source = sources.find(
+        (source) => source.id === "oyster-agent-self",
+      );
+      expect(source).toBeDefined();
+      if (source === undefined) throw new Error("self source missing");
+      const lease = await source.acquire({
+        signal: new AbortController().signal,
+        session: { sessionId: "owner-session" },
+        invalidate: () => undefined,
+      });
+      expect(lease.snapshot.modules).toHaveLength(1);
+      await lease.release();
+    },
+  );
+});
+
 it("hands Shiitake the Zookeeper patrol, which wakes only over the waterline", async () => {
   let databaseSize = 100_000_000;
   await withProbe(

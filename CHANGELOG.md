@@ -1,5 +1,43 @@
 # @fungi.computer/oyster
 
+## 0.37.0
+
+### Minor Changes
+
+- Changes since 0.36.0:
+
+  - fix(agents): keep the self source off the head of the Oyster tool roster
+  - fix(gills): decode stored Releases that predate Gill views as rows
+  - feat(agents): let an Agent rename itself and change its own avatar
+  - feat(gills): declare surface Gills beside row Gills
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.21.0
+  - @fungi.computer/braid@0.5.0
+  - @fungi.computer/gills@0.4.0
+  - @fungi.computer/nacre@0.8.0
+  - @fungi.computer/parakeet@0.13.0
+  - @fungi.computer/puffball@0.11.0
+  - @fungi.computer/workflows-wire@0.5.0
+  - @fungi.computer/darkroom@0.11.5
+  - @fungi.computer/shiitake@0.20.1
+  - @fungi.computer/shiitake-extensions@0.11.6
+  - @fungi.computer/forage@0.3.12
+  - @fungi.computer/mycelium@0.4.4
+  - @fungi.computer/zookeeper@0.0.38
+  - @fungi.computer/knapsack@0.4.17
+  - @fungi.computer/veil@0.7.8
+  - @fungi.computer/computer@0.14.3
+  - @fungi.computer/computer-contract@0.5.4
+
 ## 0.36.0
 
 ### Minor Changes

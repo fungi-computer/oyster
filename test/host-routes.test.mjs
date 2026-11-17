@@ -495,6 +495,39 @@ test("owner API routes stay private without blocking an admitted key's App reque
   assert.equal(await response.text(), "App reached");
 });
 
+test("surface Gills cannot dispatch row or options reads", async () => {
+  const host = await computerHost(
+    { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
+    "computer_fixture",
+    {
+      gills: [
+        {
+          id: "canvas",
+          title: "Canvas",
+          view: "surface",
+          desktop: { sizes: ["L"] },
+        },
+      ],
+    },
+  );
+  let dispatched = false;
+  const app = createOyster({
+    ...host,
+    instances: {
+      get: () => {
+        dispatched = true;
+        throw new Error("Surface Gill must not dispatch a backend read");
+      },
+    },
+  });
+  for (const input of [
+    { viewId: "canvas" },
+    { viewId: "canvas", options: "computer" },
+  ])
+    assert.equal((await gillRequest(app, input)).status, 404);
+  assert.equal(dispatched, false);
+});
+
 test("owner desktop reads a declared Gill using only the host Computer", async () => {
   const host = await computerHost(
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
@@ -507,6 +540,7 @@ test("owner desktop reads a declared Gill using only the host Computer", async (
       },
       gills: [
         {
+          view: "rows",
           id: "context",
           source: "context",
           title: "Context",
@@ -591,6 +625,7 @@ test("desktop Gill refuses key, anonymous, foreign Computer and undeclared param
     const host = await computerHost(principal, "computer_fixture", {
       gills: [
         {
+          view: "rows",
           id: "context",
           source: "context",
           title: "Context",
@@ -633,6 +668,7 @@ test("desktop Gill exposes missing placement and host-only Computer choices with
     {
       gills: [
         {
+          view: "rows",
           id: "context",
           source: "context",
           title: "Context",
@@ -689,7 +725,9 @@ test("Gill source requirements use the current explicit installation approval", 
     "computer_fixture",
     {
       backend: { bindings: [{ name: "COMPUTER", operations: ["processes"] }] },
-      gills: [{ id: "context", title: "Context", source: "context" }],
+      gills: [
+        { view: "rows", id: "context", title: "Context", source: "context" },
+      ],
     },
     [],
     ["computer.execute"],
@@ -747,6 +785,7 @@ test("placement replies enforce the consent marker before exposing choices", asy
       backend: { bindings: [{ name: "COMPUTER", operations: ["processes"] }] },
       gills: [
         {
+          view: "rows",
           id: "context",
           title: "Context",
           source: "context",
@@ -802,7 +841,9 @@ test("a malformed guest Gill reply is a typed private execution refusal", async 
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
     null,
     {
-      gills: [{ id: "context", title: "Context", source: "context" }],
+      gills: [
+        { view: "rows", id: "context", title: "Context", source: "context" },
+      ],
     },
   );
   const app = createOyster({
@@ -831,7 +872,9 @@ test("Gill refuses disabled, removed and unassigned Instances without dispatch",
     { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
     null,
     {
-      gills: [{ id: "context", title: "Context", source: "context" }],
+      gills: [
+        { view: "rows", id: "context", title: "Context", source: "context" },
+      ],
     },
   );
   const installed = await host.installations.get("context-probe");
@@ -868,7 +911,9 @@ test("Gill refuses write and external sources before dispatch", async () => {
       { actor: { kind: "member", memberId: "fixture" }, role: "owner" },
       null,
       {
-        gills: [{ id: "context", title: "Context", source: "context" }],
+        gills: [
+          { view: "rows", id: "context", title: "Context", source: "context" },
+        ],
         api: {
           methods: {
             context: {
@@ -905,6 +950,7 @@ test("Gill bounds and decodes real request representations before dispatch", asy
     {
       gills: [
         {
+          view: "rows",
           id: "context",
           title: "Context",
           source: "context",
@@ -956,6 +1002,7 @@ test("Gill options scope grants to the declared options source", async () => {
       backend: { bindings: [{ name: "COMPUTER", operations: ["processes"] }] },
       gills: [
         {
+          view: "rows",
           id: "context",
           title: "Context",
           source: "context",

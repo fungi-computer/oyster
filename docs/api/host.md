@@ -1930,7 +1930,7 @@ function verifyRelease(
         roles: readonly ("files" | "dashboard" | "inbox" | "media" | "sessions" | "terminal")[];
         storage?: readonly Readonly<...>[];
         commands?: readonly Readonly<...>[];
-        gills?: readonly Readonly<...>[];
+        gills?: readonly AppDeclaredGill[];
         backend?: Readonly<{
            bindings: ...;
            sync?: ...;
@@ -2000,7 +2000,7 @@ function verifyRelease(
         roles: readonly ("files" | "dashboard" | "inbox" | "media" | "sessions" | "terminal")[];
         storage?: readonly Readonly<...>[];
         commands?: readonly Readonly<...>[];
-        gills?: readonly Readonly<...>[];
+        gills?: readonly AppDeclaredGill[];
         backend?: Readonly<{
            bindings: ...;
            sync?: ...;
@@ -2063,7 +2063,7 @@ function verifyRelease(
         roles: readonly ("files" | "dashboard" | "inbox" | "media" | "sessions" | "terminal")[];
         storage?: readonly Readonly<...>[];
         commands?: readonly Readonly<...>[];
-        gills?: readonly Readonly<...>[];
+        gills?: readonly AppDeclaredGill[];
         backend?: Readonly<{
            bindings: ...;
            sync?: ...;
@@ -2165,14 +2165,7 @@ function verifyRelease(
         sigil?: ... | ...;
         projections?: ... | ...;
      }>[];
-     gills?: readonly Readonly<{
-        id: string;
-        source: string;
-        title: string;
-        params?: ... | ...;
-        watch?: ... | ...;
-        desktop?: ... | ...;
-     }>[];
+     gills?: readonly AppDeclaredGill[];
      backend?: Readonly<{
         bindings: readonly Readonly<...>[];
         sync?: Readonly<...>;
@@ -2238,7 +2231,7 @@ standalone HTML.
 readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
 `"dashboard"` \| `"inbox"` \| `"media"` \| `"sessions"` \| `"terminal"`)[];
 `storage?`: readonly `Readonly`\<...\>[]; `commands?`: readonly
-`Readonly`\<...\>[]; `gills?`: readonly `Readonly`\<...\>[]; `backend?`:
+`Readonly`\<...\>[]; `gills?`: readonly `AppDeclaredGill`[]; `backend?`:
 `Readonly`\<\{ `bindings`: ...; `sync?`: ...; \}\>; \}\>; `format`:
 `"fungi-app-v1"`; `ui`: \{ `mediaType`: `"text/html; charset=utf-8"` \|
 `"application/vnd.fungi.app-assets+json"`; `artifactRef`: `ArtifactRef`;
@@ -2262,7 +2255,7 @@ readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
 `roles`: readonly (`"files"` \| `"dashboard"` \| `"inbox"` \| `"media"` \|
 `"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<...\>[];
 `commands?`: readonly `Readonly`\<...\>[]; `gills?`: readonly
-`Readonly`\<...\>[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
+`AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
 \}\>; \}\>; `format`: `"fungi-app-v1"`; `ui`: \{ `mediaType`:
 `"text/html; charset=utf-8"` \| `"application/vnd.fungi.app-assets+json"`;
 `artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; `version`: `string`;
@@ -2283,7 +2276,7 @@ readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
 `roles`: readonly (`"files"` \| `"dashboard"` \| `"inbox"` \| `"media"` \|
 `"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<...\>[];
 `commands?`: readonly `Readonly`\<...\>[]; `gills?`: readonly
-`Readonly`\<...\>[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
+`AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
 \}\>; \}\>; `format`: `"fungi-app-v1"`; `backend`: \{ `mediaType`:
 `"application/vnd.fungi.app-backend+json"`; `artifactRef`: `ArtifactRef`;
 `digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \}; \};
@@ -2314,15 +2307,14 @@ readonly `"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`:
 `Readonly`\<\{ `key`: `string`; `scopes`: readonly ...[]; `maxBytes`: `number`;
 \}\>[]; `commands?`: readonly `Readonly`\<\{ `id`: `string`; `title`: `string`;
 `category`: `string`; `description?`: ... \| ...; `sigil?`: ... \| ...;
-`projections?`: ... \| ...; \}\>[]; `gills?`: readonly `Readonly`\<\{ `id`:
-`string`; `source`: `string`; `title`: `string`; `params?`: ... \| ...;
-`watch?`: ... \| ...; `desktop?`: ... \| ...; \}\>[]; `backend?`: `Readonly`\<\{
-`bindings`: readonly `Readonly`\<...\>[]; `sync?`: `Readonly`\<...\>; \}\>; \}\>
-\| `null`; `ui`: \| `Readonly`\<\{ `kind`: `"html"`; `artifactRef`:
-`ArtifactRef`; `digest`: `Sha256Digest`; \}\> \| `Readonly`\<\{ `kind`:
-`"assets"`; `build`: \{ `format`: `"fungi-assets-v1"`; `base`: `string`;
-`assets`: readonly `object`[]; \}; \}\> \| `null`; `backend`: \| `Readonly`\<\{
-`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\> \| `null`; \}\>\>
+`projections?`: ... \| ...; \}\>[]; `gills?`: readonly `AppDeclaredGill`[];
+`backend?`: `Readonly`\<\{ `bindings`: readonly `Readonly`\<...\>[]; `sync?`:
+`Readonly`\<...\>; \}\>; \}\> \| `null`; `ui`: \| `Readonly`\<\{ `kind`:
+`"html"`; `artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\> \|
+`Readonly`\<\{ `kind`: `"assets"`; `build`: \{ `format`: `"fungi-assets-v1"`;
+`base`: `string`; `assets`: readonly `object`[]; \}; \}\> \| `null`; `backend`:
+\| `Readonly`\<\{ `artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; \}\>
+\| `null`; \}\>\>
 
 ---
 
@@ -2394,14 +2386,7 @@ function resolveBackend(store, release): Promise<
         sigil?: ...;
         projections?: ...;
      }>[];
-     gills?: readonly Readonly<{
-        id: ...;
-        source: ...;
-        title: ...;
-        params?: ...;
-        watch?: ...;
-        desktop?: ...;
-     }>[];
+     gills?: readonly AppDeclaredGill[];
      backend?: Readonly<{
         bindings: readonly ...[];
         sync?: ... | ...;
@@ -2444,9 +2429,8 @@ root artifact, then the backend descriptor it names.
 `Readonly`\<\{ `key`: ...; `scopes`: ...; `maxBytes`: ...; \}\>[]; `commands?`:
 readonly `Readonly`\<\{ `id`: ...; `title`: ...; `category`: ...;
 `description?`: ...; `sigil?`: ...; `projections?`: ...; \}\>[]; `gills?`:
-readonly `Readonly`\<\{ `id`: ...; `source`: ...; `title`: ...; `params?`: ...;
-`watch?`: ...; `desktop?`: ...; \}\>[]; `backend?`: `Readonly`\<\{ `bindings`:
-readonly ...[]; `sync?`: ... \| ...; \}\>; \}\> \| `null`; \}\> \| `null`\>
+readonly `AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: readonly
+...[]; `sync?`: ... \| ...; \}\>; \}\> \| `null`; \}\> \| `null`\>
 
 ## References
 

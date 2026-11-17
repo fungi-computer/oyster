@@ -51,7 +51,15 @@ export function oysterAppCatalog(
           surfaceId: app.surfaceId,
           appId: app.appId,
           gills: app.gills.map((gill) => {
+            if (gill.view === "surface")
+              return {
+                id: gill.id,
+                title: gill.title,
+                view: gill.view,
+                desktop: { sizes: [...gill.desktop.sizes] },
+              };
             const metadata: AppCatalog["apps"][number]["gills"][number] = {
+              view: "rows",
               id: gill.id,
               title: gill.title,
             };

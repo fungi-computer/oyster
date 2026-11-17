@@ -2299,7 +2299,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         (item) => item.id === request.viewId,
       );
       if (
-        gill === undefined ||
+        gill?.view !== "rows" ||
         release.api === null ||
         release.backend === null
       )

@@ -122,6 +122,7 @@ export const appBackend = defineAppBackend<StorageContext>({
   },
   gills: [
     defineAppGill({
+      view: "rows",
       id: "inbox",
       title: "Inbox",
       source: "read",

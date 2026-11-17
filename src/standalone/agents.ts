@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { createSelfSource } from "./agent-self.js";
 import { agentCodeExecutionTimeoutMs } from "@fungi.computer/computer-contract";
 import {
   isRetryableProviderRejection,
@@ -244,6 +246,7 @@ import {
 } from "@fungi.computer/shiitake-extensions/schedules/client";
 import { agentScheduleTargetSchema } from "@fungi.computer/shiitake-extensions/schedules";
 import {
+  agentAvatarSchema,
   createAgentAvatarStore,
   type AgentAvatarStore,
 } from "../agent-avatars.js";
@@ -2055,6 +2058,18 @@ export abstract class StandaloneAgentBase<
               },
             }),
           ),
+          createSelfSource({
+            agentId: this.agentName(),
+            isChannelSession: (sessionId) =>
+              this.channelConversations().sessionConversation(sessionId) !==
+              null,
+            directory: async () => {
+              const pin = await this.policyDirectory();
+              if (pin === null)
+                throw new Error("Agent has no pinned directory");
+              return this.env.AGENT_DIRECTORY.getByName(pin.directoryName);
+            },
+          }),
           conversationAgents.control(() => this.controlDirectory()),
           (await this.ui()).source,
           standaloneWebSource(this.env),
@@ -3115,7 +3130,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       : null;
   }
 
-  /** Owner-only rename; refuses a name already held by another Agent. */
+  /** An owner or the Agent itself may rename it; another Agent's name is refused. */
   rename(
     agentId: string,
     name: string,
@@ -3123,15 +3138,21 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   ):
     | AgentEntry
     | Readonly<{ error: "not_found" | "name_taken" | "not_granted" }> {
-    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    if (
+      principal.actor.kind === "agent"
+        ? principal.actor.agentId !== agentId
+        : !oysterPrincipalIsOwner(principal)
+    )
+      return { error: "not_granted" };
     const id = agentIds.agent.parse(agentId);
     if (!id.ok) return { error: "not_found" };
     return this.ctx.storage.transactionSync(() => {
       try {
+        const previous = this.directory.read(this.grant(), id.value);
         const renamed = this.directory.rename(this.grant(), id.value, {
           name,
         });
-        this.bump();
+        if (previous?.name !== renamed.name) this.bump();
         return {
           agentId: renamed.agentId,
           createdBy: renamed.createdBy,
@@ -3148,20 +3169,28 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     });
   }
 
-  /** Owner-only avatar change; the Agent wears it in every App and list. */
+  /** Owner or self avatar change; the Agent wears it in every App and list. */
   setAvatar(
     agentId: string,
     avatar: Avatar,
     principal: TenantPrincipal,
   ): AgentEntry | Readonly<{ error: "not_found" | "not_granted" }> {
-    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    if (
+      principal.actor.kind === "agent"
+        ? principal.actor.agentId !== agentId
+        : !oysterPrincipalIsOwner(principal)
+    )
+      return { error: "not_granted" };
     const id = agentIds.agent.parse(agentId);
     if (!id.ok) return { error: "not_found" };
+    const chosen = agentAvatarSchema.parse(avatar);
     return this.ctx.storage.transactionSync(() => {
       const agent = this.directory.read(this.grant(), id.value);
       if (agent === null) return { error: "not_found" } as const;
-      this.avatars.write(agent.agentId, avatar);
-      this.bump();
+      if (!isDeepStrictEqual(this.avatars.read(agent.agentId), chosen)) {
+        this.avatars.write(agent.agentId, chosen);
+        this.bump();
+      }
       return {
         agentId: agent.agentId,
         createdBy: agent.createdBy,

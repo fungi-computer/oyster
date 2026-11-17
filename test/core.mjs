@@ -23,7 +23,14 @@ assert.deepEqual(
   appCatalogEntrySchema.parse({
     appId: "app_notes",
     surfaceId: "notes",
-    gills: [{ id: "entries", title: "Entries", params: [repositoryParam] }],
+    gills: [
+      {
+        view: "rows",
+        id: "entries",
+        title: "Entries",
+        params: [repositoryParam],
+      },
+    ],
   }).gills[0].params,
   [repositoryParam],
   "The desktop catalog carries the App's placement and options declaration",
