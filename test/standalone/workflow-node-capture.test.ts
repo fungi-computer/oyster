@@ -160,6 +160,7 @@ async function fixture() {
     },
   };
   const host = {
+    tenantId: tenant.id,
     auth: resolved.auth,
     computerId,
     artifacts,

@@ -334,6 +334,7 @@ const pageBundle = await bundle({
   write: false,
 });
 const app = createOyster({
+  tenantId: "default",
   pageScript: pageBundle.outputFiles[0].text,
   ownerRoutes: standalonePortEntryRoutes({
     ownsComputer: async (id) => id === "workspace",

@@ -284,6 +284,7 @@ export async function homePageFixture({
     { ok: true },
   );
   const host = {
+    tenantId: "default",
     homeInstallationId: home,
     // The admitted key may open the App, but never gains owner shell services.
     keys: {

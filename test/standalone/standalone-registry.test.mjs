@@ -1034,7 +1034,12 @@ test("repository App registration reads the committed root manifest and replays 
           artifactDigest: "sha256:" + "1".repeat(64),
           subject: {
             kind: "call",
-            context: { actor: owner.actor, role: "owner", computerId: null },
+            context: {
+              scope: { kind: "standalone", tenant: "default" },
+              actor: owner.actor,
+              role: "owner",
+              computerId: null,
+            },
             method: { name: "apps.register", effect: "write" },
           },
           grants: [{ binding: "APPS", operations: ["register"] }],
@@ -1433,7 +1438,12 @@ test("build route preserves a template seed refusal instead of reporting missing
       artifactDigest: "sha256:" + "1".repeat(64),
       subject: {
         kind: "call",
-        context: { actor: owner.actor, role: "owner", computerId: null },
+        context: {
+          scope: { kind: "standalone", tenant: "default" },
+          actor: owner.actor,
+          role: "owner",
+          computerId: null,
+        },
         method: { name: "apps.build", effect: "write" },
       },
       grants: [{ binding: "APPS", operations: ["build"] }],
@@ -1627,7 +1637,12 @@ test("a Workflow build starts its exact head once and failed builds never select
             artifactDigest: "sha256:" + "1".repeat(64),
             subject: {
               kind: "call",
-              context: { actor: owner.actor, role: "owner", computerId: null },
+              context: {
+                scope: { kind: "standalone", tenant: "default" },
+                actor: owner.actor,
+                role: "owner",
+                computerId: null,
+              },
               method: { name: "apps.buildStatus", effect: "read" },
             },
             grants: [{ binding: "APPS", operations: ["buildStatus"] }],

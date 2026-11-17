@@ -266,6 +266,7 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
     installation,
     verified,
     {
+      scope: { kind: "standalone", tenant: "default" },
       actor: currentOwner.actor,
       role: "owner",
       computerId: "workspace",
@@ -305,7 +306,11 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
       admittedCallerFacts(
         installation,
         verified,
-        { actor: { kind: "agent", agentId }, computerId: "workspace" },
+        {
+          scope: { kind: "standalone", tenant: "default" },
+          actor: { kind: "agent", agentId },
+          computerId: "workspace",
+        },
         approvedBindingGrants(installation, workflowsDeclaration),
         [],
         sessionId,
@@ -317,7 +322,11 @@ async function libraryFixture(t, extraEnv = {}, extraInstallationIds = []) {
       admittedCallerFacts(
         installation,
         verified,
-        { actor: { kind: "team-key", keyId }, computerId: "workspace" },
+        {
+          scope: { kind: "standalone", tenant: "default" },
+          actor: { kind: "team-key", keyId },
+          computerId: "workspace",
+        },
         approvedBindingGrants(installation, workflowsDeclaration),
       ),
     // The real method digests the catalog will present for every
@@ -956,7 +965,11 @@ test("an Agent-started run acts as its grantor and reports its ending to the sta
       indexes,
       env: { WORKFLOWS: { runs: (input) => runs.runs(library.facts, input) } },
     },
-    { actor: { kind: "member", memberId: ownerId }, computerId: null },
+    {
+      scope: { kind: "standalone", tenant: "default" },
+      actor: { kind: "member", memberId: ownerId },
+      computerId: null,
+    },
   );
   const byId = (runId) => listed.find((row) => row.runId === runId);
   assert.equal(byId(started.runId)?.source, "agent");
@@ -1739,7 +1752,11 @@ test("the Workflows catalog method crosses its declared standalone frame binding
           WORKFLOWS: binding,
         }),
       },
-      { computerId: null, actor: { kind: "member", memberId: "owner" } },
+      {
+        scope: { kind: "standalone", tenant: "default" },
+        computerId: null,
+        actor: { kind: "member", memberId: "owner" },
+      },
     ),
     { apps: [] },
   );

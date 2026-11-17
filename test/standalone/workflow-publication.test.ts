@@ -71,7 +71,11 @@ import { instanceIds, type AppInstanceErrorCode } from "@fungi.computer/oyster";
 import { ownerKeyAuth } from "../../src/auth.js";
 import { createInstallationStoreGeneration } from "../../src/installation-store-generation.js";
 import { OysterApprovalHome } from "../../src/approval-home.js";
-import { defaultTenant, tenantScope } from "../../src/tenant.js";
+import {
+  defaultTenant,
+  tenantScope,
+  tenantIdSchema,
+} from "../../src/tenant.js";
 import { createAdmittedGit } from "@fungi.computer/oyster/git";
 import type { InvocationFacts } from "@fungi.computer/oyster/invocation";
 import type { WorkflowDefinition } from "@fungi.computer/braid";
@@ -262,6 +266,7 @@ async function fixture(
     },
   });
   const host: StandaloneWorkflowHost = {
+    tenantId: defaultTenant,
     artifacts,
     installations: {
       generation: () => Promise.resolve(generation()),
@@ -370,6 +375,7 @@ async function fixture(
     installation,
     verified,
     {
+      scope: { kind: "standalone", tenant: "default" } as const,
       actor: { kind: "member", memberId: "arming-owner" },
       role: "owner",
       computerId: null,
@@ -494,6 +500,7 @@ async function fixture(
         installation,
         verified,
         {
+          scope: { kind: "standalone", tenant: "default" } as const,
           actor: { kind: "member", memberId: "arming-owner" },
           role: "owner",
           computerId,
@@ -529,6 +536,45 @@ async function fixture(
     },
   };
 }
+
+it("old Workflow attribution derives scope from its original host without rewriting rows", async () => {
+  const f = await fixture();
+  try {
+    const stored = JSON.stringify({
+      actor: { kind: "member", memberId: "arming-owner" },
+      computerId: null,
+      role: "owner",
+    });
+    f.storage.sql.exec(
+      "INSERT INTO standalone_workflow_callers(run_id,caller) VALUES(?,?)",
+      "scope-old-record",
+      stored,
+    );
+    const readRow = () =>
+      f.storage.sql
+        .exec(
+          "SELECT caller FROM standalone_workflow_callers WHERE run_id=?",
+          "scope-old-record",
+        )
+        .toArray();
+    expect(f.recreateOwner().caller("scope-old-record")).toEqual({
+      ...JSON.parse(stored),
+      scope: { kind: "standalone", tenant: "default" },
+    });
+    expect(readRow()).toEqual([{ caller: stored }]);
+    expect(() =>
+      f.recreateOwner({
+        ...f.host,
+        tenantId: S.decodeUnknownSync(tenantIdSchema)("foreign"),
+      }),
+    ).toThrow(
+      expect.objectContaining({ code: "installation_tenant_mismatch" }),
+    );
+    expect(readRow()).toEqual([{ caller: stored }]);
+  } finally {
+    f.close();
+  }
+});
 
 it.each([
   "write",
@@ -1111,6 +1157,7 @@ it("runs the stored version through the real App method and host without Git", a
       },
       context,
       {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "arming-owner" },
         computerId: null,
         role: "owner",
@@ -1174,6 +1221,7 @@ it("runs the publisher-attested original definition and refuses a replacement di
       subject: {
         kind: "call",
         context: {
+          scope: { kind: "standalone", tenant: "default" } as const,
           actor: { kind: "member", memberId: "another-member" },
           computerId: null,
         },
@@ -1404,6 +1452,7 @@ for (const published of [false, true]) {
         subject: {
           kind: "call",
           context: {
+            scope: { kind: "standalone", tenant: "default" } as const,
             actor: { kind: "member", memberId: "arming-owner" },
             computerId: null,
             workflow: {
@@ -1739,6 +1788,7 @@ it("never replays a raw request across member and key actor identities with the 
       subject: {
         kind: "call",
         context: {
+          scope: { kind: "standalone", tenant: "default" } as const,
           actor: { kind: "team-key", keyId: "arming-owner" },
           computerId: null,
         },

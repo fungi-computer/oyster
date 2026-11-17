@@ -1783,6 +1783,12 @@ export class OysterInstance<
       onExcessProperty: "error",
     })(raw);
     if (
+      facts.subject.kind === "call" &&
+      (facts.subject.context.scope.kind !== "standalone" ||
+        facts.subject.context.scope.tenant !== this.scope().tenantId)
+    )
+      throw new AppInstanceError("installation_tenant_mismatch");
+    if (
       facts.instanceId !== this.ctx.id.name ||
       facts.selection.owner.kind !== "installation" ||
       facts.selection.owner.id !== this.installationId()
@@ -2238,6 +2244,7 @@ export function oysterWorkerHost(
       registry().approvalSetAutoApprove(pin, actor, input),
   });
   let host: OysterHost = {
+    tenantId: scope.tenantId,
     approvals: {
       submit: async (call, signal) => {
         const cancelled = () => signal.aborted;

@@ -279,6 +279,7 @@ async function fixture(
     throw exit.failure;
   };
   const host: OysterHost = {
+    tenantId: defaultTenant,
     auth: {
       authenticate: () => Promise.resolve({ kind: "admitted", principal }),
       resolve: () => Promise.resolve(principal),

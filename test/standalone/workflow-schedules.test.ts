@@ -124,6 +124,7 @@ const decodeArm = (overrides: Readonly<Record<string, string | undefined>>) =>
 
 it("refuses an admitted member without a selected Computer before trigger admission", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "member", memberId: "owner" },
     computerId: null,
   });
@@ -158,6 +159,7 @@ it.each([undefined, "not-a-digest"])(
 
 it("refuses an Agent without admitted approval even when its protected context names a Computer", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "agent", agentId: "agent" },
     computerId: "protected-computer",
   });
@@ -187,6 +189,7 @@ it("an approved Agent controls schedules as its grantor and retains its policy s
   };
   const f = fixture(
     {
+      scope: { kind: "standalone" as const, tenant: "default" },
       actor: { kind: "agent", agentId: "agent" },
       computerId: "protected-computer",
     },
@@ -222,6 +225,7 @@ it("an approved Agent controls schedules as its grantor and retains its policy s
 
 it("uses admitted member and library scope for listing and disarming", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "member", memberId: "owner" },
     computerId: null,
   });
@@ -245,6 +249,7 @@ it("uses admitted member and library scope for listing and disarming", async () 
 
 it("the ordinary Workflow binding pages only its admitted library and admits pause as a write", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "member", memberId: "owner" },
     computerId: null,
   });
@@ -346,6 +351,7 @@ it("the ordinary Workflow binding pages only its admitted library and admits pau
 
 it("arms as the owner with the admitted frame's installation pin", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "member", memberId: "owner" },
     computerId: "protected-computer",
   });

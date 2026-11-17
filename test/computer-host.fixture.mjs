@@ -87,6 +87,7 @@ export async function computerHost(
     descriptors: capabilities,
   });
   const host = {
+    tenantId: "default",
     bootUi: () => Promise.resolve({ kind: "passed" }),
     capabilities,
     // A null principal is an anonymous request, which the host refuses.

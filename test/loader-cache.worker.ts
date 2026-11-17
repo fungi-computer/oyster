@@ -364,6 +364,7 @@ export class LoaderProbe extends OysterInstance<Env> {
         subject: {
           kind: "call",
           context: {
+            scope: { kind: "standalone", tenant: defaultTenant },
             computerId: null,
             actor: { kind: "member", memberId: actor },
           },

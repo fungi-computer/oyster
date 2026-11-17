@@ -38,6 +38,7 @@ async function fixture(homeInstallationId, anonymous = false, computerId) {
   });
   const bonsai = { ...desktop, installationId: "bonsai" };
   const host = {
+    tenantId: "default",
     auth: {
       authenticate: (request) =>
         Promise.resolve(

@@ -315,13 +315,14 @@ try {
   assert.equal(undeclared.status, 403);
   assert.deepEqual(await undeclared.json(), { error: "not_declared" });
 
-  // 6. The UI's backend route.
+  // 6. Arbitrary guest HTTP cannot overwrite host browser state. UI state is
+  // read through the admitted named-method route above, not an App-made caller.
   const backend = await fetch(`${origin}/apps/notes/backend`, {
     method: "PUT",
     headers: { ...auth, "Content-Type": "text/plain" },
     body: JSON.stringify({ method: "readNote", input: {} }),
   });
-  assert.deepEqual(await backend.json(), { text: "from methods" });
+  assert.deepEqual(await backend.json(), { probe: "guest headers" });
   for (const name of [
     "Set-Cookie",
     "Clear-Site-Data",

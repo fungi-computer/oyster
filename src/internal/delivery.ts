@@ -180,7 +180,11 @@ export async function deliverBackground(
       };
       return {
         kind: "admitted",
-        context: invocationCallerContext(principal, host.computerId ?? null),
+        context: invocationCallerContext(
+          principal,
+          host.computerId ?? null,
+          host.tenantId,
+        ),
       };
     },
   });

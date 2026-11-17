@@ -31,6 +31,7 @@ function host() {
   const reply = { status: 200, headers: {}, body: new Uint8Array() };
   const unused = () => assert.fail("Git routes reach no App runtime");
   const app = createOyster({
+    tenantId: "default",
     auth: {
       resolve: unused,
       authenticate: async (request) => {

@@ -98,6 +98,7 @@ async function wasmAssetHost(mainSource) {
     },
   });
   return createOyster({
+    tenantId: "default",
     bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({

@@ -1,5 +1,5 @@
 import { connectApp } from "@fungi.computer/agar";
-import { appBackend } from "@fungi.computer/agar/backend";
+import { appMethods } from "@fungi.computer/agar/backend";
 import { computerReadFile } from "@fungi.computer/agar/computer";
 import * as z from "zod";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -24,17 +24,13 @@ if (
 const root = await connectApp({
   host: "parent",
 });
-const backend = root.capabilities.require(appBackend);
+const backend = root.capabilities.require(appMethods);
 const read = z
   .object({ text: z.string().nullable() })
-  .parse(
-    await backend.request(JSON.stringify({ method: "readNote", input: {} })),
-  );
+  .parse(await backend.call("readNote", JSON.stringify({})));
 note.value = read.text ?? "";
 const saveNote = async () => {
-  await backend.request(
-    JSON.stringify({ method: "saveNote", input: { text: note.value } }),
-  );
+  await backend.call("saveNote", JSON.stringify({ text: note.value }));
   status.value = "Saved";
 };
 save.addEventListener("click", () => {

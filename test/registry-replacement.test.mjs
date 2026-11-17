@@ -1550,12 +1550,14 @@ test("install-apps immediately recovers all seven Apps after reset: Agents and S
     return facets.get(instanceId);
   });
   const physicalRead = (instanceId) =>
-    facets
-      .get(instanceId)
-      .readNote(
-        {},
-        { computerId: null, actor: { kind: "member", memberId: "owner" } },
-      );
+    facets.get(instanceId).readNote(
+      {},
+      {
+        scope: { kind: "standalone", tenant: "default" },
+        computerId: null,
+        actor: { kind: "member", memberId: "owner" },
+      },
+    );
   const headers = {
     Authorization: `Bearer ${f.env.OYSTER_OWNER_KEY}`,
     "Content-Type": "application/json",

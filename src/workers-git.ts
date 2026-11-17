@@ -1508,7 +1508,7 @@ export function oysterWorkerGit<Env extends OysterGitWorkerEnv>(
   const installations = registryInstallations(env, scope);
   const git: OysterGitHost = {
     writerOf: (who) => {
-      const context = invocationCallerContext(who, null);
+      const context = invocationCallerContext(who, null, scope.tenantId);
       return context.actor.kind === "member" && context.role !== undefined
         ? { kind: "actor", actor: context.actor, role: context.role }
         : { kind: "actor", actor: context.actor };
@@ -1605,6 +1605,7 @@ export function oysterWorkerGit<Env extends OysterGitWorkerEnv>(
                 invocation?.facts.deadlineAt ?? Infinity,
               );
               const context: AppMethodCallContext = {
+                scope: { kind: "standalone", tenant: scope.tenantId },
                 computerId: null,
                 actor: question.writer.actor,
               };

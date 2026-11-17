@@ -231,6 +231,7 @@ async function fixture(
   const refusals: InvocationFacts[] = [];
   let resolutionCalls = 0;
   const host: OysterHost = {
+    tenantId: defaultTenant,
     homeInstallationId: "configured-home",
     bootUi: () => Promise.resolve({ kind: "passed" as const }),
     appToolPolicy: () => {
@@ -867,6 +868,35 @@ it("refuses external and unapproved required methods before Instance dispatch", 
   expect(narrowed.status).toBe(403);
   expect(await narrowed.json()).toEqual({ error: "requires_not_granted" });
   expect(calls).toHaveLength(1);
+});
+
+it("method input, headers and query fields cannot replace the host's tenant scope", async () => {
+  const f = await fixture(true);
+  await f.install();
+  const response = await f.app.request(
+    "/apps/notes/methods/read?tenant=foreign&teamId=team_foreign",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Agar-Tenant": "foreign",
+        "X-Agar-Team-Id": "team_foreign",
+      },
+      body: JSON.stringify({
+        scope: { kind: "team", teamId: "team_foreign" },
+        context: { scope: { kind: "standalone", tenant: "foreign" } },
+      }),
+    },
+  );
+  expect(response.status).toBe(200);
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0]?.subject).toMatchObject({
+    kind: "call",
+    context: {
+      scope: { kind: "standalone", tenant: "default" },
+      actor: { kind: "member", memberId: "owner" },
+    },
+  });
 });
 
 it("refuses an anonymous read before any dispatch or tool policy", async () => {
@@ -1530,7 +1560,11 @@ it("the exact host filter excludes an unapproved write origin on a valid nonsync
     new Request("https://host.invalid"),
   );
   if (authenticated.kind !== "admitted") throw new Error("Member missing");
-  const caller = invocationCallerContext(authenticated.principal, null);
+  const caller = invocationCallerContext(
+    authenticated.principal,
+    null,
+    defaultTenant,
+  );
   const admitted = admittedBackgroundOrigins({
     installation: {
       ...installation,

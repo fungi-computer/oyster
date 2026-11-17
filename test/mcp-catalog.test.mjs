@@ -199,6 +199,7 @@ const installation = (installationId) => ({
 const calls = [];
 const installed = [installation("notes"), installation("diary")];
 const host = {
+  tenantId: "default",
   backgroundOriginKey: () => backgroundOriginKey("fixture-mcp-background-key"),
   artifacts: {
     get: (ref) => Promise.resolve(files.get(ref) ?? null),
@@ -841,6 +842,7 @@ test("the owner reaches discoverable App methods as env.<APP>", async () => {
   const origin = calls[1].context.backgroundOrigin;
   assert.equal(origin.method, "saveNote");
   assert.deepEqual(calls[1].context, {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: null,
     actor: { kind: "member", memberId: "owner" },
     role: "owner",
@@ -1177,6 +1179,7 @@ test("the MCP loader exposes dotted App methods as nested operations under one c
     );
     for (const { context } of calls)
       assert.deepEqual(context, {
+        scope: { kind: "standalone", tenant: "default" },
         computerId: null,
         actor: { kind: "team-key", keyId: "morel" },
       });

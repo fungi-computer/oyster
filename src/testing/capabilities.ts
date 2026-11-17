@@ -22,6 +22,7 @@ import {
 import { instanceIds } from "../index.js";
 import { sha256, verifyRelease } from "../release.js";
 import { approvedInstallation } from "./installation.js";
+import { defaultTenant } from "../tenant.js";
 
 /** How one capability fixture host admits its single installation. */
 export type CapabilityFixtureOptions = Readonly<{
@@ -141,6 +142,7 @@ export async function capabilityFixture(
   const readOnly = () =>
     Promise.reject(new Error("Fixture installations are read-only"));
   let base: OysterHost = {
+    tenantId: defaultTenant,
     bootUi: () => Promise.resolve({ kind: "passed" as const }),
     auth: {
       resolve: () =>

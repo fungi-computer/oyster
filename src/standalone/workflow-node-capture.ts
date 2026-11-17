@@ -20,7 +20,10 @@ import type { StandaloneWorkflowAuthorityReaders } from "./workflow-authority-re
 
 /** Live host readers and approvals; a compile catalog is deliberately not a grant port. */
 export type StandaloneWorkflowNodeCaptureOptions = Readonly<{
-  host: Pick<OysterHost, "artifacts" | "computerId" | "capabilities"> &
+  host: Pick<
+    OysterHost,
+    "tenantId" | "artifacts" | "computerId" | "capabilities"
+  > &
     Readonly<{
       auth: Pick<OysterHost["auth"], "resolve">;
       installations: Pick<OysterHost["installations"], "get">;
@@ -47,7 +50,11 @@ export function createStandaloneWorkflowNodeCapture(
       return null;
     const principal = await host.auth.resolve(actor);
     if (principal === null || !oysterPrincipalIsOwner(principal)) return null;
-    const caller = invocationCallerContext(principal, target.computerId);
+    const caller = invocationCallerContext(
+      principal,
+      target.computerId,
+      host.tenantId,
+    );
     if (
       caller.actor.kind !== "member" ||
       caller.actor.memberId !== actor.memberId

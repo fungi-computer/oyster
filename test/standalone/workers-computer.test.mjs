@@ -130,6 +130,7 @@ test("captured fleet frames keep A and B files and processes isolated from the c
         subject: {
           kind: "call",
           context: {
+            scope: { kind: "standalone", tenant: "default" },
             computerId,
             actor: { kind: "member", memberId: "owner" },
             idempotencyKey: "start",
@@ -202,6 +203,7 @@ test("a captured frame moves one file as files.move and the decoder keeps its re
       subject: {
         kind: "call",
         context: {
+          scope: { kind: "standalone", tenant: "default" },
           computerId: "move-computer",
           actor: { kind: "member", memberId: "owner" },
           idempotencyKey: "move",
@@ -880,6 +882,7 @@ async function instanceBinding(
   const run = (
     work,
     context = {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: env.OYSTER_COMPUTER_ID,
       actor: { kind: "member", memberId: "owner" },
       idempotencyKey: "process-start-proof",
@@ -896,7 +899,16 @@ async function instanceBinding(
         instanceId,
         selection: selected,
         artifactDigest: backend.digest,
-        subject: { kind: "call", context },
+        subject: {
+          kind: "call",
+          context: {
+            ...context,
+            scope: {
+              kind: "standalone",
+              tenant: (tenant ?? defaultScope).tenantId,
+            },
+          },
+        },
         grants: [{ binding: "COMPUTER", operations }, ...agentGrants],
         deadlineAt,
         ancestry: [],
@@ -911,6 +923,7 @@ async function instanceBinding(
     work,
     name = "run",
     context = {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: env.OYSTER_COMPUTER_ID,
       actor: { kind: "member", memberId: "owner" },
       idempotencyKey: "process-start-proof",
@@ -918,7 +931,17 @@ async function instanceBinding(
     deadlineAt = Date.now() + 60_000,
   ) => {
     perform = work;
-    const subject = { kind: "call", context };
+    // The Instance host, not the caller fixture, supplies its tenant pin.
+    const subject = {
+      kind: "call",
+      context: {
+        ...context,
+        scope: {
+          kind: "standalone",
+          tenant: (tenant ?? defaultScope).tenantId,
+        },
+      },
+    };
     const grants = [{ binding: "COMPUTER", operations }];
     if (replay) {
       subject.method = { name: "run", effect: "write" };
@@ -1122,7 +1145,11 @@ test("a native write into a missing folder is answered plainly, and Inkcap creat
         },
       },
     },
-    { actor: { kind: "agent", agentId: "agent-a" }, computerId: "computer-a" },
+    {
+      scope: { kind: "standalone", tenant: "default" },
+      actor: { kind: "agent", agentId: "agent-a" },
+      computerId: "computer-a",
+    },
   );
   assert.deepEqual(written, { path: "/home/levi/deep/note.md", bytes: 2 });
   assert.deepEqual(
@@ -1905,6 +1932,7 @@ test("processStart refuses a missing host key and guest-owned host fields", asyn
     }),
     "run",
     {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: env.OYSTER_COMPUTER_ID,
       actor: { kind: "member", memberId: "owner" },
     },
@@ -2004,11 +2032,13 @@ test("the same opaque key in two admitted actors cannot replay another actor's p
   const { call } = await instanceBinding(t, env, ["processStart"]);
   const work = (computer) => computer.processStart({ command: "serve" });
   const first = await call(work, "run", {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: env.OYSTER_COMPUTER_ID,
     actor: { kind: "member", memberId: "first" },
     idempotencyKey: "process-start-proof",
   });
   const second = await call(work, "run", {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: env.OYSTER_COMPUTER_ID,
     actor: { kind: "member", memberId: "second" },
     idempotencyKey: "process-start-proof",
@@ -2027,6 +2057,7 @@ test("the same opaque key in two declared methods cannot replay another method's
   const { call } = await instanceBinding(t, env, ["processStart"]);
   const work = (computer) => computer.processStart({ command: "serve" });
   const context = {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: env.OYSTER_COMPUTER_ID,
     actor: { kind: "member", memberId: "owner" },
     idempotencyKey: "process-start-proof",
@@ -2051,6 +2082,7 @@ for (const actor of [
       }),
       "run",
       {
+        scope: { kind: "standalone", tenant: "default" },
         computerId: env.OYSTER_COMPUTER_ID,
         actor,
         idempotencyKey: "process-start-proof",
@@ -2067,6 +2099,7 @@ test("distinct opaque invocation keys in the same member method start distinct p
   const work = (computer) => computer.processStart({ command: "serve" });
   const start = (idempotencyKey) =>
     call(work, "run", {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: env.OYSTER_COMPUTER_ID,
       actor: { kind: "member", memberId: "owner" },
       idempotencyKey,
@@ -2117,6 +2150,7 @@ test("standalone frame preview requires the owner role and selects by the admitt
   // The owner's tenant member id is never its configured sign-in label; the
   // frame hands the admitted id to the Computer owner, which proves it live.
   const accepted = await run((computer) => computer.preview({ port: 3000 }), {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: env.OYSTER_COMPUTER_ID,
     actor: { kind: "member", memberId: "member_canonical_owner" },
     role: "owner",
@@ -2457,6 +2491,7 @@ for (const [actor, expected] of [
     const { env, calls, authorities } = fixture();
     const { run } = await instanceBinding(t, env, ["ports"]);
     const response = await run((computer) => computer.ports({}), {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: env.OYSTER_COMPUTER_ID,
       actor,
       workflow: {
@@ -2499,6 +2534,7 @@ test("a retained routing stub is refused between frames and during every success
         return computer.ports({});
       },
       {
+        scope: { kind: "standalone", tenant: "default" },
         computerId: env.OYSTER_COMPUTER_ID,
         actor,
       },
@@ -2533,7 +2569,11 @@ for (const computerId of [null, "another-workspace"]) {
         await assert.rejects(computer.ports({}), { code: "revoked" });
         return { refused: true };
       },
-      { computerId, actor: { kind: "member", memberId: "owner" } },
+      {
+        scope: { kind: "standalone", tenant: "default" },
+        computerId,
+        actor: { kind: "member", memberId: "owner" },
+      },
     );
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { refused: true });

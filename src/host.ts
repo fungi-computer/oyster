@@ -52,7 +52,7 @@ import {
   shellModuleAsset,
   shellModuleAssetPath,
 } from "@fungi.computer/puffball/assets";
-import type { TenantPrincipal } from "./tenant.js";
+import type { TenantId, TenantPrincipal } from "./tenant.js";
 import { gitRepositoryNameSchema } from "@fungi.computer/puffball/git-representation";
 import {
   gillRequestSchema,
@@ -417,6 +417,8 @@ export type OysterEnv = { Variables: TimingVariables };
 
 /** Everything a host supplies to run Oyster. */
 export type OysterHost = Readonly<{
+  /** Tenant selected by the host before admission, never by App input. */
+  tenantId: TenantId;
   /** Native approval home. A host without one cannot execute App tool writes. */
   approvals?: Readonly<{
     /** Wait for a decision and return the native home's in-call result. */
@@ -782,7 +784,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     principal: TenantPrincipal,
     identity: Pick<Installation, "installationId" | "instanceId">,
   ) => {
-    const context = invocationCallerContext(principal, host.computerId ?? null);
+    const context = invocationCallerContext(
+      principal,
+      host.computerId ?? null,
+      host.tenantId,
+    );
     const declaration = release.declaration ?? emptyAppDeclaration;
     return applyInstallationCommand(current, command, {
       by: context.actor,
@@ -1749,7 +1755,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         copyId.data,
         name,
         input,
-        invocationCallerContext(copyOwned.principal, null),
+        invocationCallerContext(copyOwned.principal, null, host.tenantId),
       );
       return result.ok
         ? methodResponse(result.value)
@@ -2147,6 +2153,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     const computerId = invocationCallerContext(
       principal,
       host.computerId ?? null,
+      host.tenantId,
     ).computerId;
     const config = {
       workbench,
@@ -2254,7 +2261,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           admittedCallerFacts(
             installation,
             release,
-            invocationCallerContext(principal, host.computerId ?? null),
+            invocationCallerContext(
+              principal,
+              host.computerId ?? null,
+              host.tenantId,
+            ),
             decision.grants,
           ),
           request,
@@ -2270,6 +2281,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       const caller = invocationCallerContext(
         principal,
         host.computerId ?? null,
+        host.tenantId,
       );
       const installation = await enabled(context);
       if (installation === null) return refusal(404, "Not found");
@@ -2456,7 +2468,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           host,
           installation,
           release,
-          invocationCallerContext(principal, host.computerId ?? null),
+          invocationCallerContext(
+            principal,
+            host.computerId ?? null,
+            host.tenantId,
+          ),
           decision.grants,
           { name, effect: method.effect },
         ),
@@ -2536,6 +2552,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       const admittedMember = invocationCallerContext(
         principal,
         host.computerId ?? null,
+        host.tenantId,
       );
       const recheck = async (): Promise<TenantPrincipal | Response> => {
         const fresh = await host.auth.resolve(admittedMember.actor);
@@ -2543,6 +2560,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         const currentMember = invocationCallerContext(
           fresh,
           host.computerId ?? null,
+          host.tenantId,
         );
         if (
           currentMember.actor.kind !== "member" ||

@@ -191,6 +191,7 @@ const policy = {
 };
 const principal = { actor: { kind: "agent", agentId: "agent-catalog" } };
 const host = {
+  tenantId: "default",
   artifacts,
   backgroundOriginKey: () => backgroundOriginKey("catalog-proof-origin-key"),
   installations: {

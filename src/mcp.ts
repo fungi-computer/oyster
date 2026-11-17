@@ -385,6 +385,7 @@ export function appSurfaceCache(
 export async function oysterAppSnapshot(
   host: Pick<
     OysterHost,
+    | "tenantId"
     | "installations"
     | "instances"
     | "artifacts"
@@ -414,7 +415,11 @@ export async function oysterAppSnapshot(
 > {
   const limits = guestLimits(host.guestLimits);
   const generation = await host.installations.generation();
-  const caller = invocationCallerContext(principal, host.computerId ?? null);
+  const caller = invocationCallerContext(
+    principal,
+    host.computerId ?? null,
+    host.tenantId,
+  );
   const { actor } = principal;
   const modules: Record<string, ModuleRegistration> = {};
   const levels: Record<string, AppToolPolicy["level"]> = {};
@@ -778,6 +783,7 @@ function serializableAccess(
 export async function oysterAppMethods(
   host: Pick<
     OysterHost,
+    | "tenantId"
     | "installations"
     | "instances"
     | "artifacts"
@@ -888,6 +894,7 @@ export async function oysterComputerTools(
 export function oysterMcpCatalogLoad(
   host: Pick<
     OysterHost,
+    | "tenantId"
     | "installations"
     | "instances"
     | "artifacts"

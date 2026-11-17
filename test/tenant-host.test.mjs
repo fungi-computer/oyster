@@ -725,6 +725,7 @@ test("an Instance retains its tenant pin across reopen and refuses a foreign ten
     installation,
     verified,
     {
+      scope: { kind: "standalone", tenant: scopeOf("aa").tenantId },
       actor: { kind: "member", memberId: "owner" },
       role: "owner",
       computerId: null,

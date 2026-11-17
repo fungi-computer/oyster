@@ -93,7 +93,11 @@ test("App method context uses the host's Computer despite guest selector claims"
       },
     );
     assert.equal(response.status, 200);
-    const expected = { computerId: "host-workspace", actor };
+    const expected = {
+      scope: { kind: "standalone", tenant: "default" },
+      computerId: "host-workspace",
+      actor,
+    };
     if ("role" in principal) expected.role = principal.role;
     assert.deepEqual(await response.json(), expected);
   }
@@ -186,6 +190,7 @@ test("an unconfigured Oyster does not adopt a Computer from method input", async
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: null,
     actor: { kind: "member", memberId: "owner" },
     role: "owner",
@@ -200,8 +205,10 @@ test("a tenant principal's registry facts never enter the caller grammar", () =>
       membershipVersion: 3,
     },
     "host-workspace",
+    "default",
   );
   assert.deepEqual(context, {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: "host-workspace",
     actor: { kind: "member", memberId: "tenant_member_ada" },
     role: "owner",
@@ -217,8 +224,10 @@ test("a host-attested sole member reaches the caller grammar", () => {
       soleMember: true,
     },
     null,
+    "default",
   );
   assert.deepEqual(context, {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: null,
     actor: { kind: "member", memberId: "tenant_member_ada" },
     role: "owner",
@@ -228,6 +237,7 @@ test("a host-attested sole member reaches the caller grammar", () => {
   assert.throws(
     () =>
       parseAppMethodCallContext({
+        scope: { kind: "standalone", tenant: "default" },
         computerId: null,
         actor: { kind: "agent", agentId: "agent-one" },
         soleMember: true,
@@ -275,6 +285,7 @@ test("internal Agent calls keep Agent attribution and the host-selected Computer
     await Effect.runPromise(Stream.runCollect(prepared.execute()));
     assert.deepEqual(replies, [
       {
+        scope: { kind: "standalone", tenant: "default" },
         computerId: "host-workspace",
         actor: { kind: "agent", agentId: "agent-one" },
       },

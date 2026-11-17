@@ -1,4 +1,4 @@
-import type { TenantPrincipal } from "./tenant.js";
+import type { TenantId, TenantPrincipal } from "./tenant.js";
 import type { OysterHost } from "./host.js";
 import type { VerifiedRelease } from "./release.js";
 import type { Installation } from "./apps/installation.js";
@@ -557,19 +557,21 @@ export type InvocationDeadline = Readonly<{
   grantExpiresAt: number;
 }>;
 /**
- * Project an admitted principal into App attribution; only the host chooses
- * the fixed Computer context. Host admission reads the principal, never this
- * projection.
+ * Project an Oyster-admitted principal into App attribution using its host's
+ * tenant pin and fixed Computer context. Hub supplies Team scope separately.
+ * Host admission reads the principal, never this projection.
  */
 export function invocationCallerContext(
   principal: TenantPrincipal,
   computerId: string | null,
+  tenant: TenantId,
 ): AppMethodCallContext {
   const { actor } = principal;
-  if (!("role" in principal)) return { computerId, actor };
+  const scope = { kind: "standalone", tenant } as const;
+  if (!("role" in principal)) return { scope, computerId, actor };
   return principal.soleMember === true
-    ? { computerId, actor, role: principal.role, soleMember: true }
-    : { computerId, actor, role: principal.role };
+    ? { scope, computerId, actor, role: principal.role, soleMember: true }
+    : { scope, computerId, actor, role: principal.role };
 }
 /** Shared host-held caller/Workflow fact builders, never guest argument decoders. */
 export const invocationFacts = {
@@ -600,6 +602,7 @@ export const invocationFacts = {
     authority: InvocationAuthority,
     input: Readonly<{
       workflow: WorkflowAttestation;
+      scope: AppMethodCallContext["scope"];
       computerId: string | null;
       role?: AppMethodCallContext["role"];
       idempotencyKey: string;
@@ -607,6 +610,7 @@ export const invocationFacts = {
     deadline: InvocationDeadline,
   ): InvocationFacts => {
     const context: AppMethodCallContext = {
+      scope: input.scope,
       actor: input.workflow.armedBy,
       computerId: input.computerId,
       idempotencyKey: input.idempotencyKey,

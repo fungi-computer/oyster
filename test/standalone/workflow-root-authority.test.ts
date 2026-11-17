@@ -46,6 +46,7 @@ it("captures a Computer-free run from the actual canonical registry owner and re
       },
     },
     host: {
+      tenantId: tenant.id,
       auth: { resolve: unused },
       artifacts: { get: unused, put: unused },
       installations: { get: unused },

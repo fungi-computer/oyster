@@ -443,6 +443,7 @@ Variables: TimingVariables;
 
 ```ts
 type OysterHost = Readonly<{
+  tenantId: TenantId;
   approvals?: Readonly<{
      submit: Promise<OysterApprovalResult>;
   }>;

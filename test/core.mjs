@@ -1,4 +1,5 @@
 const memberCaller = {
+  scope: { kind: "standalone", tenant: "default" },
   computerId: null,
   actor: { kind: "member", memberId: "member_fixture" },
 };

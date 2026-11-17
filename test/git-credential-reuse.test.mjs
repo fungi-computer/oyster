@@ -249,6 +249,7 @@ async function instanceFixture(t, artifacts, installationId = "notes") {
         installed,
         verified,
         {
+          scope: { kind: "standalone", tenant: "default" },
           actor: { kind: "member", memberId: "fixture-owner" },
           role: "owner",
           computerId: null,

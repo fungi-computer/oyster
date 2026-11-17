@@ -1,5 +1,35 @@
 # @fungi.computer/oyster
 
+## 0.36.0
+
+### Minor Changes
+
+- Changes since 0.35.1:
+
+  - feat(apps): require one host-derived caller scope
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.20.0
+  - @fungi.computer/puffball@0.10.0
+  - @fungi.computer/shiitake@0.20.0
+  - @fungi.computer/braid@0.4.24
+  - @fungi.computer/darkroom@0.11.4
+  - @fungi.computer/nacre@0.7.2
+  - @fungi.computer/parakeet@0.12.5
+  - @fungi.computer/workflows-wire@0.4.24
+  - @fungi.computer/forage@0.3.11
+  - @fungi.computer/mycelium@0.4.3
+  - @fungi.computer/shiitake-extensions@0.11.5
+  - @fungi.computer/zookeeper@0.0.37
+  - @fungi.computer/knapsack@0.4.16
+  - @fungi.computer/veil@0.7.7
+  - @fungi.computer/computer@0.14.2
+  - @fungi.computer/computer-contract@0.5.3
+
 ## 0.35.1
 
 ### Patch Changes

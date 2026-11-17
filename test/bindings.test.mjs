@@ -393,6 +393,10 @@ async function instanceFixture(
       installed,
       verified,
       {
+        scope: method?.callerScope ?? {
+          kind: "standalone",
+          tenant: tenant?.tenantId ?? defaultTenant,
+        },
         actor: { kind: "member", memberId: "owner" },
         computerId: null,
         role: "owner",
@@ -1566,6 +1570,33 @@ test("Gill scopes captured grants to its verified read source and pins the metho
   );
   assert.equal(reply.ok, true);
   assert.equal(providerCalls, 0);
+});
+
+test("Instance refuses caller scope that disagrees with its tenant pin", async (t) => {
+  for (const callerScope of [
+    { kind: "standalone", tenant: "foreign" },
+    { kind: "team", teamId: "team_foreign" },
+  ]) {
+    const run = await instanceFixture(t);
+    let entries = 0;
+    const reply = await run(
+      [],
+      async () => {
+        entries += 1;
+        return {
+          viewId: "fixture",
+          title: "Fixture",
+          state: "empty",
+          rows: [],
+        };
+      },
+      { gill: true, callerScope },
+    );
+    assert.equal(reply.ok, false);
+    assert.equal(reply.code, "installation_tenant_mismatch");
+    assert.equal(entries, 0);
+    assertLoaderCache(run, { probes: 1, live: false });
+  }
 });
 
 test("Gill refuses a foreign tenant or installation before guest entry", async (t) => {

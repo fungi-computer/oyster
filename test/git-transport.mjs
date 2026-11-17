@@ -332,12 +332,17 @@ try {
     gate.run(
       authority(selected, {
         kind: "call",
-        context: { computerId: null, actor: memberWriter.actor },
+        context: {
+          scope: { kind: "standalone", tenant: "default" },
+          computerId: null,
+          actor: memberWriter.actor,
+        },
       }),
       {},
       (frame) => Effect.runPromise(runtime.authorizeGitPush(frame, question)),
     );
   const standaloneHost = {
+    tenantId: "default",
     bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({

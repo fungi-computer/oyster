@@ -23,6 +23,7 @@ for (const role of ["owner", "member"]) {
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
+      scope: { kind: "standalone", tenant: "default" },
       ...principal,
       computerId: "fixed-computer",
     });
@@ -58,6 +59,7 @@ for (const actor of [
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
+      scope: { kind: "standalone", tenant: "default" },
       actor,
       computerId: "fixed-computer",
     });

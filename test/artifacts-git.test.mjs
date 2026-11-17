@@ -704,7 +704,11 @@ test("repos.get binding sequence reuses only its verified frame backend and reop
       grants: [{ binding: "GIT", operations: ["read", "exchange"] }],
       ancestry: [],
     },
-    { computerId: null, actor: { kind: "member", memberId: "member_fixture" } },
+    {
+      scope: { kind: "standalone", tenant: "default" },
+      computerId: null,
+      actor: { kind: "member", memberId: "member_fixture" },
+    },
     { deadlineAt: Date.now() + 10_000, grantExpiresAt: Date.now() + 10_000 },
   );
   const gate = createInvocationGate({

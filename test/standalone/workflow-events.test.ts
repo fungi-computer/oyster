@@ -99,6 +99,7 @@ function fixture(
 
 it("refuses an event arm without a selected Computer before the router", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "member", memberId: "owner" },
     computerId: null,
   });
@@ -115,6 +116,7 @@ it("refuses an event arm without a selected Computer before the router", async (
 
 it("refuses an Agent arming an event trigger without admitted approval", async () => {
   const f = fixture({
+    scope: { kind: "standalone" as const, tenant: "default" },
     actor: { kind: "agent", agentId: "agent" },
     computerId: "computer",
   });
@@ -130,6 +132,7 @@ it("refuses an Agent arming an event trigger without admitted approval", async (
 it("an approved Agent can list and disarm App-event triggers under its grantor", async () => {
   const f = fixture(
     {
+      scope: { kind: "standalone" as const, tenant: "default" },
       actor: { kind: "agent", agentId: "agent" },
       computerId: "computer",
     },

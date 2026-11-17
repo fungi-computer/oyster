@@ -1,4 +1,6 @@
 import * as S from "effect/Schema";
+import * as z from "zod/mini";
+import { defaultTenant } from "../tenant.js";
 import {
   admitRunInput,
   accepts,
@@ -42,7 +44,10 @@ import {
 } from "../invocation.js";
 import { AppInstanceError } from "../index.js";
 import { appCapabilityIds } from "@fungi.computer/puffball";
-import type { AppMethodCallContext } from "@fungi.computer/puffball/app-method-runtime";
+import {
+  appMethodCallerSchema,
+  type AppMethodCallContext,
+} from "@fungi.computer/puffball/app-method-runtime";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   createGraphWorkflowRuns,
@@ -79,6 +84,7 @@ const MAX_APP_REPLY_BYTES = 240 * 1024;
 
 export type StandaloneWorkflowHost = Pick<
   OysterHost,
+  | "tenantId"
   | "installations"
   | "artifacts"
   | "instances"
@@ -222,6 +228,10 @@ export function createStandaloneWorkflowHost(
     ): Promise<boolean>;
   }>,
 ) {
+  // StandaloneWorkflows opens only the default tenant's durable namespace.
+  // A different host cannot relabel its existing stored caller attribution.
+  if (host.tenantId !== defaultTenant)
+    throw new AppInstanceError("installation_tenant_mismatch");
   const graph = createGraphWorkflowRuns(owner);
   const reservations = createTriggerRunReservations(owner);
   const store = {
@@ -240,6 +250,12 @@ export function createStandaloneWorkflowHost(
   owner.sql.exec(`CREATE TABLE IF NOT EXISTS standalone_workflow_callers (
     run_id TEXT PRIMARY KEY, caller TEXT NOT NULL
   ) STRICT`);
+  // Store attribution, not a second tenant authority. Reconstruct scope from
+  // this host's pin on every read; the persisted caller representation stays
+  // unchanged and cannot choose another tenant.
+  const storedCallerSchema = z.omit(appMethodCallerSchema, { scope: true });
+  const encodeCaller = (context: AppMethodCallContext): string =>
+    JSON.stringify(storedCallerSchema.parse(context));
   const readCaller = (runId: string): AppMethodCallContext | null => {
     const row = owner.sql
       .exec(
@@ -249,9 +265,10 @@ export function createStandaloneWorkflowHost(
       .toArray()[0];
     if (row === undefined) return null;
     const saved = S.decodeUnknownSync(S.Struct({ caller: S.String }))(row);
-    return S.decodeUnknownSync(appMethodCallContextSchema)(
-      JSON.parse(saved.caller),
-    );
+    return S.decodeUnknownSync(appMethodCallContextSchema)({
+      ...storedCallerSchema.parse(JSON.parse(saved.caller)),
+      scope: { kind: "standalone", tenant: host.tenantId },
+    });
   };
   const caller = (runId: string): AppMethodCallContext => {
     const saved = readCaller(runId);
@@ -468,6 +485,7 @@ export function createStandaloneWorkflowHost(
     if (current.membershipVersion !== member.membershipVersion)
       throw new AppInstanceError("revoked");
     const context: AppMethodCallContext = {
+      scope: { kind: "standalone", tenant: host.tenantId },
       actor: { kind: "member", memberId: member.memberId },
       role: "owner",
       computerId: host.computerId ?? null,
@@ -736,6 +754,7 @@ export function createStandaloneWorkflowHost(
       computerId: string | null,
     ) {
       const context: AppMethodCallContext = {
+        scope: { kind: "standalone", tenant: host.tenantId },
         actor: { kind: "member", memberId },
         computerId,
         role: "owner",
@@ -743,7 +762,7 @@ export function createStandaloneWorkflowHost(
       owner.sql.exec(
         "INSERT OR IGNORE INTO standalone_workflow_callers(run_id,caller) VALUES(?,?)",
         runId,
-        JSON.stringify(context),
+        encodeCaller(context),
       );
     },
     catalog,
@@ -930,6 +949,7 @@ export function createStandaloneWorkflowHost(
       if (publication !== undefined && !(await publisherGranted(current)))
         return { error: "not_granted" as const };
       const callContext: AppMethodCallContext = {
+        scope: { kind: "standalone", tenant: host.tenantId },
         actor: captured.actor,
         computerId: context.computerId,
       };
@@ -965,7 +985,7 @@ export function createStandaloneWorkflowHost(
           owner.sql.exec(
             "INSERT OR IGNORE INTO standalone_workflow_callers(run_id,caller) VALUES(?,?)",
             runId,
-            JSON.stringify(callContext),
+            encodeCaller(callContext),
           );
         return accepted;
       });

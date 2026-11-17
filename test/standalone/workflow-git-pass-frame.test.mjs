@@ -196,6 +196,7 @@ test("a member Workflow node frame's commands carry the public grant its run lib
     { ...stepAuthority, selection: { ...stepAuthority.selection } },
     {
       workflow: stepWorkflow,
+      scope: { kind: "standalone", tenant: "default" },
       computerId: "computer",
       idempotencyKey: "call-1",
     },
@@ -221,6 +222,7 @@ test("a member Workflow node frame's commands carry the public grant its run lib
   const manual = invocationFacts.fromCaller(
     stepAuthority,
     {
+      scope: { kind: "standalone", tenant: "default" },
       actor: { kind: "member", memberId: "owner" },
       computerId: "computer",
       idempotencyKey: "call-2",

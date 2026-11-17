@@ -578,6 +578,7 @@ test("Prints references use the captured Computer through native MEDIA and saved
 
   const instanceId = instanceIds.instance.generate();
   const caller = {
+    scope: { kind: "standalone", tenant: "default" },
     computerId: "computer-media",
     actor: { kind: "member", memberId: "artist" },
   };

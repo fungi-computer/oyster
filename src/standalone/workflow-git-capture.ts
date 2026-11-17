@@ -12,7 +12,7 @@ export function createStandaloneWorkflowInstallationGitCapture(
   options: Readonly<{
     host: Pick<
       StandaloneWorkflowNodeCaptureOptions["host"],
-      "auth" | "artifacts" | "installations"
+      "tenantId" | "auth" | "artifacts" | "installations"
     >;
     readers: Pick<StandaloneWorkflowNodeCaptureOptions["readers"], "member">;
   }>,
@@ -25,7 +25,7 @@ export function createStandaloneWorkflowInstallationGitCapture(
     if (before?.membershipVersion !== member.membershipVersion) return false;
     const principal = await host.auth.resolve(actor);
     if (principal === null || !oysterPrincipalIsOwner(principal)) return false;
-    const caller = invocationCallerContext(principal, null);
+    const caller = invocationCallerContext(principal, null, host.tenantId);
     if (
       caller.actor.kind !== "member" ||
       caller.actor.memberId !== actor.memberId

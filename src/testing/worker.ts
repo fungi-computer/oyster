@@ -82,6 +82,7 @@ export class ConfiguredInstance extends DurableObject<Env> {
         subject: {
           kind: "call",
           context: {
+            scope: { kind: "standalone" as const, tenant: "default" },
             computerId: null,
             actor: { kind: "member", memberId: this.env.OWNER },
           },

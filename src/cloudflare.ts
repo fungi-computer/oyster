@@ -680,6 +680,7 @@ export function createCloudflareAppTestCopies<FacetClass>(
         // Attribution is not a live call frame: no Computer, workflow or durable lane.
         const context = parseAppMethodCallContext(
           {
+            scope: decoded.scope,
             actor: decoded.actor,
             role: "owner",
             computerId: null,

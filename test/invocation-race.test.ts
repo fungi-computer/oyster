@@ -35,6 +35,7 @@ await test("disable fences authority before cancelling a held frame without wait
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "member_one" },
         computerId: null,
       },
@@ -133,6 +134,7 @@ await test("replay grants and fresh admitted methods are coupled at the facts bo
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "member_one" },
         computerId: null,
       },
@@ -191,6 +193,7 @@ await test("one frame latch blocks effects until its sealed claimed origin is ad
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "member_one" },
         computerId: null,
       },
@@ -280,6 +283,7 @@ const callBy = (
   effect?: "read" | "write",
 ): InvocationFacts["subject"] => {
   const context = {
+    scope: { kind: "standalone", tenant: "default" } as const,
     computerId: null,
     actor: { kind: "member" as const, memberId },
     role: "owner" as const,
@@ -676,6 +680,7 @@ await test("Instance admission preserves a typed refusal after waiting for the f
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         computerId: null,
         actor: { kind: "member", memberId: "owner" },
       },
@@ -772,6 +777,7 @@ await test("read polls each simulated second wait for one replay step without in
         ? {
             kind: "call",
             context: {
+              scope: { kind: "standalone", tenant: "default" } as const,
               actor: { kind: "member", memberId: "writer" },
               computerId: null,
             },
@@ -781,6 +787,7 @@ await test("read polls each simulated second wait for one replay step without in
         : {
             kind: "call",
             context: {
+              scope: { kind: "standalone", tenant: "default" } as const,
               actor: { kind: "member", memberId: "reader" },
               computerId: null,
             },
@@ -855,6 +862,7 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "member_one" },
         computerId: null,
         role: "member",
@@ -875,6 +883,7 @@ await test("a click preempts a held replay, closes its authority, then enters wi
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         actor: { kind: "member", memberId: "member_two" },
         computerId: null,
         role: "member",
@@ -975,6 +984,7 @@ await test("the host fact builder captures verified metadata and refuses replay 
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         computerId: null,
         actor: { kind: "member", memberId: "member_one" },
       },
@@ -990,6 +1000,7 @@ await test("the host fact builder captures verified metadata and refuses replay 
   };
   const deadlineAt = reference.deadlineAt;
   const context = {
+    scope: { kind: "standalone", tenant: "default" } as const,
     computerId: null,
     actor: { kind: "member" as const, memberId: "member_one" },
     backgroundLane: "member:member_one",
@@ -1010,7 +1021,11 @@ await test("the host fact builder captures verified metadata and refuses replay 
   };
   const agentFacts = invocationFacts.fromCaller(
     verified,
-    { computerId: null, actor: { kind: "agent", agentId: "agent_one" } },
+    {
+      scope: { kind: "standalone", tenant: "default" } as const,
+      computerId: null,
+      actor: { kind: "agent", agentId: "agent_one" },
+    },
     { deadlineAt, grantExpiresAt: deadlineAt },
     { name: "save", effect: "write" },
     "session_one",
@@ -1074,6 +1089,7 @@ function agentPolicyFrame() {
     subject: {
       kind: "call",
       context: {
+        scope: { kind: "standalone", tenant: "default" } as const,
         computerId: null,
         actor: { kind: "agent", agentId: "agent_one" },
       },
@@ -1143,6 +1159,7 @@ await test("the frame boundary refuses an Agent policy on a team-key actor", () 
       subject: {
         ...facts.subject,
         context: {
+          scope: { kind: "standalone", tenant: "default" } as const,
           computerId: null,
           actor: { kind: "team-key", keyId: "key_one" },
         },

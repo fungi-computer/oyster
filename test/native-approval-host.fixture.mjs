@@ -45,6 +45,8 @@ export function approvalHost(host) {
   assert.ok(owner, "Every fixture installation store must own native SQLite");
   const current = {
     ...host,
+    // The same pin as the approval home below.
+    tenantId: defaultTenant,
     auth: {
       resolve: (actor) =>
         Promise.resolve(

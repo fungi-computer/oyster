@@ -3331,8 +3331,10 @@ test("HTTP credentials and forged agent claims never authenticate an internal ag
     invocationCallerContext(
       { actor: { kind: "team-key", keyId: "morel" } },
       null,
+      "default",
     ),
     {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: null,
       actor: { kind: "team-key", keyId: "morel" },
     },
@@ -3562,6 +3564,7 @@ test("the agent host captures one App source per acquisition and retains agent a
     assert.equal(reads, 1, "method invocation uses the captured source");
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].context, {
+      scope: { kind: "standalone", tenant: "default" },
       computerId: "agent-workspace",
       actor: { kind: "agent", agentId: agent.agentId },
     });

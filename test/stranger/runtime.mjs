@@ -137,7 +137,11 @@ const authority = {
 const deadlineAt = Date.now() + 60_000;
 const callFacts = invocationFacts.fromCaller(
   authority,
-  { computerId: null, actor: { kind: "member", memberId: "member_stranger" } },
+  {
+    scope: { kind: "standalone", tenant: "default" },
+    computerId: null,
+    actor: { kind: "member", memberId: "member_stranger" },
+  },
   { deadlineAt, grantExpiresAt: deadlineAt },
 );
 const inactive = await gate.run(callFacts, undefined, (frame) =>
@@ -353,6 +357,7 @@ assert.equal(
 
 for (const status of [404, 429]) {
   const app = createOyster({
+    tenantId: "default",
     bootUi: () => Promise.resolve({ kind: "passed" }),
     auth: {
       authenticate: async () => ({ kind: "refused", status, retryAfter: 9 }),
