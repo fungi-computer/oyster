@@ -226,7 +226,21 @@ import { cloudflareAccountReady } from "./cloudflare-account.js";
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { agentModelListSchema } from "@fungi.computer/shiitake/model-list";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { decode as decodeBase64Url } from "effect/encoding/Base64Url";
+import * as Result from "effect/Result";
+// Named imports only: Veil's redaction module is already in the startup graph
+// (its egress paths import it), and naming the two calls lets the bundler drop
+// the maintained pattern rules this Worker never runs. A dynamic import would
+// keep the whole module, rules included, in the evaluated idle state.
+import {
+  createFingerprintRedactor,
+  createFingerprintSet,
+  type FingerprintSet,
+} from "@fungi.computer/veil/redaction";
+import type { SessionRedactor } from "@fungi.computer/shiitake";
 import { z } from "zod";
 import {
   type FrameBindingMethods,
@@ -2141,6 +2155,37 @@ export abstract class StandaloneAgentBase<
         this.archiveControl().work,
         this.discordReplyWork(),
       ],
+      redaction: this.vaultRedaction(),
+    };
+  }
+
+  private vaultRedactor:
+    | Readonly<{ revision: string; redactor: Promise<SessionRedactor> }>
+    | undefined;
+
+  /**
+   * Session redaction from this instance's stored credentials. The directory
+   * that holds them sends fingerprints only, never a value; an Agent with no
+   * directory, or a directory that cannot answer, fails closed.
+   */
+  protected vaultRedaction(): NonNullable<
+    CloudflareShiitakeOptions["redaction"]
+  > {
+    return {
+      load: async () => {
+        const pin = await this.policyDirectory();
+        if (pin === null) throw new Error("Agent directory is unavailable");
+        const answer = await this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).redactionFingerprints();
+        if (this.vaultRedactor?.revision !== answer.revision) {
+          this.vaultRedactor = {
+            revision: answer.revision,
+            redactor: createFingerprintRedactor(answer.set),
+          };
+        }
+        return this.vaultRedactor.redactor;
+      },
     };
   }
 
@@ -2314,6 +2359,51 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       if (error instanceof ModelKeyRefused) return { error: error.reason };
       throw error;
     }
+  }
+
+  private redactionSet:
+    Readonly<{ revision: string; set: FingerprintSet }> | undefined;
+
+  /**
+   * Host-only: fingerprints of every credential this directory stores (model
+   * keys, connections and Discord tokens), for Session redaction. The HMAC
+   * subkey derives from the instance credential key; no value leaves here.
+   */
+  async redactionFingerprints(): Promise<
+    Readonly<{ revision: string; set: FingerprintSet }>
+  > {
+    const storage = credentialStorage(this.ctx.storage);
+    const rows = [...(await storage.list("credential:")).values()];
+    // Each seal draws a fresh IV, so any stored change is a new revision.
+    const revision = rows
+      .map((row) => `${row.credentialId}:${row.sealed}`)
+      .sort()
+      .join("\n");
+    const cached = this.redactionSet;
+    if (cached?.revision === revision) return cached;
+    // A set that fails to build is never cached: the next read retries.
+    const fresh = { revision, set: await this.fingerprintSet(rows) };
+    this.redactionSet = fresh;
+    return fresh;
+  }
+
+  private async fingerprintSet(
+    rows: readonly StoredCredential[],
+  ): Promise<FingerprintSet> {
+    const store = createInstanceCredentialStore(this.credentialOptions());
+    const values = new Set<string>();
+    for (const row of rows)
+      await store.withSecret(row.credentialId, (secret) => {
+        for (const value of secretStrings(secret)) values.add(value);
+      });
+    // With no stored values there is nothing to find; any key will do. A
+    // malformed key refuses in createFingerprintSet, so redaction fails closed.
+    const key = this.env.OYSTER_CREDENTIAL_KEY;
+    const ownerKey =
+      key === undefined
+        ? crypto.getRandomValues(new Uint8Array(32))
+        : Result.getOrElse(decodeBase64Url(key), () => new Uint8Array(0));
+    return createFingerprintSet(ownerKey, [...values]);
   }
 
   private mcpOwner: ReturnType<typeof createAgentMcpConnections> | undefined;
@@ -3489,6 +3579,35 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
 /** Where an authorization server returns the owner after a sign-in. */
 const mcpCallbackUrl = (origin: string) =>
   new URL("/api/connections/callback", origin).href;
+
+const decodeJsonSecret = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Json),
+);
+
+/** Every string leaf of one parsed JSON value. */
+function jsonStrings(value: Schema.Json, into: string[]): void {
+  if (value === null || Predicate.isNumber(value) || Predicate.isBoolean(value))
+    return;
+  if (Predicate.isString(value)) {
+    into.push(value);
+    return;
+  }
+  // An array's values are its items; an object's are its fields.
+  for (const item of Object.values<Schema.Json>(value)) jsonStrings(item, into);
+}
+
+/**
+ * The strings one sealed secret can print: the secret itself and, for a JSON
+ * bundle (an OAuth token set, a Cloudflare key), each string inside it. Over-
+ * matching a non-secret field only masks it. Vault never stores a value
+ * under eight code units, so shorter strings are not values to find.
+ */
+function secretStrings(secret: string): string[] {
+  const strings = [secret];
+  const parsed = decodeJsonSecret(secret);
+  if (Option.isSome(parsed)) jsonStrings(parsed.value, strings);
+  return strings.filter((value) => value.length >= 8);
+}
 
 /** The directory's Durable Object storage as the credential store's key-value port. */
 const credentialStorage = (

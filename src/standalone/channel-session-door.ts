@@ -88,6 +88,11 @@ export function channelSessionDoor(
       error.cause === "closed" &&
       error.requestId === requestId
         ? "closed_request"
-        : null,
+        : error instanceof ShiitakeError &&
+            error.boundary === "contract" &&
+            (error.cause === "secret_in_prompt" ||
+              error.cause === "unavailable")
+          ? "intake_refused"
+          : null,
   };
 }

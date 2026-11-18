@@ -280,8 +280,16 @@ export type SessionDoor = Readonly<{
           }>
       ),
   ) => Promise<void>;
-  /** Only a matching, contract-closed request clears a visitor reservation. */
-  errorKind: (error: Error, requestId: string) => "closed_request" | null;
+  /**
+   * `closed_request`: only a matching, contract-closed request clears a
+   * visitor reservation. `intake_refused`: the Session refused the text at
+   * its door (it holds a key, or it could not be checked for one), so
+   * nothing was admitted or stored.
+   */
+  errorKind: (
+    error: Error,
+    requestId: string,
+  ) => "closed_request" | "intake_refused" | null;
 }>;
 
 const DAY_MS = 86_400_000;
@@ -811,11 +819,22 @@ export function createChannelConversations(
       });
       return { kind: "accepted", sessionId, commandId, delivery };
     } catch (error) {
-      if (
-        event.party.kind !== "visitor" ||
-        !(error instanceof Error) ||
-        options.door.errorKind(error, requestId) !== "closed_request"
-      )
+      const kind =
+        error instanceof Error
+          ? options.door.errorKind(error, requestId)
+          : null;
+      if (kind === "intake_refused") {
+        // The Session admitted nothing; the reservation must not keep text
+        // that holds, or may hold, a key.
+        sql.exec(
+          "DELETE FROM hub_channel_intake WHERE binding_id=? AND event_id=? AND session_id=? AND state='pending'",
+          binding.bindingId,
+          event.eventId,
+          sessionId,
+        );
+        throw error;
+      }
+      if (event.party.kind !== "visitor" || kind !== "closed_request")
         throw error;
       // The owner's durable withdrawal fence is authoritative. This reservation
       // never became a line or command; do not present it as pending intake.

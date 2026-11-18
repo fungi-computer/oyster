@@ -1,5 +1,36 @@
 # @fungi.computer/oyster
 
+## 0.39.0
+
+### Minor Changes
+
+- Changes since 0.38.1:
+
+  - fix(oyster): drop channel intake text the Session could not check
+  - fix(oyster): keep Veil pattern rules out of the idle Worker
+  - fix(oyster): drop a channel intake row when its text is refused as a key
+  - fix(oyster): open redaction fingerprints through the envelope keyring
+  - fix(shiitake): brand redacted output at runtime and decode it by its own
+    grammar
+  - feat(oyster): scrub stored credentials from Agent Sessions by fingerprint
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/parakeet@0.14.0
+  - @fungi.computer/shiitake@0.21.0
+  - @fungi.computer/veil@0.8.1
+  - @fungi.computer/knapsack@0.4.20
+  - @fungi.computer/mycelium@0.4.7
+  - @fungi.computer/shiitake-extensions@0.11.10
+  - @fungi.computer/zookeeper@0.0.42
+  - @fungi.computer/computer@0.14.7
+  - @fungi.computer/computer-contract@0.5.7
+  - @fungi.computer/braid@0.5.4
+  - @fungi.computer/workflows-wire@0.5.4
+
 ## 0.38.1
 
 ### Patch Changes

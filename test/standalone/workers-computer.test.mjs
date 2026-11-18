@@ -10,6 +10,25 @@ import { fauxModel } from "@fungi.computer/mule/testing";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { cloudflareStorageFixture } from "./cloudflare-storage.fixture.ts";
 
+/**
+ * An instance directory's storage: its SQL plus the key-value store that
+ * holds sealed credentials. These directories store none, so their Agents'
+ * Vault port answers an empty fingerprint set.
+ */
+function directoryStorage(database) {
+  const credentials = new Map();
+  return {
+    ...fromNodeSqlite(database),
+    get: async (key) => credentials.get(key),
+    put: async (key, value) => {
+      credentials.set(key, value);
+    },
+    delete: async (key) => credentials.delete(key),
+    list: async ({ prefix }) =>
+      new Map([...credentials].filter(([key]) => key.startsWith(prefix))),
+  };
+}
+
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (
@@ -2836,7 +2855,7 @@ test("App send retries the same intent after an UNKNOWN reply with one real Agen
   });
   // A named directory Durable Object, as the Worker addresses it.
   const directory = new AgentDirectory(
-    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { id: { name: "agents" }, storage: directoryStorage(database) },
     { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
   );
   const entry = directory.create(
@@ -2959,7 +2978,7 @@ async function nativeScheduleAgent(t) {
     tenantId: scope.tenantId,
   };
   const directory = new AgentDirectory(
-    { id: { name: pin.directoryName }, storage: fromNodeSqlite(database) },
+    { id: { name: pin.directoryName }, storage: directoryStorage(database) },
     { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
   );
   const principal = {
@@ -3451,7 +3470,7 @@ test("cached Agent bindings admit only the current frame before fleet effects", 
   t.after(() => database.close());
   // A named directory Durable Object, as the Worker addresses it.
   const directory = new AgentDirectory(
-    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { id: { name: "agents" }, storage: directoryStorage(database) },
     { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
   );
   const agent = directory.create(
@@ -3566,7 +3585,7 @@ test("INBOX packets stay within the installation's selected Agents", async (t) =
   const database = new DatabaseSync(":memory:");
   t.after(() => database.close());
   const directory = new AgentDirectory(
-    { id: { name: "agents" }, storage: fromNodeSqlite(database) },
+    { id: { name: "agents" }, storage: directoryStorage(database) },
     { OYSTER_OWNER_NAME: "Levi", OYSTER_ORIGIN: "https://oyster.invalid" },
   );
   const owner = { actor: { kind: "member", memberId: "Levi" }, role: "owner" };

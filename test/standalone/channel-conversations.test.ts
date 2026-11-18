@@ -70,6 +70,18 @@ it("classifies only the matching contract-closed request at the standalone host"
   expect(
     door.errorKind(new Error("unavailable"), "ch:binding:event"),
   ).toBeNull();
+  expect(
+    door.errorKind(
+      new ShiitakeError("contract", "secret_in_prompt", "Holds a key"),
+      "ch:binding:event",
+    ),
+  ).toBe("intake_refused");
+  expect(
+    door.errorKind(
+      new ShiitakeError("contract", "unavailable", "Not checked"),
+      "ch:binding:event",
+    ),
+  ).toBe("intake_refused");
 });
 
 /** The Oyster conversation law over real Shiitake and a shared SQLite store. */
@@ -211,6 +223,141 @@ it("releases a visitor intake reservation only after the real Session host close
           "withdrawn-event",
         )
         .toArray(),
+    ).toEqual([]);
+  } finally {
+    await host.close();
+    database.close();
+  }
+});
+
+it("refuses a visitor's pasted key in a channel prompt and a takeover line, keeping no intake row", async () => {
+  const database = new DatabaseSync(":memory:");
+  const owner = fromNodeSqlite(database);
+  const host = await memoryHost({
+    owner,
+    meta: { schema: FungiMessageMetaSchema },
+  });
+  // Provider-shaped, so Veil's maintained rules find it with no Vault port.
+  const key = ["ghp_", "7Zk9P2mQa4Wv6Xc8Bn0Ds3Fg5Hj1Lr9Ty2Ui"].join("");
+  try {
+    const binding: ConversationBinding = {
+      bindingId: channelIds.binding.generate(),
+      lifecycle: "active",
+      selector: {
+        provider: "web",
+        siteKey: channelIds.site.generate(),
+        origins: ["https://example.com"],
+      },
+    };
+    const conversations = createChannelConversations({
+      ...owner,
+      binding: (id) => (id === binding.bindingId ? binding : null),
+      door: channelSessionDoor(
+        () => Promise.resolve(host.agent),
+        () => undefined,
+        () => conversations,
+      ),
+      now: () => 1_000_000,
+    });
+    const visitorId = channelIds.visitor.generate();
+    const event = (eventId: string, text: string): InboundEvent => ({
+      bindingId: binding.bindingId,
+      conversation: visitorId,
+      eventId,
+      party: { kind: "visitor", visitorId },
+      text,
+    });
+    const refused = { boundary: "contract", cause: "secret_in_prompt" };
+    const intake = () =>
+      owner.sql
+        .exec("SELECT event_id, text FROM hub_channel_intake")
+        .toArray()
+        .map((row) => JSON.stringify(row));
+
+    await expect(
+      conversations.receive(event("prompt-key", `my token is ${key}`)),
+    ).rejects.toMatchObject(refused);
+    const opened = await conversations.receive(event("hello", "Hello"));
+    expect(opened).toMatchObject({ kind: "accepted" });
+    if (opened.kind !== "accepted") throw new Error("No Session opened");
+    // Party lines need an idle Session: let the Agent's turn settle first.
+    await host.settle(opened.sessionId);
+    // A person takes over; the visitor's next message is a party line.
+    expect(
+      conversations.takeOver(
+        opened.sessionId,
+        { id: "sam", name: "Sam" },
+        0,
+        true,
+      ),
+    ).toMatchObject({ kind: "ok" });
+    await expect(
+      conversations.receive(event("line-key", `here it is: ${key}`)),
+    ).rejects.toMatchObject(refused);
+    expect(await conversations.receive(event("line", "Thanks"))).toMatchObject({
+      kind: "held",
+    });
+
+    const rows = intake();
+    expect(rows.some((row) => row.includes(key))).toBe(false);
+    expect(rows.some((row) => row.includes("prompt-key"))).toBe(false);
+    expect(rows.some((row) => row.includes("line-key"))).toBe(false);
+  } finally {
+    await host.close();
+    database.close();
+  }
+});
+
+it("refuses a visitor's key as a key with the Vault port down, and keeps no unchecked text either", async () => {
+  const database = new DatabaseSync(":memory:");
+  const owner = fromNodeSqlite(database);
+  const host = await memoryHost({
+    owner,
+    meta: { schema: FungiMessageMetaSchema },
+    redaction: {
+      load: () => Promise.reject(new Error("Vault is unreachable")),
+    },
+  });
+  const key = ["ghp_", "7Zk9P2mQa4Wv6Xc8Bn0Ds3Fg5Hj1Lr9Ty2Ui"].join("");
+  try {
+    const binding: ConversationBinding = {
+      bindingId: channelIds.binding.generate(),
+      lifecycle: "active",
+      selector: {
+        provider: "web",
+        siteKey: channelIds.site.generate(),
+        origins: ["https://example.com"],
+      },
+    };
+    const conversations = createChannelConversations({
+      ...owner,
+      binding: (id) => (id === binding.bindingId ? binding : null),
+      door: channelSessionDoor(
+        () => Promise.resolve(host.agent),
+        () => undefined,
+        () => conversations,
+      ),
+      now: () => 1_000_000,
+    });
+    const visitorId = channelIds.visitor.generate();
+    const event = (eventId: string, text: string): InboundEvent => ({
+      bindingId: binding.bindingId,
+      conversation: visitorId,
+      eventId,
+      party: { kind: "visitor", visitorId },
+      text,
+    });
+    await expect(
+      conversations.receive(event("down-key", `my token is ${key}`)),
+    ).rejects.toMatchObject({
+      boundary: "contract",
+      cause: "secret_in_prompt",
+    });
+    await expect(
+      conversations.receive(event("down-plain", "Hello there")),
+    ).rejects.toMatchObject({ boundary: "contract", cause: "unavailable" });
+    expect(
+      owner.sql.exec("SELECT event_id, text FROM hub_channel_intake").toArray(),
     ).toEqual([]);
   } finally {
     await host.close();
