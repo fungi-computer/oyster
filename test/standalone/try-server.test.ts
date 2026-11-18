@@ -12,7 +12,24 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { tryOyster } from "../../src/standalone/try-cli.js";
+import {
+  tryEffects,
+  tryOyster,
+  type TrialKeychain,
+} from "../../src/standalone/try-cli.js";
+
+/** A faithful in-memory keychain: these laws are about the server child, not the OS store. */
+function memoryKeychain(): TrialKeychain {
+  const values = new Map<string, string>();
+  return (account) =>
+    Promise.resolve({
+      getPassword: () => Promise.resolve(values.get(account) ?? null),
+      setPassword: (value: string) => {
+        values.set(account, value);
+        return Promise.resolve();
+      },
+    });
+}
 
 let directory: string;
 let home: string;
@@ -95,7 +112,11 @@ process.stdin.on('end', () => {
       interactive: false,
     });
     await expect(
-      tryOyster([directory, "--port", "18983", "--no-open"], undefined, ui),
+      tryOyster(
+        [directory, "--port", "18983", "--no-open"],
+        tryEffects(memoryKeychain()),
+        ui,
+      ),
     ).rejects.toThrow(
       kind === "signal"
         ? "signal SIGTERM"
@@ -128,7 +149,7 @@ it("preserves an early log-stream failure through cancellation and child cleanup
   const ui = new Cli({ brand: "fungi", output, interactive: false });
   const running = tryOyster(
     [directory, "--port", "18983", "--no-open"],
-    undefined,
+    tryEffects(memoryKeychain()),
     ui,
     controller.signal,
   ).then(
@@ -195,7 +216,7 @@ it("retains the startup diagnosis when signaling its own child group is refused"
     await expect(
       tryOyster(
         [directory, "--port", "18983", "--no-open"],
-        undefined,
+        tryEffects(memoryKeychain()),
         new Cli({
           brand: "fungi",
           output: new PassThrough(),

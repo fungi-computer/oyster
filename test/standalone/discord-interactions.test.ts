@@ -313,6 +313,8 @@ describe("a reply an Agent still owes", () => {
     expect(w.owed()).toMatchObject([
       { state: "waiting", attempts: 1, text: "Is my fern fine?" },
     ]);
+    // The owed reply's interaction token rests sealed, never in the clear.
+    expect(JSON.stringify(w.owed())).not.toContain("token-");
     // The Agent is evicted; nothing it knew in memory survives.
     const reopened = await w.restartAgent();
     later(10_000);
@@ -348,7 +350,11 @@ describe("a reply an Agent still owes", () => {
     await w.settle();
     expect(w.discordCalls).toHaveLength(1);
     expect(w.owed()).toEqual([
-      expect.objectContaining({ state: "expired", token: "", text: "" }),
+      expect.objectContaining({
+        state: "expired",
+        sealed_token: null,
+        text: "",
+      }),
     ]);
     expect(w.owed()).toMatchObject([
       { interaction_id: "5234567890123456781", state: "expired" },
@@ -385,7 +391,7 @@ describe("a reply an Agent still owes", () => {
     await w.settle();
     expect(w.discordCalls).toHaveLength(2);
     expect(w.owed()).toEqual([
-      expect.objectContaining({ state: "expired", token: "" }),
+      expect.objectContaining({ state: "expired", sealed_token: null }),
     ]);
   });
 
@@ -402,7 +408,11 @@ describe("a reply an Agent still owes", () => {
     }
     expect(w.discordCalls).toHaveLength(5);
     expect(w.owed()).toEqual([
-      expect.objectContaining({ state: "failed", token: "", text: "" }),
+      expect.objectContaining({
+        state: "failed",
+        sealed_token: null,
+        text: "",
+      }),
     ]);
   });
 });
@@ -785,7 +795,11 @@ describe("a run that outlives the interaction token", () => {
     await w.settle();
     expect(channelCalls(w)).toEqual([]);
     expect(w.owed()).toEqual([
-      expect.objectContaining({ state: "expired", token: "", text: "" }),
+      expect.objectContaining({
+        state: "expired",
+        sealed_token: null,
+        text: "",
+      }),
     ]);
     const control = standaloneDiscordControl(w.env, w.door);
     expect(await control.undelivered(owner, w.binding.bindingId)).toMatchObject(

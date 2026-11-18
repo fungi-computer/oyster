@@ -104,6 +104,12 @@ export default {
             return owner.authenticate(input);
         }
       },
+      // The real owner sign-in form, so a browser holds only its session cookie.
+      login: (input) =>
+        owner.login?.(input) ??
+        Promise.resolve(
+          new Response("Sign-in is not available", { status: 404 }),
+        ),
     };
     // Fixed Agents and keys hold an owner-approved write policy, so the storage
     // owner law (not the tool gate) decides them; the named unapproved Agent has none.

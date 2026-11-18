@@ -1,7 +1,12 @@
 import { z } from "zod";
+import { CredentialError } from "@fungi.computer/veil/credential-store";
 
 import type { DiscordAsk } from "./discord-interactions.js";
 import type { ConversationSql } from "./conversations.js";
+import type {
+  SealedTable002,
+  SecretSealer,
+} from "../credential-migration-002.js";
 
 /**
  * The Discord replies an Agent still owes. An interaction token is valid for
@@ -11,7 +16,8 @@ import type { ConversationSql } from "./conversations.js";
  * keeps the debt in the Agent's own store, so an evicted run still answers
  * after the Agent wakes. A row names no secret once it is closed, and a closed
  * row says honestly why: `expired` (no answer within two hours) or `failed`
- * (delivery kept failing).
+ * (delivery kept failing). An open row's interaction token rests only in the
+ * Agent's S1 envelope.
  */
 
 /** The interaction token window we honour, a little under Discord's 15 minutes. */
@@ -70,7 +76,7 @@ const pendingRow = z.strictObject({
   interaction_id: z.string(),
   binding_id: z.string(),
   application_id: z.string(),
-  token: z.string(),
+  sealed_token: z.string(),
   guild_id: z.string(),
   channel_id: z.string(),
   user_id: z.string(),
@@ -92,12 +98,71 @@ const closedRow = z.strictObject({
   closed_at: z.number().int(),
 });
 const dueRow = z.strictObject({ due: z.number().int().nullable() });
+const tokenContext = (interactionId: string) => [
+  "discord-reply",
+  interactionId,
+];
+
+function ensureReplies(sql: Pick<ConversationSql, "exec">) {
+  sql.exec(`CREATE TABLE IF NOT EXISTS oyster_discord_replies (
+    interaction_id TEXT PRIMARY KEY,
+    binding_id TEXT NOT NULL,
+    application_id TEXT NOT NULL,
+    sealed_token TEXT,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    echo TEXT,
+    display_name TEXT,
+    delivered_parts INTEGER NOT NULL DEFAULT 0,
+    still_working INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT,
+    command_id TEXT,
+    state TEXT NOT NULL CHECK (state IN ('waiting','expired','failed')),
+    attempts INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    next_at INTEGER NOT NULL,
+    closed_at INTEGER
+  ) STRICT`);
+}
+
+const legacyReply = z.looseObject({
+  interaction_id: z.string(),
+  token: z.string(),
+  state: z.enum(["waiting", "expired", "failed"]),
+});
+
+/** Migration 002's step: an open row's token is sealed; a closed row holds none. */
+export const discordReplies002: SealedTable002 = {
+  table: "oyster_discord_replies",
+  plaintext: (columns) => columns.includes("token"),
+  secretColumns: ["token"],
+  ensure: ensureReplies,
+  async seal(sealer, raw) {
+    const { token, ...row } = legacyReply.parse(raw);
+    return z
+      .record(z.string(), z.union([z.string(), z.number(), z.null()]))
+      .parse({
+        ...row,
+        sealed_token:
+          row.state === "waiting" && token !== ""
+            ? await sealer.seal(tokenContext(row.interaction_id), token)
+            : null,
+      });
+  },
+};
 
 /** The pending-reply store and the host work that pays it off. */
 export function createDiscordReplies(
   options: Readonly<{
     sql: ConversationSql;
     now: () => number;
+    /** Absent without a configured keyring: recording and delivery refuse. */
+    sealer: SecretSealer | undefined;
+    /** The host's migration 002; it runs before any row is read or written. */
+    ready: () => Promise<void>;
     /** One delivery attempt; it may itself call `attach`. */
     deliver: (
       reply: DiscordPendingReply & Readonly<{ interactionId: string }>,
@@ -107,32 +172,15 @@ export function createDiscordReplies(
 ) {
   const { sql } = options;
   const ensure = () => {
-    sql.exec(`CREATE TABLE IF NOT EXISTS oyster_discord_replies (
-      interaction_id TEXT PRIMARY KEY,
-      binding_id TEXT NOT NULL,
-      application_id TEXT NOT NULL,
-      token TEXT NOT NULL,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      text TEXT NOT NULL,
-      echo TEXT,
-      display_name TEXT,
-      delivered_parts INTEGER NOT NULL DEFAULT 0,
-      still_working INTEGER NOT NULL DEFAULT 0,
-      session_id TEXT,
-      command_id TEXT,
-      state TEXT NOT NULL CHECK (state IN ('waiting','expired','failed')),
-      attempts INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      next_at INTEGER NOT NULL,
-      closed_at INTEGER
-    ) STRICT`);
+    ensureReplies(sql);
+  };
+  const sealer = () => {
+    if (options.sealer === undefined) throw new CredentialError("unavailable");
+    return options.sealer;
   };
   const close = (interactionId: string, state: "expired" | "failed") => {
     sql.exec(
-      "UPDATE oyster_discord_replies SET state=?, token='', text='', echo=NULL, closed_at=? WHERE interaction_id=?",
+      "UPDATE oyster_discord_replies SET state=?, sealed_token=NULL, text='', echo=NULL, closed_at=? WHERE interaction_id=?",
       state,
       options.now(),
       interactionId,
@@ -148,6 +196,7 @@ export function createDiscordReplies(
   };
   let active: Promise<void> | undefined;
   const pass = async (): Promise<void> => {
+    await options.ready();
     ensure();
     const now = options.now();
     sql.exec(
@@ -156,7 +205,7 @@ export function createDiscordReplies(
     );
     const rows = sql
       .exec(
-        "SELECT interaction_id,binding_id,application_id,token,guild_id,channel_id,user_id,text,echo,display_name,session_id,command_id,attempts,delivered_parts,still_working,created_at,expires_at FROM oyster_discord_replies WHERE state='waiting' AND next_at<=? ORDER BY next_at LIMIT ?",
+        "SELECT interaction_id,binding_id,application_id,sealed_token,guild_id,channel_id,user_id,text,echo,display_name,session_id,command_id,attempts,delivered_parts,still_working,created_at,expires_at FROM oyster_discord_replies WHERE state='waiting' AND next_at<=? ORDER BY next_at LIMIT ?",
         now,
         PASS_LIMIT,
       )
@@ -169,6 +218,19 @@ export function createDiscordReplies(
         options.onExpired(row.interaction_id);
         continue;
       }
+      let interactionToken: string;
+      try {
+        interactionToken = await sealer().open(
+          tokenContext(row.interaction_id),
+          row.sealed_token,
+        );
+      } catch (cause) {
+        // A missing keyring waits for one; a token that never opens is lost.
+        if (cause instanceof CredentialError && cause.code === "unavailable")
+          throw cause;
+        close(row.interaction_id, "failed");
+        continue;
+      }
       const tokenLive = at < row.expires_at;
       const delivery = await options.deliver({
         interactionId: row.interaction_id,
@@ -176,7 +238,7 @@ export function createDiscordReplies(
         ask: {
           interactionId: row.interaction_id,
           applicationId: row.application_id,
-          interactionToken: row.token,
+          interactionToken,
           guildId: row.guild_id,
           channelId: row.channel_id,
           userId: row.user_id,
@@ -229,15 +291,20 @@ export function createDiscordReplies(
   };
   return {
     /** Owe one reply. A second record of the same interaction is the first. */
-    record: (bindingId: string, ask: DiscordAsk): void => {
+    record: async (bindingId: string, ask: DiscordAsk): Promise<void> => {
+      await options.ready();
       ensure();
+      const sealedToken = await sealer().seal(
+        tokenContext(ask.interactionId),
+        ask.interactionToken,
+      );
       const now = options.now();
       sql.exec(
-        "INSERT OR IGNORE INTO oyster_discord_replies (interaction_id,binding_id,application_id,token,guild_id,channel_id,user_id,text,echo,display_name,state,attempts,created_at,expires_at,next_at) VALUES (?,?,?,?,?,?,?,?,?,?,'waiting',0,?,?,?)",
+        "INSERT OR IGNORE INTO oyster_discord_replies (interaction_id,binding_id,application_id,sealed_token,guild_id,channel_id,user_id,text,echo,display_name,state,attempts,created_at,expires_at,next_at) VALUES (?,?,?,?,?,?,?,?,?,?,'waiting',0,?,?,?)",
         ask.interactionId,
         bindingId,
         ask.applicationId,
-        ask.interactionToken,
+        sealedToken,
         ask.guildId,
         ask.channelId,
         ask.userId,

@@ -5,9 +5,13 @@ import {
   createConnections,
   createSealedCustody,
   type ConnectionProjection,
-  answerMcpRequest,
+  answerEgressRequest,
   mcpAgentSource,
+  type ConnectionSubject,
+  type ConnectionView,
   type EgressRef,
+  type HttpDestinations,
+  type Placement,
   type McpRefusal,
   type McpRequestData,
   type SqlStore,
@@ -30,6 +34,10 @@ const ids = defineIdFamily({
 /** The Oyster owner is the only actor that manages connections. */
 const owner = "owner";
 
+/** A secret grant the owner refuses: no such live subject, or a kind the Vault does not serve. */
+type SecretGrantRefusal =
+  ConnectionRefusal | Readonly<{ error: "unsupported_subject" }>;
+
 /**
  * This instance's Agent MCP connections over Veil's connections core. The
  * owner holds every credential; an Agent receives a secret-free projection and
@@ -41,6 +49,12 @@ export function createAgentMcpConnections(options: {
   /** The checked public transport; credentials ride only on this one hop. */
   send: (request: Request) => Promise<Response>;
   hasAgent: (agentId: string) => boolean;
+  /**
+   * Whether a grant's subject still stands: the Agent or Computer exists, the
+   * key exists and is live. Asked when a secret is granted and before every
+   * send, so an ended subject cannot keep using a grant it held.
+   */
+  subjectLive: (subject: ConnectionSubject) => Promise<boolean>;
   /** Told after a change so the Agent drops captured tools. */
   notify: (agentId: string) => Promise<void>;
   ownerId: string;
@@ -55,6 +69,11 @@ export function createAgentMcpConnections(options: {
       send: options.send,
     }),
     authorize: (actor) => actor === owner,
+    // The host's last word before every send: the subject must still stand.
+    check: (_grantor, grant) =>
+      grant.subject === null
+        ? Promise.resolve(true)
+        : options.subjectLive(grant.subject),
     oauth: { callbackUrl: options.callbackUrl, fetch: options.send },
     clock: () => Date.now(),
     ids: () => ids.connection.generate(),
@@ -63,12 +82,14 @@ export function createAgentMcpConnections(options: {
     Effect.runPromise(effect);
 
   const projection = (agentId: string): Promise<ConnectionProjection> =>
-    run(connections.projection(agentId));
+    run(connections.projection({ kind: "agent", id: agentId }));
 
   const holdersOf = async (connectionId: string) =>
     (await run(connections.list(owner))).flatMap((row) =>
       row.connectionId === connectionId
-        ? row.grants.map((grant) => grant.agentId)
+        ? row.grants
+            .filter((grant) => grant.subject.kind === "agent")
+            .map((grant) => grant.subject.id)
         : [],
     );
   const toolsFor = (access: ConnectionAccess) =>
@@ -81,7 +102,7 @@ export function createAgentMcpConnections(options: {
   /** Every live connection with the Agents that may use it. */
   async function list(): Promise<readonly OysterConnection[]> {
     return (await run(connections.list(owner))).flatMap((row) =>
-      row.state === "revoked"
+      row.state === "revoked" || row.surface.kind === "http"
         ? []
         : [
             {
@@ -97,15 +118,17 @@ export function createAgentMcpConnections(options: {
                     ? "oauth"
                     : "none",
               state: row.state === "active" ? "connected" : row.state,
-              grants: row.grants.map((grant) => ({
-                agentId: grant.agentId,
-                access:
-                  grant.tools === "all"
-                    ? "all"
-                    : Array.isArray(grant.tools)
-                      ? grant.tools
-                      : "read",
-              })),
+              grants: row.grants
+                .filter((grant) => grant.subject.kind === "agent")
+                .map((grant) => ({
+                  agentId: grant.subject.id,
+                  access:
+                    grant.tools === "all"
+                      ? "all"
+                      : Array.isArray(grant.tools)
+                        ? grant.tools
+                        : "read",
+                })),
             } satisfies OysterConnection,
           ],
     );
@@ -184,8 +207,9 @@ export function createAgentMcpConnections(options: {
     try {
       await run(
         connections.grant(owner, {
-          connectionId,
-          agentId,
+          target: { kind: "connection", id: connectionId },
+          subject: { kind: "agent", id: agentId },
+          capability: "connector.call",
           tools: toolsFor(access),
         }),
       );
@@ -203,7 +227,13 @@ export function createAgentMcpConnections(options: {
     agentId: string,
   ): Promise<boolean> {
     if (!(await holdersOf(connectionId)).includes(agentId)) return false;
-    await run(connections.ungrant(owner, { connectionId, agentId }));
+    await run(
+      connections.ungrant(owner, {
+        target: { kind: "connection", id: connectionId },
+        subject: { kind: "agent", id: agentId },
+        capability: "connector.call",
+      }),
+    );
     await options.notify(agentId);
     return true;
   }
@@ -230,7 +260,9 @@ export function createAgentMcpConnections(options: {
       const { connectionId } = await run(connections.complete(owner, query));
       const holders = (await run(connections.list(owner))).flatMap((row) =>
         row.connectionId === connectionId
-          ? row.grants.map((grant) => grant.agentId)
+          ? row.grants
+              .filter((grant) => grant.subject.kind === "agent")
+              .map((grant) => grant.subject.id)
           : [],
       );
       await Promise.all(holders.map((holder) => options.notify(holder)));
@@ -243,8 +275,8 @@ export function createAgentMcpConnections(options: {
 
   async function remove(connectionId: string): Promise<boolean> {
     const holders = await holdersOf(connectionId);
-    const known = (await list()).some(
-      (row) => row.connectionId === connectionId,
+    const known = (await run(connections.list(owner))).some(
+      (row) => row.connectionId === connectionId && row.state !== "revoked",
     );
     if (!known) return false;
     await run(connections.revoke(owner, { connectionId }));
@@ -254,10 +286,118 @@ export function createAgentMcpConnections(options: {
 
   /** Complete one Agent request on the owner side: the only place a credential opens. */
   const fetchFor = (agentId: string, ref: EgressRef, data: McpRequestData) =>
-    answerMcpRequest(connections.egress, agentId, ref, data);
+    answerEgressRequest(
+      connections.egress,
+      { kind: "agent", id: agentId },
+      ref,
+      data,
+    );
+
+  /** Save one HTTP secret bound to exact destinations; no subject holds it until granted. */
+  async function addSecret(
+    input: Readonly<{
+      name: string;
+      label?: string | undefined;
+      destinations: HttpDestinations;
+      placement: Placement;
+      secret: string;
+    }>,
+  ): Promise<Readonly<{ connectionId: string }> | ConnectionRefusal> {
+    try {
+      const begun = await run(
+        connections.begin(owner, {
+          requestId: ids.connection.generate(),
+          name: input.name,
+          label: input.label,
+          surface: { kind: "http", destinations: input.destinations },
+          credential: { kind: "static", placement: input.placement },
+          secret: input.secret,
+        }),
+      );
+      return { connectionId: begun.connectionId };
+    } catch (cause) {
+      if (cause instanceof ConnectionsError) {
+        if (cause.code === "conflict") return { error: "duplicate_name" };
+        if (cause.code === "invalid_input" || cause.code === "denied")
+          return { error: "invalid_endpoint" };
+      }
+      throw cause;
+    }
+  }
+
+  /** This instance's live secrets with their bindings and holders; never a value. */
+  async function secrets(): Promise<readonly ConnectionView[]> {
+    return (await run(connections.list(owner))).filter(
+      (row) => row.surface.kind === "http" && row.state !== "revoked",
+    );
+  }
+
+  /**
+   * Let one Agent, Computer or Team key use a secret under the broker's
+   * `secret.use` scope. The subject must stand now; Apps hold no Vault power.
+   */
+  async function grantSecret(
+    connectionId: string,
+    subject: ConnectionSubject,
+  ): Promise<Readonly<{ ok: true }> | SecretGrantRefusal> {
+    if (subject.kind === "app") return { error: "unsupported_subject" };
+    if (
+      (subject.kind === "agent" && !options.hasAgent(subject.id)) ||
+      !(await options.subjectLive(subject))
+    )
+      return { error: "not_found" };
+    try {
+      await run(
+        connections.grant(owner, {
+          target: { kind: "secret", id: connectionId },
+          subject,
+          capability: "secret.use",
+          tools: "all",
+        }),
+      );
+    } catch (cause) {
+      if (
+        cause instanceof ConnectionsError &&
+        (cause.code === "denied" || cause.code === "invalid_input")
+      )
+        return { error: "not_found" };
+      if (cause instanceof ConnectionsError && cause.code === "unsupported")
+        return { error: "unsupported_subject" };
+      throw cause;
+    }
+    if (subject.kind === "agent") await options.notify(subject.id);
+    return { ok: true };
+  }
+
+  async function ungrantSecret(
+    connectionId: string,
+    subject: ConnectionSubject,
+  ): Promise<void> {
+    await run(
+      connections.ungrant(owner, {
+        target: { kind: "secret", id: connectionId },
+        subject,
+        capability: "secret.use",
+      }),
+    );
+    if (subject.kind === "agent") await options.notify(subject.id);
+  }
 
   return {
     list,
+    addSecret,
+    secrets,
+    grantSecret,
+    ungrantSecret,
+    /** Every recorded use and refusal of one secret, without its value. */
+    secretUsage: (connectionId: string) =>
+      run(connections.audit(owner, connectionId)),
+    /** Complete one request with a secret on the owner side; the caller names its subject. */
+    fetchSecret: (
+      subject: ConnectionSubject,
+      ref: EgressRef,
+      data: McpRequestData,
+    ) => answerEgressRequest(connections.egress, subject, ref, data),
     add,
     grant,
     ungrant,

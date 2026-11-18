@@ -5,6 +5,7 @@ import type { Installation } from "./apps/installation.js";
 import { approvedBindingGrants, type InvocationGrants } from "./apps/gate.js";
 import { appToolPolicySchema } from "./apps/tools.js";
 import * as Schema from "effect/Schema";
+import type { AppRegionEvent } from "@fungi.computer/puffball/backend";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import {
@@ -63,6 +64,10 @@ const grantsSchema = Schema.Array(
     ),
   ),
 );
+const appRegionEventKinds = ["connect", "message", "close", "alarm"] as const;
+/** One kind of supervisor-delivered Region event. */
+export type AppRegionEventKind = AppRegionEvent["kind"];
+
 /** Host-admitted facts; shape decoding does not establish host authority. */
 export const invocationFactsSchema = Schema.Struct({
   instanceId: instanceIdSchema,
@@ -116,6 +121,13 @@ export const invocationFactsSchema = Schema.Struct({
     }),
     Schema.Struct({
       kind: Schema.Literal("lifecycle"),
+      name: Schema.Literal("onRegion"),
+      /** The supervisor event; only a connect carries a host-stamped caller. */
+      event: Schema.Literals(appRegionEventKinds),
+      context: Schema.optionalKey(appMethodCallContextSchema),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("lifecycle"),
       name: Schema.Literal("syncRefused"),
       lane: Schema.String.check(
         Schema.makeFilter(
@@ -140,6 +152,11 @@ export const invocationFactsSchema = Schema.Struct({
         (facts.subject.kind !== "lifecycle" ||
           facts.subject.name !== "syncRefused" ||
           facts.grants.length === 0) &&
+        (facts.subject.kind !== "lifecycle" ||
+          facts.subject.name !== "onRegion" ||
+          (facts.grants.length === 0 &&
+            (facts.subject.event === "connect") ===
+              (facts.subject.context !== undefined))) &&
         (facts.subject.kind !== "call" ||
           facts.subject.agentPolicy === undefined ||
           facts.subject.context.actor.kind === "agent") &&
@@ -164,6 +181,16 @@ export const invocationFactsSchema = Schema.Struct({
 );
 /** The immutable authority and attribution supplied at host admission. */
 export type InvocationFacts = typeof invocationFactsSchema.Type;
+/**
+ * The host-attested caller a frame carries, if any: every call, and a Region
+ * connect. Instance owners check its scope against their own binding.
+ */
+export function invocationCaller(
+  facts: InvocationFacts,
+): AppMethodCallContext | undefined {
+  if (facts.subject.kind === "call") return facts.subject.context;
+  return facts.subject.name === "onRegion" ? facts.subject.context : undefined;
+}
 /** Method name/effect taken from a verified API; raw backend requests have no method. */
 export type InvocationMethod = NonNullable<
   Extract<InvocationFacts["subject"], { kind: "call" }>["method"]
@@ -619,6 +646,25 @@ export const invocationFacts = {
     if (input.role !== undefined) context.role = input.role;
     return invocationFacts.fromCaller(authority, context, deadline);
   },
+  /**
+   * A Region event under the Instance's current authority: no binding grants,
+   * and a caller only on a connect the host has just admitted.
+   */
+  fromRegion: (
+    authority: Omit<InvocationAuthority, "grants">,
+    event: AppRegionEventKind,
+    deadline: InvocationDeadline,
+    context?: AppMethodCallContext,
+  ): InvocationFacts =>
+    parseFacts({
+      ...authority,
+      grants: [],
+      subject:
+        context === undefined
+          ? { kind: "lifecycle", name: "onRegion", event }
+          : { kind: "lifecycle", name: "onRegion", event, context },
+      deadlineAt: Math.min(deadline.deadlineAt, deadline.grantExpiresAt),
+    }),
 };
 
 /** Authority comes from the admitted installation and its verified backend bytes. */
@@ -672,6 +718,26 @@ export function admittedCallerFacts(
   );
 }
 
+/**
+ * Mint a Region connect only after host caller and Release admission. The
+ * Instance itself refuses a Release whose verified profile is not region.
+ */
+export function admittedRegionConnectFacts(
+  installation: Installation,
+  release: VerifiedRelease,
+  context: AppMethodCallContext,
+): InvocationFacts {
+  const deadlineAt = Date.now() + APP_INVOCATION_CEILING_MS;
+  const { instanceId, selection, artifactDigest, ancestry } =
+    invocationAuthorityOf(installation, release);
+  return invocationFacts.fromRegion(
+    { instanceId, selection, artifactDigest, ancestry },
+    "connect",
+    { deadlineAt, grantExpiresAt: deadlineAt },
+    context,
+  );
+}
+
 /** Seal the host-verified named method after its current admission checks. */
 export async function admittedMethodCallerFacts(
   host: Pick<OysterHost, "backgroundOriginKey">,
@@ -707,4 +773,43 @@ export async function admittedMethodCallerFacts(
     method,
     origin,
   );
+}
+
+/** The private header a host uses to hand an admitted Region connect to its Instance. */
+export const regionAdmissionHeader = "x-fungi-region-admission";
+const regionAdmissionSchema = Schema.fromJsonString(
+  Schema.Struct({
+    facts: invocationFactsSchema,
+    limits: Schema.Struct({ cpuMs: Schema.Number, subRequests: Schema.Number }),
+  }),
+);
+/** Host side: the admitted connect facts ride the Instance's own upgrade request. */
+export function regionAdmissionRequest(
+  request: Request,
+  facts: InvocationFacts,
+  limits: Readonly<{ cpuMs: number; subRequests: number }>,
+): Request {
+  if (
+    facts.subject.kind !== "lifecycle" ||
+    facts.subject.name !== "onRegion" ||
+    facts.subject.event !== "connect"
+  )
+    throw new Error("Region admission needs connect facts");
+  const headers = new Headers({ Upgrade: "websocket" });
+  headers.set(
+    regionAdmissionHeader,
+    Schema.encodeSync(regionAdmissionSchema)({ facts, limits }),
+  );
+  // Only the upgrade and the host's admission cross; no browser header does.
+  return new Request(request.url, { method: "GET", headers });
+}
+/** Instance side: read the host's admission; null when this is no Region connect. */
+export function readRegionAdmission(request: Request): {
+  facts: InvocationFacts;
+  limits: Readonly<{ cpuMs: number; subRequests: number }>;
+} | null {
+  const header = request.headers.get(regionAdmissionHeader);
+  if (header === null || request.headers.get("Upgrade") !== "websocket")
+    return null;
+  return Schema.decodeUnknownSync(regionAdmissionSchema)(header);
 }

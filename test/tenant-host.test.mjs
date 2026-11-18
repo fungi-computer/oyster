@@ -1028,8 +1028,12 @@ test("window selection and cached HTTP hosts share authentication only within on
         },
       }),
     }),
-    workspace: async (currentEnv, _keysLive, scope, incoming) => {
-      const computerId = await standaloneComputerSelection(registry, incoming);
+    workspace: async (currentEnv, keysLive, scope, incoming) => {
+      const computerId = await standaloneComputerSelection(
+        registry,
+        keysLive,
+        incoming,
+      );
       selections.push(computerId);
       return {
         computerId,
@@ -1077,6 +1081,85 @@ test("window selection and cached HTTP hosts share authentication only within on
   );
   assert.equal(authentications, 5);
   assert.deepEqual(selections, ["a", "b"]);
+});
+
+test("a key granted several Computers must name one: a request without computerId is refused 400", async () => {
+  const selections = [];
+  const registry = {
+    storeFromOlderOyster: async () => false,
+    list: async () => [],
+    // No installation: a named, granted Computer reaches the App route itself.
+    get: async () => null,
+    selectedComputer: async () => "owner-selected",
+    computerFleet: async (memberId, input) =>
+      memberId === "stored-member" && ["a", "b"].includes(input.computerId)
+        ? { computerId: input.computerId }
+        : null,
+  };
+  const env = {
+    RELEASES: {},
+    REGISTRY: { getByName: () => registry },
+    KEYS: {
+      getByName: () => ({
+        live: async (keyId) => ({
+          keyId,
+          owner: "stored-member",
+          grantVersion: 1,
+          grants: [
+            { capability: "apps.use", targets: { kind: "all" } },
+            {
+              capability: "computer.use",
+              targets: { kind: "selected", ids: ["a", "b"] },
+            },
+          ],
+        }),
+      }),
+    },
+  };
+  const root = oysterGitRoot({
+    tenancy: () => ({
+      resolve: async () => ({
+        scope: scopeOf("aa"),
+        auth: {
+          // The key's owner is still the live canonical owner.
+          resolve: async (actor) => ({ actor, role: "owner" }),
+          authenticate: async () => ({
+            kind: "admitted",
+            principal: { actor: { kind: "team-key", keyId: "composer" } },
+          }),
+        },
+      }),
+    }),
+    workspace: async (currentEnv, keysLive, scope, incoming) => {
+      const computerId = await standaloneComputerSelection(
+        registry,
+        keysLive,
+        incoming,
+      );
+      selections.push(computerId);
+      return {
+        computerId,
+        files: r2FileSource(currentEnv.RELEASES, scope.workspacePrefix),
+      };
+    },
+  });
+  const worker = createOysterGitWorker(root);
+  const fetch = (query) =>
+    worker.fetch(
+      new globalThis.Request(`https://aa.oyster.test/apps/notes/${query}`),
+      env,
+      {},
+    );
+  const unnamed = await fetch("");
+  assert.equal(unnamed.status, 400);
+  assert.match(await unnamed.text(), /computerId/u);
+  assert.equal((await fetch("?computerId=other")).status, 403);
+  assert.notEqual((await fetch("?computerId=b")).status, 400);
+  assert.deepEqual(
+    selections,
+    ["b"],
+    "only the named, granted Computer serves",
+  );
 });
 
 test("each request admits its tenant once; a removed tenant refuses the next request without a visitor fallback", async () => {

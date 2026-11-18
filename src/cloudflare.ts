@@ -28,6 +28,7 @@ import {
   gitPushVerdictSchema,
 } from "@fungi.computer/agar/git";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { appRegionReplySchema } from "@fungi.computer/puffball/backend";
 import { guestLimits, type GuestLimits } from "./guest-policy.js";
 export type { GuestLimits } from "./guest-policy.js";
 import { headContentObject } from "./build/content-objects.js";
@@ -77,6 +78,16 @@ import {
   type AppTestCopyPorts,
 } from "./app-test-copies.js";
 export { checkBackendConstruction } from "./boot-construction.js";
+export {
+  createAppRegion,
+  durableAppRegionNative,
+  isAppRegionSocket,
+  type AppRegion,
+  type AppRegionDeliver,
+  type AppRegionDurableState,
+  type AppRegionNative,
+  type AppRegionSocket,
+} from "./app-region.js";
 import type { WatchdogSqliteOwner } from "@fungi.computer/watchdog";
 import {
   createAppInstance,
@@ -770,7 +781,8 @@ export function createCloudflareAppInstance<FacetClass, Host>(
    */
   const facetFailure = (
     frame: InvocationFrame<Host>,
-    stage: "backend_execution" | "git_push" | "background_refusal",
+    stage:
+      "backend_execution" | "git_push" | "background_refusal" | "region_event",
     cause: unknown,
     fallback: () => Error,
   ): Error => {
@@ -1045,6 +1057,23 @@ export function createCloudflareAppInstance<FacetClass, Host>(
                   "git_push",
                   cause,
                   () => new Error("App Git push handler failed", { cause }),
+                ),
+            }),
+          region: (event) =>
+            Effect.tryPromise({
+              try: async () => {
+                const reply = appRegionReplySchema.parse(
+                  await stub.invoke("onRegion", [event], bindings),
+                );
+                if (frame.signal.aborted) throw new AppInstanceError("revoked");
+                return reply;
+              },
+              catch: (cause) =>
+                facetFailure(
+                  frame,
+                  "region_event",
+                  cause,
+                  () => new Error("App Region handler failed", { cause }),
                 ),
             }),
           call: (name: string, input: Schema.Json) =>

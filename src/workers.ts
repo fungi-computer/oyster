@@ -115,6 +115,7 @@ import {
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import {
   AppInstanceError,
+  type AppRegionHostEvent,
   type AppInstance,
   type Backend,
   type Instance,
@@ -136,7 +137,17 @@ import {
 } from "./cloudflare.js";
 import type { AppTestCopy, AppTestCopyAuthority } from "./app-test-copies.js";
 import {
+  createAppRegion,
+  durableAppRegionNative,
+  isAppRegionSocket,
+  type AppRegion,
+} from "./app-region.js";
+import {
   invocationFactsSchema,
+  invocationCaller,
+  invocationFacts as hostInvocationFacts,
+  readRegionAdmission,
+  regionAdmissionRequest,
   assertBackgroundBinding,
   admitBackgroundFrame,
   type BackgroundFrameState,
@@ -1155,6 +1166,7 @@ type InstanceTarget = Readonly<{
   syncRefused(
     ...args: Parameters<OysterInstance["syncRefused"]>
   ): Promise<void>;
+  fetch(request: Request): Promise<Response>;
 }>;
 
 /** One host-facing handle over an Instance, pinned to `scope` and `budget`. */
@@ -1224,8 +1236,13 @@ function instanceHandle(
     onGitPush: (facts, fact) => target.onGitPush(facts, fact, budget, tenantId),
     syncRefused: (facts, refusal) =>
       target.syncRefused(facts, refusal, budget, tenantId),
+    regionConnect: (facts, request) =>
+      target.fetch(regionAdmissionRequest(request, facts, guestLimits(budget))),
   };
 }
+
+/** One Region event's frame lifetime; a wake or message is short work. */
+const regionEventCeilingMs = 30_000;
 
 /**
  * One App Instance: Oyster's lifecycle supervisor in this Durable Object's
@@ -1256,6 +1273,8 @@ export class OysterInstance<
   private readonly gitJournal: Promise<
     Awaited<ReturnType<typeof createGitPushJournal>>
   >;
+  /** A `region` Release's sockets and wake, supervised natively here. */
+  private readonly region: AppRegion;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(
@@ -1276,6 +1295,14 @@ export class OysterInstance<
     this.runtime = this.createRuntime(this.limits);
     this.frames = createCloudflareInvocationGate(ctx, (frame) =>
       this.closeBackground(frame),
+    );
+    this.region = createAppRegion(
+      durableAppRegionNative(ctx, (at) => this.scheduleWake(at)),
+      // A connect only ever runs in its admitting frame, never from here.
+      (event) =>
+        event.kind === "connect"
+          ? Promise.reject(new AppInstanceError("invalid_invocation_facts"))
+          : this.regionEvent(event),
     );
     this.testCopies = createCloudflareAppTestCopies(ctx, env.LOADER, {
       limits: () => this.limits,
@@ -1698,6 +1725,7 @@ export class OysterInstance<
     const settled = await Promise.allSettled([
       this.gitJournal.then((journal) => journal.alarm()),
       Effect.runPromise(this.testCopies.expire()),
+      this.region.alarm(),
     ]);
     const failed = settled.find((outcome) => outcome.status === "rejected");
     if (failed !== undefined) throw failed.reason;
@@ -1725,7 +1753,10 @@ export class OysterInstance<
       new AppInstanceError("revoked"),
       runId === undefined ? undefined : { runId },
     );
-    if (runId === undefined) await Effect.runPromise(this.testCopies.revoke());
+    if (runId === undefined) {
+      this.region.fence("Installation changed");
+      await Effect.runPromise(this.testCopies.revoke());
+    }
   }
   /** One registry read re-admits a guest binding packet against its frame. */
   private async assertCurrent(
@@ -1782,10 +1813,11 @@ export class OysterInstance<
     const facts = Schema.decodeUnknownSync(invocationFactsSchema, {
       onExcessProperty: "error",
     })(raw);
+    const caller = invocationCaller(facts);
     if (
-      facts.subject.kind === "call" &&
-      (facts.subject.context.scope.kind !== "standalone" ||
-        facts.subject.context.scope.tenant !== this.scope().tenantId)
+      caller !== undefined &&
+      (caller.scope.kind !== "standalone" ||
+        caller.scope.tenant !== this.scope().tenantId)
     )
       throw new AppInstanceError("installation_tenant_mismatch");
     if (
@@ -1990,10 +2022,118 @@ export class OysterInstance<
           );
         });
         this.rememberRelease(release);
+        const before = await Effect.runPromise(this.runtime.inspect());
         const applied = await result(this.runtimeFor(limits).apply(state));
+        // A new selection, authority or status closes Region sockets and drops
+        // the App's wake: every reconnect re-admits. App data stays.
+        if (
+          !applied.ok ||
+          applied.value.status !== "active" ||
+          before?.authorityVersion !== applied.value.authorityVersion ||
+          before.releaseId !== applied.value.releaseId
+        )
+          this.region.fence("Installation changed");
         if (!(await committed())) return { ok: false, code: "stale_authority" };
         return applied;
       },
+    );
+  }
+  /**
+   * The Instance's private door for an admitted Region connect: only its own
+   * host reaches this stub, carrying connect facts it has just attested.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    let admitted;
+    try {
+      admitted = readRegionAdmission(request);
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    if (admitted === null) return new Response(null, { status: 426 });
+    const { facts, limits } = admitted;
+    try {
+      return await this.withFrame(
+        facts,
+        guestLimits(limits),
+        (runtime, frame) => {
+          const caller = invocationCaller(frame.facts);
+          if (
+            caller === undefined ||
+            frame.host.artifact.backend.runtime.kind !== "region"
+          )
+            throw new AppInstanceError("invalid_invocation_facts");
+          return this.region.connect(caller, (event) =>
+            Effect.runPromise(
+              runtime.region(
+                frame,
+                event.kind === "connect"
+                  ? { kind: "connect", connection: event.connection }
+                  : event,
+              ),
+            ),
+          );
+        },
+        this.scope().tenantId,
+      );
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof AppInstanceError ? error.code : "failed" },
+        { status: error instanceof AppInstanceError ? 403 : 502 },
+      );
+    }
+  }
+  /** Route a hibernated Region socket's frame to the supervisor. */
+  override async webSocketMessage(
+    socket: WebSocket,
+    message: string | ArrayBuffer,
+  ): Promise<void> {
+    if (isAppRegionSocket(this.ctx, socket))
+      await this.region.message(socket, message);
+  }
+  /** Route a hibernated Region socket's close to the supervisor, which answers it. */
+  override async webSocketClose(
+    socket: WebSocket,
+    code: number,
+    reason: string,
+  ): Promise<void> {
+    if (isAppRegionSocket(this.ctx, socket))
+      await this.region.close(socket, code, reason);
+  }
+  /**
+   * A later Region event runs under the Instance's current authority: its
+   * applied, active selection and verified bytes, with no caller or grants.
+   */
+  private async regionEvent(
+    event: Exclude<AppRegionHostEvent, { kind: "connect" }>,
+  ) {
+    const instance = await Effect.runPromise(this.runtime.inspect());
+    if (instance?.status !== "active") throw new AppInstanceError("disabled");
+    const release = this.release(instance.releaseId);
+    const resolved = await this.backends(release);
+    if (resolved?.backend.runtime.kind !== "region")
+      throw new AppInstanceError("invalid_invocation_facts");
+    const deadlineAt = Date.now() + regionEventCeilingMs;
+    const selection = {
+      instanceId: instance.instanceId,
+      owner: instance.owner,
+      appId: instance.appId,
+      releaseId: instance.releaseId,
+      authorityVersion: instance.authorityVersion,
+    };
+    return this.withFrame(
+      hostInvocationFacts.fromRegion(
+        {
+          instanceId: instance.instanceId,
+          selection,
+          artifactDigest: resolved.digest,
+          ancestry: [],
+        },
+        event.kind,
+        { deadlineAt, grantExpiresAt: deadlineAt },
+      ),
+      undefined,
+      (runtime, frame) => Effect.runPromise(runtime.region(frame, event)),
+      this.scope().tenantId,
     );
   }
   /** Forward an admitted HTTP request to the App backend. */

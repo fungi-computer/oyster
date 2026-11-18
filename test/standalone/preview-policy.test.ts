@@ -348,6 +348,40 @@ describe("Oyster private port previews", () => {
     for (const header of ["cookie", "authorization", "cf-access-jwt-assertion"])
       expect(forwarded?.headers.has(header)).toBe(false);
   });
+  it("uses one private-suffix site rule for configuration and the gate", async () => {
+    // workers.dev is a private PSL entry: a.workers.dev and b.workers.dev are
+    // separate sites to browsers, so previewOrigins accepts the pair.
+    const bindings = {
+      OYSTER_ORIGIN: "https://a.workers.dev",
+      OYSTER_PREVIEW_DOMAIN: "b.workers.dev",
+    };
+    expect(await previewOrigins(bindings)).not.toBeNull();
+    const f = await fixture(bindings);
+    const issued = await f.preview.issueOwner("owner", 5173);
+    expect(new URL(issued.previewUrl).hostname).toBe(
+      "workspace-5173.b.workers.dev",
+    );
+    // The owner's entry redirect carries its Referer onto the token navigation.
+    const exchange = await f.fetch(
+      new Request(issued.previewUrl, {
+        headers: {
+          referer: "https://a.workers.dev/computers/workspace/ports/5173",
+        },
+      }),
+    );
+    expect(exchange.status).toBe(302);
+    const cookie = session(exchange);
+    const asset = (referer: string) =>
+      f.fetch(
+        new Request("https://workspace-5173.b.workers.dev/main.js", {
+          headers: { cookie, referer },
+        }),
+      );
+    expect((await asset("https://a.workers.dev/")).status).toBe(200);
+    expect((await asset("https://workspace-5174.b.workers.dev/")).status).toBe(
+      401,
+    );
+  });
   it("treats every host under a multi-label public suffix preview domain as one site", async () => {
     const bindings = {
       OYSTER_ORIGIN: env.OYSTER_ORIGIN,

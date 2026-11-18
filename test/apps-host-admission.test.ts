@@ -327,6 +327,8 @@ async function fixture(
         if (!withMethods)
           throw new Error("A UI-only Release must not execute a backend");
         return {
+          regionConnect: () =>
+            Promise.reject(new Error("No Region in this fixture")),
           prepare: () =>
             Promise.resolve({
               ok: true,

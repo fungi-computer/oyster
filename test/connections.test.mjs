@@ -87,7 +87,12 @@ function fixture(send, bearer = true) {
     callbackUrl,
     store: fromNodeSqlite(database),
     vault: createInstanceCredentialStore({
-      credentialKey: randomBytes(32).toString("base64url"),
+      owner: fromNodeSqlite(database),
+      ownerId: "agents",
+      keyring: {
+        activeKeyId: "test",
+        keys: { test: randomBytes(32).toString("base64url") },
+      },
       storage: {
         get: async (key) => vaultRows.get(key),
         put: async (key, value) => {
@@ -100,6 +105,9 @@ function fixture(send, bearer = true) {
     }),
     send: fake.send,
     hasAgent: (agentId) => agents.has(agentId),
+    // An Agent stands while the instance holds it; other kinds are not used here.
+    subjectLive: (subject) =>
+      Promise.resolve(subject.kind === "agent" && agents.has(subject.id)),
     notify: async (agentId) => {
       notified.push(agentId);
     },
@@ -577,5 +585,208 @@ test("a server that asks for no token works with no credential at all", async ()
     assert.ok(h.fake.seen.every((value) => value === null));
   } finally {
     await acquired.release();
+  }
+});
+
+/** The instance owner over real SQLite and the real instance credential store. */
+function secretOwner(
+  database = new DatabaseSync(":memory:"),
+  ended = new Set(),
+) {
+  const sealed = new Map();
+  const sent = [];
+  const owner = createAgentMcpConnections({
+    ownerId: "agents",
+    callbackUrl,
+    store: fromNodeSqlite(database),
+    vault: createInstanceCredentialStore({
+      owner: fromNodeSqlite(database),
+      ownerId: "agents",
+      keyring: {
+        activeKeyId: "test",
+        keys: { test: randomBytes(32).toString("base64url") },
+      },
+      storage: {
+        get: async (key) => sealed.get(key),
+        put: async (key, value) => {
+          sealed.set(key, value);
+        },
+        delete: async (key) => sealed.delete(key),
+        list: async (prefix) =>
+          new Map([...sealed].filter(([key]) => key.startsWith(prefix))),
+      },
+    }),
+    send: async (request) => {
+      sent.push(request);
+      return Response.json({ ok: true });
+    },
+    hasAgent: (agentId) => agentId === "agent_1",
+    // Subjects the instance has ended: a deleted Agent or Computer, a revoked key.
+    subjectLive: (subject) =>
+      Promise.resolve(!ended.has(`${subject.kind}:${subject.id}`)),
+    notify: () => Promise.resolve(),
+  });
+  const storedBytes = async () => {
+    const { Buffer } = await import("node:buffer");
+    const tables = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((row) => String(row.name));
+    return Buffer.from(
+      JSON.stringify([
+        ...tables.map((name) =>
+          database
+            .prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`)
+            .all(),
+        ),
+        [...sealed],
+      ]),
+    );
+  };
+  return { database, owner, sent, storedBytes };
+}
+
+test("instance secrets keep the shared secret laws: exact hosts, subjects, revoke and value-free audit", async () => {
+  const { proveSecretOwner } =
+    await import("../../veil/test/fixtures/connections-secret-laws.mjs");
+  const { randomUUID } = await import("node:crypto");
+  const ended = new Set(["team-key:key_gone"]);
+  const h = secretOwner(undefined, ended);
+  try {
+    const unwrap = (result) => {
+      if ("error" in result) throw new Error(result.error);
+      return result;
+    };
+    await proveSecretOwner({
+      secret: `sk-test-VAULTCANARY-${randomUUID()}`,
+      subjects: {
+        agent: { kind: "agent", id: "agent_1" },
+        computer: { kind: "computer", id: "computer_1" },
+        app: { kind: "app", id: "app_1" },
+        teamKey: { kind: "team-key", id: "key_1" },
+        deadKey: { kind: "team-key", id: "key_gone" },
+      },
+      add: async (input) => unwrap(await h.owner.addSecret(input)).connectionId,
+      list: () => h.owner.secrets(),
+      grant: async (connectionId, subject) => {
+        const given = await h.owner.grantSecret(connectionId, subject);
+        if ("error" in given) return { refusal: given.error };
+        const view = (await h.owner.secrets()).find(
+          (candidate) => candidate.connectionId === connectionId,
+        );
+        const held = view?.grants.find(
+          (grant) =>
+            grant.subject.kind === subject.kind &&
+            grant.subject.id === subject.id,
+        );
+        assert.ok(held);
+        return { connectionId, grantVersion: held.version };
+      },
+      ungrant: (connectionId, subject) =>
+        h.owner.ungrantSecret(connectionId, subject),
+      revoke: async (connectionId) => {
+        assert.equal(await h.owner.remove(connectionId), true);
+      },
+      send: (subject, ref, data) => h.owner.fetchSecret(subject, ref, data),
+      usage: (connectionId) => h.owner.secretUsage(connectionId),
+      // Oyster has one owner: there is no lesser grantor to demote.
+      end: (subject) => {
+        ended.add(`${subject.kind}:${subject.id}`);
+      },
+      sent: () => h.sent,
+      storedBytes: h.storedBytes,
+    });
+  } finally {
+    h.database.close();
+  }
+});
+
+test("an instance store's agent grants reopen as subject grants with the same authority", async () => {
+  const database = new DatabaseSync(":memory:");
+  // The directory store as the previous Oyster release wrote it.
+  database.exec(`
+    CREATE TABLE veil_connections (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, surface TEXT NOT NULL,
+      credential TEXT NOT NULL, locator TEXT, state TEXT NOT NULL,
+      authorityVersion INTEGER NOT NULL, version INTEGER NOT NULL) STRICT;
+    CREATE TABLE veil_connection_grants (
+      connectionId TEXT NOT NULL, agentId TEXT NOT NULL, tools TEXT NOT NULL,
+      grantor TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL,
+      PRIMARY KEY (connectionId, agentId)) STRICT;
+    INSERT INTO veil_connections VALUES ('conn_notes', 'notes',
+      '{"kind":"mcp","url":"https://mcp.example.com/mcp","table":null}',
+      '{"kind":"none"}', NULL, 'active', 2, 1);
+    INSERT INTO veil_connection_grants VALUES
+      ('conn_notes', 'agent_1', '["add"]', 'owner', 7, 1),
+      ('conn_notes', 'agent_2', '"all"', 'owner', 9, 0);`);
+  const h = secretOwner(database);
+  try {
+    // The retired grant is kept field for field, still inactive.
+    assert.deepEqual(
+      database
+        .prepare(
+          "SELECT target, subject, capability, tools, grantor, version, active FROM veil_connection_grants ORDER BY subject",
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        {
+          target: '{"kind":"connection","id":"conn_notes"}',
+          subject: '{"kind":"agent","id":"agent_1"}',
+          capability: "connector.call",
+          tools: '["add"]',
+          grantor: "owner",
+          version: 7,
+          active: 1,
+        },
+        {
+          target: '{"kind":"connection","id":"conn_notes"}',
+          subject: '{"kind":"agent","id":"agent_2"}',
+          capability: "connector.call",
+          tools: '"all"',
+          grantor: "owner",
+          version: 9,
+          active: 0,
+        },
+      ],
+    );
+    assert.deepEqual(
+      (await h.owner.list()).map((row) => row.grants),
+      [[{ agentId: "agent_1", access: ["add"] }]],
+    );
+    const projected = await h.owner.projection("agent_1");
+    assert.deepEqual(
+      projected.connections.map((row) => [
+        row.connectionId,
+        row.grantVersion,
+        row.tools,
+      ]),
+      [["conn_notes", 7, ["add"]]],
+    );
+    const data = { url: endpoint, method: "GET", headers: [], body: null };
+    const opened = await h.owner.fetch(
+      "agent_1",
+      { connectionId: "conn_notes", grantVersion: 7 },
+      data,
+    );
+    assert.equal(opened instanceof Response && opened.status, 200);
+    assert.deepEqual(
+      await h.owner.fetch(
+        "agent_2",
+        { connectionId: "conn_notes", grantVersion: 9 },
+        data,
+      ),
+      { error: "revoked" },
+    );
+    assert.equal(h.sent.length, 1);
+    assert.throws(() =>
+      database
+        .prepare(
+          "INSERT INTO veil_connection_grants (connectionId, agentId, tools, grantor, version, active) VALUES ('conn_notes', 'agent_3', '\"all\"', 'owner', 1, 1)",
+        )
+        .run(),
+    );
+  } finally {
+    database.close();
   }
 });

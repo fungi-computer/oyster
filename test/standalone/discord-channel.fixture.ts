@@ -258,6 +258,8 @@ export async function discordWorld(
   for (const [property, value] of Object.entries({
     OYSTER_ORIGIN: origin,
     OYSTER_OWNER_NAME: "owner",
+    // Open interaction tokens rest only in each Agent's envelope.
+    OYSTER_CREDENTIAL_KEY: credentialKey,
     AGENT_DIRECTORY: { getByName: () => base.directory },
     AGENTS: {
       getByName: (name: string) => {
@@ -415,7 +417,7 @@ export async function discordWorld(
       [...stores.values()].flatMap(({ db }) =>
         db
           .prepare(
-            "SELECT interaction_id, state, attempts, token, text FROM oyster_discord_replies",
+            "SELECT interaction_id, state, attempts, sealed_token, text FROM oyster_discord_replies",
           )
           .all(),
       ),

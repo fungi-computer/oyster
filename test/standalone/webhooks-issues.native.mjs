@@ -96,6 +96,8 @@ config.main = `${root}test/standalone/workflows-root.fixture.ts`;
 config.vars = {
   ...config.vars,
   OYSTER_HOME_INSTALLATION: "bonsai",
+  // Subscription signing secrets rest only in the instance's envelope.
+  OYSTER_CREDENTIAL_KEY: randomBytes(32).toString("base64url"),
 };
 await writeFile(`${work}/wrangler.json`, JSON.stringify(config));
 

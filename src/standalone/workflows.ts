@@ -85,6 +85,7 @@ import {
   workflowWebhookControlResponse,
 } from "../webhooks.js";
 import { workflowWebhookRefusal } from "../webhook-ingress.js";
+import { instanceSecretSealer } from "./model-key-vault.js";
 import { Hono } from "hono";
 
 export type StandaloneWorkflowEnv = OysterGitWorkerEnv &
@@ -305,6 +306,12 @@ export abstract class StandaloneWorkflowRunsBase<
           webhooks = createWorkflowWebhooks<TenantPrincipal>({
             sql: ctx.storage.sql,
             transactionSync: (body) => ctx.storage.transactionSync(body),
+            sealer: instanceSecretSealer({
+              owner: ctx.storage,
+              // This object is the library's; its keys open only for it.
+              ownerId: libraryId,
+              env,
+            }),
             now: () => this.scheduleClock.now(),
             scope: { host: env.OYSTER_ORIGIN, tenant: libraryId },
             owner: async (principal) => {

@@ -32,6 +32,7 @@
     "test/tenancy/*.ts",
     "test/stranger/*.mts",
     "test/storage-app/backend/*.ts",
+    "test/region-app/backend/*.ts",
     "test/background-app/backend/*.ts",
     "test/git-app/backend/*.ts"
   ],

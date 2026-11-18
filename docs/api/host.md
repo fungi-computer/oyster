@@ -295,6 +295,7 @@ type InstanceHandle = Readonly<{
   syncRefused: (facts, refusal) => Promise<void>;
   authorizeGitPush: (facts, question) => Promise<GitPushVerdict>;
   fetch: (facts, request) => Promise<Response>;
+  regionConnect: (facts, request) => Promise<Response>;
   gill: (facts, api, source, input) => Promise<InstanceResult<GillReply>>;
   call: (facts, api, name, input) => Promise<InstanceResult<AppMethodReply>>;
 }>;

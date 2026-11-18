@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join, relative } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import ts from "typescript";
 import { fileURLToPath, URL } from "node:url";
@@ -184,7 +185,7 @@ test("only authorization.ts builds a router for the Oyster host", () => {
 
 test("what a key reaches is decided only in authorization.ts", () => {
   const decisions =
-    /\bfunction\s+(keyAppAccess|keyAgentAccess|keyAllowsComputerUse|allowsMachineEnrollment|reachesAgent|reachesComputer|reachesInstallation|appToolAccess)\b/u;
+    /\bfunction\s+(keyAppAccess|keyAgentAccess|keyComputer|keyComputerChoice|keyFrameComputer|allowsMachineEnrollment|reachesAgent|reachesComputer|reachesInstallation|appToolAccess)\b/u;
   const offenders = files
     .filter(
       ({ path, text }) => path !== "authorization.ts" && decisions.test(text),
@@ -494,6 +495,13 @@ const { standaloneWorkflowWebhookRoutes } =
   await import("../dist/standalone/workflow-webhooks.js");
 const { workersMedia } = await import("../dist/standalone/media.js");
 hooks.deregister();
+const { ownerOrKeyAuth } = await import("../dist/auth.js");
+const { createChannelVisitors } = await import("../dist/channels/visitors.js");
+const { channelIds } = await import("../dist/channels/ids.js");
+const { channelPartySchema } = await import("../dist/channels/binding.js");
+const { hostActorSchema } =
+  await import("@fungi.computer/puffball/app-method-runtime");
+const { fromNodeSqlite } = await import("@fungi.computer/watchdog/node-sqlite");
 const { oysterRouteTable } = await import("../dist/host.js");
 const { agentCapabilities } = await import("../dist/agents.js");
 const { fileCapabilities } = await import("../dist/files.js");
@@ -502,8 +510,10 @@ const { capabilityFixture } = await import("../dist/testing/index.js");
 const {
   Requirement,
   agent,
+  keyComputerChoice,
   owner,
   publicRoute,
+  reachesComputer,
   routes,
   serveCapability,
   serveDoors,
@@ -915,6 +925,186 @@ test("Files and Media need computer.use for a key and refuse an Agent", async ()
     403,
   );
   assert.equal((await call(media, "/media/describe", "agent")).status, 403);
+});
+
+test("a key's computer.use targets name the Computers its Files reach; all keeps the host's", async () => {
+  const apps = { capability: "apps.use", targets: { kind: "all" } };
+  const grants = {
+    spare: [
+      apps,
+      {
+        capability: "computer.use",
+        targets: { kind: "selected", ids: ["spare"] },
+      },
+    ],
+    every: [apps, { capability: "computer.use", targets: { kind: "all" } }],
+  };
+  const source = {
+    list: async () => ({ path: "/", entries: [], nextOffset: null }),
+    read: async () => new globalThis.TextEncoder().encode("workspace"),
+    write: () => assert.fail("reads never write"),
+    mkdir: () => assert.fail("reads never write"),
+    replace: () => assert.fail("reads never write"),
+  };
+  const options = {
+    capabilities: ["computer.readFile"],
+    fileSource: source,
+    authenticate: async (request) => ({
+      kind: "admitted",
+      principal: {
+        actor: { kind: "team-key", keyId: request.headers.get("x-who") },
+      },
+    }),
+    liveKey: async (keyId) => ({
+      keyId,
+      owner: "owner",
+      grantVersion: 1,
+      grants: grants[keyId],
+    }),
+  };
+  const read = async (computerId, who) => {
+    const { app } = await capabilityFixture({ ...options, computerId });
+    const response = await app.request(
+      "https://oyster.test/files/content?path=/a",
+      {
+        headers: {
+          "X-Oyster-Installation": "capability-fixture",
+          "x-who": who,
+        },
+      },
+    );
+    return response.status;
+  };
+  assert.equal(await read("spare", "spare"), 200);
+  // A host serving another Computer refuses the key, wherever it came from.
+  assert.equal(await read("main", "spare"), 403);
+  assert.equal(await read("main", "every"), 200);
+  assert.equal(await read("spare", "every"), 200);
+  const key = (keyId) => ({
+    kind: "key",
+    key: { keyId, grants: grants[keyId] },
+  });
+  assert.equal(reachesComputer(key("spare"), "spare"), true);
+  assert.equal(reachesComputer(key("spare"), "main"), false);
+  // A host with no Computer id is reached only by an all-Computers grant.
+  assert.equal(reachesComputer(key("spare"), null), false);
+  assert.equal(reachesComputer(key("every"), null), true);
+});
+
+test("a key granted selected Computers keeps its own; others follow the owner's selection", () => {
+  const live = (grants) => ({
+    keyId: "composer",
+    owner: "owner",
+    grantVersion: 1,
+    grants,
+  });
+  const selected = (...ids) =>
+    live([{ capability: "computer.use", targets: { kind: "selected", ids } }]);
+  const every = live([
+    { capability: "computer.use", targets: { kind: "all" } },
+  ]);
+  const appsOnly = live([{ capability: "apps.use", targets: { kind: "all" } }]);
+  const granted = (computerId) => ({
+    kind: "granted",
+    computerId,
+    owner: "owner",
+  });
+  const ownerSelection = { kind: "owner-selection" };
+  // One Computer: that Computer, named or not; never another.
+  assert.deepEqual(
+    keyComputerChoice(selected("spare"), null),
+    granted("spare"),
+  );
+  assert.deepEqual(
+    keyComputerChoice(selected("spare"), "spare"),
+    granted("spare"),
+  );
+  assert.deepEqual(keyComputerChoice(selected("spare"), "main"), {
+    kind: "refused",
+    status: 403,
+    error: "This key can't use that Computer",
+  });
+  // Several: the caller names one of them.
+  assert.equal(keyComputerChoice(selected("a", "b"), null).kind, "refused");
+  assert.equal(keyComputerChoice(selected("a", "b"), null).status, 400);
+  assert.deepEqual(keyComputerChoice(selected("a", "b"), "b"), granted("b"));
+  // All Computers and no Computer keep today's rule: the owner's selection,
+  // and only the owner names another.
+  assert.deepEqual(keyComputerChoice(every, null), ownerSelection);
+  assert.deepEqual(keyComputerChoice(appsOnly, null), ownerSelection);
+  assert.deepEqual(keyComputerChoice(every, "spare"), {
+    kind: "refused",
+    status: 403,
+    error: "Owner only",
+  });
+  // A dead key names no Computer.
+  assert.deepEqual(keyComputerChoice(null, null), ownerSelection);
+  assert.equal(keyComputerChoice(null, "spare").kind, "refused");
+});
+
+test("a channel party is never a principal: the key gate refuses a visitor's own credential", async () => {
+  // Website, Discord, email and game parties are their own shape; none of
+  // them decodes as the host actor every grant and catalog is built for.
+  const parties = [
+    { kind: "visitor", visitorId: channelIds.visitor.generate() },
+    { kind: "discord-user", guildId: "1".repeat(18), userId: "2".repeat(18) },
+    { kind: "email-sender", address: "visitor@example.com", dmarc: "pass" },
+    { kind: "player", worldId: "world", playerId: "player" },
+    { kind: "source", source: "github" },
+  ];
+  for (const party of parties) {
+    assert.equal(channelPartySchema.safeParse(party).success, true, party.kind);
+    assert.equal(hostActorSchema.safeParse(party).success, false, party.kind);
+  }
+  // A real visitor's access token, as the website edge mints it.
+  const database = new DatabaseSync(":memory:");
+  try {
+    const sqlite = fromNodeSqlite(database);
+    const visitors = createChannelVisitors({
+      sql: sqlite.sql,
+      transactionSync: (body) => sqlite.transactionSync(body),
+      now: () => Date.now(),
+    });
+    const siteKey = channelIds.site.generate();
+    const minted = await visitors.mint(
+      {
+        bindingId: channelIds.binding.generate(),
+        lifecycle: "active",
+        selector: {
+          provider: "web",
+          siteKey,
+          origins: ["https://example.com"],
+        },
+      },
+      siteKey,
+      "address",
+    );
+    assert.equal(minted.kind, "granted");
+    const { accessToken } = minted.credentials;
+    // The one gate HTTP and the MCP owner both authenticate through.
+    const presented = [];
+    const auth = ownerOrKeyAuth(
+      // Any owner credential of the minimum length; a visitor's never matches.
+      "o".repeat(32),
+      "owner",
+      () => ({
+        // The key store holds no visitor credential, so it knows none.
+        verify: async (secret) => {
+          presented.push(secret);
+          return { kind: "refused", code: "unknown" };
+        },
+      }),
+    );
+    const admission = await auth.authenticate(
+      new globalThis.Request("https://oyster.test/mcp", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    assert.equal(admission.kind, "refused");
+    assert.deepEqual(presented, [accessToken]);
+  } finally {
+    database.close();
+  }
 });
 
 test("only minted requirements register; a copy or look-alike throws", () => {

@@ -79,6 +79,7 @@ import { guestLimits, type GuestLimits } from "./guest-policy.js";
 import {
   APP_INVOCATION_CEILING_MS,
   admittedCallerFacts,
+  admittedRegionConnectFacts,
   admittedMethodCallerFacts,
   invocationAuthorityOf,
   invocationCallerContext,
@@ -335,6 +336,11 @@ export type InstanceHandle = Readonly<{
   ) => Promise<GitPushVerdict>;
   /** Forward an admitted HTTP request to the backend. */
   fetch: (facts: InvocationFacts, request: Request) => Promise<Response>;
+  /** Hand an admitted Region connect to the Instance; answers its socket upgrade. */
+  regionConnect: (
+    facts: InvocationFacts,
+    request: Request,
+  ) => Promise<Response>;
   /** Invoke a declared read Gill through the same immutable invocation frame. */
   gill: (
     facts: InvocationFacts,
@@ -2184,6 +2190,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       uiUrl,
       backendUrl: `/apps/${installation.installationId}/backend`,
       methodsUrl: `/apps/${installation.installationId}/methods/`,
+      regionUrl: `/apps/${installation.installationId}/region`,
     };
     if (context.req.header("Accept") === "application/json")
       return Response.json(config, {
@@ -2271,6 +2278,41 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           request,
         );
       return appFacetResponse(response);
+    },
+  );
+
+  // A Region socket is the same backend admission, then a native upgrade.
+  table.get(
+    "/apps/:installationId/region",
+    appRoute(),
+    async (context, { principal }) => {
+      if (context.req.header("Upgrade") !== "websocket")
+        return refusal(426, "Expected a WebSocket");
+      // A browser always names its page: a cross-site page cannot ride the session.
+      if (!sameOriginReadRequest(context.req.raw))
+        return refusal(403, "Cross-site Region connect refused");
+      const installation = await enabled(context);
+      if (installation === null) return refusal(404, "Not found");
+      const release = await releaseOf(installation.release);
+      const decision = admits(
+        await gateFacts(installation, release, principal),
+        { kind: "backend" },
+      );
+      if (decision.kind === "refused") return refusal(403, decision.code);
+      return host.instances
+        .get(selectionOf(installation).instanceId, limits)
+        .regionConnect(
+          admittedRegionConnectFacts(
+            installation,
+            release,
+            invocationCallerContext(
+              principal,
+              host.computerId ?? null,
+              host.tenantId,
+            ),
+          ),
+          context.req.raw,
+        );
     },
   );
 

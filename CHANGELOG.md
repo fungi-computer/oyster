@@ -1,5 +1,73 @@
 # @fungi.computer/oyster
 
+## 0.38.0
+
+### Minor Changes
+
+- Changes since 0.37.2:
+
+  - fix(apps): check a Region socket is open instead of catching its send
+  - fix(apps): keep closing Region sockets out of App code and replies
+  - fix(subagents): keep the Agents a conversation sent work to in the footer
+  - fix(apps): bound Region sockets, messages, sends and wakes
+  - fix(apps): keep the Region grammar and host off App backend bundles
+  - fix(oyster): use one private-suffix site rule for previews and the gate
+  - fix(oyster): keep the owner Computer for keys without computer.use
+  - fix(oyster): seal library webhook keys under the library's own name
+  - fix(oyster): report sealed-secret failures instead of dropping them
+  - feat(oyster): seal webhook, subscription and Discord reply secrets at rest
+  - fix(apps): satisfy lint and type surfaces for the Region profile
+  - fix(agents): own the Agent name shape in Agar, where Oyster core can reach
+    it
+  - fix(agents): one safe Agent name shape for people and the Agent itself
+  - fix(oyster): keep Region state off Instances that never served a socket
+  - feat(agar): connect an App to its Region through the host page
+  - feat(hub): admit and supervise Region connections on the Team Instance
+  - feat(oyster): admit and supervise Region connections on the Instance
+  - feat(oyster): supervise App Region sockets and wakes natively
+  - feat(shed): start, stop, read logs and restart processes for a
+    Computer-scoped key
+  - fix(subagents): read the host Agent's id when the roster is used
+  - fix(oyster): export the MCP owner host factory type it takes
+  - fix(hub): answer secret subject liveness from each host's owners
+  - feat(oyster): pin a key's MCP and HTTP host to its granted Computer
+  - fix(veil): recheck every secret subject and protect post-send refusals
+  - feat(oyster): keep a key on the Computers its grant names
+  - fix(subagents): derive the parent edge from createdBy, drop the roster
+  - fix(oyster): satisfy typed lint in credential custody and its tests
+  - feat(veil): retain previous Hub credential keys for envelope rotation
+  - feat(veil): keep secrets as http connections with subject grants and audit
+  - feat(veil): seal credentials under owner envelope keys with configured
+    rotation
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.22.0
+  - @fungi.computer/caps@0.12.1
+  - @fungi.computer/nacre@0.8.1
+  - @fungi.computer/parakeet@0.13.2
+  - @fungi.computer/puffball@0.12.0
+  - @fungi.computer/shiitake-extensions@0.11.8
+  - @fungi.computer/shiitake@0.20.3
+  - @fungi.computer/veil@0.8.0
+  - @fungi.computer/braid@0.5.2
+  - @fungi.computer/darkroom@0.11.6
+  - @fungi.computer/workflows-wire@0.5.2
+  - @fungi.computer/knapsack@0.4.19
+  - @fungi.computer/mycelium@0.4.6
+  - @fungi.computer/forage@0.3.13
+  - @fungi.computer/zookeeper@0.0.40
+  - @fungi.computer/computer@0.14.6
+  - @fungi.computer/computer-contract@0.5.6
+
 ## 0.37.2
 
 ### Patch Changes

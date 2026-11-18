@@ -249,6 +249,27 @@ Host storage, verified artifact resolution, and frame-bound execution ports.
 
 ---
 
+### AppRegionHostEvent
+
+```ts
+type AppRegionHostEvent =
+  | Readonly<{
+      kind: "connect";
+      connection: string;
+    }>
+  | Exclude<
+      AppRegionEvent,
+      {
+        kind: "connect";
+      }
+    >;
+```
+
+A Region event as a supervisor hands it to the runtime; a connect carries no
+caller of its own.
+
+---
+
 ### AppBackendConnection
 
 ```ts
@@ -256,6 +277,7 @@ type AppBackendConnection = Readonly<{
   authorizeGitPush?: (question) => Effect.Effect<GitPushVerdict, Error>;
   onGitPush?: (fact) => Effect.Effect<void, Error>;
   syncRefused?: (refusal) => Effect.Effect<void, Error>;
+  region?: (event) => Effect.Effect<AppRegionReply, Error>;
   fetch: (request) => Effect.Effect<Response, Error>;
   call: (name, input) => Effect.Effect<AppMethodReply, Error>;
   gill: (cargo) => Effect.Effect<Schema.Json, Error>;
@@ -278,6 +300,7 @@ type AppInstance<Host> = Readonly<{
   authorizeGitPush: (frame, question) => Effect.Effect<GitPushVerdict, Error>;
   onGitPush: (frame, fact) => Effect.Effect<void, Error>;
   syncRefused: (frame, refusal) => Effect.Effect<void, Error>;
+  region: (frame, event) => Effect.Effect<AppRegionReply, Error>;
   inspect: () => Effect.Effect<Instance | null, Error>;
 }>;
 ```

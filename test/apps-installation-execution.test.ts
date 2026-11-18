@@ -296,6 +296,8 @@ async function fixture(
     },
     instances: {
       get: (id) => ({
+        regionConnect: () =>
+          Promise.reject(new Error("No Region in this fixture")),
         prepare: (state) => {
           prepares++;
           return unexpected === "prepare" ||

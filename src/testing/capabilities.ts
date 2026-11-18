@@ -41,6 +41,8 @@ export type CapabilityFixtureOptions = Readonly<{
   authenticate?: (request: Request) => Promise<OysterAuthResult>;
   agents?: OysterAgents;
   liveKey?: (keyId: string) => Promise<LiveOysterKey | null>;
+  /** The Computer the host serves; absent, the host has none. */
+  computerId?: string;
 }>;
 
 /** One Oyster host with a single installation whose capability grants the options shape. */
@@ -184,6 +186,8 @@ export async function capabilityFixture(
   };
   if (options.liveKey !== undefined)
     base = { ...base, keys: { live: options.liveKey } };
+  if (options.computerId !== undefined)
+    base = { ...base, computerId: options.computerId };
   const host: OysterHost =
     options.agents === undefined
       ? base

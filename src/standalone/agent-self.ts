@@ -1,4 +1,5 @@
 import { Mycelium, type CapabilitySource } from "@fungi.computer/mycelium";
+import { agentNameSchema } from "@fungi.computer/agar/agents";
 import { z } from "zod";
 import { agentAvatarSchema } from "../agent-avatars.js";
 import type { AgentEntry } from "./agents.js";
@@ -67,7 +68,7 @@ export function createSelfSource(
                       description:
                         "Rename yourself. A name held by another Agent is refused.",
                       input: z.strictObject({
-                        name: z.string().trim().min(1).max(256),
+                        name: agentNameSchema,
                       }),
                       output: z.union([
                         z.strictObject({

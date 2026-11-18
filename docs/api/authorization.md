@@ -355,6 +355,58 @@ readonly `Readonly`\<\{ `methods`: readonly [`Method`](#method)[] \| `"ALL"`;
 
 ## Type Aliases
 
+### KeyFrameComputer
+
+```ts
+type KeyFrameComputer =
+  | Readonly<{
+      kind: "owner-computer";
+    }>
+  | Readonly<{
+      kind: "granted";
+      owner: string;
+    }>
+  | Readonly<{
+      kind: "refused";
+    }>;
+```
+
+How an App call a key made re-admits the Computer its frame captured. A key with
+no `computer.use` grant never chose a Computer: its App reaches the owner's
+Computer through the App's own approved permissions, exactly as before keys
+could target Computers (`owner-computer`). A key with a `computer.use` grant
+reaches only a Computer that grant names, still held by the key's owner
+(`granted`); any other Computer is `refused`.
+
+---
+
+### KeyComputerChoice
+
+```ts
+type KeyComputerChoice =
+  | Readonly<{
+      kind: "owner-selection";
+    }>
+  | Readonly<{
+      kind: "granted";
+      computerId: string;
+      owner: string;
+    }>
+  | Readonly<{
+      kind: "refused";
+      status: 400 | 403;
+      error: string;
+    }>;
+```
+
+Which Computer one key request uses. A key with no `computer.use` grant, or one
+over all Computers, follows the owner's current selection as it always has, and
+only the owner names another. A key granted selected Computers uses its own, so
+the owner switching Computers never moves it: its one Computer, or among several
+the one `requested` names.
+
+---
+
 ### OwnerPrincipal
 
 ```ts
@@ -396,6 +448,7 @@ type AuthorityPorts = Readonly<{
   appToolPolicy: (
     actor,
   ) => AppToolPolicy | null | Promise<AppToolPolicy | null>;
+  computerId?: string | null;
 }>;
 ```
 
@@ -783,23 +836,70 @@ Agent access is scoped to the granted Agent ids, never inferred from App grants.
 
 ---
 
-### keyAllowsComputerUse()
+### keyComputer()
 
 ```ts
-function keyAllowsComputerUse(key): boolean;
+function keyComputer(key, computerId): boolean;
 ```
 
-Whether a live key's own grants turn its Computer access on. Off by default.
+Whether a live key's `computer.use` grant reaches this Computer: every Computer
+(`all`), or one its selected ids name. Off by default. A host with no Computer
+id (`null`) is reached only by an `all` grant.
 
 #### Parameters
 
-| Parameter | Type                                     |
-| --------- | ---------------------------------------- |
-| `key`     | [`LiveOysterKey`](keys.md#liveoysterkey) |
+| Parameter    | Type                                     |
+| ------------ | ---------------------------------------- |
+| `key`        | [`LiveOysterKey`](keys.md#liveoysterkey) |
+| `computerId` | `string` \| `null`                       |
 
 #### Returns
 
 `boolean`
+
+---
+
+### keyFrameComputer()
+
+```ts
+function keyFrameComputer(key, computerId): KeyFrameComputer;
+```
+
+Decide [KeyFrameComputer](#keyframecomputer) for one live key; a dead key is
+refused.
+
+#### Parameters
+
+| Parameter    | Type                                                                                                                                                                                                                                      |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`        | \| `Readonly`\<\{ `keyId`: `string`; `owner`: `string`; `grantVersion`: `number`; `grants`: readonly `Readonly`\<\{ `capability`: [`OysterKeyCapability`](keys.md#oysterkeycapability); `targets`: `GrantTargets`; \}\>[]; \}\> \| `null` |
+| `computerId` | `string`                                                                                                                                                                                                                                  |
+
+#### Returns
+
+[`KeyFrameComputer`](#keyframecomputer)
+
+---
+
+### keyComputerChoice()
+
+```ts
+function keyComputerChoice(key, requested): KeyComputerChoice;
+```
+
+Decide [KeyComputerChoice](#keycomputerchoice) from a key's live grants; a dead
+key names nothing.
+
+#### Parameters
+
+| Parameter   | Type                                                                                                                                                                                                                                      |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`       | \| `Readonly`\<\{ `keyId`: `string`; `owner`: `string`; `grantVersion`: `number`; `grants`: readonly `Readonly`\<\{ `capability`: [`OysterKeyCapability`](keys.md#oysterkeycapability); `targets`: `GrantTargets`; \}\>[]; \}\> \| `null` |
+| `requested` | `string` \| `null`                                                                                                                                                                                                                        |
+
+#### Returns
+
+[`KeyComputerChoice`](#keycomputerchoice)
 
 ---
 
@@ -834,13 +934,14 @@ True only for a member admitted with the owner role.
 function hostAuthorityPorts(host): AuthorityPorts;
 ```
 
-A host's own ports: its key store's liveness and its Agents' tool policy.
+A host's own ports: its key store's liveness, its Agents' tool policy and its
+Computer.
 
 #### Parameters
 
-| Parameter | Type                                                                        |
-| --------- | --------------------------------------------------------------------------- |
-| `host`    | `Pick`\<[`OysterHost`](host.md#oysterhost), `"keys"` \| `"appToolPolicy"`\> |
+| Parameter | Type                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `host`    | `Pick`\<[`OysterHost`](host.md#oysterhost), `"keys"` \| `"appToolPolicy"` \| `"computerId"`\> |
 
 #### Returns
 
@@ -894,18 +995,19 @@ granted keys do.
 ### reachesComputer()
 
 ```ts
-function reachesComputer(authority): boolean;
+function reachesComputer(authority, computerId): boolean;
 ```
 
-Whether this authority reaches the host's Computer, its workspace files and the
-media written there. Members do; a key only with `computer.use`; Agents reach a
-Computer only through their own attachment owner.
+Whether this authority reaches one Computer, its workspace files and the media
+written there. Members do; a key only with `computer.use` naming that Computer
+or all of them; Agents reach a Computer only through their own attachment owner.
 
 #### Parameters
 
-| Parameter   | Type                      |
-| ----------- | ------------------------- |
-| `authority` | [`Authority`](#authority) |
+| Parameter    | Type                      |
+| ------------ | ------------------------- |
+| `authority`  | [`Authority`](#authority) |
+| `computerId` | `string` \| `null`        |
 
 #### Returns
 

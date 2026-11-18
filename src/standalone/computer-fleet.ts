@@ -8,14 +8,20 @@ import {
   localBackendDetachRequestSchema,
   localBackendDetachSchema,
 } from "@fungi.computer/computer/fleet";
-import { type OysterAuth, type OysterEnv } from "../host.js";
+import type { OysterEnv } from "../host.js";
 import {
+  keyComputerChoice,
   oysterPrincipalIsOwner,
   owner as ownerRoute,
   routes as routeTable,
   type Routes,
 } from "../authorization.js";
 import { computerTargetParam } from "../computer-target.js";
+import type { TenantPrincipal } from "../tenant.js";
+import type {
+  OysterKeysLivePort,
+  OysterWorkspaceCaller,
+} from "../workers-git.js";
 import type { StandaloneRegistry } from "./registry.js";
 
 /** Fleet controls never accept an actor from the request body. */
@@ -97,46 +103,87 @@ function fleetResponse(
   });
 }
 
-/** A window's requested context is a hint, never authority or a default mutation. */
+/** Whether `memberId` is the live canonical owner and owns this Computer. */
+export async function ownerHoldsComputer(
+  registry: Pick<StandaloneRegistry, "computerFleet">,
+  memberId: string,
+  computerId: string,
+): Promise<boolean> {
+  const result = await registry.computerFleet(memberId, {
+    operation: "resolve",
+    computerId,
+  });
+  return fleetStatus(result) === 200;
+}
+
+/**
+ * The Computer one host serves. The owner's current selection, unless the
+ * owner names another with `?computerId=`, or the caller is a key granted
+ * selected Computers: that key's own Computer, whatever the owner selects
+ * (`keyComputerChoice`). A window's requested context is a hint, never
+ * authority or a default mutation.
+ */
 export async function standaloneComputerSelection(
   registry: Pick<StandaloneRegistry, "computerFleet" | "selectedComputer">,
-  incoming?: Readonly<{ request: Request; auth: OysterAuth }>,
+  keysLive: OysterKeysLivePort,
+  caller?: OysterWorkspaceCaller,
 ): Promise<string> {
-  if (incoming === undefined) return registry.selectedComputer();
-  const requested = new URL(incoming.request.url).searchParams.getAll(
-    computerTargetParam,
-  );
-  if (requested.length === 0) return registry.selectedComputer();
-  const admission = await incoming.auth.authenticate(incoming.request);
-  if (admission.kind === "refused")
-    throw new HTTPException(admission.status, {
-      res: Response.json(
-        { error: "Computer selection refused" },
-        {
-          status: admission.status,
-          headers:
-            admission.retryAfter === undefined
-              ? {}
-              : { "Retry-After": String(admission.retryAfter) },
-        },
-      ),
-    });
-  if (!oysterPrincipalIsOwner(admission.principal))
-    throw new HTTPException(403, { message: "Owner only" });
-  const computerId = z.tuple([fleetComputerId]).safeParse(requested);
-  if (!computerId.success)
+  if (caller === undefined) return registry.selectedComputer();
+  let principal: TenantPrincipal;
+  let requested: readonly string[] = [];
+  if ("request" in caller) {
+    requested = new URL(caller.request.url).searchParams.getAll(
+      computerTargetParam,
+    );
+    // One authentication per request: the route requirement reuses it.
+    const admission = await caller.auth.authenticate(caller.request);
+    if (admission.kind === "refused") {
+      // An unauthenticated request reaches no Computer; its route refuses it.
+      if (requested.length === 0) return registry.selectedComputer();
+      throw new HTTPException(admission.status, {
+        res: Response.json(
+          { error: "Computer selection refused" },
+          {
+            status: admission.status,
+            headers:
+              admission.retryAfter === undefined
+                ? {}
+                : { "Retry-After": String(admission.retryAfter) },
+          },
+        ),
+      });
+    }
+    principal = admission.principal;
+  } else principal = caller.principal;
+  const named = z.tuple([fleetComputerId]).safeParse(requested);
+  if (requested.length > 0 && !named.success)
     throw new HTTPException(400, { message: "Invalid Computer selection" });
-  const result = await registry.computerFleet(
-    admission.principal.actor.memberId,
-    {
+  const computerId = named.success ? named.data[0] : null;
+  // The fleet re-proves the canonical owner holds the Computer it hands out.
+  const held = async (memberId: string, id: string) => {
+    const result = await registry.computerFleet(memberId, {
       operation: "resolve",
-      computerId: computerId.data[0],
-    },
-  );
-  const status = fleetStatus(result);
-  if (status !== 200)
-    throw new HTTPException(status, { res: fleetResponse(result) });
-  return computerId.data[0];
+      computerId: id,
+    });
+    const status = fleetStatus(result);
+    if (status !== 200)
+      throw new HTTPException(status, { res: fleetResponse(result) });
+    return id;
+  };
+  if (principal.actor.kind === "team-key") {
+    const key = await keysLive(principal.actor.keyId);
+    const choice = keyComputerChoice(key, computerId);
+    if (choice.kind === "owner-selection") return registry.selectedComputer();
+    if (choice.kind === "refused")
+      throw new HTTPException(choice.status, {
+        res: Response.json({ error: choice.error }, { status: choice.status }),
+      });
+    return held(choice.owner, choice.computerId);
+  }
+  if (computerId === null) return registry.selectedComputer();
+  if (!oysterPrincipalIsOwner(principal))
+    throw new HTTPException(403, { message: "Owner only" });
+  return held(principal.actor.memberId, computerId);
 }
 
 /** Tenant-owner management controls over the same durable fleet as Hub. */

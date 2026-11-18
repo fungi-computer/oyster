@@ -31,6 +31,7 @@ import {
 } from "./authorization.js";
 import type { AppToolPolicy } from "./apps/tools.js";
 import * as Schema from "effect/Schema";
+import { agentNameSchema } from "@fungi.computer/agar/agents";
 import { z } from "zod";
 import {
   type CapabilityEnv,
@@ -554,6 +555,8 @@ function ownerAgentRoutes<E extends Env>(
         await context.req.json(),
       );
       if (body._tag === "None") return refusal(400, "Name the agent");
+      const name = agentNameSchema.safeParse(body.value.name);
+      if (!name.success) return refusal(400, "Name the agent");
       const avatar =
         body.value.avatar === undefined
           ? undefined
@@ -564,7 +567,7 @@ function ownerAgentRoutes<E extends Env>(
       // are approved the same way direct owner approval is, with no second path.
       return Response.json(
         await agents.create(
-          body.value.name,
+          name.data,
           body.value.requestId,
           principal,
           "owner-direct",
@@ -620,11 +623,9 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
             await context.req.json(),
           );
           if (body._tag === "None") return refusal(400, "Name the agent");
-          const result = await agents.rename(
-            agentId,
-            body.value.name,
-            principal,
-          );
+          const name = agentNameSchema.safeParse(body.value.name);
+          if (!name.success) return refusal(400, "Name the agent");
+          const result = await agents.rename(agentId, name.data, principal);
           if ("error" in result)
             return refusal(
               result.error === "not_found"

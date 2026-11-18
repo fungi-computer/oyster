@@ -1,12 +1,13 @@
 import * as Schema from "effect/Schema";
 import {
-  createCredentialSealer,
-  createCredentialStore,
+  createOwnerCredentialSealer,
+  createOwnerCredentialStore,
   CredentialError,
   type CredentialRecord,
-  type CredentialSealer,
   type CredentialStorage,
+  type CredentialKeyring,
 } from "@fungi.computer/veil/credential-store";
+import type { SqlStore } from "@fungi.computer/veil/connections";
 import {
   modelKeyAuthenticated,
   modelKeyForwardedHeaders,
@@ -97,6 +98,36 @@ const providerOf = (kind: string): Provider => {
   return provider;
 };
 const maxKeyLength = 16_384;
+/** Deployment-owned wrapping keys. No implicit `instance` key id remains. */
+export function instanceCredentialKeyring(env: {
+  OYSTER_CREDENTIAL_KEY?: string;
+  OYSTER_CREDENTIAL_KEY_ID?: string;
+  OYSTER_CREDENTIAL_PREVIOUS_KEYS?: string;
+}): CredentialKeyring | undefined {
+  const key = env.OYSTER_CREDENTIAL_KEY;
+  // A deployment that never named its key keeps the id its rows were sealed under.
+  const id =
+    env.OYSTER_CREDENTIAL_KEY_ID ??
+    (key === undefined ? undefined : "instance");
+  const retained = env.OYSTER_CREDENTIAL_PREVIOUS_KEYS;
+  if (key === undefined && id === undefined && retained === undefined)
+    return undefined;
+  if (key === undefined || id === undefined)
+    throw new CredentialError("unavailable");
+  try {
+    const previous =
+      retained === undefined
+        ? {}
+        : Schema.decodeUnknownSync(
+            Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+          )(retained);
+    if (Object.hasOwn(previous, id)) throw new CredentialError("unavailable");
+    return { activeKeyId: id, keys: { ...previous, [id]: key } };
+  } catch {
+    throw new CredentialError("unavailable");
+  }
+}
+
 const publicRecord = (record: CredentialRecord): ModelKeyRecord => ({
   keyId: record.credentialId,
   provider: providerOf(record.kind),
@@ -119,44 +150,89 @@ function authenticated(
   return modelKeyAuthenticated(provider, headers, apiKey);
 }
 
+const instanceDomain = "fungi.oyster.credentials.v1";
+
+/**
+ * The instance's envelope for one object's own secrets beside its credential
+ * rows: webhook, subscription and Discord reply secrets. Without a keyring
+ * there is no sealer; a malformed keyring refuses each use as unavailable.
+ */
+export function instanceSecretSealer(options: {
+  owner: SqlStore;
+  ownerId: string;
+  env: Parameters<typeof instanceCredentialKeyring>[0];
+}): SecretSealer | undefined {
+  const { env } = options;
+  if (
+    env.OYSTER_CREDENTIAL_KEY === undefined &&
+    env.OYSTER_CREDENTIAL_KEY_ID === undefined &&
+    env.OYSTER_CREDENTIAL_PREVIOUS_KEYS === undefined
+  )
+    return undefined;
+  // Resolved per use, so a malformed keyring rejects that use, never composition.
+  const current = () => {
+    const keyring = instanceCredentialKeyring(env);
+    if (keyring === undefined) throw new CredentialError("unavailable");
+    return createOwnerCredentialSealer({
+      storage: options.owner,
+      ownerId: options.ownerId,
+      keyring,
+      domain: instanceDomain,
+    });
+  };
+  return {
+    seal: async (context, credential) => current().seal(context, credential),
+    open: async (context, sealed) => current().open(context, sealed),
+  };
+}
+
+/** One object's sealer and the migration 002 its own tables need. */
+export function instanceSecretCustody(
+  options: Parameters<typeof instanceSecretSealer>[0] & {
+    tables: readonly SealedTable002[];
+  },
+) {
+  const sealer = instanceSecretSealer(options);
+  return {
+    sealer,
+    ready: credentialMigration002({
+      store: options.owner,
+      sealer,
+      tables: options.tables,
+    }),
+  };
+}
+
 /**
  * The instance's one encrypted credential store. Listing and removal need no
  * key; sealing and opening refuse without one.
  */
 export function createInstanceCredentialStore(options: {
   storage: CredentialStorage;
-  credentialKey: string | undefined;
+  owner: SqlStore;
+  ownerId: string;
+  keyring: CredentialKeyring | undefined;
   now?: () => number;
 }) {
-  const unavailable = () => Promise.reject(new CredentialError("unavailable"));
-  const sealer: CredentialSealer =
-    options.credentialKey === undefined
-      ? { seal: unavailable, open: unavailable }
-      : createCredentialSealer(
-          {
-            activeKeyId: "instance",
-            keys: { instance: options.credentialKey },
-          },
-          "fungi.oyster.credentials.v1",
-        );
-  const storeOptions: Parameters<typeof createCredentialStore>[0] = {
-    storage: options.storage,
-    sealer,
-  };
-  if (options.now !== undefined) storeOptions.now = options.now;
-  return createCredentialStore(storeOptions);
+  return createOwnerCredentialStore({
+    ...options,
+    domain: instanceDomain,
+    migrate: () => migrateCredentialRows001(options),
+  });
 }
 
 export function createModelKeyVault(options: {
   storage: ModelKeyStorage;
-  /** The instance credential key (32 bytes, base64url); absent means no custody. */
-  credentialKey: string | undefined;
+  owner: SqlStore;
+  ownerId: string;
+  /** Active and retained wrapping keys; absent means no custody. */
+  keyring: CredentialKeyring | undefined;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
 }) {
   const send: typeof globalThis.fetch =
     options.fetch ?? ((input, init) => globalThis.fetch(input, init));
-  const credentialKey = options.credentialKey;
+  const keyring = options.keyring;
   const credentials = createInstanceCredentialStore(options);
   const store = () => credentials;
   const custody = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -187,7 +263,7 @@ export function createModelKeyVault(options: {
         apiKey.length > maxKeyLength
       )
         throw new ModelKeyRefused("invalid_key");
-      if (credentialKey === undefined)
+      if (keyring === undefined)
         throw new ModelKeyRefused("custody_unavailable");
       let secret = apiKey;
       let probe: Request;
@@ -298,3 +374,9 @@ export function createModelKeyVault(options: {
     },
   };
 }
+import { migrateCredentialRows001 } from "../credential-migration-001.js";
+import {
+  credentialMigration002,
+  type SealedTable002,
+  type SecretSealer,
+} from "../credential-migration-002.js";

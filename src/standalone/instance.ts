@@ -1,4 +1,5 @@
 import { AppInstanceError } from "../index.js";
+import { instanceSecretSealer } from "./model-key-vault.js";
 import {
   oysterBindingEntrypoint,
   type OysterBindingTable,
@@ -167,7 +168,16 @@ export abstract class StandaloneInstance<
  * libraries. A library that is down keeps its own row pending and retried, or
  * failed after the last retry; the emitting App's write has already returned.
  */
-export class StandaloneEventDelivery extends OysterWebhooks<WorkflowEventEnv> {
+export class StandaloneEventDelivery extends OysterWebhooks<
+  WorkflowEventEnv & Parameters<typeof instanceSecretSealer>[0]["env"]
+> {
+  protected override credentialSealer() {
+    return instanceSecretSealer({
+      owner: this.ctx.storage,
+      ownerId: this.ctx.id.toString(),
+      env: this.env,
+    });
+  }
   protected override deliverToRecipient(
     delivery: Readonly<{ recipient: string; event: HostRecipientEvent }>,
   ): Promise<void> {

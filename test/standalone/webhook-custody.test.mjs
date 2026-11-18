@@ -4,7 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import { createHmac } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
-import { workflowWebhookCustody } from "../../src/webhook-custody.ts";
+import { createOwnerCredentialSealer } from "@fungi.computer/veil/credential-store";
+import {
+  workflowWebhookCustody,
+  workflowWebhookKeys002,
+} from "../../src/webhook-custody.ts";
+import { credentialMigration002 } from "../../src/credential-migration-002.ts";
 import { armedWorkflowTriggerSchema } from "@fungi.computer/braid/runtime";
 const { Headers, TextEncoder } = globalThis;
 const capturedBinding = armedWorkflowTriggerSchema.parse({
@@ -35,7 +40,19 @@ function fixture() {
   const storage = fromNodeSqlite(database);
   let now = 1_800_000_000_000;
   let failCommit = false;
+  const sealer = createOwnerCredentialSealer({
+    storage,
+    ownerId: "library",
+    domain: "fungi.oyster.credentials.v1",
+    keyring: { activeKeyId: "test", keys: { test: "B".repeat(43) } },
+  });
   const options = {
+    sealer,
+    ready: credentialMigration002({
+      store: storage,
+      sealer,
+      tables: [workflowWebhookKeys002],
+    }),
     sql: storage.sql,
     transactionSync: (body) =>
       storage.transactionSync(() => {
@@ -95,7 +112,7 @@ test("key provisioning durably captures the admitted binding, not caller-supplie
     );
     assert.equal(created.bindingId, "binding");
     assert.equal(created.installationId, capturedBinding.installationId);
-    const verified = f
+    const verified = await f
       .open()
       .verification.verify(signed(created.secret, f.now()));
     assert.equal(verified.status, "ok");
@@ -126,7 +143,8 @@ test("failed owner commit leaves neither a key nor an armed binding and permits 
     );
     assert.equal(created.kind, "created");
     assert.deepEqual(
-      f.open().verification.verify(signed(created.secret, f.now())).binding,
+      (await f.open().verification.verify(signed(created.secret, f.now())))
+        .binding,
       capturedBinding,
     );
   } finally {
@@ -188,7 +206,7 @@ test("rotation overlaps current and previous for 24 hours across a store restart
     owner = f.open();
     for (const secret of [first.secret, rotated.secret]) {
       assert.equal(
-        owner.verification.verify(signed(secret, f.now())).status,
+        (await owner.verification.verify(signed(secret, f.now()))).status,
         "ok",
       );
     }
@@ -197,11 +215,11 @@ test("rotation overlaps current and previous for 24 hours across a store restart
     });
     f.advance(24 * 60 * 60 * 1000);
     assert.equal(
-      owner.verification.verify(signed(first.secret, f.now())).status,
+      (await owner.verification.verify(signed(first.secret, f.now()))).status,
       "refused",
     );
     assert.equal(
-      owner.verification.verify(signed(rotated.secret, f.now())).status,
+      (await owner.verification.verify(signed(rotated.secret, f.now()))).status,
       "ok",
     );
   } finally {
@@ -222,12 +240,13 @@ test("explicit retirement rejects previous immediately and compromise revocation
     const rotated = await owner.rotate("owner", "binding");
     await owner.retirePrevious("owner", "binding");
     assert.equal(
-      owner.verification.verify(signed(first.secret, f.now())).status,
+      (await owner.verification.verify(signed(first.secret, f.now()))).status,
       "refused",
     );
     await owner.revoke("owner", "binding");
     assert.equal(
-      f.open().verification.verify(signed(rotated.secret, f.now())).status,
+      (await f.open().verification.verify(signed(rotated.secret, f.now())))
+        .status,
       "refused",
     );
     assert.deepEqual(
@@ -262,7 +281,7 @@ test("members cannot rotate, retire, revoke or list; a successor owner never rec
     });
     assert.deepEqual(await owner.list("member"), { bindings: [], next: null });
     assert.equal(
-      owner.verification.verify(signed(first.secret, f.now())).status,
+      (await owner.verification.verify(signed(first.secret, f.now()))).status,
       "ok",
     );
     assert.deepEqual(await owner.rotate("successor", "binding"), {
@@ -284,10 +303,14 @@ test("fungi retries re-signed with a new timestamp or key retain delivery identi
       "fungi-v1",
       capturedBinding,
     );
-    const original = owner.verification.verify(signed(first.secret, f.now()));
+    const original = await owner.verification.verify(
+      signed(first.secret, f.now()),
+    );
     const rotated = await owner.rotate("owner", "binding");
     f.advance(30_000);
-    const retry = owner.verification.verify(signed(rotated.secret, f.now()));
+    const retry = await owner.verification.verify(
+      signed(rotated.secret, f.now()),
+    );
     assert.equal(retry.status, "ok");
     assert.equal(retry.eventId, original.eventId);
   } finally {
@@ -314,21 +337,21 @@ test("GitHub delivery id plus body hash survives rotation but deliberately does 
       }),
       body: new TextEncoder().encode(text),
     });
-    const original = owner.verification.verify(
+    const original = await owner.verification.verify(
       request(first.secret, "delivery-1", '{"n":1}'),
     );
     const rotated = await owner.rotate("owner", "binding");
-    const retry = owner.verification.verify(
+    const retry = await owner.verification.verify(
       request(rotated.secret, "delivery-1", '{"n":1}'),
     );
     assert.equal(original.status, "ok");
     assert.deepEqual(retry, original);
-    const changedBody = owner.verification.verify(
+    const changedBody = await owner.verification.verify(
       request(rotated.secret, "delivery-1", '{"n":2}'),
     );
     assert.notEqual(changedBody.eventId, original.eventId);
     // GitHub does not authenticate this ID or any timestamp: accepted policy.
-    const changedUnsignedId = owner.verification.verify(
+    const changedUnsignedId = await owner.verification.verify(
       request(rotated.secret, "delivery-2", '{"n":1}'),
     );
     assert.equal(changedUnsignedId.status, "ok");
@@ -367,12 +390,14 @@ test("Standard Webhooks re-signing under a new key retains the signed message id
         body: new TextEncoder().encode(text),
       };
     };
-    const original = owner.verification.verify(signedStandard(first.secret));
+    const original = await owner.verification.verify(
+      signedStandard(first.secret),
+    );
     const rotated = await owner.rotate("owner", "binding");
     f.advance(30_000);
     assert.equal(original.status, "ok");
     assert.deepEqual(
-      owner.verification.verify(signedStandard(rotated.secret)),
+      await owner.verification.verify(signedStandard(rotated.secret)),
       original,
     );
   } finally {

@@ -5,7 +5,12 @@ import { createCodemodeSandbox } from "@fungi.computer/mycelium/workers";
 import type { EventStore } from "@modelcontextprotocol/server";
 import * as Schema from "effect/Schema";
 import type { OysterHost, OysterMcp } from "./host.js";
-import { tenantIdSchema, tenantScope, type TenantScope } from "./tenant.js";
+import {
+  tenantIdSchema,
+  tenantScope,
+  type TenantPrincipal,
+  type TenantScope,
+} from "./tenant.js";
 
 /**
  * The MCP protocol SDK builds hundreds of schemas when it loads. Only the first
@@ -52,13 +57,16 @@ export class OysterMcpOwner<
   readonly #createHost: (
     env: Env,
     scope: TenantScope,
+    principal?: TenantPrincipal,
   ) => OysterHost | Promise<OysterHost>;
+  /** `createHost` given a principal builds the host that principal's catalog uses. */
   constructor(
     ctx: DurableObjectState,
     env: Env,
     createHost: (
       env: Env,
       scope: TenantScope,
+      principal?: TenantPrincipal,
     ) => OysterHost | Promise<OysterHost>,
   ) {
     super(ctx, env);
@@ -193,7 +201,7 @@ export class OysterMcpOwner<
               // operation handles retain the Computer captured by their own catalog.
               load: async (principal) =>
                 protocol.catalog.oysterMcpCatalogLoad(
-                  await this.#createHost(this.env, scope),
+                  await this.#createHost(this.env, scope, principal),
                 )(principal),
               sandbox: createCodemodeSandbox(this.env.LOADER),
             }),
@@ -216,7 +224,11 @@ export class OysterMcpOwner<
 
 /** Bind the owner to the deployment's existing host factory and options. */
 export function createOysterMcpOwner<Env extends OysterMcpOwnerEnv>(
-  host: (env: Env, scope: TenantScope) => OysterHost | Promise<OysterHost>,
+  host: (
+    env: Env,
+    scope: TenantScope,
+    principal?: TenantPrincipal,
+  ) => OysterHost | Promise<OysterHost>,
 ): new (ctx: DurableObjectState, env: Env) => OysterMcpOwner<Env> {
   return class extends OysterMcpOwner<Env> {
     constructor(ctx: DurableObjectState, env: Env) {

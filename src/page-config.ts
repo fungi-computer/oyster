@@ -22,6 +22,8 @@ export const oysterAppConfigSchema = Schema.Struct({
   uiUrl: Schema.String,
   backendUrl: Schema.String,
   methodsUrl: Schema.String,
+  /** The admitted Region socket door; absent when the App has no backend. */
+  regionUrl: Schema.optional(Schema.String),
   capabilities: Schema.Array(capabilityDescriptorSchema),
 });
 /** The host-admitted App configuration served by Oyster. */

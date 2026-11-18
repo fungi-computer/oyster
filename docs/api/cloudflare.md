@@ -10,6 +10,99 @@
 
 ## Type Aliases
 
+### AppRegionSocket
+
+```ts
+type AppRegionSocket = Pick<
+  WebSocket,
+  | "send"
+  | "close"
+  | "serializeAttachment"
+  | "deserializeAttachment"
+  | "readyState"
+>;
+```
+
+The socket operations a Region supervisor uses; App code never sees one.
+
+---
+
+### AppRegionNative
+
+```ts
+type AppRegionNative<Socket, Client> = Readonly<{
+  pair: {
+    client: Client;
+    server: Socket;
+  };
+  accept: void;
+  sockets: readonly Socket[];
+  readWake: number | null;
+  writeWake: void;
+  scheduleWake: Promise<void>;
+  upgraded: Response;
+  now: number;
+}>;
+```
+
+The native Durable Object surface a Region supervisor uses: hibernating
+WebSockets and the Instance's one shared alarm. App code never sees it.
+
+#### Type Parameters
+
+| Type Parameter                                           | Default type |
+| -------------------------------------------------------- | ------------ |
+| `Socket` _extends_ [`AppRegionSocket`](#appregionsocket) | `WebSocket`  |
+| `Client`                                                 | `WebSocket`  |
+
+---
+
+### AppRegionDeliver
+
+```ts
+type AppRegionDeliver = (event) => Promise<AppRegionReply>;
+```
+
+Run one bounded event in the App, under the Instance's current authority.
+
+#### Parameters
+
+| Parameter | Type             |
+| --------- | ---------------- |
+| `event`   | `AppRegionEvent` |
+
+#### Returns
+
+`Promise`\<`AppRegionReply`\>
+
+---
+
+### AppRegion
+
+```ts
+type AppRegion = ReturnType<typeof createAppRegion>;
+```
+
+One Instance's Region supervisor.
+
+---
+
+### AppRegionDurableState
+
+```ts
+type AppRegionDurableState = Pick<
+  DurableObjectState,
+  "acceptWebSocket" | "getWebSockets" | "getTags"
+> &
+  Readonly<{
+    storage: Pick<DurableObjectStorage, "sql">;
+  }>;
+```
+
+The Durable Object surface a Region needs: hibernating sockets and SQLite.
+
+---
+
 ### FrameBindingProps
 
 ```ts
@@ -279,6 +372,84 @@ const frameBindingPropsSchema: Struct<{
 The shared RPC boundary decoder for host-minted invocation binding props.
 
 ## Functions
+
+### createAppRegion()
+
+```ts
+function createAppRegion<Socket, Client>(native, deliver): object;
+```
+
+Supervisor-owned Region lifecycle: native sockets and alarms stay here; the App
+receives only bounded Region events and answers with a bounded reply.
+
+#### Type Parameters
+
+| Type Parameter                                           |
+| -------------------------------------------------------- |
+| `Socket` _extends_ [`AppRegionSocket`](#appregionsocket) |
+| `Client`                                                 |
+
+#### Parameters
+
+| Parameter | Type                                                        |
+| --------- | ----------------------------------------------------------- |
+| `native`  | [`AppRegionNative`](#appregionnative)\<`Socket`, `Client`\> |
+| `deliver` | [`AppRegionDeliver`](#appregiondeliver)                     |
+
+#### Returns
+
+| Name        | Type                                                     | Description                                                                                                                                 |
+| ----------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect()` | (`caller`, `deliverConnect?`) => `Promise`\<`Response`\> | Accept an already-admitted connection; the caller comes from the host. Its connect runs in the admitting frame, later events in fresh ones. |
+| `message()` | (`socket`, `data`) => `Promise`\<`void`\>                | Deliver one bounded text frame from an attested socket.                                                                                     |
+| `close()`   | ( `socket`, `code`, `reason` ) => `Promise`\<`void`\>    | The browser closed: send the server's half of the close, then tell the App if the socket was attested.                                      |
+| `alarm()`   | () => `Promise`\<`void`\>                                | Deliver the App's wake when due; the shared alarm may fire for others.                                                                      |
+| `fence()`   | (`reason`) => `void`                                     | Disable or removal: close every socket and drop the App's wake; data stays.                                                                 |
+
+---
+
+### durableAppRegionNative()
+
+```ts
+function durableAppRegionNative(ctx, scheduleWake): AppRegionNative;
+```
+
+Native hibernating sockets and a persisted wake in the supervisor's own SQLite.
+The supervisor's shared alarm is lowered through `scheduleWake`.
+
+#### Parameters
+
+| Parameter      | Type                                              |
+| -------------- | ------------------------------------------------- |
+| `ctx`          | [`AppRegionDurableState`](#appregiondurablestate) |
+| `scheduleWake` | (`at`) => `Promise`\<`void`\>                     |
+
+#### Returns
+
+[`AppRegionNative`](#appregionnative)
+
+---
+
+### isAppRegionSocket()
+
+```ts
+function isAppRegionSocket(ctx, socket): boolean;
+```
+
+Whether a hibernated socket a Durable Object woke for is a Region socket.
+
+#### Parameters
+
+| Parameter | Type                                        |
+| --------- | ------------------------------------------- |
+| `ctx`     | `Pick`\<`DurableObjectState`, `"getTags"`\> |
+| `socket`  | `WebSocket`                                 |
+
+#### Returns
+
+`boolean`
+
+---
 
 ### checkBackendConstruction()
 

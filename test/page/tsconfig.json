@@ -1,4 +1,4 @@
 {
   "extends": "../../src/page/tsconfig.json",
-  "include": ["*.ts"]
+  "include": ["*.ts", "../region-app/ui/*.ts"]
 }

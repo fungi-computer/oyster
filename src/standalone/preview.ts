@@ -43,6 +43,17 @@ const originSchema = z.lazy(() =>
         !url.hash,
     ),
 );
+
+/**
+ * The one registrable-site rule for configuration and the port gate. Private
+ * PSL entries (workers.dev, ...) are included because browsers use them for
+ * SameSite cookies. Loaded on demand to keep the idle heap budget.
+ */
+async function registrableSite(): Promise<(url: URL) => string | null> {
+  const { getDomain } = await import("tldts");
+  return (url) => getDomain(url.hostname, { allowPrivateDomains: true });
+}
+
 function configuredPreview(env: StandalonePreviewEnv) {
   if (env.OYSTER_PREVIEW_DOMAIN !== undefined) {
     const parsed = originSchema.safeParse(
@@ -65,9 +76,7 @@ export async function previewOrigins(
   const owner = originSchema.safeParse(env.OYSTER_ORIGIN);
   const configured = configuredPreview(env);
   if (!owner.success || configured?.mode !== "host") return null;
-  const { getDomain } = await import("tldts");
-  const site = (url: URL) =>
-    getDomain(url.hostname, { allowPrivateDomains: true });
+  const site = await registrableSite();
   const ownerSite = site(owner.data);
   const previewSite = site(configured.preview);
   if (ownerSite === null || previewSite === null || ownerSite === previewSite)
@@ -79,14 +88,6 @@ export async function previewOrigins(
 }
 
 export class PreviewRefused extends Error {}
-
-// Public suffix rules only: a private-suffix preview domain still makes every
-// workspace-* host one site, so the gate refuses siblings that browsers might
-// treat as separate sites. Loaded on demand like previewOrigins' parser.
-async function publicSite() {
-  const { getDomain } = await import("tldts");
-  return (url: URL) => getDomain(url.hostname, { allowPrivateDomains: false });
-}
 
 // The retained flat hostname uses the Computer's non-secret identity. Fleet
 // IDs have a computer_ prefix; configured standalone IDs can be simple labels.
@@ -153,7 +154,7 @@ export function createStandalonePreview(
         return new Response(null, { status: 404 });
       const policy = {
         entryUrl: entryUrl(origins, computerId, port),
-        site: await publicSite(),
+        site: await registrableSite(),
       };
       return access
         .gate(port, policy, async (admitted) => {

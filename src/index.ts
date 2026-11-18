@@ -15,7 +15,13 @@ import { instanceIdSchema } from "./instance-id.js";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { releaseIdSchema, appIdSchema } from "@fungi.computer/puffball/effect";
-import type { DurableBackend } from "@fungi.computer/puffball/backend";
+import {
+  appRegionEventSchema,
+  appRegionReplySchema,
+  type AppRegionEvent,
+  type AppRegionReply,
+  type DurableBackend,
+} from "@fungi.computer/puffball/backend";
 import type { Release, Sha256Digest } from "@fungi.computer/puffball";
 import type { AppMethodReply } from "@fungi.computer/agar/backend";
 import { appFacetRequest, appFacetResponse } from "./backend-request.js";
@@ -233,6 +239,10 @@ export type InstancePorts<Host> = Readonly<{
     frame: InvocationFrame<Host>,
   ) => Effect.Effect<AppBackendConnection, Error>;
 }>;
+/** A Region event as a supervisor hands it to the runtime; a connect carries no caller of its own. */
+export type AppRegionHostEvent =
+  | Readonly<{ kind: "connect"; connection: string }>
+  | Exclude<AppRegionEvent, { kind: "connect" }>;
 /** One admitted connection to a running App backend. */
 export type AppBackendConnection = Readonly<{
   /** Ask the App about the whole external push under this admitted connection. */
@@ -243,6 +253,8 @@ export type AppBackendConnection = Readonly<{
   onGitPush?: (fact: AppGitPushFact) => Effect.Effect<void, Error>;
   /** Settle the refused member lane, without binding authority. */
   syncRefused?: (refusal: BackgroundSyncRefusal) => Effect.Effect<void, Error>;
+  /** Deliver one supervisor Region event; the App answers with a bounded reply. */
+  region?: (event: AppRegionEvent) => Effect.Effect<AppRegionReply, Error>;
   /** Send an HTTP request to the backend. */
   fetch: (request: Request) => Effect.Effect<Response, Error>;
   /** Invoke a declared backend method under the connection's immutable frame;
@@ -307,6 +319,14 @@ export type AppInstance<Host> = Readonly<{
     frame: InvocationFrame<Host>,
     refusal: BackgroundSyncRefusal,
   ) => Effect.Effect<void, Error>;
+  /**
+   * Deliver a supervisor Region event under exact live Instance selection. A
+   * connect's caller is the frame's own host-attested context, never an input.
+   */
+  region: (
+    frame: InvocationFrame<Host>,
+    event: AppRegionHostEvent,
+  ) => Effect.Effect<AppRegionReply, Error>;
   /** Read the current Instance record, resuming an interrupted purge. */
   inspect: () => Effect.Effect<Instance | null, Error>;
 }>;
@@ -637,8 +657,42 @@ export function createAppInstance<Host>(
         );
       }),
     );
+  const region = (frame: InvocationFrame<Host>, raw: AppRegionHostEvent) => {
+    const subject = frame.facts.subject;
+    if (
+      subject.kind !== "lifecycle" ||
+      subject.name !== "onRegion" ||
+      subject.event !== raw.kind ||
+      frame.facts.grants.length !== 0
+    )
+      return failure("invalid_invocation_facts");
+    return Effect.try({
+      try: () =>
+        appRegionEventSchema.parse(
+          raw.kind === "connect" ? { ...raw, caller: subject.context } : raw,
+        ),
+      catch: (cause) => new Error("Region event invalid", { cause }),
+    }).pipe(
+      Effect.flatMap((event) =>
+        connect(frame).pipe(
+          Effect.flatMap((connection) =>
+            connection.region === undefined
+              ? Effect.fail(new Error("App Region handler unavailable"))
+              : connection.region(event),
+          ),
+          Effect.flatMap((reply) =>
+            Effect.try({
+              try: () => appRegionReplySchema.parse(reply),
+              catch: (cause) => new Error("Region reply invalid", { cause }),
+            }),
+          ),
+        ),
+      ),
+    );
+  };
   return {
     syncRefused,
+    region,
     prepare,
     apply,
     fetch,

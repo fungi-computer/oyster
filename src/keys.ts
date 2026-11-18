@@ -1,6 +1,6 @@
 /**
  * Oyster's own Ear Tag vocabulary: named keys an owner issues for selected
- * Apps and Agents, its Computer or machine enrollment. App grants never imply
+ * Apps, Agents and Computers, or machine enrollment. App grants never imply
  * Agent access. A key's id is its name, so name-derived identities stay stable.
  * What a key reaches is decided only in `authorization.ts`.
  */
@@ -23,8 +23,9 @@ export type OysterKeyCapability =
 /**
  * `apps.use` also reaches `apps.read` (one level, per `defineGrants`'s own
  * `implies`): a key that may change an App's data may also read it.
- * `computer.use` has no narrower capability under it; the Computer is on or
- * off, host-wide.
+ * `computer.use` has no narrower capability under it. Over all Computers it
+ * follows the owner's current selection; over selected Computer ids it stays
+ * on those Computers whatever the owner selects.
  * `agents.use` selects Agent ids independently of App grants.
  * `machine.enroll` admits enrollment only; it implies no App or Computer access.
  * The enrollment owner, not this vocabulary, owns one-use consumption.
@@ -48,7 +49,7 @@ export function allInstallations(
   return { capability, targets: { kind: "all" } };
 }
 
-/** The grant that turns on the Computer for a key, host-wide; there is no narrower target. */
+/** The grant that turns on the owner's currently selected Computer for a key. */
 export const computerUseGrant: Grant<OysterKeyCapability> = {
   capability: "computer.use",
   targets: { kind: "all" },

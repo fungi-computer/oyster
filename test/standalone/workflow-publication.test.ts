@@ -298,6 +298,7 @@ async function fixture(
         prepare: () => Promise.reject(new Error("Unexpected prepare")),
         apply: () => Promise.reject(new Error("Unexpected apply")),
         fetch: () => Promise.reject(new Error("Unexpected fetch")),
+        regionConnect: () => Promise.reject(new Error("Unexpected Region")),
         onGitPush: () => Promise.reject(new Error("Unexpected lifecycle")),
         syncRefused: () => Promise.reject(new Error("Unexpected sync refusal")),
         authorizeGitPush: () =>

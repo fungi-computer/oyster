@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OysterAuth } from "../../src/host.js";
 import type { TenantPrincipal } from "../../src/tenant.js";
+import type { LiveOysterKey } from "../../src/keys.js";
 import { standaloneComputerSelection } from "../../src/standalone/computer-fleet.js";
 
 const owner: TenantPrincipal = {
@@ -34,6 +35,8 @@ function fixture() {
       );
     },
   };
+  const keys = new Map<string, LiveOysterKey>();
+  const keysLive = (keyId: string) => Promise.resolve(keys.get(keyId) ?? null);
   const incoming = (principal: TenantPrincipal, computerId: string) => {
     const auth: OysterAuth = {
       resolve: () => Promise.resolve(principal),
@@ -47,6 +50,8 @@ function fixture() {
     registry,
     incoming,
     reads,
+    keys,
+    keysLive,
     reassign: () => {
       currentOwner = false;
     },
@@ -61,10 +66,12 @@ describe("standalone window Computer admission", () => {
     const f = fixture();
     const a = await standaloneComputerSelection(
       f.registry,
+      f.keysLive,
       f.incoming(owner, "a"),
     );
     const b = await standaloneComputerSelection(
       f.registry,
+      f.keysLive,
       f.incoming(owner, "b"),
     );
     f.select("default-c");
@@ -78,12 +85,14 @@ describe("standalone window Computer admission", () => {
 
   it("keeps the existing default for HTTP without a target and for non-HTTP callers", async () => {
     const f = fixture();
-    expect(await standaloneComputerSelection(f.registry)).toBe("default-a");
-    const incoming = f.incoming(owner, "a");
-    incoming.request = new Request("https://oyster.test/apps/inkcap/");
-    expect(await standaloneComputerSelection(f.registry, incoming)).toBe(
+    expect(await standaloneComputerSelection(f.registry, f.keysLive)).toBe(
       "default-a",
     );
+    const incoming = f.incoming(owner, "a");
+    incoming.request = new Request("https://oyster.test/apps/inkcap/");
+    expect(
+      await standaloneComputerSelection(f.registry, f.keysLive, incoming),
+    ).toBe("default-a");
     expect(f.reads).toEqual([]);
   });
 
@@ -95,7 +104,11 @@ describe("standalone window Computer admission", () => {
     async (principal) => {
       const f = fixture();
       await expect(
-        standaloneComputerSelection(f.registry, f.incoming(principal, "b")),
+        standaloneComputerSelection(
+          f.registry,
+          f.keysLive,
+          f.incoming(principal, "b"),
+        ),
       ).rejects.toMatchObject({ status: 403 });
       expect(f.reads).toEqual([]);
     },
@@ -104,7 +117,11 @@ describe("standalone window Computer admission", () => {
   it("refuses a foreign or missing Computer through owner-admitted resolution", async () => {
     const f = fixture();
     await expect(
-      standaloneComputerSelection(f.registry, f.incoming(owner, "unknown")),
+      standaloneComputerSelection(
+        f.registry,
+        f.keysLive,
+        f.incoming(owner, "unknown"),
+      ),
     ).rejects.toMatchObject({ status: 404 });
   });
 
@@ -112,14 +129,22 @@ describe("standalone window Computer admission", () => {
     const f = fixture();
     f.reassign();
     await expect(
-      standaloneComputerSelection(f.registry, f.incoming(owner, "b")),
+      standaloneComputerSelection(
+        f.registry,
+        f.keysLive,
+        f.incoming(owner, "b"),
+      ),
     ).rejects.toMatchObject({ status: 403 });
   });
 
   it("refuses malformed selection without reading the fleet", async () => {
     const f = fixture();
     await expect(
-      standaloneComputerSelection(f.registry, f.incoming(owner, "")),
+      standaloneComputerSelection(
+        f.registry,
+        f.keysLive,
+        f.incoming(owner, ""),
+      ),
     ).rejects.toMatchObject({ status: 400 });
     expect(f.reads).toEqual([]);
   });
@@ -131,8 +156,71 @@ describe("standalone window Computer admission", () => {
     url.searchParams.append("computerId", "b");
     incoming.request = new Request(url);
     await expect(
-      standaloneComputerSelection(f.registry, incoming),
+      standaloneComputerSelection(f.registry, f.keysLive, incoming),
     ).rejects.toMatchObject({ status: 400 });
+    expect(f.reads).toEqual([]);
+  });
+
+  it("keeps a key granted one Computer on it, over HTTP and for an MCP principal", async () => {
+    const f = fixture();
+    const key: TenantPrincipal = {
+      actor: { kind: "team-key", keyId: "composer" },
+    };
+    f.keys.set("composer", {
+      keyId: "composer",
+      owner: "owner",
+      grantVersion: 1,
+      grants: [
+        {
+          capability: "computer.use",
+          targets: { kind: "selected", ids: ["spare"] },
+        },
+      ],
+    });
+    const http = f.incoming(key, "spare");
+    http.request = new Request("https://oyster.test/apps/shed/");
+    expect(
+      await standaloneComputerSelection(f.registry, f.keysLive, http),
+    ).toBe("spare");
+    f.select("default-c");
+    expect(
+      await standaloneComputerSelection(f.registry, f.keysLive, {
+        principal: key,
+      }),
+    ).toBe("spare");
+    // The fleet re-proves the key's owner still holds that Computer.
+    expect(f.reads).toEqual([
+      { memberId: "owner", computerId: "spare" },
+      { memberId: "owner", computerId: "spare" },
+    ]);
+    f.reassign();
+    await expect(
+      standaloneComputerSelection(f.registry, f.keysLive, { principal: key }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("keeps an all-Computers key on the owner's selection", async () => {
+    const f = fixture();
+    const key: TenantPrincipal = {
+      actor: { kind: "team-key", keyId: "every" },
+    };
+    f.keys.set("every", {
+      keyId: "every",
+      owner: "owner",
+      grantVersion: 1,
+      grants: [{ capability: "computer.use", targets: { kind: "all" } }],
+    });
+    expect(
+      await standaloneComputerSelection(f.registry, f.keysLive, {
+        principal: key,
+      }),
+    ).toBe("default-a");
+    f.select("default-c");
+    expect(
+      await standaloneComputerSelection(f.registry, f.keysLive, {
+        principal: key,
+      }),
+    ).toBe("default-c");
     expect(f.reads).toEqual([]);
   });
 });

@@ -7,7 +7,7 @@ import type { TeamRole } from "@fungi.computer/cairn/team-role";
  *
  * Who may reach what is decided here once, from one {@link Authority}: the
  * owner reaches everything; a named key reaches exactly its Ear Tag grants
- * (Apps, Agents, the Computer); an Agent reaches its App tool policy. An
+ * (Apps, Agents, Computers); an Agent reaches its App tool policy. An
  * anonymous request reaches only the public routes: sign-in, robots.txt and
  * digest-pinned assets. The App gate
  * (`apps/gate.ts`) still owns App-declaration rules; it asks this module for a
@@ -59,9 +59,102 @@ export function keyAgentAccess(key: LiveOysterKey, agentId: string): boolean {
   return oysterKeyVocabulary.grantsAllow(key.grants, "agents.use", agentId);
 }
 
-/** Whether a live key's own grants turn its Computer access on. Off by default. */
-export function keyAllowsComputerUse(key: LiveOysterKey): boolean {
-  return oysterKeyVocabulary.grantsAllow(key.grants, "computer.use");
+/**
+ * Whether a live key's `computer.use` grant reaches this Computer: every
+ * Computer (`all`), or one its selected ids name. Off by default. A host with
+ * no Computer id (`null`) is reached only by an `all` grant.
+ */
+export function keyComputer(
+  key: LiveOysterKey,
+  computerId: string | null,
+): boolean {
+  return oysterKeyVocabulary.grantsAllow(
+    key.grants,
+    "computer.use",
+    computerId ?? undefined,
+  );
+}
+
+/**
+ * How an App call a key made re-admits the Computer its frame captured. A key
+ * with no `computer.use` grant never chose a Computer: its App reaches the
+ * owner's Computer through the App's own approved permissions, exactly as
+ * before keys could target Computers (`owner-computer`). A key with a
+ * `computer.use` grant reaches only a Computer that grant names, still held by
+ * the key's owner (`granted`); any other Computer is `refused`.
+ */
+export type KeyFrameComputer =
+  | Readonly<{ kind: "owner-computer" }>
+  | Readonly<{ kind: "granted"; owner: string }>
+  | Readonly<{ kind: "refused" }>;
+
+/** Decide {@link KeyFrameComputer} for one live key; a dead key is refused. */
+export function keyFrameComputer(
+  key: LiveOysterKey | null,
+  computerId: string,
+): KeyFrameComputer {
+  if (key === null) return { kind: "refused" };
+  if (!key.grants.some((grant) => grant.capability === "computer.use"))
+    return { kind: "owner-computer" };
+  return keyComputer(key, computerId)
+    ? { kind: "granted", owner: key.owner }
+    : { kind: "refused" };
+}
+
+/**
+ * Which Computer one key request uses. A key with no `computer.use` grant,
+ * or one over all Computers, follows the owner's current selection as it
+ * always has, and only the owner names another. A key granted selected
+ * Computers uses its own, so the owner switching Computers never moves it:
+ * its one Computer, or among several the one `requested` names.
+ */
+export type KeyComputerChoice =
+  | Readonly<{ kind: "owner-selection" }>
+  | Readonly<{
+      kind: "granted";
+      computerId: string;
+      /** The key's owner, who must still hold that Computer. */
+      owner: string;
+    }>
+  | Readonly<{ kind: "refused"; status: 400 | 403; error: string }>;
+
+/** Decide {@link KeyComputerChoice} from a key's live grants; a dead key names nothing. */
+export function keyComputerChoice(
+  key: LiveOysterKey | null,
+  requested: string | null,
+): KeyComputerChoice {
+  const grants = (key?.grants ?? []).filter(
+    (grant) => grant.capability === "computer.use",
+  );
+  const everyComputer = grants.some((grant) => grant.targets.kind === "all");
+  const granted = [
+    ...new Set(
+      grants.flatMap((grant) =>
+        grant.targets.kind === "selected" ? grant.targets.ids : [],
+      ),
+    ),
+  ];
+  if (requested !== null) {
+    if (everyComputer || key === null)
+      return { kind: "refused", status: 403, error: "Owner only" };
+    return granted.includes(requested)
+      ? { kind: "granted", computerId: requested, owner: key.owner }
+      : {
+          kind: "refused",
+          status: 403,
+          error: "This key can't use that Computer",
+        };
+  }
+  const [only, ...others] = granted;
+  if (key === null || everyComputer || only === undefined)
+    return { kind: "owner-selection" };
+  if (others.length === 0)
+    return { kind: "granted", computerId: only, owner: key.owner };
+  return {
+    kind: "refused",
+    status: 400,
+    error: "This key reaches several Computers; name one with ?computerId=",
+  };
 }
 
 /** The owner, as every owner route receives it. */
@@ -88,15 +181,21 @@ export type AuthorityPorts = Readonly<{
   appToolPolicy: (
     actor: Extract<HostActor, { kind: "agent" }>,
   ) => AppToolPolicy | null | Promise<AppToolPolicy | null>;
+  /**
+   * The Computer this host's requests reach. A host with none omits it, and
+   * then only a key granted every Computer passes a Computer requirement.
+   */
+  computerId?: string | null;
 }>;
 
-/** A host's own ports: its key store's liveness and its Agents' tool policy. */
+/** A host's own ports: its key store's liveness, its Agents' tool policy and its Computer. */
 export function hostAuthorityPorts(
-  host: Pick<OysterHost, "keys" | "appToolPolicy">,
+  host: Pick<OysterHost, "keys" | "appToolPolicy" | "computerId">,
 ): AuthorityPorts {
   return {
     liveKey: async (keyId) => (await host.keys?.live(keyId)) ?? null,
     appToolPolicy: async (actor) => (await host.appToolPolicy?.(actor)) ?? null,
+    computerId: host.computerId ?? null,
   };
 }
 
@@ -152,17 +251,21 @@ export function reachesAgent(authority: Authority, agentId: string): boolean {
 }
 
 /**
- * Whether this authority reaches the host's Computer, its workspace files and
- * the media written there. Members do; a key only with `computer.use`;
- * Agents reach a Computer only through their own attachment owner.
+ * Whether this authority reaches one Computer, its workspace files and the
+ * media written there. Members do; a key only with `computer.use` naming that
+ * Computer or all of them; Agents reach a Computer only through their own
+ * attachment owner.
  */
-export function reachesComputer(authority: Authority): boolean {
+export function reachesComputer(
+  authority: Authority,
+  computerId: string | null,
+): boolean {
   switch (authority.kind) {
     case "owner":
     case "member":
       return true;
     case "key":
-      return authority.key !== null && keyAllowsComputerUse(authority.key);
+      return authority.key !== null && keyComputer(authority.key, computerId);
     case "agent":
       return false;
   }
@@ -548,7 +651,7 @@ export function computer(): Requirement<
   return requirement({ kind: "computer" }, async (facts) => {
     const authority = await signedInAuthority(facts);
     if (authority instanceof Response) return authority;
-    if (!reachesComputer(authority))
+    if (!reachesComputer(authority, facts.ports.computerId ?? null))
       return refused(403, "Computer access requires an owner or key");
     return { principal: authority.principal };
   });

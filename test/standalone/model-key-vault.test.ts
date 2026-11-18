@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
+import { DatabaseSync } from "node:sqlite";
+import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
+import {
+  createCredentialSealer,
+  createCredentialStore,
+  createOwnerCredentialSealer,
+} from "@fungi.computer/veil/credential-store";
 import { normalizeModel, streamModel } from "@fungi.computer/mule/effect";
 import { selectAgentModel } from "../../src/standalone/agent-model-choice.js";
 import type { StoredCredential } from "@fungi.computer/veil/credential-store";
@@ -11,6 +19,145 @@ import {
 
 const credentialKey = "A".repeat(43);
 const apiKey = `sk-test-${"x".repeat(16)}`;
+let custodyDatabase: DatabaseSync;
+beforeEach(() => {
+  custodyDatabase = new DatabaseSync(":memory:");
+});
+afterEach(() => {
+  custodyDatabase.close();
+});
+const custody = () => ({
+  owner: fromNodeSqlite(custodyDatabase),
+  ownerId: "oyster-a",
+  keyring: { activeKeyId: "oyster-1", keys: { "oyster-1": credentialKey } },
+});
+
+it("uses the configured instance keyring and binds model-key custody to its owner", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const storage = memory();
+    const owner = fromNodeSqlite(database);
+    const keyring = {
+      activeKeyId: "oyster-1",
+      keys: { "oyster-1": credentialKey },
+    };
+    const vault = createInstanceCredentialStore({
+      storage,
+      owner,
+      ownerId: "oyster-a",
+      keyring,
+    });
+    const record = await vault.put({
+      kind: "model-key/openai",
+      label: "Model",
+      secret: apiKey,
+    });
+    const other = createInstanceCredentialStore({
+      storage,
+      owner,
+      ownerId: "oyster-b",
+      keyring,
+    });
+    await expect(
+      other.withSecret(record.credentialId, () => true),
+    ).rejects.toMatchObject({ code: "denied" });
+    expect(
+      await vault.withSecret(record.credentialId, (secret) => secret),
+    ).toBe(apiKey);
+  } finally {
+    database.close();
+  }
+});
+
+it("migration 001 preserves seeded model, Discord and MCP credentials, then refuses the old shape", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const owner = fromNodeSqlite(database);
+    const storage = memory();
+    const domain = "fungi.oyster.credentials.v1";
+    const legacy = createCredentialStore({
+      storage,
+      sealer: createCredentialSealer(
+        { activeKeyId: "instance", keys: { instance: credentialKey } },
+        domain,
+      ),
+    });
+    const nonce = crypto.randomUUID();
+    const inputs = [
+      {
+        kind: "model-key/openai",
+        label: "Model",
+        secret: `sk-test-VAULTCANARY-${nonce}`,
+      },
+      {
+        kind: "discord-bot-token",
+        label: "Discord",
+        secret: `MTIzNDU2Nzg5MDEyMzQ1Njc4.VAULTCANARY.${nonce}`,
+      },
+      {
+        kind: "connection",
+        label: "MCP",
+        secret: `ghp_VAULTCANARY${nonce.replaceAll("-", "")}`,
+      },
+    ];
+    const records = [];
+    for (const input of inputs) records.push(await legacy.put(input));
+    const oldRows = await storage.list("credential:");
+    const keyring = {
+      activeKeyId: "oyster-2",
+      keys: {
+        instance: credentialKey,
+        "oyster-2": encodeBase64Url(new Uint8Array(32).fill(2)),
+      },
+    };
+    const { migrateCredentialRows001 } =
+      await import("../../src/credential-migration-001.js");
+    const options = { owner, ownerId: "oyster-a", storage, keyring };
+    // The host's ordinary first use runs migration 001 before opening anything.
+    const first = records[0];
+    if (first === undefined) throw new Error("Missing seeded record");
+    expect(
+      await createInstanceCredentialStore(options).withSecret(
+        first.credentialId,
+        (value) => value,
+      ),
+    ).toBe(inputs[0]?.secret);
+    const current = createCredentialStore({
+      storage,
+      sealer: createOwnerCredentialSealer({
+        storage: owner,
+        ownerId: options.ownerId,
+        domain,
+        keyring: {
+          activeKeyId: keyring.activeKeyId,
+          keys: { "oyster-2": encodeBase64Url(new Uint8Array(32).fill(2)) },
+        },
+      }),
+    });
+    for (const [index, record] of records.entries()) {
+      expect(
+        await current.withSecret(record.credentialId, (value) => value),
+      ).toBe(inputs[index]?.secret);
+    }
+    expect(await current.list()).toEqual(records);
+    const snapshot = storage.dump();
+    await migrateCredentialRows001(options);
+    expect(storage.dump()).toBe(snapshot);
+    const allBytes = JSON.stringify([
+      snapshot,
+      database.prepare("SELECT * FROM veil_credential_keys").all(),
+    ]);
+    for (const input of inputs) expect(allBytes).not.toContain(input.secret);
+    for (const [id, row] of oldRows) await storage.put(id, row);
+    await migrateCredentialRows001(options);
+    for (const record of records)
+      await expect(
+        current.withSecret(record.credentialId, () => true),
+      ).rejects.toMatchObject({ code: "denied" });
+  } finally {
+    database.close();
+  }
+});
 
 function memory(): ModelKeyStorage & { dump(): string } {
   const rows = new Map<string, StoredCredential>();
@@ -52,7 +199,7 @@ describe("instance model-key vault", () => {
     const upstream = provider(200);
     const vault = createModelKeyVault({
       storage,
-      credentialKey,
+      ...custody(),
       fetch: upstream.fetch,
       now: () => 1_000,
     });
@@ -94,7 +241,7 @@ describe("instance model-key vault", () => {
       const upstream = provider(200);
       const vault = createModelKeyVault({
         storage: memory(),
-        credentialKey,
+        ...custody(),
         fetch: upstream.fetch,
       });
       await vault.seal({ provider: name, label: "Key", apiKey });
@@ -108,7 +255,7 @@ describe("instance model-key vault", () => {
   it("refuses a provider it does not list", async () => {
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey,
+      ...custody(),
       fetch: provider(200).fetch,
     });
     for (const name of ["openai-compatible", "amazon-bedrock", "huggingface"])
@@ -122,7 +269,7 @@ describe("instance model-key vault", () => {
     const upstream = provider(200);
     const vault = createModelKeyVault({
       storage,
-      credentialKey,
+      ...custody(),
       fetch: upstream.fetch,
     });
     const accountId = "a".repeat(32);
@@ -179,7 +326,7 @@ describe("instance model-key vault", () => {
     const requests: Request[] = [];
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey,
+      ...custody(),
       fetch: (input, init) => {
         const request = new Request(input, init);
         requests.push(request);
@@ -231,14 +378,14 @@ describe("instance model-key vault", () => {
     const storage = memory();
     const credentials = createInstanceCredentialStore({
       storage,
-      credentialKey,
+      ...custody(),
     });
     const record = await credentials.put({
       kind: "model-key/cloudflare-workers-ai",
       label: "Broken",
       secret: `malformed-${apiKey}`,
     });
-    const vault = createModelKeyVault({ storage, credentialKey });
+    const vault = createModelKeyVault({ storage, ...custody() });
     await expect(vault.baseUrl(record.credentialId)).rejects.toMatchObject({
       reason: "custody_unavailable",
       message: "custody_unavailable",
@@ -249,7 +396,7 @@ describe("instance model-key vault", () => {
     const storage = memory();
     const vault = createModelKeyVault({
       storage,
-      credentialKey,
+      ...custody(),
       fetch: provider(401).fetch,
     });
     await expect(vault.seal(openai)).rejects.toMatchObject({
@@ -261,7 +408,7 @@ describe("instance model-key vault", () => {
   it("reports an unreachable provider as unavailable, not as a bad key", async () => {
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey,
+      ...custody(),
       fetch: provider(503).fetch,
     });
     await expect(vault.seal(openai)).rejects.toMatchObject({
@@ -272,7 +419,8 @@ describe("instance model-key vault", () => {
   it("refuses custody without an instance master secret", async () => {
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey: undefined,
+      ...custody(),
+      keyring: undefined,
       fetch: provider(200).fetch,
     });
     await expect(vault.seal(openai)).rejects.toMatchObject({
@@ -284,13 +432,14 @@ describe("instance model-key vault", () => {
     const storage = memory();
     const keyed = createModelKeyVault({
       storage,
-      credentialKey,
+      ...custody(),
       fetch: provider(200).fetch,
     });
     const { keyId } = await keyed.seal(openai);
     const bare = createModelKeyVault({
       storage,
-      credentialKey: undefined,
+      ...custody(),
+      keyring: undefined,
       fetch: provider(200).fetch,
     });
     expect(await bare.list()).toHaveLength(1);
@@ -304,7 +453,7 @@ describe("instance model-key vault", () => {
     const upstream = provider(200);
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey,
+      ...custody(),
       fetch: upstream.fetch,
     });
     const { keyId } = await vault.seal({
@@ -338,7 +487,7 @@ describe("instance model-key vault", () => {
   it("fails explicitly once a key is removed or never existed", async () => {
     const vault = createModelKeyVault({
       storage: memory(),
-      credentialKey,
+      ...custody(),
       fetch: provider(200).fetch,
     });
     const { keyId } = await vault.seal(openai);
@@ -357,13 +506,17 @@ describe("instance model-key vault", () => {
     const storage = memory();
     const one = createModelKeyVault({
       storage,
-      credentialKey,
+      ...custody(),
       fetch: provider(200).fetch,
     });
     const { keyId } = await one.seal(openai);
     const two = createModelKeyVault({
       storage,
-      credentialKey: "C".repeat(43),
+      ...custody(),
+      keyring: {
+        activeKeyId: "oyster-1",
+        keys: { "oyster-1": "C".repeat(43) },
+      },
       fetch: provider(200).fetch,
     });
     await expect(

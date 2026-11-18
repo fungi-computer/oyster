@@ -25,6 +25,7 @@ import {
   reportTryFailure,
   tryOyster,
   prepareTryModelKeyCustody,
+  type TrialKeychain,
   type TryEffects,
 } from "../../src/standalone/try-cli.js";
 import { CleanupError } from "../../src/build/process-group.js";
@@ -42,6 +43,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 /** A piped terminal: plain lines, the same as CI. */
@@ -1293,6 +1296,59 @@ describe("startup cancellation ownership", () => {
 describe("trial model-key custody", () => {
   const configuredKey = encodeBase64Url(new Uint8Array(32).fill(7));
   const otherKey = encodeBase64Url(new Uint8Array(32).fill(9));
+  // A faithful in-memory keychain behind the same port the OS keychain fills.
+  const keychain = { values: new Map<string, string>(), locked: false };
+  const osKeychain: TrialKeychain = (account) => {
+    if (keychain.locked)
+      return Promise.reject(new Error("synthetic locked keychain"));
+    return Promise.resolve({
+      getPassword: () => Promise.resolve(keychain.values.get(account) ?? null),
+      setPassword: (value: string) => {
+        keychain.values.set(account, value);
+        return Promise.resolve();
+      },
+    });
+  };
+  const headless: TrialKeychain = () => Promise.resolve(undefined);
+  beforeEach(() => {
+    keychain.values.clear();
+    keychain.locked = false;
+  });
+
+  it("keeps the wrapping key in one 0600 fallback file on headless Linux and warns once", async () => {
+    project();
+    const warning = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const first = await prepareTryModelKeyCustody(root, headless);
+      const second = await prepareTryModelKeyCustody(root, headless);
+      expect(first).toEqual(second);
+      expect(first).toMatchObject({ activeKeyId: "local" });
+      expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
+      const messages = warning.mock.calls
+        .map(([text]) => String(text))
+        .filter((text) => text.includes("OS keychain unavailable"));
+      expect(messages).toHaveLength(1);
+      const files = await readdir(
+        join(home, ".config", "fungi", "oyster-trials"),
+      );
+      const trial = files[0];
+      if (trial === undefined) throw new Error("Missing private trial");
+      const fallback = join(
+        home,
+        ".config",
+        "fungi",
+        "oyster-trials",
+        trial,
+        "credential-keyring.json",
+      );
+      expect(statSync(fallback).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await readFile(fallback, "utf8"))).toEqual(first);
+    } finally {
+      warning.mockRestore();
+      vi.unstubAllEnvs();
+      vi.stubEnv("HOME", home);
+    }
+  });
 
   function project() {
     writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
@@ -1317,35 +1373,27 @@ describe("trial model-key custody", () => {
     );
   }
 
-  function key() {
-    const value = bindings().OYSTER_CREDENTIAL_KEY;
-    if (value?.type !== "secret_text" && value?.type !== "plain_text")
-      throw new Error("Missing native secret binding");
-    return value.value;
-  }
-
-  it("keeps a separate master key readable after restarting an existing trial", async () => {
+  it("keeps a separate master key in the OS keychain across trial restarts", async () => {
     project();
-    await prepareTryModelKeyCustody(root);
-    const first = key();
+    const first = await prepareTryModelKeyCustody(root, osKeychain);
     expect(
-      first === (await readFile(join(root, ".oyster-owner"), "utf8")).trim(),
+      first.keys[first.activeKeyId] ===
+        (await readFile(join(root, ".oyster-owner"), "utf8")).trim(),
     ).toBe(false);
-    const envelope = await createCredentialSealer(
-      { activeKeyId: "instance", keys: { instance: first } },
-      "restart-proof",
-    ).seal([], "model-token-fixture");
-    const before = await readFile(join(root, ".env.local"), "utf8");
-    await prepareTryModelKeyCustody(root);
-    expect((await readFile(join(root, ".env.local"), "utf8")) === before).toBe(
-      true,
+    const envelope = await createCredentialSealer(first, "restart-proof").seal(
+      [],
+      "model-token-fixture",
     );
-    expect(statSync(join(root, ".env.local")).mode & 0o777).toBe(0o600);
+    const restarted = await prepareTryModelKeyCustody(root, osKeychain);
+    expect(restarted).toEqual(first);
+    expect(keychain.values.size).toBe(1);
+    expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
+    expect(existsSync(join(root, ".env.local"))).toBe(false);
     expect(
-      await createCredentialSealer(
-        { activeKeyId: "instance", keys: { instance: key() } },
-        "restart-proof",
-      ).open([], envelope),
+      await createCredentialSealer(restarted, "restart-proof").open(
+        [],
+        envelope,
+      ),
     ).toBe("model-token-fixture");
     expect(await readFile(join(root, ".gitignore"), "utf8")).toContain(
       "/.env.local",
@@ -1353,7 +1401,7 @@ describe("trial model-key custody", () => {
   });
 
   it.each([".dev.vars", ".env", ".env.local"])(
-    "preserves a configured key and native bindings in %s",
+    "moves a configured key from %s into private custody without changing other native bindings",
     async (file) => {
       project();
       if (file === ".dev.vars")
@@ -1363,9 +1411,16 @@ describe("trial model-key custody", () => {
         );
       const before = `# existing local settings\nOYSTER_CREDENTIAL_KEY="${configuredKey}"\nOTHER_SECRET='unchanged value'\n`;
       writeFileSync(join(root, file), before);
-      await prepareTryModelKeyCustody(root);
-      expect(key() === configuredKey).toBe(true);
-      expect((await readFile(join(root, file), "utf8")) === before).toBe(true);
+      const migrated = await prepareTryModelKeyCustody(root, osKeychain);
+      expect(migrated.keys[migrated.activeKeyId]).toBe(configuredKey);
+      expect(migrated.keys.instance).toBe(configuredKey);
+      expect(await readFile(join(root, file), "utf8")).not.toContain(
+        configuredKey,
+      );
+      expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
+      expect(await prepareTryModelKeyCustody(root, osKeychain)).toEqual(
+        migrated,
+      );
       expect(bindings().OTHER_SECRET).toEqual({
         type: "secret_text",
         value: "unchanged value",
@@ -1381,11 +1436,11 @@ describe("trial model-key custody", () => {
     },
   );
 
-  it("adds only the missing binding to an existing native vars file", async () => {
+  it("does not append its wrapping key to an existing native vars file", async () => {
     project();
     const before = "# literal native secret\nOTHER_SECRET='literal $VALUE'\n";
     writeFileSync(join(root, ".dev.vars"), before);
-    await prepareTryModelKeyCustody(root);
+    await prepareTryModelKeyCustody(root, osKeychain);
     expect(
       (await readFile(join(root, ".dev.vars"), "utf8")).startsWith(before),
     ).toBe(true);
@@ -1393,14 +1448,14 @@ describe("trial model-key custody", () => {
       type: "secret_text",
       value: "literal $VALUE",
     });
-    expect(bindings().OYSTER_CREDENTIAL_KEY?.type).toBe("secret_text");
+    expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
   });
 
   it("refuses an invalid existing key without replacement or secret-bearing errors", async () => {
     project();
     const before = "OYSTER_CREDENTIAL_KEY=invalid-private-fixture\n";
     writeFileSync(join(root, ".dev.vars"), before);
-    await expect(prepareTryModelKeyCustody(root)).rejects.toThrow(
+    await expect(prepareTryModelKeyCustody(root, osKeychain)).rejects.toThrow(
       "This Oyster could not prepare private model-key storage.",
     );
     expect((await readFile(join(root, ".dev.vars"), "utf8")) === before).toBe(
@@ -1408,21 +1463,38 @@ describe("trial model-key custody", () => {
     );
   });
 
-  it("refuses when native dotenv loading is disabled, then retains the generated key", async () => {
+  it("does not depend on dotenv loading to retain a new key", async () => {
     project();
     vi.stubEnv("CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV", "false");
     try {
-      await expect(prepareTryModelKeyCustody(root)).rejects.toThrow(
-        "This Oyster could not prepare private model-key storage.",
-      );
+      const first = await prepareTryModelKeyCustody(root, osKeychain);
+      expect(await prepareTryModelKeyCustody(root, osKeychain)).toEqual(first);
+      expect(existsSync(join(root, ".env.local"))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
       vi.stubEnv("HOME", home);
     }
-    const before = await readFile(join(root, ".env.local"), "utf8");
-    await prepareTryModelKeyCustody(root);
-    expect((await readFile(join(root, ".env.local"), "utf8")) === before).toBe(
-      true,
+  });
+
+  it("refuses a locked keychain instead of silently downgrading custody", async () => {
+    project();
+    keychain.locked = true;
+    await expect(prepareTryModelKeyCustody(root, osKeychain)).rejects.toThrow(
+      "could not prepare private model-key storage",
     );
+    expect(keychain.values.size).toBe(0);
+    expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
+  });
+
+  it("refuses to replace an old key hidden by disabled native dotenv loading", async () => {
+    project();
+    const before = `OYSTER_CREDENTIAL_KEY=${configuredKey}\n`;
+    writeFileSync(join(root, ".env.local"), before);
+    vi.stubEnv("CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV", "false");
+    await expect(prepareTryModelKeyCustody(root, osKeychain)).rejects.toThrow(
+      "could not prepare private model-key storage",
+    );
+    expect(await readFile(join(root, ".env.local"), "utf8")).toBe(before);
+    expect(keychain.values.size).toBe(0);
   });
 });

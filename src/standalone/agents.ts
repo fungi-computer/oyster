@@ -66,6 +66,7 @@ import {
 } from "./website-channels.js";
 import {
   createDiscordReplies,
+  discordReplies002,
   type DiscordDelivery,
   type DiscordReplies,
 } from "../channels/discord-replies.js";
@@ -187,6 +188,8 @@ import {
 import {
   createInstanceCredentialStore,
   createModelKeyVault,
+  instanceCredentialKeyring,
+  instanceSecretCustody,
   ModelKeyRefused,
   type ModelKeyRecord,
   type ModelKeyRefusal,
@@ -618,8 +621,11 @@ export type StandaloneAgentsEnv = Readonly<{
   KEYS?: StandaloneTenancyEnv["KEYS"];
   OYSTER_ORIGIN: string;
   OYSTER_OWNER_KEY?: string;
-  /** Instance credential key (32 bytes, base64url) that seals model API keys; generated at install, never in the repository. */
+  /** Active wrapping key (32 bytes, base64url), held outside the stored data. */
   OYSTER_CREDENTIAL_KEY?: string;
+  OYSTER_CREDENTIAL_KEY_ID?: string;
+  /** JSON object of retained key ids to base64url wrapping keys. */
+  OYSTER_CREDENTIAL_PREVIOUS_KEYS?: string;
   AGENTS: DurableObjectNamespace<StandaloneAgentBase>;
   /** Host-only directory custody. Guest entrypoints expose operations, not this binding; Codemode receives only Mycelium modules. */
   AGENT_DIRECTORY: DurableObjectNamespace<AgentDirectory>;
@@ -798,8 +804,8 @@ export abstract class StandaloneAgentBase<
    * is recorded as owed before anything else, then paid off by the Agent's
    * durable host work: an Agent evicted mid-run still answers when it wakes.
    */
-  askDiscord(bindingId: string, ask: DiscordAsk): void {
-    this.discordReplies().record(bindingId, ask);
+  async askDiscord(bindingId: string, ask: DiscordAsk): Promise<void> {
+    await this.discordReplies().record(bindingId, ask);
     this.ctx.waitUntil(
       this.wakeRuntime().catch((cause: unknown) => {
         console.error("discord reply wake failed", cause);
@@ -811,6 +817,12 @@ export abstract class StandaloneAgentBase<
     return (this.discordReplyOwner ??= createDiscordReplies({
       sql: this.ctx.storage.sql,
       now: () => Date.now(),
+      ...instanceSecretCustody({
+        owner: this.ctx.storage,
+        ownerId: this.ctx.id.toString(),
+        env: this.env,
+        tables: [discordReplies002],
+      }),
       deliver: (reply) => this.deliverDiscord(reply),
       onExpired: (interactionId) => {
         console.warn("discord reply expired undelivered", interactionId);
@@ -1508,12 +1520,13 @@ export abstract class StandaloneAgentBase<
   private mailOwner: ReturnType<typeof agentMail> | undefined;
   private conversationAgentsOwner:
     ReturnType<typeof createConversationAgents> | undefined;
-  /** The Agents each of this Agent's conversations created or sent work to. */
+  /** This Agent's children by createdBy, and its conversations' watched sends. */
   private async conversationAgents() {
     const { createConversationAgents } =
       await import("@fungi.computer/shiitake-extensions/roster/conversation-agents");
     return (this.conversationAgentsOwner ??= createConversationAgents(
       this.ctx.storage,
+      () => this.ctx.id.name ?? this.ctx.id.toString(),
     ));
   }
   private mail() {
@@ -2228,12 +2241,17 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return this.archiveProjection().archived(agentId);
   }
 
+  private credentialOptions() {
+    return {
+      owner: this.ctx.storage,
+      ownerId: this.ctx.id.toString(),
+      keyring: instanceCredentialKeyring(this.env),
+      storage: credentialStorage(this.ctx.storage),
+    };
+  }
+
   private modelKeys() {
-    const storage = this.ctx.storage;
-    return createModelKeyVault({
-      credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
-      storage: credentialStorage(storage),
-    });
+    return createModelKeyVault(this.credentialOptions());
   }
 
   /** Domain refusals cross the DO RPC boundary as data, not as Error prototypes. */
@@ -2307,13 +2325,34 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     return (this.mcpOwner ??= createAgentMcpConnections({
       ownerId: this.ctx.id.name ?? "agents",
       store: storage,
-      vault: createInstanceCredentialStore({
-        credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
-        storage: credentialStorage(storage),
-      }),
+      vault: createInstanceCredentialStore(this.credentialOptions()),
       // The Worker's own egress: public internet only.
       send: (request) => fetch(request),
       hasAgent: (agentId) => this.has(agentId),
+      // Asked at grant and before every secret send. The registry's
+      // ownsComputer is the same owner frameComputerId re-admits through.
+      // Outside the instance's own directory nothing stands (fail closed).
+      subjectLive: async (subject) => {
+        const scope = this.machineScope();
+        if (this.ctx.id.name !== scope.durableName("agents")) return false;
+        const bindings: StandaloneComputerEnv = this.env;
+        switch (subject.kind) {
+          case "agent":
+            return this.has(subject.id);
+          case "computer":
+            return bindings.REGISTRY.getByName(
+              scope.durableName("registry"),
+            ).ownsComputer(subject.id);
+          case "team-key":
+            return (
+              (await this.env.KEYS.getByName(scope.durableName("keys")).live(
+                subject.id,
+              )) !== null
+            );
+          case "app":
+            return false;
+        }
+      },
       notify: (agentId) =>
         this.env.AGENTS.getByName(agentId).invalidateMcpConnections(),
       callbackUrl: mcpCallbackUrl(this.env.OYSTER_ORIGIN),
@@ -2878,10 +2917,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     }));
   }
   private discordVault() {
-    return createInstanceCredentialStore({
-      credentialKey: this.env.OYSTER_CREDENTIAL_KEY,
-      storage: credentialStorage(this.ctx.storage),
-    });
+    return createInstanceCredentialStore(this.credentialOptions());
   }
 
   /** Owner read of every Discord application bound to one of this tenant's Agents. */

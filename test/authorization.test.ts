@@ -224,7 +224,7 @@ await test("one decision table: who reaches which Agent, App and Computer", asyn
       {
         agentA: reachesAgent(authority, "agent_a"),
         agentB: reachesAgent(authority, "agent_b"),
-        computer: reachesComputer(authority),
+        computer: reachesComputer(authority, "workspace"),
         notesRead: await reachesInstallation(authority, notes, "read", ports),
         notesUse: await reachesInstallation(authority, notes, "use", ports),
         boardRead: await reachesInstallation(authority, board, "read", ports),

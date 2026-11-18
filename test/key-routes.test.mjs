@@ -11,7 +11,11 @@ import { URL } from "node:url";
 import { createOyster } from "../dist/host.js";
 import { fromNodeSqlite } from "@fungi.computer/ear-tag/keys/node";
 import { oysterKeyVocabulary } from "../dist/keys.js";
-import { keyAllowsComputerUse, keyAppAccess } from "../dist/authorization.js";
+import {
+  keyComputer,
+  keyAppAccess,
+  reachesComputer,
+} from "../dist/authorization.js";
 import { computerHost } from "./computer-host.fixture.mjs";
 
 // workers-git.js imports `cloudflare:workers` at module scope for its
@@ -30,6 +34,8 @@ const hooks = registerHooks({
 });
 const { OysterKeys, gitAdminRoutes } = await import("../dist/workers-git.js");
 const { tenantScope, defaultTenant } = await import("../dist/tenant.js");
+const { standaloneComputerSelection } =
+  await import("../dist/standalone/computer-fleet.js");
 hooks.deregister();
 const { ownerOrKeyAuth } = await import("../dist/auth.js");
 
@@ -125,7 +131,7 @@ test("an owner mints and verifies an enrollment-only Oyster key without App or C
   const live = await store.live(key.keyId);
   assert.ok(live);
   assert.equal(keyAppAccess(live, "notes"), null);
-  assert.equal(keyAllowsComputerUse(live), false);
+  assert.equal(keyComputer(live, "fixed-computer"), false);
 });
 
 test("refuses an agent_-shaped name at issuance: Bonsai's mayPush treats a key name and an Agent id as the same name, so they must stay disjoint", async () => {
@@ -266,4 +272,91 @@ test("an expired key is refused 401 on its very next authenticated request", asy
     kind: "refused",
     status: 401,
   });
+});
+
+test("a key limited to one Computer stays on it after the owner switches Computers; all keys follow, revoke stops it", async () => {
+  const keys = keysNamespace();
+  const scope = tenantScope(defaultTenant, "https://oyster.example");
+  const app = createOyster({
+    ...(await computerHost(owner, "main")),
+    ownerRoutes: gitAdminRoutes({ KEYS: keys }, scope),
+  });
+  const issue = async (name, computer) => {
+    const response = await app.request("/api/keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        grants: [
+          ...allAppsGrant,
+          { capability: "computer.use", targets: computer },
+        ],
+      }),
+    });
+    assert.equal(response.status, 201);
+    const { plaintext, key } = await response.json();
+    assert.deepEqual(key.grants[1].targets, computer);
+    return plaintext;
+  };
+  const spare = await issue("composer", { kind: "selected", ids: ["spare"] });
+  const every = await issue("everywhere", { kind: "all" });
+  const store = () => keys.getByName(scope.durableName("keys"));
+  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", store);
+  const keysLive = (keyId) => store().live(keyId);
+  // The owner's fleet: the canonical owner holds these three Computers.
+  const owned = new Set(["main", "spare", "other"]);
+  let selected = "main";
+  const registry = {
+    selectedComputer: async () => selected,
+    computerFleet: async (memberId, request) =>
+      memberId === "owner" && owned.has(request.computerId)
+        ? { computerId: request.computerId }
+        : null,
+  };
+  const select = (secret, query = "") =>
+    standaloneComputerSelection(registry, keysLive, {
+      auth,
+      request: new Request(`https://oyster.example/apps/notes/${query}`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      }),
+    });
+  assert.equal(await select(spare), "spare");
+  assert.equal(await select(every), "main");
+  assert.equal(await select(ownerKeySecret), "main");
+  // The owner switches Computers in the UI: only the limited key stays put.
+  selected = "other";
+  assert.equal(await select(spare), "spare");
+  assert.equal(await select(every), "other");
+  assert.equal(await select(ownerKeySecret), "other");
+  // Naming its own Computer is fine; naming another is refused, and an
+  // all-Computers key still may not name one (only the owner does).
+  assert.equal(await select(spare, "?computerId=spare"), "spare");
+  await assert.rejects(select(spare, "?computerId=main"), { status: 403 });
+  await assert.rejects(select(every, "?computerId=spare"), { status: 403 });
+  assert.equal(await select(ownerKeySecret, "?computerId=spare"), "spare");
+  // Its Computer leaves the fleet: the key is refused, never moved.
+  owned.delete("spare");
+  await assert.rejects(select(spare), { status: 404 });
+  owned.add("spare");
+  const live = await keysLive("composer");
+  const authority = { kind: "key", key: live };
+  assert.equal(reachesComputer(authority, "spare"), true);
+  assert.equal(reachesComputer(authority, "other"), false);
+  // Revoked: the next call authenticates as no one and reaches no Computer.
+  const revoke = await app.request("/api/keys/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keyId: "composer", requestId: "req-revoke-spare" }),
+  });
+  assert.equal(revoke.status, 200);
+  assert.equal(await keysLive("composer"), null);
+  assert.deepEqual(
+    await auth.authenticate(
+      new Request("https://oyster.example/apps/notes/", {
+        headers: { Authorization: `Bearer ${spare}` },
+      }),
+    ),
+    { kind: "refused", status: 401 },
+  );
+  assert.equal(reachesComputer({ kind: "key", key: null }, "spare"), false);
 });

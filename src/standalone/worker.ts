@@ -141,7 +141,8 @@ export { AgentDirectory } from "./agents.js";
 const standaloneRoot = (
   selectComputer: (
     registry: ReturnType<typeof tenantRegistry>,
-    incoming?: Parameters<typeof standaloneComputerSelection>[1],
+    keysLive: Parameters<typeof standaloneComputerSelection>[1],
+    incoming?: Parameters<typeof standaloneComputerSelection>[2],
   ) => Promise<{ computerId: string; computerName: string | null }>,
 ) => {
   const root: OysterGitRoot<StandaloneEnv> = oysterGitRoot<StandaloneEnv>({
@@ -179,6 +180,7 @@ const standaloneRoot = (
       const registry = tenantRegistry(env, scope);
       const { computerId, computerName } = await selectComputer(
         registry,
+        keysLive,
         request,
       );
       return {
@@ -233,8 +235,12 @@ const standaloneRoot = (
   });
   return root;
 };
-const oysterRoot = standaloneRoot(async (registry, incoming) => {
-  const computerId = await standaloneComputerSelection(registry, incoming);
+const oysterRoot = standaloneRoot(async (registry, keysLive, incoming) => {
+  const computerId = await standaloneComputerSelection(
+    registry,
+    keysLive,
+    incoming,
+  );
   return { computerId, computerName: await registry.computerName(computerId) };
 });
 export class OysterMcp extends createOysterGitMcpOwner(oysterRoot) {}

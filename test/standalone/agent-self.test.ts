@@ -92,6 +92,13 @@ it("lets an Agent rename only itself, with typed duplicate refusal and no-op rep
         context,
       ),
     ).rejects.toBeDefined();
+    for (const hidden of ["Cr\u202Eumb", "Cr\u200Bumb", "Cr\u2066umb"]) {
+      await expect(
+        invokeModuleOperation(module, "rename", { name: hidden }, context),
+      ).rejects.toBeDefined();
+      // The owner's rename is held to the same shape.
+      expect(() => directory.rename(moss.agentId, hidden, owner)).toThrow();
+    }
     await expect(
       invokeModuleOperation(module, "setAvatar", { avatar }, context),
     ).resolves.toEqual({ avatar });

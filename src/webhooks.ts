@@ -12,6 +12,7 @@ import {
 } from "@fungi.computer/braid/runtime";
 import {
   workflowWebhookCustody,
+  workflowWebhookKeys002,
   workflowWebhookVerifierSchema,
   type WorkflowWebhookVerifier,
 } from "./webhook-custody.js";
@@ -21,6 +22,7 @@ import {
   type WebhookIngressLimits,
 } from "./webhook-ingress.js";
 import { workflowWebhookAbuse } from "./webhook-abuse.js";
+import { credentialMigration002 } from "./credential-migration-002.js";
 
 const ids = defineIdFamily({
   family: "workflow-webhooks",
@@ -96,7 +98,10 @@ export async function workflowWebhookControlResponse<Principal>(
  * No separate intake state machine or run/settlement store exists here.
  */
 export function createWorkflowWebhooks<Principal>(
-  options: Parameters<typeof workflowWebhookCustody<Principal>>[0] & {
+  options: Omit<
+    Parameters<typeof workflowWebhookCustody<Principal>>[0],
+    "ready"
+  > & {
     scope: Readonly<{ host: string; tenant: string }>;
     runs: Pick<
       ReturnType<typeof createTeamWorkflowRuns>,
@@ -118,7 +123,19 @@ export function createWorkflowWebhooks<Principal>(
     reportFailure(): void;
   },
 ) {
-  const custody = workflowWebhookCustody(options);
+  // Migration 002 seals plaintext keys before any row is read or written.
+  const ready = credentialMigration002({
+    store: options,
+    sealer: options.sealer,
+    tables: [workflowWebhookKeys002],
+  });
+  const custody = workflowWebhookCustody({ ...options, ready });
+  // Seal at composition too, so an idle store does not keep plaintext keys.
+  void Effect.runPromise(Effect.result(Effect.tryPromise(ready))).then(
+    (sealed) => {
+      if (Result.isFailure(sealed)) options.reportFailure();
+    },
+  );
   const abuse = workflowWebhookAbuse({
     ...options.abuse,
     scope: options.scope,
@@ -137,7 +154,7 @@ export function createWorkflowWebhooks<Principal>(
     async deliver(delivery) {
       if (!(await abuse.bindingAdmission(delivery.bindingId)))
         return { status: "refused" };
-      const verified = custody.verification.verify(delivery);
+      const verified = await custody.verification.verify(delivery);
       if (verified.status !== "ok") return { status: "refused" };
       const body = z
         .json()

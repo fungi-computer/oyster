@@ -194,10 +194,11 @@ npx @fungi.computer/oyster install-apps
 ```
 
 Your workers.dev subdomain is on the Workers & Pages overview in the Cloudflare
-dashboard. `OYSTER_CREDENTIAL_KEY` seals the model API keys you add in Settings;
-keep a copy, because losing it makes those keys unreadable. Set `OYSTER_ORIGIN`
-in `wrangler.jsonc` if you deploy again later, since every deploy replaces the
-Worker's variables.
+dashboard. `OYSTER_CREDENTIAL_KEY` seals the model API keys you add in Settings
+and the webhook, subscription and Discord reply secrets Oyster stores; without
+it those features refuse as unavailable. Keep a copy, because losing it makes
+those secrets unreadable. Set `OYSTER_ORIGIN` in `wrangler.jsonc` if you deploy
+again later, since every deploy replaces the Worker's variables.
 
 The first `install-apps` takes about 15 to 20 minutes, mostly building the seven
 Apps on your Computer, two at a time. It prints a line per step and a timing

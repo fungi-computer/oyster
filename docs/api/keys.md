@@ -86,10 +86,11 @@ const oysterKeyVocabulary: GrantVocabulary<OysterKeyCapability>;
 
 `apps.use` also reaches `apps.read` (one level, per `defineGrants`'s own
 `implies`): a key that may change an App's data may also read it. `computer.use`
-has no narrower capability under it; the Computer is on or off, host-wide.
-`agents.use` selects Agent ids independently of App grants. `machine.enroll`
-admits enrollment only; it implies no App or Computer access. The enrollment
-owner, not this vocabulary, owns one-use consumption.
+has no narrower capability under it. Over all Computers it follows the owner's
+current selection; over selected Computer ids it stays on those Computers
+whatever the owner selects. `agents.use` selects Agent ids independently of App
+grants. `machine.enroll` admits enrollment only; it implies no App or Computer
+access. The enrollment owner, not this vocabulary, owns one-use consumption.
 
 ---
 
@@ -99,8 +100,7 @@ owner, not this vocabulary, owns one-use consumption.
 const computerUseGrant: Grant<OysterKeyCapability>;
 ```
 
-The grant that turns on the Computer for a key, host-wide; there is no narrower
-target.
+The grant that turns on the owner's currently selected Computer for a key.
 
 ## Functions
 

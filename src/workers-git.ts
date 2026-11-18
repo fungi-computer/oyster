@@ -5,6 +5,7 @@ import {
   tenantScope,
   type OysterTenancy,
   type ResolvedTenant,
+  type TenantPrincipal,
   type TenantScope,
 } from "./tenant.js";
 import { createOysterMcpOwner } from "./mcp-owner.js";
@@ -78,6 +79,15 @@ import {
   type ArtifactsRepositoryInfo as ProviderInfo,
 } from "@fungi.computer/burrow";
 import { attemptWebhook } from "./webhook-delivery.js";
+import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
+import { CredentialError } from "@fungi.computer/veil/credential-store";
+import type { SqlStore } from "@fungi.computer/veil/connections";
+import {
+  credentialMigration002,
+  type SealedTable002,
+  type SecretSealer,
+} from "./credential-migration-002.js";
 import {
   createRecipientDeliveries,
   type HostEventSource,
@@ -678,6 +688,8 @@ export type SubscriptionCreated = Readonly<{
   subscription: WebhookSubscription;
   secret: string;
 }>;
+/** A host with no configured keyring stores no new signing secret. */
+export type SubscriptionRefused = Readonly<{ error: "unavailable" }>;
 
 /** One delivery attempt record. */
 export type WebhookDelivery = Readonly<{
@@ -708,6 +720,39 @@ const deliveryRow = Schema.Struct({
   updated_at: Schema.Number,
 });
 const typesSchema = Schema.fromJsonString(Schema.Array(Schema.String));
+const subscriptionContext = (id: string) => ["webhook-subscription", id];
+const columnNames = Schema.Array(Schema.Struct({ name: Schema.String }));
+
+function ensureSubscriptions(sql: SqlStore["sql"]) {
+  sql.exec(`CREATE TABLE IF NOT EXISTS oyster_subscriptions (
+    id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, url TEXT NOT NULL, sealed_secret TEXT NOT NULL,
+    types TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT`);
+}
+
+const legacySubscription = Schema.Struct({
+  id: Schema.String,
+  installation_id: Schema.String,
+  url: Schema.String,
+  secret: Schema.String,
+  types: Schema.String,
+  created_at: Schema.Number,
+});
+
+/** Migration 002's step: a subscription's signing secret is sealed. */
+const webhookSubscriptions002: SealedTable002 = {
+  table: "oyster_subscriptions",
+  plaintext: (columns) => columns.includes("secret"),
+  secretColumns: ["secret"],
+  ensure: ensureSubscriptions,
+  async seal(sealer, raw) {
+    const { secret, ...row } =
+      Schema.decodeUnknownSync(legacySubscription)(raw);
+    return {
+      ...row,
+      sealed_secret: await sealer.seal(subscriptionContext(row.id), secret),
+    };
+  },
+};
 
 function toSubscription(row: unknown): WebhookSubscription {
   const decoded = Schema.decodeUnknownSync(subscriptionRow)(row);
@@ -724,17 +769,19 @@ function toSubscription(row: unknown): WebhookSubscription {
  * The tenant's App event delivery owner: webhook subscriptions with signed,
  * retried deliveries, and host recipients with durable per-recipient records.
  * An emit commits here and returns; every delivery happens on the alarm.
+ * Signing secrets rest only in this object's S1 envelope.
  */
 export class OysterWebhooks<
   Env extends OysterKeysEnv = OysterKeysEnv,
 > extends DurableObject<Env> {
   readonly #recipients: ReturnType<typeof createRecipientDeliveries>;
+  #secrets:
+    | Readonly<{ sealer: SecretSealer | undefined; ready: () => Promise<void> }>
+    | undefined;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    ensureSubscriptions(ctx.storage.sql);
     ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS oyster_subscriptions (
-        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, url TEXT NOT NULL, secret TEXT NOT NULL,
-        types TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS oyster_deliveries (
         id TEXT PRIMARY KEY, subscription TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL,
         state TEXT NOT NULL, attempts INTEGER NOT NULL, next_at INTEGER NOT NULL,
@@ -748,6 +795,30 @@ export class OysterWebhooks<
       deliver: (recipient, event) =>
         this.deliverToRecipient({ recipient, event }),
     });
+    // Plaintext secrets an older Oyster left are sealed by the next alarm,
+    // which the platform retries while no keyring is configured.
+    const columns = Schema.decodeUnknownSync(columnNames)(
+      ctx.storage.sql.exec("PRAGMA table_info(oyster_subscriptions)").toArray(),
+    ).map(({ name }) => name);
+    if (webhookSubscriptions002.plaintext(columns))
+      void ctx.blockConcurrencyWhile(() => this.wakeBy(Date.now()));
+  }
+  /** The host's S1 sealer for this object; none means no keyring is configured. */
+  protected credentialSealer(): SecretSealer | undefined {
+    return undefined;
+  }
+  private secrets() {
+    if (this.#secrets !== undefined) return this.#secrets;
+    const sealer = this.credentialSealer();
+    this.#secrets = {
+      sealer,
+      ready: credentialMigration002({
+        store: this.ctx.storage,
+        sealer,
+        tables: [webhookSubscriptions002],
+      }),
+    };
+    return this.#secrets;
   }
   /**
    * A root that names host recipients delivers to them here. This host has
@@ -770,12 +841,12 @@ export class OysterWebhooks<
     return this.#recipients.deliveries(recipient);
   }
   /** Subscribe `url` to an installation's events; returns the secret once. */
-  subscribe(input: {
+  async subscribe(input: {
     installationId: string;
     url: string;
     types: readonly string[];
     secret?: string | undefined;
-  }): SubscriptionCreated {
+  }): Promise<SubscriptionCreated | SubscriptionRefused> {
     const secret =
       input.secret ??
       `whsec_${btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24))))}`;
@@ -786,12 +857,24 @@ export class OysterWebhooks<
       types: [...input.types],
       createdAt: Date.now(),
     };
+    let sealed: string;
+    try {
+      const { sealer, ready } = this.secrets();
+      await ready();
+      if (sealer === undefined) throw new CredentialError("unavailable");
+      sealed = await sealer.seal(subscriptionContext(subscription.id), secret);
+    } catch (cause) {
+      // Domain refusals cross the DO RPC boundary as data.
+      if (cause instanceof CredentialError && cause.code === "unavailable")
+        return { error: "unavailable" };
+      throw cause;
+    }
     this.ctx.storage.sql.exec(
-      "INSERT INTO oyster_subscriptions (id, installation_id, url, secret, types, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO oyster_subscriptions (id, installation_id, url, sealed_secret, types, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       subscription.id,
       subscription.installationId,
       subscription.url,
-      secret,
+      sealed,
       JSON.stringify(subscription.types),
       subscription.createdAt,
     );
@@ -880,6 +963,8 @@ export class OysterWebhooks<
   /** Deliver due webhooks and recipient rows, then schedule the next retry. */
   override async alarm(): Promise<void> {
     await this.#recipients.drain();
+    const { sealer, ready } = this.secrets();
+    await ready();
     const now = Date.now();
     const due = this.ctx.storage.sql
       .exec<{
@@ -896,14 +981,38 @@ export class OysterWebhooks<
     await Promise.all(
       due.map(async (delivery) => {
         const target = this.ctx.storage.sql
-          .exec<{ url: string; secret: string }>(
-            "SELECT url, secret FROM oyster_subscriptions WHERE id = ?",
+          .exec<{ url: string; sealed_secret: string }>(
+            "SELECT url, sealed_secret FROM oyster_subscriptions WHERE id = ?",
             delivery.subscription,
           )
           .toArray()[0];
         let status: number | null = null;
-        if (target !== undefined) {
-          const attempt = await attemptWebhook(target, delivery);
+        // A secret that does not open counts as a failed attempt: retried,
+        // then failed like a refusal, never sent unsigned.
+        const secret =
+          target === undefined
+            ? undefined
+            : await Effect.runPromise(
+                Effect.result(
+                  Effect.tryPromise(async () => {
+                    if (sealer === undefined)
+                      throw new CredentialError("unavailable");
+                    return sealer.open(
+                      subscriptionContext(delivery.subscription),
+                      target.sealed_secret,
+                    );
+                  }),
+                ),
+              );
+        if (
+          target !== undefined &&
+          secret !== undefined &&
+          Result.isSuccess(secret)
+        ) {
+          const attempt = await attemptWebhook(
+            { url: target.url, secret: secret.success },
+            delivery,
+          );
           status = attempt.kind === "response" ? attempt.status : null;
         }
         const attempts = delivery.attempts + 1;
@@ -1171,13 +1280,15 @@ export function gitAdminRoutes(
     );
     if (body._tag === "None")
       return Response.json({ error: "Invalid subscription" }, { status: 400 });
-    return Response.json(
-      await env.WEBHOOKS.getByName(scope.durableName("webhooks")).subscribe({
-        ...body.value,
-        types: body.value.types ?? [],
-      }),
-      { status: 201 },
-    );
+    const created = await env.WEBHOOKS.getByName(
+      scope.durableName("webhooks"),
+    ).subscribe({
+      ...body.value,
+      types: body.value.types ?? [],
+    });
+    return "error" in created
+      ? Response.json(created, { status: 503 })
+      : Response.json(created, { status: 201 });
   });
   routes.get("/api/webhooks", owner, async () =>
     Response.json(
@@ -1273,7 +1384,7 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
     env: Env,
     keysLive: OysterKeysLivePort,
     scope: TenantScope,
-    request?: Readonly<{ request: Request; auth: OysterAuth }>,
+    caller?: OysterWorkspaceCaller,
   ) => OysterWorkspace | Promise<OysterWorkspace>;
   /** Additional capabilities share the exact workspace selected for the base host. */
   capabilities?: (
@@ -1303,6 +1414,14 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
 export type OysterGitWorkerHost = OysterHost & Readonly<{ git: OysterGitHost }>;
 
 /**
+ * Who a workspace is selected for: an HTTP request it may authenticate, or a
+ * principal already admitted elsewhere (an MCP catalog).
+ */
+export type OysterWorkspaceCaller =
+  | Readonly<{ request: Request; auth: OysterAuth }>
+  | Readonly<{ principal: TenantPrincipal }>;
+
+/**
  * `host.keys.live`'s own shape: the live facts behind a key id, re-checked
  * against the tenant's current owner on every read; null for an unknown,
  * revoked, expired, suspended key, or one a since-reassigned tenant's
@@ -1322,6 +1441,7 @@ export type OysterGitRoot<Env extends OysterGitWorkerEnv> = Readonly<{
     env: Env,
     scope: TenantScope,
     request?: Request,
+    principal?: TenantPrincipal,
   ): Promise<OysterGitWorkerHost>;
 }>;
 
@@ -1357,7 +1477,7 @@ export function oysterGitRoot<Env extends OysterGitWorkerEnv>(
       if (resolved !== null) state.admissions.set(request, resolved);
       return resolved;
     },
-    hostFor(env, scope, request) {
+    hostFor(env, scope, request, principal) {
       const state = stateOf(env);
       return oysterGitWorkerHost(
         env,
@@ -1372,6 +1492,7 @@ export function oysterGitRoot<Env extends OysterGitWorkerEnv>(
           ),
         },
         request,
+        principal,
       );
     },
   };
@@ -1678,6 +1799,7 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   options: OysterGitWorkerOptions<Env>,
   selected: ResolvedTenant,
   request?: Request,
+  principal?: TenantPrincipal,
 ): Promise<OysterGitWorkerHost> {
   const { scope, auth } = selected;
   // The one path to a key's liveness: the stored owner id is re-checked
@@ -1699,7 +1821,11 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
     env,
     keysLive,
     scope,
-    request === undefined ? undefined : { request, auth },
+    request !== undefined
+      ? { request, auth }
+      : principal === undefined
+        ? undefined
+        : { principal },
   )) ?? {
     computerId: scope.computerName("workspace"),
     files: r2FileSource(env.RELEASES, scope.workspacePrefix),
@@ -1834,5 +1960,7 @@ function pinnedTenantAuth(
 export function createOysterGitMcpOwner<Env extends OysterGitWorkerEnv>(
   root: OysterGitRoot<Env>,
 ) {
-  return createOysterMcpOwner<Env>((env, scope) => root.hostFor(env, scope));
+  return createOysterMcpOwner<Env>((env, scope, principal) =>
+    root.hostFor(env, scope, undefined, principal),
+  );
 }

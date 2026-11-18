@@ -11,6 +11,30 @@ import {
 } from "../../src/standalone/try-custody.js";
 import { trialWorkerConfiguration } from "../../src/standalone/try-worker.js";
 
+it("delivers active and retained wrapping keys as private Worker bindings", () => {
+  const configuration = trialWorkerConfiguration({
+    directory: "/synthetic",
+    port: 8787,
+    key: "owner",
+    credentialKeyring: {
+      activeKeyId: "new",
+      keys: { new: "A".repeat(43), old: "B".repeat(43) },
+    },
+  });
+  expect(configuration.bindings?.OYSTER_CREDENTIAL_KEY).toEqual({
+    type: "secret_text",
+    value: "A".repeat(43),
+  });
+  expect(configuration.bindings?.OYSTER_CREDENTIAL_KEY_ID).toEqual({
+    type: "plain_text",
+    value: "new",
+  });
+  expect(configuration.bindings?.OYSTER_CREDENTIAL_PREVIOUS_KEYS).toEqual({
+    type: "secret_text",
+    value: JSON.stringify({ old: "B".repeat(43) }),
+  });
+});
+
 it("serves a loopback trial with secret custody and no debugger, then closes it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "oyster-trial-worker-"));
   const previousCwd = process.cwd();
@@ -60,6 +84,10 @@ it("serves a loopback trial with secret custody and no debugger, then closes it"
         directory,
         port,
         key: "synthetic-owner",
+        credentialKeyring: {
+          activeKeyId: "local",
+          keys: { local: "A".repeat(43) },
+        },
       }),
     );
     await worker.ready;

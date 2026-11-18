@@ -307,6 +307,18 @@ assert.equal(
   400,
   "an oversized name is refused",
 );
+for (const hidden of [
+  "Gar\u202Edener",
+  "Gar\u200Bdener",
+  "Gar\u2066dener",
+  "Gar\ndener",
+])
+  assert.equal(
+    (await rename(hidden)).status,
+    400,
+    "a control, bidi or zero-width character in a name is refused",
+  );
+assert.equal(renameWrites, 1, "a refused name never reaches the directory");
 assert.equal((await rename("Gardener", "agent_9")).status, 404);
 const second = await (await create("owner", "r2")).json();
 agentGrants = [

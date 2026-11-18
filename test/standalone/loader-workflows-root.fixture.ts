@@ -13,6 +13,8 @@ export class StandaloneWorkflowRuns extends WorkflowRuns {
   ) {
     super(ctx, {
       ...env,
+      // Webhook signing keys rest only in the library's envelope.
+      OYSTER_CREDENTIAL_KEY: "E".repeat(43),
       WORKFLOW_WEBHOOK_POLICY: {
         limits: {
           bodyBytes: 64 * 1024,

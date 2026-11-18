@@ -180,6 +180,203 @@ test("captured fleet frames keep A and B files and processes isolated from the c
   }
 });
 
+test("a key's captured frame re-reads the key: revoked, regranted or disowned, its next call is refused", async () => {
+  const scope = scopeOf({ OYSTER_ORIGIN: "https://key-frame.test" });
+  const owned = new Set(["spare", "main"]);
+  let live = {
+    keyId: "composer",
+    owner: "owner",
+    grantVersion: 1,
+    grants: [
+      {
+        capability: "computer.use",
+        targets: { kind: "selected", ids: ["spare"] },
+      },
+    ],
+  };
+  const written = [];
+  const env = {
+    OYSTER_COMPUTER_ID: "main",
+    REGISTRY: {
+      getByName: () => ({
+        ownsComputer: (id) => owned.has(id),
+        computerFleet: async (memberId, request) =>
+          memberId === "owner" && owned.has(request.computerId)
+            ? { computerId: request.computerId }
+            : { error: "owner_required" },
+      }),
+    },
+    KEYS: {
+      getByName: (name) => {
+        assert.equal(name, scope.durableName("keys"));
+        return { live: async (keyId) => (keyId === live?.keyId ? live : null) };
+      },
+    },
+    COMPUTER: {
+      getByName: (id) => ({
+        value: async (authority, action, input) => {
+          assert.equal(authority.computerId, id);
+          written.push(id);
+          return { path: input.path, bytesWritten: input.content.length };
+        },
+      }),
+    },
+  };
+  const frame = (computerId) => ({
+    signal: new globalThis.AbortController().signal,
+    facts: {
+      subject: {
+        kind: "call",
+        context: {
+          computerId,
+          actor: { kind: "team-key", keyId: "composer" },
+          idempotencyKey: "write",
+        },
+      },
+      selection: { owner: { kind: "installation", id: "shed" } },
+      deadlineAt: Date.now() + 60_000,
+    },
+    host: { method: { name: "run" } },
+  });
+  const write = (computerId) =>
+    computerInvocation(env, scope, frame(computerId), "write", [
+      { path: "/workspace/a.txt", content: "a" },
+    ]);
+  await write("spare");
+  assert.deepEqual(written, ["spare"]);
+  // A frame captured on a Computer the key does not name never runs.
+  await assert.rejects(write("main"), { code: "revoked" });
+  // The Computer leaves the owner's fleet.
+  owned.delete("spare");
+  await assert.rejects(write("spare"), { code: "revoked" });
+  owned.add("spare");
+  // Revoked or expired: the key reads as null.
+  live = null;
+  await assert.rejects(write("spare"), { code: "revoked" });
+  assert.deepEqual(written, ["spare"]);
+  // A key with no computer.use grant keeps the owner's Computer, as any App
+  // call does; only a Computer the owner no longer holds refuses it.
+  live = {
+    keyId: "composer",
+    owner: "owner",
+    grantVersion: 2,
+    grants: [{ capability: "apps.use", targets: { kind: "all" } }],
+  };
+  await write("main");
+  assert.deepEqual(written, ["spare", "main"]);
+  owned.delete("main");
+  await assert.rejects(write("main"), { code: "revoked" });
+});
+
+test("a key starts a process on its own Computer under the requestId it names, and an Agent still cannot", async () => {
+  const scope = scopeOf({ OYSTER_ORIGIN: "https://key-start.test" });
+  const callerScope = { kind: "standalone", tenant: "default" };
+  let live = {
+    keyId: "composer",
+    owner: "owner",
+    grantVersion: 1,
+    grants: [
+      {
+        capability: "computer.use",
+        targets: { kind: "selected", ids: ["spare"] },
+      },
+    ],
+  };
+  const started = [];
+  const env = {
+    OYSTER_COMPUTER_ID: "main",
+    REGISTRY: {
+      getByName: () => ({
+        ownsComputer: () => true,
+        computerFleet: async (memberId, request) =>
+          memberId === "owner" ? { computerId: request.computerId } : null,
+      }),
+    },
+    KEYS: {
+      getByName: () => ({
+        live: async (keyId) => (keyId === live?.keyId ? live : null),
+      }),
+    },
+    COMPUTER: {
+      getByName: (id) => ({
+        value: async (authority, action, input) => {
+          assert.equal(authority.computerId, id);
+          assert.deepEqual([...authority.actions], [action]);
+          started.push({
+            id,
+            action,
+            input,
+            actor: authority.provenance.actor,
+          });
+          return { id: "process", state: "running", ...input };
+        },
+      }),
+    },
+  };
+  const frame = (computerId, actor, idempotencyKey) => ({
+    signal: new globalThis.AbortController().signal,
+    facts: {
+      subject: {
+        kind: "call",
+        context:
+          idempotencyKey === undefined
+            ? { scope: callerScope, computerId, actor }
+            : { scope: callerScope, computerId, actor, idempotencyKey },
+      },
+      selection: { owner: { kind: "installation", id: "shed" } },
+      deadlineAt: Date.now() + 60_000,
+    },
+    host: { method: { name: "start" } },
+  });
+  const key = { kind: "team-key", keyId: "composer" };
+  const start = (computerId, actor, args, idempotencyKey) =>
+    computerInvocation(
+      env,
+      scope,
+      frame(computerId, actor, idempotencyKey),
+      "processStart",
+      args,
+    );
+  await start("spare", key, [{ command: "pnpm dev", requestId: "req_one" }]);
+  assert.deepEqual(started, [
+    {
+      id: "spare",
+      action: "processStart",
+      input: {
+        command: "pnpm dev",
+        requestId: "req_one",
+        requestScope: 'installation:["shed","start","team-key:composer"]',
+      },
+      actor: "team-key:composer",
+    },
+  ]);
+  // The host's own key wins over the one the caller names.
+  await start("spare", key, [{ command: "x", requestId: "named" }], "host");
+  assert.equal(started[1].input.requestId, "host");
+  // No key from the host or the caller: nothing starts.
+  await assert.rejects(start("spare", key, [{ command: "x" }]), {
+    code: "revoked",
+  });
+  // An Agent never starts a process here, with or without a requestId.
+  await assert.rejects(
+    start("spare", { kind: "agent", agentId: "agent" }, [
+      { command: "x", requestId: "req_two" },
+    ]),
+    { code: "revoked" },
+  );
+  // Another Computer, or a revoked key: refused before any native call.
+  await assert.rejects(
+    start("main", key, [{ command: "x", requestId: "req_three" }]),
+    { code: "revoked" },
+  );
+  live = null;
+  await assert.rejects(
+    start("spare", key, [{ command: "x", requestId: "req_four" }]),
+    { code: "revoked" },
+  );
+  assert.equal(started.length, 2);
+});
+
 test("a captured frame moves one file as files.move and the decoder keeps its refusals", async () => {
   const calls = [];
   const scope = scopeOf({ OYSTER_ORIGIN: "https://move.test" });
@@ -765,6 +962,11 @@ async function instanceBinding(
     REGISTRY: {
       getByName: () => ({
         ownsComputer: (computerId) => computerId === env.OYSTER_COMPUTER_ID,
+        // The fixture's keys belong to the canonical owner of this Computer.
+        computerFleet: async (memberId, request) =>
+          memberId === "owner" && request.computerId === env.OYSTER_COMPUTER_ID
+            ? { computerId: request.computerId }
+            : null,
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
         computerName: async () => null,
         get: async () => {
@@ -1923,7 +2125,7 @@ const refusedCode = (pending) =>
     (error) => error.code,
   );
 
-test("processStart refuses a missing host key and guest-owned host fields", async (t) => {
+test("processStart refuses a missing key and guest-owned scope and method fields", async (t) => {
   const { env, calls } = fixture();
   const { call, binding } = await instanceBinding(t, env, ["processStart"]);
   const response = await call(
@@ -1938,9 +2140,6 @@ test("processStart refuses a missing host key and guest-owned host fields", asyn
     },
   );
   assert.deepEqual(response, { ok: true, value: { refused: "revoked" } });
-  await assert.rejects(
-    binding.processStart({ command: "serve", requestId: "guest" }),
-  );
   await assert.rejects(
     binding.processStart({ command: "serve", requestScope: "guest" }),
   );
@@ -2069,10 +2268,9 @@ test("the same opaque key in two declared methods cannot replay another method's
   assert.notEqual(first.value.id, second.value.id);
 });
 
-for (const actor of [
-  { kind: "agent", agentId: "owner" },
-  { kind: "team-key", keyId: "owner" },
-]) {
+// A key starts a process under its own name (see "a key starts a process on its
+// own Computer"); an Agent never does.
+for (const actor of [{ kind: "agent", agentId: "owner" }]) {
   test(`processStart refuses ${actor.kind} actors without a member fallback`, async (t) => {
     const { env, calls } = fixture();
     const { call } = await instanceBinding(t, env, ["processStart"]);
@@ -2479,6 +2677,33 @@ test("App bindings enforce declared operations and refuse selectors and disabled
   await assert.rejects(binding.ports({}), /instance_inactive/u);
   assert.deepEqual(calls, [
     { action: "listPorts", input: {}, actor: "member:owner" },
+  ]);
+});
+
+test("an apps.use-only key still calls an App's Computer binding on the owner's Computer", async (t) => {
+  const { env, calls } = fixture();
+  // A key granted Apps but no computer.use: the App reaches the Computer
+  // through the permissions the owner approved for it, not through the key.
+  env.KEYS = {
+    getByName: () => ({
+      live: async (keyId) => ({
+        keyId,
+        owner: "owner",
+        grantVersion: 1,
+        grants: [{ capability: "apps.use", targets: { kind: "all" } }],
+      }),
+    }),
+  };
+  const { run } = await instanceBinding(t, env, ["ports"]);
+  const response = await run((computer) => computer.ports({}), {
+    scope: { kind: "standalone", tenant: "default" },
+    computerId: env.OYSTER_COMPUTER_ID,
+    actor: { kind: "team-key", keyId: "media-caller" },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ports: [] });
+  assert.deepEqual(calls, [
+    { action: "listPorts", input: {}, actor: "team-key:media-caller" },
   ]);
 });
 

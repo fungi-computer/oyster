@@ -13,11 +13,7 @@
 // and --verbose streams them instead. Piped output or CI gets plain lines.
 import { spawn, type ChildProcess } from "node:child_process";
 import { startTrialComputer } from "./trial-computer.js";
-import {
-  createTrialOwner,
-  prepareTrialPrivateState,
-  prepareTrialSecretFile,
-} from "./try-custody.js";
+import { createTrialOwner, prepareTrialPrivateState } from "./try-custody.js";
 import { randomBytes } from "node:crypto";
 import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
 import { addAbortListener } from "node:events";
@@ -31,7 +27,7 @@ import {
 import { InstallationObservationError } from "../installation-client.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import {
-  appendFile,
+  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -39,14 +35,23 @@ import {
   readdir,
   rm,
   readFile,
+  realpath,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:net";
-import { createCredentialSealer } from "@fungi.computer/veil/credential-store";
+import {
+  createCredentialSealer,
+  type CredentialKeyring,
+} from "@fungi.computer/veil/credential-store";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
-import { parseArgs, stripVTControlCharacters } from "node:util";
+import {
+  isDeepStrictEqual,
+  parseArgs,
+  parseEnv,
+  stripVTControlCharacters,
+} from "node:util";
 import { Cli } from "@fungi.computer/lantern";
 import * as z from "zod";
 import { installHelloApp } from "./hello-app.js";
@@ -611,66 +616,239 @@ async function waitUntilReady(
   return signal.aborted ? "exited" : "timeout";
 }
 
-/** Provision the trial's separate encryption key through Wrangler's native secrets. */
+const trialKeyringSchema = z.strictObject({
+  activeKeyId: z.string(),
+  keys: z.record(z.string(), z.string()),
+});
+const warnedCredentialFiles = new Set<string>();
+
+/** One OS keychain entry, as `@napi-rs/keyring` exposes it. */
+export type TrialKeychainEntry = Readonly<{
+  getPassword(): Promise<string | null>;
+  setPassword(value: string): Promise<void>;
+}>;
+/** Opens the entry for an account; `undefined` means this host has no keychain. */
+export type TrialKeychain = (
+  account: string,
+) => Promise<TrialKeychainEntry | undefined>;
+
+/** A known-absent session bus permits a file; a locked/broken keychain does not. */
+async function headlessKeychain(): Promise<boolean> {
+  if (
+    process.platform !== "linux" ||
+    process.env.DBUS_SESSION_BUS_ADDRESS ||
+    process.env.DISPLAY
+  )
+    return false;
+  if (process.env.XDG_RUNTIME_DIR === undefined) return true;
+  try {
+    await access(join(process.env.XDG_RUNTIME_DIR, "bus"));
+    return false;
+  } catch (cause) {
+    if (z.object({ code: z.literal("ENOENT") }).safeParse(cause).success)
+      return true;
+    throw cause;
+  }
+}
+
+/** The host's keychain, never the library's nonpersistent keyutils fallback. */
+const osKeychain: TrialKeychain = async (account) =>
+  (await headlessKeychain())
+    ? undefined
+    : new (await import("@napi-rs/keyring")).AsyncEntry(
+        "fungi-oyster-credentials",
+        account,
+        { linux: { store: "secret-service" } },
+      );
+
+/** Convert native dotenv input once, after private custody has retained the key. */
+async function removeTrialCredentialBindings(directory: string): Promise<void> {
+  for (const name of [".dev.vars", ".env", ".env.local"]) {
+    const file = join(directory, name);
+    if (!(await exists(file))) continue;
+    const path = await realpath(file);
+    const before = await readFile(path, "utf8");
+    const values = parseEnv(before);
+    const removed = [
+      "OYSTER_CREDENTIAL_KEY",
+      "OYSTER_CREDENTIAL_KEY_ID",
+      "OYSTER_CREDENTIAL_PREVIOUS_KEYS",
+    ];
+    if (!removed.some((key) => Object.hasOwn(values, key))) continue;
+    const kept = Object.fromEntries(
+      Object.entries(values).filter(([key]) => !removed.includes(key)),
+    );
+    // Drop only the custody lines; comments and other settings keep their bytes.
+    const next = before
+      .split(/(?<=\n)/u)
+      .filter(
+        (line) =>
+          !/^\s*(?:export\s+)?OYSTER_CREDENTIAL_(?:KEY|KEY_ID|PREVIOUS_KEYS)\s*=/u.test(
+            line,
+          ),
+      )
+      .join("");
+    // Node owns decoding. Never rewrite a file whose other values would change.
+    if (!isDeepStrictEqual(parseEnv(next), kept))
+      throw new Error("Native secret settings cannot be migrated losslessly");
+    const stage = await mkdtemp(join(dirname(path), ".credential-migration-"));
+    try {
+      const temporary = join(stage, "vars");
+      await writeFile(temporary, next, { mode: 0o600, flag: "wx" });
+      if ((await readFile(path, "utf8")) !== before)
+        throw new Error("Native secret settings changed during migration");
+      await rename(temporary, path);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+  }
+}
+
+/** Keep the trial KEK outside its database and deliver it to the Worker over stdin. */
 export async function prepareTryModelKeyCustody(
   directory: string,
-): Promise<void> {
+  keychain: TrialKeychain = osKeychain,
+): Promise<CredentialKeyring> {
   try {
     await prepareTrialPrivateState(directory);
     const native = await import("wrangler");
-    const resolveKey = () => {
+    const resolveKeyring = () => {
       const config = native.unstable_readConfig({
         config: join(directory, "wrangler.jsonc"),
       });
-      const binding = native.unstable_getVarsForDev(
+      const bindings = native.unstable_getVarsForDev(
         config.userConfigPath,
         undefined,
         config.vars,
         undefined,
         true,
         config.secrets,
-      ).OYSTER_CREDENTIAL_KEY;
-      if (binding === undefined) return undefined;
-      if (binding.type !== "secret_text" && binding.type !== "plain_text")
-        throw new Error("Invalid credential-key binding");
-      return binding.value;
+      );
+      const value = (name: string) => {
+        const binding = bindings[name];
+        if (binding === undefined) return undefined;
+        if (binding.type !== "secret_text" && binding.type !== "plain_text")
+          throw new Error("Invalid credential-key binding");
+        return binding.value;
+      };
+      const key = value("OYSTER_CREDENTIAL_KEY");
+      if (key === undefined) return undefined;
+      const id = value("OYSTER_CREDENTIAL_KEY_ID");
+      const previous = z
+        .record(z.string(), z.string())
+        .parse(JSON.parse(value("OYSTER_CREDENTIAL_PREVIOUS_KEYS") ?? "{}"));
+      // The old generated trial used `instance`; it is migration input only.
+      return id === undefined
+        ? { activeKeyId: "local", keys: { instance: key, local: key } }
+        : { activeKeyId: id, keys: { ...previous, [id]: key } };
     };
-    const validate = async (key: string) => {
-      await createCredentialSealer(
-        { activeKeyId: "instance", keys: { instance: key } },
-        "fungi.oyster.credentials.v1",
-      ).seal([], "Oyster credential custody check");
+    const validate = async (keyring: CredentialKeyring) => {
+      await createCredentialSealer(keyring, "fungi.oyster.credentials.v1").seal(
+        [],
+        "Oyster credential custody check",
+      );
+      return keyring;
     };
-    const existing = resolveKey();
-    if (existing !== undefined) {
-      await validate(existing);
-      return;
-    }
-    const key = encodeBase64Url(randomBytes(32));
-    const path = await prepareTrialSecretFile(
-      directory,
-      (await exists(join(directory, ".dev.vars"))) ? ".dev.vars" : ".env.local",
+    const account = await realpath(join(directory, ownerKeyFile));
+    const path = join(dirname(account), "credential-keyring.json");
+    const entry = await keychain(account);
+    const saved = await entry?.getPassword();
+    const file = (await exists(path))
+      ? await readFile(path, "utf8")
+      : undefined;
+    const configured = resolveKeyring();
+    // Disabled dotenv loading can hide an existing key; never mint a replacement over it.
+    if (configured === undefined)
+      for (const name of [".dev.vars", ".env", ".env.local"]) {
+        const native = join(directory, name);
+        if (
+          (await exists(native)) &&
+          Object.hasOwn(
+            parseEnv(await readFile(native, "utf8")),
+            "OYSTER_CREDENTIAL_KEY",
+          )
+        )
+          throw new Error("An existing wrapping key is not loadable");
+      }
+    const existing = saved ?? file;
+    const keyring = await validate(
+      existing === undefined
+        ? (configured ?? {
+            activeKeyId: "local",
+            keys: {
+              local: encodeBase64Url(
+                crypto.getRandomValues(new Uint8Array(32)),
+              ),
+            },
+          })
+        : trialKeyringSchema.parse(JSON.parse(existing)),
     );
-    await appendFile(path, `\nOYSTER_CREDENTIAL_KEY=${key}\n`, { mode: 0o600 });
-    await chmod(path, 0o600);
-    const provisioned = resolveKey();
-    if (provisioned !== key) throw new Error("Credential key was not loaded");
-    await validate(provisioned);
+    if (configured !== undefined && !isDeepStrictEqual(configured, keyring))
+      throw new Error("Native configuration and private custody disagree");
+    if (
+      file !== undefined &&
+      !isDeepStrictEqual(trialKeyringSchema.parse(JSON.parse(file)), keyring)
+    )
+      throw new Error("File and keychain custody disagree");
+    const encoded = JSON.stringify(keyring);
+    if (existing === undefined) {
+      // Exclusive creation also gives concurrent startup attempts one durable candidate.
+      try {
+        await writeFile(path, encoded, { mode: 0o600, flag: "wx" });
+      } catch (cause) {
+        if (!z.object({ code: z.literal("EEXIST") }).safeParse(cause).success)
+          throw cause;
+        throw new Error("Another startup is preparing credential custody", {
+          cause,
+        });
+      }
+    }
+    if (entry === undefined) {
+      await chmod(path, 0o600);
+      if (!warnedCredentialFiles.has(path)) {
+        warnedCredentialFiles.add(path);
+        process.stderr.write(
+          `oyster: OS keychain unavailable (Linux Secret Service); wrapping keys stored/read in 0600 file ${JSON.stringify(path)}.\n`,
+        );
+      }
+    } else {
+      if (saved == null) {
+        const current = await entry.getPassword();
+        if (current !== null && current !== encoded)
+          throw new Error("Keychain changed during startup");
+        if (current === null) await entry.setPassword(encoded);
+      }
+      const retained = await entry.getPassword();
+      if (
+        retained === null ||
+        !isDeepStrictEqual(
+          trialKeyringSchema.parse(JSON.parse(retained)),
+          keyring,
+        )
+      )
+        throw new Error("Keychain did not retain the wrapping keys");
+      if (await exists(path)) await rm(path);
+    }
+    await removeTrialCredentialBindings(directory);
+    return keyring;
   } catch {
     throw new TryError(
       "This Oyster could not prepare private model-key storage.",
-      "Check the local secret files and Wrangler environment settings, then restart the Oyster. Existing keys were not replaced.",
+      "Check the OS keychain and private credential-keyring.json, then restart the Oyster. Existing keys were not replaced.",
     );
   }
 }
 
-function startWrangler(input: {
-  directory: string;
-  port: number;
-  key: string;
-  verbose: boolean;
-  signal: AbortSignal;
-}) {
+function startWrangler(
+  input: {
+    directory: string;
+    port: number;
+    key: string;
+    verbose: boolean;
+    signal: AbortSignal;
+  },
+  keychain: TrialKeychain,
+) {
   return (async () => {
     input.signal.throwIfAborted();
     const workerHost = join(input.directory, trialWorkerFile);
@@ -679,7 +857,10 @@ function startWrangler(input: {
         `The local Oyster worker is not installed in ${input.directory}.`,
         `Run \`npm install\` there, then run \`${retryCommand(input.directory, input.port)}\` again.`,
       );
-    await prepareTryModelKeyCustody(input.directory);
+    const credentialKeyring = await prepareTryModelKeyCustody(
+      input.directory,
+      keychain,
+    );
     await mkdir(join(input.directory, ".oyster"), { recursive: true });
     const log = join(input.directory, logFile);
     input.signal.throwIfAborted();
@@ -709,6 +890,7 @@ function startWrangler(input: {
         directory: input.directory,
         port: input.port,
         key: input.key,
+        credentialKeyring,
       }),
     );
     const exited = new Promise<number | null>((done) => {
@@ -804,9 +986,12 @@ function isTryCancellation(cause: unknown, signal: AbortSignal): boolean {
   );
 }
 
-const realEffects: TryEffects = {
+/** The real trial effects; `keychain` holds the wrapping keys (the OS keychain by default). */
+export const tryEffects = (
+  keychain: TrialKeychain = osKeychain,
+): TryEffects => ({
   installDependencies: installTryDependencies,
-  startServer: startWrangler,
+  startServer: (input) => startWrangler(input, keychain),
   installHello: installHelloApp,
   installDesktop: async ({ directory, ...input }) => {
     process.env.PATH = `${join(directory, "node_modules", ".bin")}${delimiter}${process.env.PATH ?? ""}`;
@@ -835,7 +1020,8 @@ const realEffects: TryEffects = {
   signInLink: startSignInLink,
   open: openBrowser,
   portFree,
-};
+});
+const realEffects = tryEffects();
 
 export async function tryOyster(
   args: readonly string[],

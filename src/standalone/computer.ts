@@ -117,6 +117,7 @@ import {
 import {
   authorityOf,
   computer as computerRoute,
+  keyFrameComputer,
   owner,
   reachesComputer,
   routes as routeTable,
@@ -133,6 +134,7 @@ import {
   type OysterBuildBackend,
 } from "../app-builds.js";
 import type { StandaloneRegistry } from "./registry.js";
+import { ownerHoldsComputer } from "./computer-fleet.js";
 import type { TenantPrincipal, TenantScope } from "../tenant.js";
 import {
   workflowGitStepGrant,
@@ -192,13 +194,17 @@ const command = computerExecutionRequestSchema({ maximumTimeMs: 45_000 }).omit({
   backend: true,
 });
 const empty = z.strictObject({});
-// Frame-bound callers (Agent/Workflow methods) never supply requestId or
-// requestScope; the host mints both from the invoking frame's idempotency
-// key and installation (see computerInvocation's "processStart" case).
-const processStart = processStartInputSchema.omit({
-  requestId: true,
-  requestScope: true,
-});
+// Frame-bound callers never supply requestScope; the host mints it from the
+// invoking frame's installation. The replay key is the frame's idempotency key
+// when the host attests one (a Workflow node). A caller it attests none for,
+// such as an external key over MCP, names its own requestId, which Shed
+// passes through (see computerInvocation's "processStart" case).
+const processStart = processStartInputSchema
+  .omit({
+    requestId: true,
+    requestScope: true,
+  })
+  .extend({ requestId: processStartInputSchema.shape.requestId.optional() });
 // The Oyster capability HTTP route has no per-field header mapping (the
 // generic page capability handle in packages/oyster/src/page/capabilities.ts
 // just JSON-encodes the whole input), so requestId travels in the body here;
@@ -234,7 +240,7 @@ function grant(computerId: string, actor: string): ComputerGrant {
 }
 
 /**
- * The Computer grant actor for a principal `authorization.ts` lets reach the
+ * The Computer grant actor for a principal `authorization.ts` lets reach this
  * Computer; null otherwise. `keysLive` is the one owner-checked port every
  * caller reaches a key's liveness through (the same one `host.keys.live`
  * is); a caller with none -- the Media binding's own workspace selection
@@ -243,12 +249,16 @@ function grant(computerId: string, actor: string): ComputerGrant {
 async function computerActor(
   principal: TenantPrincipal,
   keysLive: OysterKeysLivePort | undefined,
+  computerId: string,
 ): Promise<string | null> {
   const authority = await authorityOf(principal, {
     liveKey: keysLive ?? (() => Promise.resolve(null)),
     appToolPolicy: () => null,
+    computerId,
   });
-  return reachesComputer(authority) ? JSON.stringify(principal) : null;
+  return reachesComputer(authority, computerId)
+    ? JSON.stringify(principal)
+    : null;
 }
 
 /** Each advertised Computer tool, the grant action that accepts it, and its result. */
@@ -1172,7 +1182,7 @@ export function standaloneWorkspace(
   return {
     computerId,
     computer: async (principal) => {
-      const actor = await computerActor(principal, keysLive);
+      const actor = await computerActor(principal, keysLive, computerId);
       if (actor === null) return null;
       return {
         // Every Computer advertises the same static operations.
@@ -1494,7 +1504,13 @@ async function computerPreviewInvocation(
   return preview;
 }
 
-/** Re-admit the Computer captured by this invocation, never the current UI selection. */
+/**
+ * Re-admit the Computer captured by this invocation, never the current UI
+ * selection. A key's frame also re-reads that key (`keyFrameComputer`): once
+ * it is revoked or expired the next call stops here. A key with no
+ * `computer.use` grant keeps the owner's Computer, as any App call does; one
+ * with a grant must still name this Computer, held by the key's owner.
+ */
 async function frameComputerId(
   env: StandaloneComputerEnv,
   scope: TenantScope,
@@ -1505,11 +1521,20 @@ async function frameComputerId(
   if (subject.kind !== "call" || subject.context.computerId === null)
     throw new AppInstanceError("revoked");
   const computerId = workspaceId.parse(subject.context.computerId);
-  if (
-    !(await env.REGISTRY.getByName(scope.durableName("registry")).ownsComputer(
+  const registry = env.REGISTRY.getByName(scope.durableName("registry"));
+  const { actor } = subject.context;
+  if (actor.kind === "team-key") {
+    const reach = keyFrameComputer(
+      await env.KEYS.getByName(scope.durableName("keys")).live(actor.keyId),
       computerId,
-    ))
-  )
+    );
+    const admitted =
+      reach.kind === "owner-computer"
+        ? await registry.ownsComputer(computerId)
+        : reach.kind === "granted" &&
+          (await ownerHoldsComputer(registry, reach.owner, computerId));
+    if (!admitted) throw new AppInstanceError("revoked");
+  } else if (!(await registry.ownsComputer(computerId)))
     throw new AppInstanceError("revoked");
   frame.signal.throwIfAborted();
   return computerId;
@@ -1596,12 +1621,12 @@ export async function computerInvocation(
       break;
     case "processStart": {
       const [parsed] = z.tuple([processStart]).parse(args);
-      const requestId = subject.context.idempotencyKey;
+      const requestId = subject.context.idempotencyKey ?? parsed.requestId;
       const owner = frame.facts.selection.owner;
       const methodName = frame.host.method?.name;
       if (
         requestId === undefined ||
-        actor.kind !== "member" ||
+        actor.kind === "agent" ||
         owner.kind !== "installation" ||
         methodName === undefined
       )

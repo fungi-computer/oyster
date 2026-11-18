@@ -308,7 +308,7 @@ function capturedAccessFor(
 
 /** Re-read one actor's current App-tool access for one installation, fresh. */
 async function freshAccessFor(
-  host: Pick<OysterHost, "appToolPolicy" | "keys">,
+  host: Pick<OysterHost, "appToolPolicy" | "keys" | "computerId">,
   actor: Extract<TenantPrincipal["actor"], { kind: "agent" | "team-key" }>,
   installationId: string,
 ): Promise<AppToolPolicy | null> {

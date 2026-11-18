@@ -1162,14 +1162,14 @@ Decode a stored backend descriptor; a manifest's backend must be one.
 
 `object`
 
-| Name                  | Type              |
-| --------------------- | ----------------- |
-| `runtime`             | `object`          |
-| `runtime.kind`        | `"durable-facet"` |
-| `runtime.stateSchema` | `number`          |
-| `compatibilityDate`   | `string`          |
-| `exportName`          | `string`          |
-| `code`                | `string`          |
+| Name                  | Type                            |
+| --------------------- | ------------------------------- |
+| `runtime`             | `object`                        |
+| `runtime.kind`        | `"durable-facet"` \| `"region"` |
+| `runtime.stateSchema` | `number`                        |
+| `compatibilityDate`   | `string`                        |
+| `exportName`          | `string`                        |
+| `code`                | `string`                        |
 
 ## References
 

@@ -33,7 +33,12 @@ import {
 import { appStorage } from "@fungi.computer/agar/storage";
 import { approvals } from "@fungi.computer/agar/approvals";
 import { oysterStorageHandle } from "./storage.js";
-import { appBackend, appMethods } from "@fungi.computer/agar/backend";
+import {
+  appBackend,
+  appMethods,
+  appRegion,
+} from "@fungi.computer/agar/backend";
+import { oysterRegionHost } from "./region.js";
 import {
   computerList,
   computerPorts,
@@ -705,6 +710,9 @@ export async function oysterAppCapabilities(
       handle: new Methods(config.methodsUrl, options.computerTarget),
     },
     ...capabilities,
+    ...(config.regionUrl === undefined
+      ? []
+      : [{ ...appRegion, handle: oysterRegionHost(config.regionUrl) }]),
     ...(config.appsOpen && options.appOpen
       ? [{ ...appsOpen, handle: new AppOpen(options.appOpen) }]
       : []),
