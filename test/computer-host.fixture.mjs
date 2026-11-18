@@ -1,10 +1,6 @@
 import { installationStore } from "./native-approval-host.fixture.mjs";
 import { approvedInstallation } from "../dist/testing/index.js";
 import { verifyRelease } from "../dist/release.js";
-import {
-  appBackendActorHeader,
-  appBackendComputerHeader,
-} from "@fungi.computer/agar/backend";
 import { instanceIds } from "../dist/index.js";
 import { sha256 } from "../dist/release.js";
 
@@ -117,8 +113,7 @@ export async function computerHost(
         }),
         fetch: async (_selection, request) =>
           globalThis.Response.json({
-            computerId: request.headers.get(appBackendComputerHeader),
-            actorId: request.headers.get(appBackendActorHeader),
+            headers: [...request.headers.keys()],
           }),
         // Observe the actual trusted context crossing the Instance RPC seam.
         call: async (facts) => {

@@ -1,7 +1,4 @@
-import {
-  appBackendComputerHeader,
-  appMethodReplySchema,
-} from "@fungi.computer/agar/backend";
+import { appMethodReplySchema } from "@fungi.computer/agar/backend";
 import { nativeGitFrameMethods } from "@fungi.computer/agar/git-rpc";
 import { rpcHandleSchema, rpcMethod } from "@fungi.computer/agar/rpc";
 import {
@@ -646,7 +643,6 @@ export function createCloudflareAppTestCopies<FacetClass>(
     ) =>
       execute(authority, copyId, async (stub) => {
         const safe = appFacetRequest(request);
-        safe.headers.delete(appBackendComputerHeader);
         const reply = facetHttpReplySchema.parse(
           await stub.http(
             {

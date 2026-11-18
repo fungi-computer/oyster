@@ -4,10 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { Mycelium } from "@fungi.computer/mycelium";
 import { directSandbox } from "@fungi.computer/mycelium/testing";
-import {
-  appBackendActorHeader,
-  appBackendComputerHeader,
-} from "@fungi.computer/agar/backend";
 import { createOyster } from "../dist/host.js";
 import { invocationCallerContext } from "../dist/invocation.js";
 import { parseAppMethodCallContext } from "@fungi.computer/puffball/app-method-runtime";
@@ -151,7 +147,7 @@ test("an old App tool policy without grantedBy requires re-approval before dispa
   assert.equal(dispatches, 0);
 });
 
-test("backend forwarding replaces forged context headers with the host's selection", async () => {
+test("backend forwarding drops forged identity headers", async () => {
   const app = createOyster(
     await computerHost(
       { actor: { kind: "member", memberId: "owner" }, role: "owner" },
@@ -161,15 +157,12 @@ test("backend forwarding replaces forged context headers with the host's selecti
   const response = await app.request("/apps/context-probe/backend", {
     method: "PUT",
     headers: {
-      [appBackendComputerHeader]: "guest-computer",
-      [appBackendActorHeader]: "guest-actor",
+      "X-Agar-Computer-Id": "guest-computer",
+      "X-Agar-Actor-Id": "guest-actor",
     },
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    computerId: "host-workspace",
-    actorId: "owner",
-  });
+  assert.deepEqual(await response.json(), { headers: ["content-type"] });
   assert.equal(
     (await app.request("/apps/missing/backend", { method: "PUT" })).status,
     404,

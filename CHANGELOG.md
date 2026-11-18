@@ -1,5 +1,24 @@
 # @fungi.computer/oyster
 
+## 0.38.1
+
+### Patch Changes
+
+- Changes since 0.38.0:
+
+  - fix(agar): stop minting host-set X-Agar identity headers
+
+- Updated dependencies
+  - @fungi.computer/agar@0.22.1
+  - @fungi.computer/braid@0.5.3
+  - @fungi.computer/darkroom@0.11.7
+  - @fungi.computer/nacre@0.8.2
+  - @fungi.computer/parakeet@0.13.3
+  - @fungi.computer/shiitake@0.20.4
+  - @fungi.computer/workflows-wire@0.5.3
+  - @fungi.computer/shiitake-extensions@0.11.9
+  - @fungi.computer/zookeeper@0.0.41
+
 ## 0.38.0
 
 ### Minor Changes

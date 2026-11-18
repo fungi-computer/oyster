@@ -2,21 +2,11 @@
  * Hub normally builds this shape itself; callers of the App runtime must not
  * be able to pass their own headers through the facet.
  */
-import {
-  appBackendActorHeader,
-  appBackendComputerHeader,
-} from "@fungi.computer/agar/backend";
 
 export function appFacetRequest(request: Request): Request {
   const headers = new Headers();
-  for (const name of [
-    "Content-Type",
-    appBackendActorHeader,
-    appBackendComputerHeader,
-  ]) {
-    const value = request.headers.get(name);
-    if (value !== null) headers.set(name, value);
-  }
+  const contentType = request.headers.get("Content-Type");
+  if (contentType !== null) headers.set("Content-Type", contentType);
   const init: RequestInit & { duplex?: "half" } = {
     method: request.method,
     headers,

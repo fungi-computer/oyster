@@ -5,10 +5,6 @@ const memberCaller = {
 };
 /* global structuredClone, Response, Request, console */
 import { appFacetRequest } from "../dist/backend-request.js";
-import {
-  appBackendActorHeader,
-  appBackendComputerHeader,
-} from "@fungi.computer/agar/backend";
 import assert from "node:assert/strict";
 import { appCatalogEntrySchema } from "@fungi.computer/nacre/app-directory";
 
@@ -352,10 +348,7 @@ const guarded = await run(
   ),
 );
 assert.deepEqual(await guarded.json(), {
-  headers: [
-    ["content-type", "application/json"],
-    ["x-agar-actor-id", "actor_fixture"],
-  ],
+  headers: [["content-type", "application/json"]],
   method: "POST",
   body: "present",
 });
@@ -366,7 +359,7 @@ assert.deepEqual(resolvedReleaseIds.slice(resolvedBeforePreviewRelease), [
   selected.releaseId,
 ]);
 console.log(
-  "App runtime forwards only Content-Type and admitted actor/Computer headers",
+  "App runtime forwards only Content-Type and never an identity header",
 );
 await expectFailure(
   fetchAsMember(
@@ -550,15 +543,15 @@ const scoped = appFacetRequest(
   new Request("https://app.internal/", {
     headers: {
       "Content-Type": "application/json",
-      [appBackendActorHeader]: "user_one",
-      [appBackendComputerHeader]: "computer_a",
+      "X-Agar-Actor-Id": "user_one",
+      "X-Agar-Computer-Id": "computer_a",
       Authorization: "untrusted",
       "X-Arbitrary": "untrusted",
     },
   }),
 );
-assert.equal(scoped.headers.get(appBackendComputerHeader), "computer_a");
-assert.equal(scoped.headers.get(appBackendActorHeader), "user_one");
+assert.equal(scoped.headers.get("X-Agar-Computer-Id"), null);
+assert.equal(scoped.headers.get("X-Agar-Actor-Id"), null);
 assert.equal(scoped.headers.get("Content-Type"), "application/json");
 assert.equal(scoped.headers.get("Authorization"), null);
 assert.equal(scoped.headers.get("X-Arbitrary"), null);

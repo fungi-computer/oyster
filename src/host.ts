@@ -139,8 +139,6 @@ import {
   appCallOperation,
 } from "./apps/operations.js";
 import {
-  appBackendActorHeader,
-  appBackendComputerHeader,
   appMethodRefusalStatus,
   type AppMethodReply,
 } from "@fungi.computer/agar/backend";
@@ -1708,10 +1706,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       if (!copyId.success) return noStoreRefusal(400, "Invalid copy id");
       const request = new Request("https://app.internal/", {
         method: "PUT",
-        headers: {
-          "Content-Type": "text/plain",
-          [appBackendActorHeader]: oysterPrincipalId(copyOwned.principal),
-        },
+        headers: { "Content-Type": "text/plain" },
         body: await context.req.text(),
       });
       return copyOwned.copies.fetch(copyOwned.authority, copyId.data, request);
@@ -2251,15 +2246,9 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       const body = await context.req.text();
       if (new TextEncoder().encode(body).byteLength > maxBackendBody)
         return refusal(413, "Request too large");
-      const headers = new Headers({
-        "Content-Type": "text/plain",
-        [appBackendActorHeader]: oysterPrincipalId(principal),
-      });
-      if (host.computerId !== undefined)
-        headers.set(appBackendComputerHeader, host.computerId);
       const request = new Request("https://app.internal/", {
         method: "PUT",
-        headers,
+        headers: { "Content-Type": "text/plain" },
         body,
       });
       const response = await host.instances
