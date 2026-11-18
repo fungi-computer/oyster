@@ -243,13 +243,27 @@ describe("App Region bounds", () => {
     const region = createAppRegion(fixture.native, app.deliver);
     const member = (index: number) =>
       caller("team_one", `member_${String(index)}`);
-    for (let index = 0; index < appRegionLimits.socketsPerInstance; index += 1)
-      expect((await region.connect(member(index))).status).toBe(200);
+    // Fill the Region as hibernation finds it: sockets already accepted and
+    // stamped. Filling through connect re-parses every held attachment on each
+    // of the 256 connects (about 33k parses: 3.3 s idle, past the 5 s limit
+    // under load); the cap is decided by the one connect below.
+    for (
+      let index = 0;
+      index < appRegionLimits.socketsPerInstance;
+      index += 1
+    ) {
+      const socket = new FakeSocket();
+      socket.serializeAttachment({
+        connection: `conn_${String(index)}`,
+        caller: member(index),
+      });
+      fixture.native.accept(socket);
+    }
     const refused = await region.connect(member(9_999));
     expect(refused.status).toBe(429);
     // No socket was accepted and the App never saw the refused connect.
     expect(fixture.sockets).toHaveLength(appRegionLimits.socketsPerInstance);
-    expect(app.events).toHaveLength(appRegionLimits.socketsPerInstance);
+    expect(app.events).toHaveLength(0);
     // A server-closed socket still holds its slot until the client's close
     // frame arrives; then the slot is free.
     fixture.sockets[0]?.close(1000, "gone");

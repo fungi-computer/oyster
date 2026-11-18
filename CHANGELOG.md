@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.39.1
+
+### Patch Changes
+
+- Changes since 0.39.0:
+
+  - fix(oyster): show the cause of a model-key storage refusal and warn loudly
+  - fix(oyster): import the Secret Service probe statically
+  - fix(oyster): start a trial on the 0600 file when no Secret Service runs
+
+- Updated dependencies
+  - @fungi.computer/computer@0.14.8
+
 ## 0.39.0
 
 ### Minor Changes

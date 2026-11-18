@@ -8,9 +8,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
 import { fileURLToPath, URL } from "node:url";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Buffer } from "node:buffer";
 import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
 import * as native from "wrangler";
@@ -1326,7 +1330,9 @@ describe("trial model-key custody", () => {
       expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();
       const messages = warning.mock.calls
         .map(([text]) => String(text))
-        .filter((text) => text.includes("OS keychain unavailable"));
+        .filter((text) =>
+          text.includes("Linux Secret Service is not available"),
+        );
       expect(messages).toHaveLength(1);
       const files = await readdir(
         join(home, ".config", "fungi", "oyster-trials"),
@@ -1349,6 +1355,84 @@ describe("trial model-key custody", () => {
       vi.stubEnv("HOME", home);
     }
   });
+
+  // A headless server or CI runner with a systemd user session has a session
+  // bus but no Secret Service; its trial must start on the 0600 file.
+  it.runIf(process.platform === "linux")(
+    "uses the 0600 file when the session bus offers no Secret Service",
+    async () => {
+      project();
+      const bus = await privateSessionBus();
+      const warning = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", bus.address);
+        vi.stubEnv("DISPLAY", undefined);
+        const first = await prepareTryModelKeyCustody(root);
+        expect(first).toMatchObject({ activeKeyId: "local" });
+        expect(await prepareTryModelKeyCustody(root)).toEqual(first);
+        const notice = warning.mock.calls
+          .map(([text]) => String(text))
+          .find((text) =>
+            text.includes("Linux Secret Service is not available"),
+          );
+        expect(notice).toContain("UNENCRYPTED in the 0600 file");
+        expect(notice).toContain("credential-keyring.json");
+        expect(notice).toContain("install and start a Secret Service provider");
+      } finally {
+        warning.mockRestore();
+        bus.stop();
+      }
+    },
+  );
+
+  /** A dbus-daemon with no service directories: nothing can be activated. */
+  async function privateSessionBus() {
+    // A short socket directory: a checkout path can exceed sun_path's limit.
+    const sockets = mkdtempSync(join(tmpdir(), "oyster-bus-"));
+    const config = join(root, "session-bus.conf");
+    writeFileSync(
+      config,
+      `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir=${sockets}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`,
+    );
+    const daemon = spawn(
+      "dbus-daemon",
+      [`--config-file=${config}`, "--nofork", "--print-address=1"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    // A missing dbus-daemon (ENOENT) or a daemon that never prints its
+    // address fails this proof at once instead of hanging the suite.
+    const [line] = z.tuple([z.string()]).parse(
+      await Promise.race([
+        once(createInterface({ input: daemon.stdout }), "line", {
+          signal: AbortSignal.timeout(10_000),
+        }),
+        once(daemon, "error").then(([cause]: unknown[]) => {
+          throw new Error(
+            "This Linux proof needs dbus-daemon (the dbus package) on PATH",
+            { cause },
+          );
+        }),
+      ]),
+    );
+    return {
+      address: line.trim(),
+      stop: () => {
+        daemon.kill();
+        rmSync(sockets, { recursive: true, force: true });
+      },
+    };
+  }
 
   function project() {
     writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
@@ -1455,9 +1539,17 @@ describe("trial model-key custody", () => {
     project();
     const before = "OYSTER_CREDENTIAL_KEY=invalid-private-fixture\n";
     writeFileSync(join(root, ".dev.vars"), before);
-    await expect(prepareTryModelKeyCustody(root, osKeychain)).rejects.toThrow(
+    const failure: unknown = await prepareTryModelKeyCustody(
+      root,
+      osKeychain,
+    ).catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    const output = plain();
+    reportTryFailure(failure, output.ui);
+    expect(output.text()).toContain(
       "This Oyster could not prepare private model-key storage.",
     );
+    expect(output.text()).not.toContain("invalid-private-fixture");
     expect((await readFile(join(root, ".dev.vars"), "utf8")) === before).toBe(
       true,
     );
@@ -1479,8 +1571,15 @@ describe("trial model-key custody", () => {
   it("refuses a locked keychain instead of silently downgrading custody", async () => {
     project();
     keychain.locked = true;
-    await expect(prepareTryModelKeyCustody(root, osKeychain)).rejects.toThrow(
-      "could not prepare private model-key storage",
+    const failure: unknown = await prepareTryModelKeyCustody(
+      root,
+      osKeychain,
+    ).catch((cause: unknown) => cause);
+    const output = plain();
+    reportTryFailure(failure, output.ui);
+    // The underlying keychain error is the reason the person sees.
+    expect(output.text()).toContain(
+      "could not prepare private model-key storage. Reason: synthetic locked keychain",
     );
     expect(keychain.values.size).toBe(0);
     expect(bindings().OYSTER_CREDENTIAL_KEY).toBeUndefined();

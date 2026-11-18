@@ -13,6 +13,7 @@
 // and --verbose streams them instead. Piped output or CI gets plain lines.
 import { spawn, type ChildProcess } from "node:child_process";
 import { startTrialComputer } from "./trial-computer.js";
+import { secretServiceAbsent } from "./secret-service.js";
 import { createTrialOwner, prepareTrialPrivateState } from "./try-custody.js";
 import { randomBytes } from "node:crypto";
 import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
@@ -27,7 +28,6 @@ import {
 import { InstallationObservationError } from "../installation-client.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import {
-  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -144,12 +144,15 @@ async function timedTask<T>(
   }
 }
 
-/** A failure that knows the exact next step; the command shows both. */
+/**
+ * A failure that knows the exact next step; the command shows both, and the
+ * underlying reason when one caused it.
+ */
 class TryError extends Error {
   readonly title: string;
   readonly next: string;
-  constructor(title: string, next: string) {
-    super(`${title} ${next}`);
+  constructor(title: string, next: string, options?: ErrorOptions) {
+    super(`${title} ${next}`, options);
     this.name = "TryError";
     this.title = title;
     this.next = next;
@@ -185,6 +188,17 @@ function innermostError(cause: unknown): Error {
   return current;
 }
 
+/**
+ * The innermost cause's message. A JSON syntax error quotes its input, which
+ * can be a saved keyring, so it is named instead of shown.
+ */
+function failureReason(cause: unknown): string {
+  const innermost = innermostError(cause);
+  return innermost instanceof SyntaxError
+    ? "a saved file is not valid JSON"
+    : innermost.message;
+}
+
 const networkErrorCodes: ReadonlySet<unknown> = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -200,7 +214,13 @@ function isNetworkFailure(error: Error): error is Error & { code: string } {
 
 /** Show a failed `oyster try` as an error with its next step. */
 export function reportTryFailure(cause: unknown, ui: Cli): void {
-  if (cause instanceof TryError) ui.problem(cause.title, cause.next);
+  if (cause instanceof TryError)
+    ui.problem(
+      cause.cause === undefined
+        ? cause.title
+        : `${cause.title} Reason: ${failureReason(cause.cause)}`,
+      cause.next,
+    );
   else
     ui.problem(
       cause instanceof Error ? cause.message : String(cause),
@@ -632,28 +652,13 @@ export type TrialKeychain = (
   account: string,
 ) => Promise<TrialKeychainEntry | undefined>;
 
-/** A known-absent session bus permits a file; a locked/broken keychain does not. */
-async function headlessKeychain(): Promise<boolean> {
-  if (
-    process.platform !== "linux" ||
-    process.env.DBUS_SESSION_BUS_ADDRESS ||
-    process.env.DISPLAY
-  )
-    return false;
-  if (process.env.XDG_RUNTIME_DIR === undefined) return true;
-  try {
-    await access(join(process.env.XDG_RUNTIME_DIR, "bus"));
-    return false;
-  } catch (cause) {
-    if (z.object({ code: z.literal("ENOENT") }).safeParse(cause).success)
-      return true;
-    throw cause;
-  }
-}
-
-/** The host's keychain, never the library's nonpersistent keyutils fallback. */
+/**
+ * The host's keychain, never the library's nonpersistent keyutils fallback.
+ * A Linux session known to have no Secret Service permits a file; a locked or
+ * broken keychain does not.
+ */
 const osKeychain: TrialKeychain = async (account) =>
-  (await headlessKeychain())
+  process.platform === "linux" && (await secretServiceAbsent())
     ? undefined
     : new (await import("@napi-rs/keyring")).AsyncEntry(
         "fungi-oyster-credentials",
@@ -808,7 +813,14 @@ export async function prepareTryModelKeyCustody(
       if (!warnedCredentialFiles.has(path)) {
         warnedCredentialFiles.add(path);
         process.stderr.write(
-          `oyster: OS keychain unavailable (Linux Secret Service); wrapping keys stored/read in 0600 file ${JSON.stringify(path)}.\n`,
+          [
+            "",
+            "oyster: WARNING: Linux Secret Service is not available on this machine.",
+            `oyster: This Oyster's model-key wrapping key is stored UNENCRYPTED in the 0600 file ${JSON.stringify(path)}.`,
+            "oyster: Anyone who can read that file as you can decrypt the model keys this Oyster saves.",
+            "oyster: To keep it in the OS keychain instead, install and start a Secret Service provider (for example gnome-keyring, or KeePassXC with Secret Service integration enabled) in your login session, then restart the Oyster.",
+            "",
+          ].join("\n"),
         );
       }
     } else {
@@ -831,10 +843,11 @@ export async function prepareTryModelKeyCustody(
     }
     await removeTrialCredentialBindings(directory);
     return keyring;
-  } catch {
+  } catch (cause) {
     throw new TryError(
       "This Oyster could not prepare private model-key storage.",
       "Check the OS keychain and private credential-keyring.json, then restart the Oyster. Existing keys were not replaced.",
+      { cause },
     );
   }
 }
