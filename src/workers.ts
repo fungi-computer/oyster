@@ -173,6 +173,8 @@ import {
   type AppStorageResult,
   type AppStorageWrite,
   type AppStorageReset,
+  type AppStorageClaim,
+  type AppStorageClaimed,
   type ResolvedAppStorage,
 } from "@fungi.computer/agar/storage";
 import type { AppStorageAdmission } from "./app-storage.js";
@@ -534,6 +536,18 @@ export class OysterRegistry<
   ): Promise<AppStorageResult<{ revision: number }>> {
     return this.storageResult(
       this.storageView(installationId, () => Promise.resolve(ownerId)).reset(
+        input,
+      ),
+    );
+  }
+  /** Claim one declared absent layer for the authenticated root owner, or read the layer already there. */
+  storageClaim(
+    installationId: string,
+    ownerId: string,
+    input: AppStorageClaim,
+  ): Promise<AppStorageResult<AppStorageClaimed>> {
+    return this.storageResult(
+      this.storageView(installationId, () => Promise.resolve(ownerId)).claim(
         input,
       ),
     );
@@ -2415,6 +2429,8 @@ export function oysterWorkerHost(
           registry().storageWrite(installationId, ownerId, input),
         reset: (input) =>
           registry().storageReset(installationId, ownerId, input),
+        claim: (input) =>
+          registry().storageClaim(installationId, ownerId, input),
         events: (key) => registry().storageEvents(installationId, ownerId, key),
       }),
     },

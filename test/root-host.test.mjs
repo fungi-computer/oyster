@@ -95,6 +95,9 @@ async function fixture(homeInstallationId, anonymous = false, computerId) {
         reset: () => {
           throw new Error("Invalid reset must not reach storage");
         },
+        claim: () => {
+          throw new Error("Invalid claim must not reach storage");
+        },
         events: () =>
           Promise.resolve(new Response("event: ready\ndata: {}\n\n")),
       }),
@@ -295,6 +298,17 @@ test("storage rejects forged admission fields before calling its owner", async (
     },
   );
   assert.equal(response.status, 400);
+  const claim = await app.request("/api/workbench/storage/desktop-fork/claim", {
+    method: "POST",
+    headers: { Authorization: "owner", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      key: "desktop",
+      scope: "member",
+      value: {},
+      basedOn: null,
+    }),
+  });
+  assert.equal(claim.status, 400);
 });
 
 for (const { name, options, principal, workbench, storage } of [

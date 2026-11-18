@@ -66,6 +66,7 @@ import {
   appStorageKeyNameSchema,
   appStorageWriteSchema,
   appStorageResetSchema,
+  appStorageClaimSchema,
   type AppStorageWire,
 } from "@fungi.computer/agar/storage";
 import type { OysterRootDirectory } from "./root-data.js";
@@ -501,7 +502,7 @@ export type OysterHost = Readonly<{
     storage(
       installationId: string,
       ownerId: string,
-    ): Pick<AppStorageWire, "read" | "write" | "reset"> &
+    ): Pick<AppStorageWire, "read" | "write" | "reset" | "claim"> &
       Readonly<{
         /** Stream changes for an admitted declared storage key. */
         events(key: string): Promise<Response>;
@@ -1321,6 +1322,14 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         return operation === "read"
           ? Response.json(await view.read(key.value))
           : view.events(key.value);
+      }
+      if (operation === "claim" && context.req.method === "POST") {
+        const input = Schema.decodeUnknownOption(appStorageClaimSchema, {
+          onExcessProperty: "error",
+        })(await context.req.json());
+        return input._tag === "None"
+          ? refusal(400, "Invalid storage claim")
+          : Response.json(await view.claim(input.value));
       }
       if (
         (operation === "write" || operation === "reset") &&

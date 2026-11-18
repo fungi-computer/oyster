@@ -13,6 +13,7 @@ export default defineConfig({
   test: {
     include: [
       "test/page/*.test.ts",
+      "test/storage-claim.test.mjs",
       "test/apps-*.test.ts",
       "test/git-journal.test.ts",
       "test/event-recipients.test.ts",

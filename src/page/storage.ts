@@ -5,12 +5,15 @@ import {
   appStorageKeyNameSchema,
   appStorageWriteSchema,
   appStorageResetSchema,
+  appStorageClaimSchema,
   appStorageReadResultSchema,
   appStorageMutationResultSchema,
+  appStorageClaimResultSchema,
   type AppStorageWire,
   type AppStorageEventHandle,
   type AppStorageWrite,
   type AppStorageReset,
+  type AppStorageClaim,
 } from "@fungi.computer/agar/storage";
 
 const NativeTarget: new () => object = RpcTarget;
@@ -80,9 +83,17 @@ class Storage extends NativeTarget implements AppStorageWire {
       await this.mutate("reset", input),
     );
   }
+  async claim(raw: AppStorageClaim) {
+    const input = Schema.decodeUnknownSync(appStorageClaimSchema, {
+      onExcessProperty: "error",
+    })(raw);
+    return Schema.decodeUnknownSync(appStorageClaimResultSchema)(
+      await this.mutate("claim", input),
+    );
+  }
   private async mutate(
-    operation: "write" | "reset",
-    input: AppStorageWrite | AppStorageReset,
+    operation: "write" | "reset" | "claim",
+    input: AppStorageWrite | AppStorageReset | AppStorageClaim,
   ) {
     return reply(
       await fetch(path(this.installationId, operation), {

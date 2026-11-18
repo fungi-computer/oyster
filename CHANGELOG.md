@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.43.0
+
+### Minor Changes
+
+- Changes since 0.42.1:
+
+  - fix(test): keep agar and Oyster source out of foreign type programs
+  - feat(agar): claim an absent App storage layer in every host
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/agar@0.23.0
+  - @fungi.computer/braid@0.6.1
+  - @fungi.computer/darkroom@0.11.8
+  - @fungi.computer/nacre@0.8.3
+  - @fungi.computer/parakeet@0.14.2
+  - @fungi.computer/shiitake@0.21.2
+  - @fungi.computer/workflows-wire@0.7.1
+  - @fungi.computer/shiitake-extensions@0.11.12
+  - @fungi.computer/zookeeper@0.0.44
+
 ## 0.42.1
 
 ### Patch Changes

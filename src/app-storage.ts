@@ -31,6 +31,8 @@ import {
   type AppStorageResult,
   type AppStorageWrite,
   type AppStorageReset,
+  type AppStorageClaim,
+  type AppStorageClaimed,
   type ResolvedAppStorage,
   type AppStorageEvent,
 } from "@fungi.computer/agar/storage";
@@ -239,10 +241,9 @@ export function createAppStorage(options: {
       current ? saved.count + 1 : 1,
     );
   };
-  const mutate = (
+  const requireWritable = (
     admission: MutationAdmission,
-    input: AppStorageReset,
-    value: Schema.Json | undefined,
+    scope: AppStorageWrite["scope"],
   ) => {
     const writer: AppStorageWriter =
       "memberId" in admission
@@ -252,8 +253,15 @@ export function createAppStorage(options: {
             isOwner: admission.isOwner,
           }
         : { kind: "lifecycle", handler: "installation" };
-    if (!appStorageWritable(writer, input.scope))
+    if (!appStorageWritable(writer, scope))
       throw new AppStorageError("owner_required");
+  };
+  const mutate = (
+    admission: MutationAdmission,
+    input: AppStorageReset,
+    value: Schema.Json | undefined,
+  ) => {
+    requireWritable(admission, input.scope);
     const declared = declare(admission, input.key);
     if (!declared.scopes.includes(input.scope))
       throw new AppStorageError("scope_not_declared");
@@ -346,6 +354,52 @@ export function createAppStorage(options: {
       canWriteTeam: "isOwner" in admission ? admission.isOwner : true,
     };
   };
+  /**
+   * Keep an existing layer, or store `input.value` in the absent layer with
+   * every write check. One transaction, so concurrent first writers settle
+   * on one value and none of them sees a `conflict`.
+   */
+  const claimLayer = (
+    admission: MutationAdmission,
+    input: AppStorageClaim,
+  ): AppStorageClaimed => {
+    requireWritable(admission, input.scope);
+    const declared = declare(admission, input.key);
+    if (!declared.scopes.includes(input.scope))
+      throw new AppStorageError("scope_not_declared");
+    const current = layers(admission, input.key).find(
+      (row) => row.scope === input.scope,
+    );
+    if (current !== undefined)
+      return {
+        value: current.value,
+        revision: current.revision,
+        claimed: false,
+      };
+    const { revision } = mutate(
+      admission,
+      { key: input.key, scope: input.scope, basedOn: null },
+      input.value,
+    );
+    return { value: input.value, revision, claimed: true };
+  };
+  const commitClaim = (admission: MutationAdmission, input: AppStorageClaim) =>
+    Effect.uninterruptible(
+      options
+        .commit(() => claimLayer(admission, input))
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              if (result.claimed)
+                publish(
+                  admission,
+                  { key: input.key, scope: input.scope, basedOn: null },
+                  result,
+                );
+            }),
+          ),
+        ),
+    );
   const commitMutation = (
     admission: MutationAdmission,
     input: AppStorageReset,
@@ -401,6 +455,12 @@ export function createAppStorage(options: {
         write: (input: AppStorageWrite) => mutation(input, input.value),
         /** Reset a declared team layer; member scope is rejected with owner_required. */
         reset: (input: AppStorageReset) => mutation(input, undefined),
+        /** Claim an absent declared team layer, or return the layer already there. */
+        claim: (input: AppStorageClaim) =>
+          authorize().pipe(
+            Effect.flatMap((admission) => commitClaim(admission, input)),
+            Effect.mapError(unavailable),
+          ),
       };
     },
     /** Bind a member view to live admission, declared keys and the current membership version. */
@@ -433,6 +493,12 @@ export function createAppStorage(options: {
             Effect.flatMap((admission) =>
               commitMutation(admission, input, undefined),
             ),
+            Effect.mapError(unavailable),
+          ),
+        /** Claim an admitted absent layer, or return the layer already there. */
+        claim: (input: AppStorageClaim) =>
+          admitted().pipe(
+            Effect.flatMap((admission) => commitClaim(admission, input)),
             Effect.mapError(unavailable),
           ),
         /** One bounded invalidation stream. Null marks an armed subscription. */

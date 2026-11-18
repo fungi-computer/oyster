@@ -528,7 +528,7 @@ type OysterHost = Readonly<{
         }>;
         installing?: readonly InstallingApp[];
      }>>;
-     storage: Pick<AppStorageWire, "read" | "write" | "reset"> & Readonly<{
+     storage: Pick<AppStorageWire, "read" | "write" | "reset" | "claim"> & Readonly<{
         events: Promise<Response>;
      }>;
   }>;
