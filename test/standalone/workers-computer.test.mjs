@@ -927,7 +927,9 @@ async function instanceBinding(
         kind: "change-grants",
         changes: installation.authority.approvedGrants
           .filter(({ capability }) =>
-            ["agent.read", "agent.manage", "agent.send"].includes(capability),
+            ["agent.list", "agent.read", "agent.manage", "agent.send"].includes(
+              capability,
+            ),
           )
           .map(({ capability, operations }) => ({
             capability,
@@ -3362,6 +3364,40 @@ test("standalone AGENTS packets match finite selected Agents with one live Regis
   });
   assert.equal(result.status, 200, await result.clone().text());
   assert.deepEqual(await result.json(), { refused: true });
+});
+
+test("standalone AGENTS.list names only the Agents the installation may list", async (t) => {
+  const { env, agent, a, b, pin } = await nativeScheduleAgent(t);
+  await agent.usePolicyDirectory(pin);
+  const listed = async (host, id) => {
+    const proof = await instanceBinding(
+      t,
+      env,
+      ["ports"],
+      id,
+      [{ name: "AGENTS", operations: ["list"] }],
+      undefined,
+      undefined,
+      false,
+      host,
+    );
+    const result = await proof.run(async (_computer, { AGENTS }) => ({
+      agents: (await AGENTS.list()).agents,
+    }));
+    assert.equal(result.status, 200, await result.clone().text());
+    return (await result.json()).agents;
+  };
+  assert.deepEqual(await listed({}, "list-all"), [
+    { agentId: a.agentId, name: "A" },
+    { agentId: b.agentId, name: "B" },
+  ]);
+  assert.deepEqual(
+    await listed(
+      { agentResources: [{ kind: "agent", id: b.agentId }] },
+      "list-one",
+    ),
+    [{ agentId: b.agentId, name: "B" }],
+  );
 });
 
 test("standalone AGENTS initialization failure addresses the owner but opens no native runtime", async (t) => {

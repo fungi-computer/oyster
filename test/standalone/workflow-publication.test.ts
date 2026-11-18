@@ -391,6 +391,7 @@ async function fixture(
   if (!method) throw new Error("Missing method");
   const indexes = createWorkflowIndexes(storage);
   const library = createWorkflowLibrary({
+    actor: { kind: "member", memberId: "member_a" },
     index: indexes,
     git: git.git,
     author: { name: "Test", email: "test@example.invalid" },

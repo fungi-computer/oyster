@@ -3938,6 +3938,7 @@ const agentBindingArgs = {
     visit: z.tuple([agentTarget]),
   },
   AGENTS: {
+    list: z.tuple([z.strictObject({}).optional()]),
     send: z.tuple([
       agentTarget.extend({
         requestId: z
@@ -3967,6 +3968,15 @@ const decodeInboxVisit = Schema.decodeUnknownSync(inboxVisitSchema, {
 const decodeAgentAccepted = Schema.decodeUnknownSync(AcceptedSchema, {
   onExcessProperty: "error",
 });
+/** Ids and display names only, as Hub's `agent.list` returns. */
+const agentListSchema = Schema.Struct({
+  agents: Schema.Array(
+    Schema.Struct({ agentId: Schema.String, name: Schema.String }),
+  ),
+});
+const decodeAgentList = Schema.decodeUnknownSync(agentListSchema, {
+  onExcessProperty: "error",
+});
 
 /** Shared packet codecs; the Instance alone admits the current frame's operations. */
 export const agentFrameMethods = {
@@ -3987,6 +3997,11 @@ export const agentFrameMethods = {
     },
   },
   AGENTS: {
+    list: {
+      decodeArgs: (raw) => agentBindingArgs.AGENTS.list.parse(raw),
+      decodeResult: decodeAgentList,
+      requiredOperations: () => ["list"],
+    },
     schedules: {
       decodeArgs: (raw) => agentScheduleBindingArgs.schedules.parse(raw),
       decodeResult: Schema.decodeUnknownSync(agentSchedulePageSchema, {
@@ -4072,6 +4087,7 @@ export async function dispatchAgentBinding(
     | { visited: true }
     | AgentSchedulePage
     | AgentScheduleControlReceipt
+    | Schema.Schema.Type<typeof agentListSchema>
     | Pick<
         Awaited<ReturnType<StandaloneAgentBase["sendFromApp"]>>,
         "status" | "commandId"
@@ -4102,6 +4118,19 @@ export async function dispatchAgentBinding(
     frame.signal.throwIfAborted();
     await directory.visit(input.agentId, input.sessionId);
     result = { visited: true };
+  } else if (props.binding === "AGENTS" && method === "list") {
+    agentBindingArgs.AGENTS.list.parse(args);
+    const listable = admitted.authority.approvedGrants.find(
+      (grant) => grant.capability === "agent.list",
+    );
+    if (listable === undefined)
+      throw new AppInstanceError("binding_not_granted");
+    const ceiling = agentCeiling(listable.resources);
+    result = {
+      agents: (await directory.list())
+        .filter(({ agentId }) => ceiling === "all" || ceiling.has(agentId))
+        .map(({ agentId, name }) => ({ agentId, name })),
+    };
   } else if (props.binding === "AGENTS" && method === "send") {
     const [input] = agentBindingArgs.AGENTS.send.parse(args);
     if (!(await directory.has(input.agentId))) throw new Error("No such agent");
@@ -4164,6 +4193,7 @@ export async function dispatchAgentBinding(
       inboxPageSchema,
       inboxVisitSchema,
       AcceptedSchema,
+      agentListSchema,
       agentSchedulePageSchema,
       agentScheduleControlReceiptSchema,
     ]),
