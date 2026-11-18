@@ -7,6 +7,7 @@ import {
 } from "@fungi.computer/oyster/apps";
 import {
   graphStartRequestSchema,
+  wireRunRow,
   createWorkflowRunAuthority,
   createWorkflowCeilingCapture,
   armedWorkflowTriggerSchema,
@@ -1768,6 +1769,75 @@ it("refuses lifecycle, expired, stale-selection and ungranted start facts", asyn
     for (const facts of refused)
       await expect(f.owner.prepare(facts, request)).rejects.toThrow();
     expect(f.calls).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
+
+it("records a member's test of a draft as a test run, listed with its draft revision and no commit", async () => {
+  const f = await fixture();
+  try {
+    const test = { workflowId: "example", draftRevision: 2 };
+    const started = await f.owner.prepare(f.facts, {
+      requestId: "draft-test",
+      definition: f.definition,
+      bindings: { probe: "probe" },
+      input: {},
+      test,
+    });
+    expect(started).toMatchObject({ kind: "started" });
+    if (!("runId" in started) || started.runId === undefined)
+      throw new Error("Test run not created");
+    const stored = f.owner.store.read(started.runId);
+    expect(stored?.source).toBe("test");
+    expect(stored?.test).toEqual(test);
+    expect(stored?.publication).toBeUndefined();
+    const listed = f.owner.store.list({
+      installationId: "library",
+      workflowId: "example",
+    });
+    expect(listed.map(wireRunRow)).toEqual([
+      {
+        runId: started.runId,
+        workflowId: "example",
+        draftRevision: 2,
+        source: "test",
+        initiatedBy: { kind: "member", memberId: "arming-owner" },
+        startedAt: listed[0]?.startedAt,
+      },
+    ]);
+  } finally {
+    f.close();
+  }
+});
+
+it("refuses a Git step in a test, as in any run that is not published", async () => {
+  const f = await fixture();
+  try {
+    const definition: WorkflowDefinition = {
+      ...f.definition,
+      nodes: f.definition.nodes.map((node) =>
+        node.kind === "app"
+          ? {
+              ...node,
+              gitAccess: {
+                binding: "source",
+                repository: "project",
+                branches: ["refs/heads/main"],
+              },
+            }
+          : node,
+      ),
+    };
+    await expect(
+      f.owner.prepare(f.facts, {
+        requestId: "test-git-step",
+        definition,
+        bindings: { probe: "probe", source: { kind: "team-source" } },
+        input: {},
+        test: { workflowId: "example", draftRevision: 1 },
+      }),
+    ).resolves.toEqual({ error: "not_granted" });
   } finally {
     f.close();
   }

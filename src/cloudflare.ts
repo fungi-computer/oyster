@@ -20,6 +20,7 @@ import {
 } from "@fungi.computer/puffball/background-replay";
 export type { BackgroundFrameState } from "./invocation.js";
 import { causeClass, failureDiagnostic, guestFailure } from "./cause-class.js";
+import { loadPatternRedactor } from "@fungi.computer/veil/redaction";
 import {
   appGitPushFactSchema,
   gitPushVerdictSchema,
@@ -29,6 +30,7 @@ import { appRegionReplySchema } from "@fungi.computer/puffball/backend";
 import { guestLimits, type GuestLimits } from "./guest-policy.js";
 export type { GuestLimits } from "./guest-policy.js";
 import { headContentObject } from "./build/content-objects.js";
+import { redactionWithheld } from "./build/job-log.js";
 import type {
   ArtifactHeads,
   ArtifactDeletes,
@@ -99,6 +101,34 @@ import {
 } from "./index.js";
 
 const bindingWire = createFrameBindingWire(appInstanceErrorCodeSchema.literals);
+
+/**
+ * Logs a recycled-guest failure with its message masked by Veil's pattern
+ * rules. A rule table that cannot load withholds the message, never logs it raw.
+ */
+async function logAppInstanceFailure(
+  stage: string,
+  cause: unknown,
+): Promise<void> {
+  const diagnostic = failureDiagnostic(cause);
+  const { message, ...rest } = diagnostic;
+  const masked =
+    message === undefined
+      ? rest
+      : {
+          ...rest,
+          message: await loadPatternRedactor().then(
+            (redactor) => redactor.redact(message).text,
+            () => redactionWithheld,
+          ),
+        };
+  console.error("AppInstance failure", {
+    stage,
+    code: "failed",
+    ...masked,
+    recycled: true,
+  });
+}
 
 /**
  * The zone's edge cache as a {@link VerifiedObjectCache}: each verified object
@@ -793,12 +823,7 @@ export function createCloudflareAppInstance<FacetClass, Host>(
     }
     const failure = cause instanceof Error ? guestFailure(cause) : fallback();
     retireGuest(frame);
-    console.error("AppInstance failure", {
-      stage,
-      code: "failed",
-      ...failureDiagnostic(cause),
-      recycled: true,
-    });
+    void logAppInstanceFailure(stage, cause);
     return failure;
   };
   return createAppInstance<Host>({
@@ -911,12 +936,7 @@ export function createCloudflareAppInstance<FacetClass, Host>(
         } catch (error) {
           // The Loader and facet are host platform: their text is host-owned.
           retireGuest(frame);
-          console.error("AppInstance failure", {
-            stage: "artifact_resolve",
-            code: "failed",
-            ...failureDiagnostic(error),
-            recycled: true,
-          });
+          void logAppInstanceFailure("artifact_resolve", error);
           throw error;
         }
         // A host that cannot mint its binding stubs refuses the frame by code;

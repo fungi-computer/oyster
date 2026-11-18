@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { loadPatternRedactor } from "@fungi.computer/veil/redaction";
+import { redactionWithheld } from "../build/job-log.js";
 import { createSelfSource } from "./agent-self.js";
 import { agentCodeExecutionTimeoutMs } from "@fungi.computer/computer-contract";
 import {
@@ -326,6 +328,25 @@ import type {
   OysterInboxItem,
   OysterSessionRow,
 } from "../agents.js";
+
+/** A failure for the host log: Veil's pattern rules mask any key in its text. */
+const redactedFailure = (cause: unknown): Promise<string> =>
+  loadPatternRedactor().then(
+    (redactor) =>
+      redactor.redact(
+        cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : String(cause),
+      ).text,
+    () => redactionWithheld,
+  );
+
+/** Logs a failure once its text is masked; the log line never blocks the caller. */
+const logRedactedFailure = (label: string, cause: unknown): void => {
+  void redactedFailure(cause).then((text) => {
+    console.error(label, text);
+  });
+};
 
 /** The starter has no Home yet: the owner has not attached a Computer. The seed waits for one. */
 class StarterHomePending extends Error {
@@ -779,7 +800,7 @@ export abstract class StandaloneAgentBase<
       },
       sessionId ?? "none",
       (cause) => {
-        console.error("channel run decision failed", cause);
+        logRedactedFailure("channel run decision failed", cause);
       },
     );
   }
@@ -822,7 +843,7 @@ export abstract class StandaloneAgentBase<
     await this.discordReplies().record(bindingId, ask);
     this.ctx.waitUntil(
       this.wakeRuntime().catch((cause: unknown) => {
-        console.error("discord reply wake failed", cause);
+        logRedactedFailure("discord reply wake failed", cause);
       }),
     );
   }
@@ -2619,14 +2640,14 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       wakeNow: () => {
         this.ctx.waitUntil(
           this.ctx.storage.setAlarm(Date.now()).catch((cause: unknown) => {
-            console.error("machine-link.first-fence-wake", cause);
+            logRedactedFailure("machine-link.first-fence-wake", cause);
           }),
         );
       },
       retryDelayMs: (failures) =>
         Math.min(60_000, 1_000 * 2 ** Math.min(failures, 6)),
       report: (operation, cause) => {
-        console.error(operation, cause);
+        logRedactedFailure(operation, cause);
       },
     }));
   }
@@ -3729,12 +3750,11 @@ export function standaloneAgents(
         report: (cause) => {
           // Waiting for the owner to attach a Computer is not a failure.
           if (cause instanceof StarterHomePending) return;
-          console.warn(
-            JSON.stringify({
-              event: "starter_agent_failed",
-              cause: String(cause),
-            }),
-          );
+          void redactedFailure(cause).then((text) => {
+            console.warn(
+              JSON.stringify({ event: "starter_agent_failed", cause: text }),
+            );
+          });
         },
       });
     },

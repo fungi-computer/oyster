@@ -957,7 +957,7 @@ export abstract class StandaloneRegistry
   }
 
   async recordBuildEvent(event: BuildGitEvent): Promise<void> {
-    (await this.#appBuilds()).record(event);
+    await (await this.#appBuilds()).record(event);
   }
 
   /** The egress: may this Computer's live job upload one object, how large? */

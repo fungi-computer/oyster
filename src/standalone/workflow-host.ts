@@ -912,7 +912,12 @@ export function createStandaloneWorkflowHost(
               }
             : {
                 initiatedBy: { kind: "member", memberId: actorId },
-                source: facts.subject.kind === "lifecycle" ? "event" : "manual",
+                source:
+                  request.test !== undefined
+                    ? "test"
+                    : facts.subject.kind === "lifecycle"
+                      ? "event"
+                      : "manual",
                 libraryInstallationId: libraryId,
                 computerId: context.computerId,
                 plan: compiled.plan,
@@ -938,8 +943,16 @@ export function createStandaloneWorkflowHost(
         source: preparation.source,
         initiatedBy: preparation.initiatedBy,
       };
-      const record =
-        delivery === undefined ? started : { ...started, delivery };
+      // A test is listed under its library, as a published run is.
+      const tested =
+        request.test === undefined
+          ? started
+          : {
+              ...started,
+              test: request.test,
+              libraryInstallationId: libraryId,
+            };
+      const record = delivery === undefined ? tested : { ...tested, delivery };
       const current = await admitStart(facts);
       if (
         canonicalJson(S.decodeUnknownSync(S.Json)(current.context)) !==

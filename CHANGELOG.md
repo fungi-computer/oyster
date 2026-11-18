@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.41.0
+
+### Minor Changes
+
+- Changes since 0.40.0:
+
+  - fix(vault): give the redaction load outcome a typed result
+  - fix(vault): report a redaction load failure instead of dropping it
+  - fix(vault): load log redaction on first use and await build event records
+  - fix(vault): load the redaction rules lazily in build logs and host logs
+  - feat(vault): scrub keys from ops logs, build logs and telemetry spans (Vault
+    S9)
+  - feat(workflows): report the input a run was started with in its status
+  - feat(trellis): test a saved draft as a Test run
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/braid@0.6.0
+  - @fungi.computer/workflows-wire@0.6.0
+
 ## 0.40.0
 
 ### Minor Changes

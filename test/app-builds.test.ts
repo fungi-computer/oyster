@@ -55,7 +55,7 @@ import {
   type BuildJobLog,
   retainedBuildLogs,
 } from "../src/app-builds.js";
-import { createBuildJobLog } from "../src/build/job-log.js";
+import { buildJobDiagnostic, createBuildJobLog } from "../src/build/job-log.js";
 import { standaloneBuildRoutes } from "../src/standalone/builds.js";
 import { serveHost } from "../src/authorization.js";
 import type { OysterAuthResult } from "../src/host.js";
@@ -277,7 +277,7 @@ function fixture(
     async runBuild(input) {
       if (uploaded !== null) await upload(store, uploaded);
       const exitCode = await simulate(input);
-      const capture = createBuildJobLog();
+      const capture = await createBuildJobLog();
       if (buildOutput.stdout !== undefined)
         capture.append(new TextEncoder().encode(buildOutput.stdout));
       if (buildOutput.stderr !== undefined)
@@ -389,8 +389,113 @@ it("retains a failing build's complete combined output in its existing artifact 
   expect(guestBackend.status).toBe(403);
 });
 
-it("allocates only for output received by a tiny build", () => {
-  const capture = createBuildJobLog();
+/** A provider-shaped key, assembled so source scanners see no key. */
+const buildCanary = ["ghp_", "7Zk9P2mQa4Wv6Xc8Bn0Ds3Fg5Hj1Lr9Ty2Ui"].join("");
+/** Byte scan: one code unit per byte, so a needle matches raw bytes only. */
+const holds = (bytes: Uint8Array, needle: string) =>
+  Array.from(bytes, (byte) => String.fromCharCode(byte))
+    .join("")
+    .includes(needle);
+
+it("scrubs a key a build script prints from the stored log, the diagnostic and the ?log read", async () => {
+  const f = fixture(() => Promise.resolve(1), normalized, undefined, null, {
+    stdout: `deploying with token=${buildCanary}\n`,
+    stderr: `fatal: bad credentials ${buildCanary}\n`,
+  });
+  const started = await f.builds.start({
+    appId,
+    sourceRevision,
+    requestedBy: "owner",
+  });
+  const completed = await started.run();
+  const log = await f.reopen().readLog(completed.jobId);
+  const retained = base64url.decode(log?.output ?? "");
+  expect(new TextDecoder().decode(retained)).toBe(
+    "deploying with token=[REDACTED]\nfatal: bad credentials [REDACTED]\n",
+  );
+  const served = serveHost(
+    standaloneBuildRoutes(() => ({
+      buildBackend: () => Promise.resolve({ kind: "no_backend" }),
+      startBuild: () =>
+        Promise.resolve({ kind: "refused", reason: "no_source" }),
+      readBuild: (jobId) => Promise.resolve(f.reopen().read(jobId)),
+      readBuildLog: (jobId) => f.reopen().readLog(jobId),
+    })),
+    (): Promise<OysterAuthResult> =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: {
+          actor: { kind: "member", memberId: "owner" },
+          role: "owner",
+        },
+      }),
+    { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
+  );
+  const served200 = await served.request(
+    `https://oyster.test/api/builds/${completed.jobId}?log`,
+  );
+  const sinks = [
+    ...[...f.store.objects.values()].map((object) => object.bytes),
+    retained,
+    new TextEncoder().encode(completed.detail ?? ""),
+    new Uint8Array(await served200.arrayBuffer()),
+  ];
+  expect(sinks).toHaveLength(4);
+  for (const sink of sinks) {
+    expect(holds(sink, buildCanary)).toBe(false);
+    expect(holds(sink, buildCanary.slice(0, 20))).toBe(false);
+    expect(holds(sink, buildCanary.slice(-20))).toBe(false);
+  }
+});
+
+it("masks a key split across events and scan windows without changing other bytes", async () => {
+  for (const shift of [0, 16_383, 16_384, 32_767, 32_768, 49_151]) {
+    const capture = await createBuildJobLog();
+    const text = `${"-".repeat(shift)}\nsecret=${buildCanary}\n${"after\n".repeat(9000)}`;
+    const bytes = new TextEncoder().encode(text);
+    for (let at = 0; at < bytes.length; at += 997)
+      capture.append(bytes.subarray(at, at + 997));
+    const result = capture.finish();
+    const retained = base64url.decode(result.output);
+    expect(holds(retained, buildCanary.slice(0, 12))).toBe(false);
+    expect(holds(retained, buildCanary.slice(-12))).toBe(false);
+    expect(new TextDecoder().decode(retained)).toBe(
+      text.replace(buildCanary, "[REDACTED]"),
+    );
+  }
+});
+
+it("keeps raw terminal and split UTF-8 bytes exactly while scanning", async () => {
+  const capture = await createBuildJobLog();
+  const raw = Uint8Array.of(
+    0xe2,
+    0x82,
+    0x1b,
+    0x5b,
+    0x33,
+    0x31,
+    0x6d,
+    0xff,
+    0x00,
+  );
+  capture.append(raw.subarray(0, 2));
+  capture.append(raw.subarray(2));
+  expect(base64url.decode(capture.finish().output)).toEqual(raw);
+});
+
+it("scrubs a key from a build's failure diagnostic", async () => {
+  const diagnostic = await buildJobDiagnostic(
+    "job_1",
+    `push failed with ${buildCanary} rejected`,
+  );
+  expect(diagnostic).toContain("?log");
+  expect(
+    holds(new TextEncoder().encode(diagnostic), buildCanary.slice(0, 20)),
+  ).toBe(false);
+});
+
+it("allocates only for output received by a tiny build", async () => {
+  const capture = await createBuildJobLog();
   expect(capture.allocatedBytes).toBe(0);
   expect(base64url.decode(capture.finish().output).byteLength).toBe(0);
   capture.append(new TextEncoder().encode("ok\n"));
@@ -400,8 +505,8 @@ it("allocates only for output received by a tiny build", () => {
   );
 });
 
-it("grows the tail ring on demand and retains the latest bytes after wrap", () => {
-  const capture = createBuildJobLog();
+it("grows the tail ring on demand and retains the latest bytes after wrap", async () => {
+  const capture = await createBuildJobLog();
   const half = buildJobLogMaxBytes / 2;
   capture.append(new Uint8Array(half).fill(72));
   capture.append(new Uint8Array(3).fill(65));
@@ -432,8 +537,8 @@ it("grows the tail ring on demand and retains the latest bytes after wrap", () =
   ).toBe(true);
 });
 
-it("grows both retained log buffers logarithmically across small writes", () => {
-  const capture = createBuildJobLog();
+it("grows both retained log buffers logarithmically across small writes", async () => {
+  const capture = await createBuildJobLog();
   const chunk = new Uint8Array(64);
   const half = buildJobLogMaxBytes / 2;
   let reallocations = 0;
@@ -630,7 +735,7 @@ it("serves a build log only through the owner door and answers others without it
 });
 
 it("keeps exactly a 2 MiB head/tail and counts discarded raw bytes, including split UTF-8", async () => {
-  const capture = createBuildJobLog();
+  const capture = await createBuildJobLog();
   const head = new Uint8Array(buildJobLogMaxBytes / 2).fill(72);
   const tail = new Uint8Array(buildJobLogMaxBytes / 2).fill(84);
   const middle = new TextEncoder().encode("🍄\r\n");
@@ -822,7 +927,7 @@ it("builds a registered source's exact commit on the Computer into a verified Re
       credentialId,
     );
     expect(submitted.status).toBe(200);
-    builds.record({
+    await builds.record({
       kind: "build-status",
       jobId,
       credentialId,
@@ -862,7 +967,7 @@ it("records the built Release in the artifact store as an installable, verified 
       grantOf(command),
       credentialId,
     );
-    builds.record({
+    await builds.record({
       kind: "build-artifact",
       jobId,
       credentialId,
@@ -899,7 +1004,7 @@ async function buildWith(
         grantOf(command),
         credentialId,
       );
-      builds.record({
+      await builds.record({
         kind: "build-artifact",
         jobId,
         credentialId,
@@ -1057,6 +1162,27 @@ it("refuses an uploaded object whose bytes are not its digest, keeping a verifie
   }
 });
 
+it("has written a reported failure to the job row by the time record returns", async () => {
+  let settled: string | undefined;
+  const { builds } = fixture(async ({ jobId }) => {
+    const credentialId =
+      builds.admitBuild(jobId, computerObjectId)?.credentialId ?? "";
+    await builds.record({
+      kind: "build-status",
+      jobId,
+      credentialId,
+      status: "failed",
+      detail: "the build script exited 2",
+    });
+    settled = builds.read(jobId)?.status;
+    return 0;
+  });
+  await (
+    await builds.start({ appId, sourceRevision, requestedBy: "owner-1" })
+  ).run();
+  expect(settled).toBe("failed");
+});
+
 it("keeps a recorded Release root out of reach of a later job's object uploads", async () => {
   const manifestBytes = new TextEncoder().encode(
     encodeTeamAppCandidateManifest(candidate),
@@ -1076,7 +1202,7 @@ it("keeps a recorded Release root out of reach of a later job's object uploads",
         grantOf(command),
         credentialId,
       );
-      builds.record({
+      await builds.record({
         kind: "build-status",
         jobId,
         credentialId,
@@ -1171,13 +1297,13 @@ function restartedOwners(clock: { now: number }, missingOutput = false) {
         // The Computer keeps building after the owner that called it is gone.
         port: {
           buildBackend: () => Promise.resolve({ kind: "hosted" }),
-          runBuild: ({ command }) => {
+          runBuild: async ({ command }) => {
             commands.push(command);
             return missingOutput
-              ? Promise.resolve({
+              ? {
                   output: null,
-                  log: createBuildJobLog().finish(),
-                })
+                  log: (await createBuildJobLog()).finish(),
+                }
               : new Promise<never>(() => undefined);
           },
         },
@@ -1235,7 +1361,7 @@ it("completes a build from the Computer's reports after its owner restarted mid-
       )
     ).status,
   ).toBe(200);
-  after.record({
+  await after.record({
     kind: "build-status",
     jobId: build.jobId,
     credentialId,
@@ -1323,12 +1449,12 @@ it("keeps a build running when the Computer loses its result, and completes it f
       objectId: computerObjectId,
       port: {
         buildBackend: () => Promise.resolve({ kind: "hosted" }),
-        runBuild: (input) => {
+        runBuild: async (input) => {
           command = input.command;
-          return Promise.resolve({
+          return {
             output: null,
-            log: createBuildJobLog().finish(),
-          });
+            log: (await createBuildJobLog()).finish(),
+          };
         },
       },
     },
@@ -1371,7 +1497,7 @@ it("keeps a build running when the Computer loses its result, and completes it f
       )
     ).status,
   ).toBe(200);
-  builds.record({
+  await builds.record({
     kind: "build-status",
     jobId: build.jobId,
     credentialId,
@@ -1497,7 +1623,7 @@ async function submitUnder(
         )
       ).status;
       if (submitted === 200)
-        builds.record({
+        await builds.record({
           kind: "build-status",
           jobId,
           credentialId,
@@ -1677,7 +1803,7 @@ it("builds a template's recorded seed revision, cloning only that template while
         )
       ).status,
     ).toBe(200);
-    builds.record({
+    await builds.record({
       kind: "build-status",
       jobId,
       credentialId,
@@ -1848,7 +1974,7 @@ it.each(["installed", "needs_consent", "failed"] as const)(
           )
         ).status,
       ).toBe(200);
-      builds.record({
+      await builds.record({
         kind: "build-status",
         jobId,
         credentialId: admission.credentialId,

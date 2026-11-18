@@ -693,7 +693,7 @@ export class ComputerDO
       "registry",
     ).admitBuildExecution(input.jobId, this.state.id.toString());
     if (!admitted) throw new AppInstanceError("revoked");
-    const log = createBuildJobLog();
+    const log = await createBuildJobLog();
     const result = await this.executeOperationAfterAcceptance(
       {
         command: input.command,

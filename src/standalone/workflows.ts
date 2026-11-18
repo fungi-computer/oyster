@@ -60,7 +60,7 @@ import {
   type WorkflowGitCredential,
   type WorkflowGitPassGrant,
   workflowRunReport,
-  wireRunInitiator,
+  wireRunRow,
   type WorkflowRunDelivery,
   type WorkflowRunEnding,
 } from "@fungi.computer/braid/runtime";
@@ -623,19 +623,7 @@ export abstract class StandaloneWorkflowRunsBase<
         ? { installationId: libraryId }
         : { installationId: libraryId, workflowId: input.workflowId };
     return {
-      runs: owner.store.list(filter).map((run) => {
-        const row = {
-          runId: run.runId,
-          workflowId: run.publication?.workflowId ?? run.trigger?.workflowId,
-          commit: run.publication?.commit ?? run.trigger?.commit,
-          source: run.source,
-          initiatedBy: wireRunInitiator(run.initiatedBy),
-          startedAt: run.startedAt,
-        };
-        return run.trigger === undefined
-          ? row
-          : { ...row, triggerId: run.trigger.triggerId };
-      }),
+      runs: owner.store.list(filter).map(wireRunRow),
     };
   }
   /** Native alarm delivery: fire every due schedule of this library. */
@@ -839,6 +827,7 @@ export abstract class StandaloneWorkflowRunsBase<
       runId,
       planDigest: run.plan.planDigest,
       title: run.plan.definition.title,
+      input: run.input,
       outcome,
       events: owner.store.events(runId),
       reviews: owner.store.reviews(runId),

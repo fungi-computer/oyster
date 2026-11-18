@@ -409,13 +409,13 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         : { digest: job.artifact_digest, bytes: job.artifact_bytes },
     detail: job.detail,
   });
-  const settle = (
+  const settle = async (
     jobId: string,
     status: "succeeded" | "failed" | "interrupted" | "revoked",
     detail: string | null,
   ) => {
     const diagnostic =
-      detail === null ? null : buildJobDiagnostic(jobId, detail);
+      detail === null ? null : await buildJobDiagnostic(jobId, detail);
     owner.sql.exec(
       `UPDATE oyster_build_jobs SET installation=CASE WHEN ?='succeeded' THEN installation ELSE ${failedInstallation} END,
         status=?, detail=?, expires_at=MIN(expires_at, ?) WHERE job_id=? AND status='running'`,
@@ -468,9 +468,9 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       // The job row is minted in `start`; the lifecycle only reads it back.
       mintTeamBuildCredential: ({ jobId }) =>
         Promise.resolve(lifecycleJob(required(jobId))),
-      revokeTeamBuild: (jobId) => {
-        settle(jobId, "revoked", "Build revoked");
-        return Promise.resolve(lifecycleJob(required(jobId)));
+      revokeTeamBuild: async (jobId) => {
+        await settle(jobId, "revoked", "Build revoked");
+        return lifecycleJob(required(jobId));
       },
       build: () =>
         Promise.resolve({
@@ -480,13 +480,13 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
             const job = readJob(jobId);
             return Promise.resolve(job === null ? null : lifecycleJob(job));
           },
-          complete: (
+          complete: async (
             jobId: string,
             status: "succeeded" | "failed",
             detail: string,
           ) => {
-            settle(jobId, status, detail);
-            return Promise.resolve(lifecycleJob(required(jobId)));
+            await settle(jobId, status, detail);
+            return lifecycleJob(required(jobId));
           },
           // Oyster's egress writes job facts here directly; nothing is queued.
           deliverProjection: () => Promise.resolve(),
@@ -546,7 +546,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       // An unknown output can belong to a live builder. Its reports can
       // still succeed; the existing build expiry interrupts it if abandoned.
       if (!(cause instanceof BuildOutcomeUnknown))
-        settle(jobId, "failed", candidateFailureDiagnostic(cause));
+        await settle(jobId, "failed", candidateFailureDiagnostic(cause));
     }
     return view(required(jobId));
   };
@@ -940,7 +940,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
       );
     },
     /** A reported artifact or status for a live job. */
-    record(
+    async record(
       event:
         | Readonly<{
             kind: "build-artifact";
@@ -956,7 +956,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
             status: "succeeded" | "failed";
             detail: string | null;
           }>,
-    ): void {
+    ): Promise<void> {
       const job = readJob(event.jobId);
       if (!live(job) || job.credential_id !== event.credentialId) return;
       if (event.kind === "build-artifact")
@@ -968,7 +968,7 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
         );
       // Success is the recorded Release's fact, never the report's alone.
       else if (event.status === "failed" || readRelease(event.jobId) !== null)
-        settle(event.jobId, event.status, event.detail);
+        await settle(event.jobId, event.status, event.detail);
     },
     /**
      * May this live job's build upload one object now, and how large? The
@@ -1084,7 +1084,11 @@ export function createOysterAppBuilds(options: OysterAppBuildOptions) {
           false,
         );
       } catch {
-        settle(jobId, "failed", "Candidate could not be stored as a Release");
+        await settle(
+          jobId,
+          "failed",
+          "Candidate could not be stored as a Release",
+        );
         return new Response(null, { status: 422 });
       }
       owner.transactionSync(() => {

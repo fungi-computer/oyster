@@ -645,7 +645,7 @@ async function fixture(
 it("reserves build-log artifact refs from owner uploads without blocking opaque App refs", async () => {
   const { app, host } = await fixture();
   const logRef = parseArtifactRef(`artifact:build-log-build_${"a".repeat(32)}`);
-  const log = createBuildJobLog();
+  const log = await createBuildJobLog();
   log.append(new TextEncoder().encode("actual build output\n"));
   const stored = new TextEncoder().encode(JSON.stringify(log.finish()));
   await host.artifacts.put(logRef, stored);

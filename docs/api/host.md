@@ -460,6 +460,7 @@ type OysterHost = Readonly<{
            active: ...;
         }>;
         title: z.ZodString;
+        input: z.ZodRecord<z.ZodString, z.ZodJSONSchema>;
         events: z.ZodArray<z.ZodRecord<..., ...>>;
         reviews: z.ZodArray<z.ZodRecord<..., ...>>;
         status: z.ZodString;
