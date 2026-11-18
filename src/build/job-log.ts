@@ -3,6 +3,8 @@ import { base64url } from "jose";
 import { boundedDiagnostic } from "@fungi.computer/bird-dog/effect";
 import {
   loadPatternRedactor,
+  maskSpans,
+  type PatternMatch,
   type PatternRedactor,
 } from "@fungi.computer/veil/redaction";
 
@@ -126,6 +128,9 @@ function textToBytes(text: string): Uint8Array {
 const scanWindow = 16 * 1024;
 const maxPendingText = 1024 * 1024;
 
+const secretsOf = (matches: readonly PatternMatch[]) =>
+  matches.map(({ secret }) => secret);
+
 /** What a host writes where it cannot redact: the ADR's form, never raw output. */
 export const redactionWithheld = "[output withheld: redaction unavailable]";
 
@@ -133,11 +138,13 @@ export const redactionWithheld = "[output withheld: redaction unavailable]";
  * The redactor, or undefined when its rules cannot load: callers then write
  * {@link redactionWithheld} and never the unredacted text.
  */
-async function loadRedactorOrWithhold(): Promise<{
+async function loadRedactorOrWithhold(
+  load: () => Promise<PatternRedactor>,
+): Promise<{
   redactor: PatternRedactor | undefined;
 }> {
   try {
-    return { redactor: await loadPatternRedactor() };
+    return { redactor: await load() };
   } catch (cause) {
     console.error(
       "redaction rules failed to load",
@@ -150,12 +157,15 @@ async function loadRedactorOrWithhold(): Promise<{
 /**
  * One bounded sink for a build's combined output. Veil's pattern redactor
  * (S3's gitleaks rules) runs before a byte is retained, so the stored log and
- * every `?log` read of it are already scrubbed.
+ * every `?log` read of it are already scrubbed. `loadRedactor` is Veil's
+ * loader unless a caller wraps it (a test that counts scanned characters).
  */
-export async function createBuildJobLog() {
+export async function createBuildJobLog(
+  loadRedactor: () => Promise<PatternRedactor> = loadPatternRedactor,
+) {
   const ring = createBoundedLog();
   // A rule table that cannot load stores the withheld notice, never the output.
-  const { redactor } = await loadRedactorOrWithhold();
+  const { redactor } = await loadRedactorOrWithhold(loadRedactor);
   let pending = "";
   let scannedLength = 0;
   const scan = (final: boolean) => {
@@ -165,29 +175,46 @@ export async function createBuildJobLog() {
       if (final) ring.append(textToBytes(redactionWithheld));
       return;
     }
-    const text = redactor.redact(pending).text;
-    if (final) {
-      ring.append(textToBytes(text));
+    const matches = redactor.find(pending);
+    if (matches === undefined) {
+      // Over Veil's size ceiling: withhold this text, never pass it raw.
+      ring.append(textToBytes(redactionWithheld));
       pending = "";
       scannedLength = 0;
       return;
     }
-    // Text past the last replacement is unchanged; a match near the end could
-    // still grow with later output, so only an unchanged window leaves pending.
-    let unchanged = 0;
-    while (
-      unchanged < text.length &&
-      unchanged < pending.length &&
-      text[text.length - 1 - unchanged] ===
-        pending[pending.length - 1 - unchanged]
-    )
-      unchanged++;
-    if (
-      text.length > scanWindow &&
-      (unchanged >= scanWindow || text.length > maxPendingText)
-    ) {
+    if (final) {
+      ring.append(textToBytes(maskSpans(pending, secretsOf(matches))));
+      pending = "";
+      scannedLength = 0;
+      return;
+    }
+    if (pending.length > maxPendingText) {
+      // Ceiling: emit all but the last window, masked on both sides of the cut.
+      const text = maskSpans(pending, secretsOf(matches));
       ring.append(textToBytes(text.slice(0, text.length - scanWindow)));
       pending = text.slice(text.length - scanWindow);
+      scannedLength = pending.length;
+      return;
+    }
+    // A match reaching into the last window could still grow with later
+    // output, so it stays pending raw, with its whole match as rescan context.
+    // Walking by descending start also holds any match that overlaps one held.
+    let cut = pending.length - scanWindow;
+    for (const { match } of [...matches].sort(
+      (left, right) => right.match.start - left.match.start,
+    ))
+      if (match.start < cut && match.end > cut) cut = match.start;
+    if (cut > 0) {
+      ring.append(
+        textToBytes(
+          maskSpans(
+            pending.slice(0, cut),
+            secretsOf(matches).filter(({ end }) => end <= cut),
+          ),
+        ),
+      );
+      pending = pending.slice(cut);
     }
     scannedLength = pending.length;
   };
@@ -220,7 +247,7 @@ export async function buildJobDiagnostic(
   detail: string,
 ): Promise<string> {
   const reference = `Log: ${buildJobLogReference(jobId)}`;
-  const { redactor } = await loadRedactorOrWithhold();
+  const { redactor } = await loadRedactorOrWithhold(loadPatternRedactor);
   const diagnostic =
     boundedDiagnostic(
       redactor === undefined ? redactionWithheld : redactor.redact(detail).text,

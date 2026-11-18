@@ -33,6 +33,7 @@ export default defineConfig({
       "test/build/candidate-builder.test.ts",
       "test/build/candidate-diagnostic.test.ts",
       "test/build/build-memory.test.ts",
+      "test/build/job-log-scan.test.ts",
     ],
   },
 });
