@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.42.1
+
+### Patch Changes
+
+- Changes since 0.42.0:
+
+  - Updated starter Apps for the Trellis release.
+
 ## 0.42.0
 
 ### Minor Changes
