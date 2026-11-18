@@ -1,7 +1,10 @@
 /**
  * Standalone Oyster's Computer egress: the same host policy Hub's
- * ComputerEgress decides with. It serves three lanes:
+ * ComputerEgress decides with. It serves four lanes:
  *
+ * - the Vault lane: a request presenting one of this Computer's live `fvr1.`
+ *   references, which the Agent directory that owns the secret completes
+ *   (its grant, exact binding, value placement, echo check and audit);
  * - Oyster's own origin Git, carrying only the guest's own credential;
  * - the anonymous public download lane (package registries and release hosts
  *   the policy classifies), so a build can install its dependencies, behind
@@ -24,7 +27,12 @@ import {
   originGitRequest,
   publicEgressEnabled,
   recordComputerEgress,
+  vaultRefusalStatus,
+  vaultRequestData,
+  type VaultRequestData,
 } from "@fungi.computer/computer/egress";
+import type { VaultReferenceAdmission } from "@fungi.computer/computer";
+import { connectionBodyLimit } from "@fungi.computer/veil/connections";
 import { createBuildEgress, type BuildGitEvent } from "../build-egress.js";
 import type { ContentObjectOwner } from "../build/content-objects.js";
 import type {
@@ -37,6 +45,15 @@ import { gitDoorRoute, smartHttpExchange, type GitDoorTarget } from "../git.js";
 
 /** Loopback props the ComputerDO sets; a guest cannot choose them. */
 export type OysterComputerEgressProps = Readonly<{ computerObjectId: string }>;
+
+/** The Vault lane: this Computer resolves a reference, its owner sends. */
+export type OysterComputerVaultPort = Readonly<{
+  admit(reference: string): Promise<VaultReferenceAdmission | null>;
+  send(
+    admission: VaultReferenceAdmission,
+    data: VaultRequestData,
+  ): Promise<Response | Readonly<{ error: string }>>;
+}>;
 
 /** The registry's build admission, for the one Computer this egress serves. */
 export type OysterComputerBuildPort = Readonly<{
@@ -86,6 +103,8 @@ export async function serveOysterComputerEgress(
     /** Live setting from the Computer identified by the host's loopback props. */
     internetAccess(): Promise<boolean>;
     build: OysterComputerBuildPort;
+    /** Absent: this host offers no Vault lane, and every reference is refused. */
+    vault?: OysterComputerVaultPort;
     forward(request: Request): Promise<Response>;
   }>,
 ): Promise<Response> {
@@ -110,7 +129,32 @@ export async function serveOysterComputerEgress(
   });
   if (decision.kind === "denied") return deny(url.hostname, decision.reason);
   let response: Response;
-  if (decision.kind === "origin-git")
+  if (decision.kind === "vault") {
+    if (options.vault === undefined)
+      return deny(url.hostname, "lane-not-offered:vault");
+    const admission = await options.vault.admit(decision.reference);
+    if (admission === null) return deny(url.hostname, "vault-reference");
+    const prepared = await vaultRequestData(
+      request,
+      url,
+      decision.reference,
+      connectionBodyLimit,
+    );
+    if (prepared.kind === "refused")
+      return deny(
+        url.hostname,
+        `vault-${prepared.reason}`,
+        prepared.reason === "too_large" ? 413 : 403,
+      );
+    const sent = await options.vault.send(admission, prepared.data);
+    if (!(sent instanceof Response))
+      return deny(
+        url.hostname,
+        `vault-${sent.error}`,
+        vaultRefusalStatus(sent.error),
+      );
+    response = sent;
+  } else if (decision.kind === "origin-git")
     response = await options.forward(originGitRequest(request, url));
   else if (decision.kind === "public") {
     let enabled: boolean;

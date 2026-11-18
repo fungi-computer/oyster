@@ -578,6 +578,7 @@ export async function nativeWorkflowRoot({
   computer,
   computerInstances = 1,
   ai = false,
+  variables = {},
 }) {
   const { work, config } = await nativeFixtureWorkspace(root, prefix);
   config.main = `${root}test/standalone/${main}`;
@@ -593,6 +594,7 @@ export async function nativeWorkflowRoot({
     work,
     config,
     ...computerOptions,
+    variables: { ...computerOptions.variables, ...variables },
     oysterOrigin: tenantOrigin,
   });
   return {

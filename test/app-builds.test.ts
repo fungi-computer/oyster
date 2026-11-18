@@ -448,8 +448,11 @@ it("scrubs a key a build script prints from the stored log, the diagnostic and t
   }
 });
 
-it("masks a key split across events and scan windows without changing other bytes", async () => {
-  for (const shift of [0, 16_383, 16_384, 32_767, 32_768, 49_151]) {
+// Each shift is its own test: scanning a ~100 KiB log costs 0.1 to 0.4 s, and
+// the six together approached the 5 s default under gate load.
+it.each([0, 16_383, 16_384, 32_767, 32_768, 49_151])(
+  "masks a key split across events and scan windows without changing other bytes (shift %i)",
+  async (shift) => {
     const capture = await createBuildJobLog();
     const text = `${"-".repeat(shift)}\nsecret=${buildCanary}\n${"after\n".repeat(9000)}`;
     const bytes = new TextEncoder().encode(text);
@@ -462,8 +465,8 @@ it("masks a key split across events and scan windows without changing other byte
     expect(new TextDecoder().decode(retained)).toBe(
       text.replace(buildCanary, "[REDACTED]"),
     );
-  }
-});
+  },
+);
 
 it("keeps raw terminal and split UTF-8 bytes exactly while scanning", async () => {
   const capture = await createBuildJobLog();

@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.44.0
+
+### Minor Changes
+
+- Changes since 0.43.0:
+
+  - fix(oyster): return an admitted Agent Computer call as plain data over RPC
+  - feat(computer): place Vault keys from Hub and Oyster gateways for Agent
+    commands
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.15.0
+  - @fungi.computer/veil@0.9.0
+  - @fungi.computer/shiitake@0.21.3
+  - @fungi.computer/parakeet@0.14.3
+  - @fungi.computer/shiitake-extensions@0.11.13
+  - @fungi.computer/zookeeper@0.0.45
+
 ## 0.43.0
 
 ### Minor Changes

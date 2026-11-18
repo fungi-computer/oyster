@@ -10,10 +10,38 @@ import {
 import {
   serveOysterComputerEgress,
   type OysterComputerBuildPort,
+  type OysterComputerVaultPort,
 } from "../../src/standalone/computer-egress.js";
 
 const origin = "https://oyster.test";
 const livePass = `obp.build_${"a".repeat(32)}.${"b".repeat(64)}`;
+const liveReference = `fvr1.${"r".repeat(43)}`;
+
+/** This Computer knows one live reference; its owner answers each send. */
+function liveVault(
+  sent: Parameters<OysterComputerVaultPort["send"]>[] = [],
+  answer: () => Response | Readonly<{ error: string }> = () =>
+    new Response("placed", { status: 200 }),
+): OysterComputerVaultPort {
+  return {
+    admit: (reference) =>
+      Promise.resolve(
+        reference === liveReference
+          ? {
+              invocationId: "exec:1",
+              owner: "directory",
+              subject: { kind: "agent", id: "ag_1" },
+              connectionId: "secret_1",
+              grantVersion: 1,
+            }
+          : null,
+      ),
+    send: (admission, data) => {
+      sent.push([admission, data]);
+      return Promise.resolve(answer());
+    },
+  };
+}
 
 /** A registry with live build jobs of `bonsai/my-app` and of the
  * `template-shed` template on this Computer. */
@@ -96,11 +124,13 @@ async function egress(
   options: {
     publicEgress?: string;
     build?: OysterComputerBuildPort;
+    /** `null`: the host wires no Vault lane at all. */
+    vault?: OysterComputerVaultPort | null;
     internetAccess?: () => Promise<boolean>;
   } = {},
 ) {
   const forwarded: Request[] = [];
-  const response = await serveOysterComputerEgress(request, {
+  const host: Parameters<typeof serveOysterComputerEgress>[1] = {
     origin,
     computerId: "computer-object",
     publicEgress: options.publicEgress,
@@ -110,7 +140,13 @@ async function egress(
       forwarded.push(admitted);
       return Promise.resolve(new Response("git", { status: 200 }));
     },
-  });
+  };
+  const response = await serveOysterComputerEgress(
+    request,
+    options.vault === null
+      ? host
+      : { ...host, vault: options.vault ?? liveVault() },
+  );
   return { response, forwarded };
 }
 
@@ -119,6 +155,71 @@ afterEach(() => {
 });
 
 describe("standalone Oyster Computer egress", () => {
+  it("sends a live reference's request through its owner, without the reference", async () => {
+    const sent: Parameters<OysterComputerVaultPort["send"]>[] = [];
+    const { response, forwarded } = await egress(
+      new Request(`https://api.stripe.com/v1/charges?expand=${liveReference}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${liveReference}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      }),
+      { vault: liveVault(sent) },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("placed");
+    expect(forwarded).toHaveLength(0);
+    const [[admission, data] = []] = sent;
+    expect(admission?.connectionId).toBe("secret_1");
+    expect(data?.url).toBe("https://api.stripe.com/v1/charges");
+    expect(data?.headers).toEqual([["content-type", "application/json"]]);
+    expect(JSON.stringify(data)).not.toContain(liveReference);
+  });
+
+  it("fails closed when no Vault owner is wired, even toward a public host", async () => {
+    const fetched = vi.fn(() => Promise.resolve(new Response("leaked")));
+    vi.stubGlobal("fetch", fetched);
+    for (const url of [
+      "https://registry.npmjs.org/is-number",
+      "https://unlisted.example/",
+    ]) {
+      const { response, forwarded } = await egress(
+        new Request(url, { headers: { "x-api-key": liveReference } }),
+        { vault: null },
+      );
+      expect(response.status).toBe(403);
+      expect(forwarded).toHaveLength(0);
+    }
+    expect(fetched).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an unknown or copied reference",
+      `fvr1.${"x".repeat(43)}`,
+      undefined,
+      403,
+    ],
+    ["the owner's destination refusal", liveReference, "denied", 403],
+    ["a revoked grant", liveReference, "revoked", 403],
+    ["a redirect", liveReference, "invalid_response", 502],
+  ])("refuses %s", async (_name, reference, error, status) => {
+    const sent: Parameters<OysterComputerVaultPort["send"]>[] = [];
+    const { response } = await egress(
+      new Request("https://unlisted.example/", {
+        headers: { "x-api-key": reference },
+      }),
+      {
+        vault: liveVault(sent, () => ({ error: error ?? "denied" })),
+      },
+    );
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe("Computer egress denied by policy");
+    expect(sent).toHaveLength(error === undefined ? 0 : 1);
+  });
+
   it.each([
     [
       "GET",

@@ -269,7 +269,8 @@ export class OysterInstallationExecutor extends installationWorkerEntrypoint<Sta
   (env, scope) => oysterRoot.hostFor(env, scope),
 ) {}
 
-/** The Computer's egress gateway: its own HTTPS Git back into this Worker. */
+/** The Computer's egress gateway: its own HTTPS Git back into this Worker,
+ * and the Vault lane through the Agent directory that owns each secret. */
 export class OysterComputerEgress extends WorkerEntrypoint<
   StandaloneEnv,
   OysterComputerEgressProps
@@ -277,14 +278,23 @@ export class OysterComputerEgress extends WorkerEntrypoint<
   override fetch(request: Request): Promise<Response> {
     const computerObjectId = this.ctx.props.computerObjectId;
     const registry = computerRegistry(this.env);
+    const computer = () =>
+      this.env.COMPUTER.get(this.env.COMPUTER.idFromString(computerObjectId));
+    // The Agent directory that owns each secret, not the Git owner's narrow view.
+    const directories: StandaloneAgentsEnv["AGENT_DIRECTORY"] =
+      this.env.AGENT_DIRECTORY;
     return serveOysterComputerEgress(request, {
       origin: this.env.OYSTER_ORIGIN,
       computerId: computerObjectId,
       publicEgress: this.env.COMPUTER_PUBLIC_EGRESS,
-      internetAccess: () =>
-        this.env.COMPUTER.get(
-          this.env.COMPUTER.idFromString(computerObjectId),
-        ).internetAccess(),
+      internetAccess: () => computer().internetAccess(),
+      vault: {
+        admit: (reference) => computer().admitVaultReference(reference),
+        send: (admission, data) =>
+          directories
+            .getByName(admission.owner)
+            .sendComputerVault(admission, data),
+      },
       build: {
         gitPassFor: (target) =>
           registry.buildGitPassFor(computerObjectId, target),

@@ -164,8 +164,21 @@ import {
 } from "./agent-computers.js";
 import {
   FleetGrantRefused,
+  type ComputerAction,
   type ComputerGrant,
 } from "@fungi.computer/computer/fleet";
+import {
+  vaultExecutionContext,
+  type VaultReferenceAdmission,
+  type VaultSecretGrant,
+} from "@fungi.computer/computer";
+import type { VaultRequestData } from "@fungi.computer/computer/egress";
+import type {
+  ConnectionSubject,
+  ConnectionUsage,
+  HttpDestinations,
+  Placement,
+} from "@fungi.computer/veil/connections";
 import {
   homeExtension,
   homeGrant,
@@ -1210,7 +1223,7 @@ export abstract class StandaloneAgentBase<
         const pin = await this.policyDirectory();
         if (pin?.directoryName !== captured.scopeId)
           throw new FleetGrantRefused();
-        return this.env.AGENT_DIRECTORY.getByName(
+        const grant = await this.env.AGENT_DIRECTORY.getByName(
           pin.directoryName,
         ).admitAgentComputer(
           {
@@ -1220,6 +1233,17 @@ export abstract class StandaloneAgentBase<
           },
           pin.tenantId,
         );
+        return {
+          computerId: grant.computerId,
+          actions: new Set(grant.actions),
+          expiresAt: grant.expiresAt,
+          provenance: grant.provenance,
+          // Whose Vault secrets this Agent's commands may name: its directory's.
+          egress: vaultExecutionContext({
+            owner: pin.directoryName,
+            subject: { kind: "agent", id: captured.agentId },
+          }),
+        };
       },
     };
   }
@@ -2281,6 +2305,18 @@ const visitRow = Schema.Struct({
 const counterRow = Schema.Struct({ value: Schema.Number });
 
 /** Names this Oyster's agents and remembers which Sessions the member opened. */
+/**
+ * An admitted Agent Computer call as it crosses the directory's RPC boundary:
+ * plain data, which the Agent turns into its fleet grant with the Vault
+ * context of the directory that admitted it.
+ */
+export type AdmittedAgentComputer = Readonly<{
+  computerId: string;
+  actions: readonly ComputerAction[];
+  expiresAt: number;
+  provenance: ComputerGrant["provenance"];
+}>;
+
 export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private archiveProjectionOwner:
     ReturnType<typeof agentArchiveProjection> | undefined;
@@ -2493,6 +2529,69 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
 
   async removeConnection(connectionId: string) {
     return (await this.mcpConnections()).remove(connectionId);
+  }
+
+  /** Host-only: save one Vault secret bound to exact destinations. */
+  async addSecret(
+    input: Readonly<{
+      name: string;
+      destinations: HttpDestinations;
+      placement: Placement;
+      secret: string;
+    }>,
+  ): Promise<Readonly<{ connectionId: string }> | Readonly<{ error: string }>> {
+    return (await this.mcpConnections()).addSecret(input);
+  }
+
+  async grantSecret(
+    connectionId: string,
+    subject: ConnectionSubject,
+  ): Promise<Readonly<{ ok: true }> | Readonly<{ error: string }>> {
+    return (await this.mcpConnections()).grantSecret(connectionId, subject);
+  }
+
+  async ungrantSecret(
+    connectionId: string,
+    subject: ConnectionSubject,
+  ): Promise<void> {
+    await (await this.mcpConnections()).ungrantSecret(connectionId, subject);
+  }
+
+  async secretUsage(connectionId: string): Promise<readonly ConnectionUsage[]> {
+    return (await this.mcpConnections()).secretUsage(connectionId);
+  }
+
+  /** A Computer opening one Agent command: which secrets it holds now; never a value. */
+  async computerVaultGrants(
+    agentId: string,
+  ): Promise<readonly VaultSecretGrant[]> {
+    const granted = await (await this.mcpConnections()).projection(agentId);
+    return granted.connections.flatMap((connection) =>
+      connection.surface.kind === "http"
+        ? [
+            {
+              name: connection.name,
+              connectionId: connection.connectionId,
+              grantVersion: connection.grantVersion,
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** The Computer gateway's Vault lane: one resolved reference's request, sent here. */
+  async sendComputerVault(
+    admission: VaultReferenceAdmission,
+    data: VaultRequestData,
+  ): Promise<Response | Readonly<{ error: string }>> {
+    return (await this.mcpConnections()).fetchSecret(
+      admission.subject,
+      {
+        connectionId: admission.connectionId,
+        grantVersion: admission.grantVersion,
+      },
+      data,
+    );
   }
 
   async connectionTools(connectionId: string) {
@@ -2917,7 +3016,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       "scopeId" | "agentId" | "attachment"
     >,
     tenantId: TenantId,
-  ): Promise<Omit<ComputerGrant, "egress">> {
+  ): Promise<AdmittedAgentComputer> {
     const owner = await this.computerOwner(captured.agentId, tenantId);
     const scope = tenantScope(tenantId, this.env.OYSTER_ORIGIN);
     const held = captured.attachment;
@@ -2950,7 +3049,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       throw new FleetGrantRefused();
     return {
       computerId: held.computerId,
-      actions: new Set([
+      actions: [
         "files.read",
         "files.readBytes",
         "files.list",
@@ -2964,7 +3063,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
         "processStart",
         "processList",
         "processKill",
-      ]),
+      ],
       expiresAt: Date.now() + 60_000,
       provenance: { actor: oysterPrincipalId(owner), via: captured.agentId },
     };

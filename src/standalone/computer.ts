@@ -48,6 +48,9 @@ import {
   type AttachedBackend,
   type ComputerEnv,
   type ComputerFilesRpc,
+  isVaultExecutionContext,
+  type VaultSecretGrant,
+  withVaultExecution,
 } from "@fungi.computer/computer";
 import {
   patchInputSchema,
@@ -319,7 +322,16 @@ export type StandaloneComputerOwnerEnv = StandaloneComputerEnv &
     WORKFLOW_RUNS: Readonly<{
       getByName(libraryId: string): StandaloneWorkflowGitIssuer;
     }>;
+    /** Each Agent directory owns its Agents' Vault secrets. */
+    AGENT_DIRECTORY: Readonly<{
+      getByName(directoryName: string): StandaloneVaultGrantOwner;
+    }>;
   }>;
+
+/** Which secrets one Agent holds now, for its command's references. */
+export type StandaloneVaultGrantOwner = Readonly<{
+  computerVaultGrants(agentId: string): Promise<readonly VaultSecretGrant[]>;
+}>;
 
 /** The library run owner's per-invocation Workflow Git credential ports. */
 export type StandaloneWorkflowGitIssuer = Readonly<{
@@ -793,6 +805,13 @@ export class ComputerDO
    * Computer hands it only to that command's Git environment.
    */
   protected override executionHooks(): ComputerExecutionHostHooks {
+    // An Agent command's references come from the directory its grant names.
+    const vault = this.vaultExecutionHooks({
+      grants: ({ owner, subject }) =>
+        this.previewBindings.AGENT_DIRECTORY.getByName(
+          owner,
+        ).computerVaultGrants(subject.id),
+    });
     const issuer = (context: ComputerValue) => {
       const grant =
         workflowGitExecutionContextSchema.parse(context).workflowGit;
@@ -801,7 +820,7 @@ export class ComputerDO
         runs: this.previewBindings.WORKFLOW_RUNS.getByName(grant.teamId),
       };
     };
-    return {
+    return withVaultExecution(vault, {
       async open(invocation, context) {
         const { grant, runs } = issuer(context);
         return {
@@ -818,7 +837,7 @@ export class ComputerDO
         const { grant, runs } = issuer(context);
         await runs.closeWorkflowGit(invocation.id, grant);
       },
-    };
+    });
   }
 
   protected override attachedBackends(): readonly AttachedBackend[] {
@@ -874,7 +893,16 @@ export class ComputerDO
         }),
         accept,
       );
-    return output.parse(await this.callAfterAcceptance(tool, input, accept));
+    // The host-issued grant names whose Vault references an Agent command holds.
+    const vault =
+      (tool === "bash" || tool === "exec") &&
+      authority.egress !== undefined &&
+      isVaultExecutionContext(authority.egress)
+        ? authority.egress
+        : undefined;
+    return output.parse(
+      await this.callAfterAcceptance(tool, input, accept, vault),
+    );
   }
 
   /** JSON operations keep the Computer's maintained parsers and execution engine. */
