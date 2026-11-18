@@ -3,6 +3,7 @@
   "include": [
     "*.ts",
     "workflow-probe/*.ts",
+    "workflow-prints/*.ts",
     "../../src/standalone/exports.d.ts"
   ]
 }

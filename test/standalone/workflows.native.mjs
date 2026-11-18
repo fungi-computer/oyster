@@ -21,6 +21,7 @@ import {
 } from "@modelcontextprotocol/client";
 
 import { probeDeclaration } from "./workflow-probe/declaration.ts";
+import { printsDeclaration } from "./workflow-prints/declaration.ts";
 
 import { packRelease, installRelease } from "@fungi.computer/oyster/pack";
 import { standaloneAppSet } from "@fungi.computer/oyster/standalone/app-set";
@@ -161,7 +162,8 @@ async function proveWorkflowMcp(completedRunId, pendingRunId) {
 }
 let reviewServer;
 let reviewBrowser;
-async function answerInRunView(runId, workflowId, approved, reviewedValue) {
+/** The one vite server and isolated Chromium the browser proofs share. */
+async function reviewHarness() {
   if (!reviewServer) {
     const { createServer: createViteServer } = await import("vite");
     const { chromium } = await import("playwright");
@@ -177,6 +179,9 @@ async function answerInRunView(runId, workflowId, approved, reviewedValue) {
       ...portsOf(origin),
     ]);
   }
+}
+async function answerInRunView(runId, workflowId, approved, reviewedValue) {
+  await reviewHarness();
   const width = approved ? 1440 : 390;
   const page = await reviewBrowser.newPage({
     viewport: { width, height: 960 },
@@ -291,6 +296,138 @@ async function answerInRunView(runId, workflowId, approved, reviewedValue) {
       failures,
       "Standalone review browser proof failed",
     );
+}
+
+/**
+ * Hero B in the real editor over the real host: Test workflow lists the step
+ * that really calls Prints, nothing runs until the person says yes, the run's
+ * recorded image previews on the canvas, and the review stops it.
+ */
+async function testHeroBInEditor(workflowId) {
+  await reviewHarness();
+  const page = await reviewBrowser.newPage({
+    viewport: { width: 1440, height: 960 },
+  });
+  const requests = [];
+  const pageErrors = [];
+  page.on("pageerror", (cause) => pageErrors.push(cause.message));
+  await page.route("**/test-step-rpc/*", (route) => {
+    const request = route.request();
+    const method = new URL(request.url()).pathname.split("/").at(-1);
+    const operation = (async () => {
+      const reply = await call("trellis", method, request.postDataJSON());
+      await route.fulfill({ json: reply });
+    })();
+    requests.push(operation);
+    return operation;
+  });
+  const proof = await Promise.allSettled([
+    (async () => {
+      const { expect } = await import("playwright/test");
+      const target = new URL(
+        "test/test-step.html",
+        reviewServer.resolvedUrls.local[0],
+      );
+      target.searchParams.set("workflowId", workflowId);
+      await page.goto(target.href);
+      await page.evaluate(async () => {
+        globalThis.document.documentElement.dataset.theme = "latte";
+        await globalThis.document.fonts.ready;
+      });
+      const evidence =
+        process.env.WORKFLOW_REVIEW_EVIDENCE ??
+        `${root}.botanical/workflow-reviews/shots`;
+      await mkdir(evidence, { recursive: true });
+      await expect(
+        page.getByText("Cover prompt", { exact: true }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "More", exact: true }).click();
+      const testItem = page.getByRole("menuitem", {
+        name: "Test workflow",
+        exact: true,
+      });
+      await expect(testItem).toBeEnabled();
+      await testItem.click();
+      // Prints really writes or reaches out: the test asks before it runs it.
+      const confirm = page.getByRole("alertdialog", {
+        name: "Run write steps",
+      });
+      await expect(confirm).toContainText("Make the cover");
+      await expect(confirm).toContainText("generateImage");
+      assert.deepEqual(await call("prints", "received", {}), []);
+      await page.screenshot({
+        path: `${evidence}/test-step-confirm.png`,
+        fullPage: true,
+      });
+      await confirm.getByRole("button", { name: "Run them for real" }).click();
+      // The fake Prints answered; the run stops at the review like a live one.
+      // The test polls the run; Prints and the review answer in a few seconds.
+      await expect(
+        page.getByRole("heading", { name: "Use this cover?" }),
+      ).toBeVisible({ timeout: 30_000 });
+      for (const choice of ["Use it", "Make another", "Skip this week"])
+        await expect(
+          page.getByRole("button", { name: choice, exact: true }),
+        ).toBeVisible();
+      await expect(
+        page.locator('.react-flow__node[data-id="cover"] img'),
+      ).toBeVisible();
+      await expect(page.locator(".wf-test-line")).toContainText(
+        "Testing the whole workflow",
+      );
+      await page.locator('.react-flow__node[data-id="cover"]').click();
+      const io = page.getByRole("region", { name: "Input and output" });
+      await expect(io).toContainText("A quiet moss-covered forest path");
+      await expect(io).toContainText("Flux 1 Schnell");
+      // Nothing triggered this: no trigger or starter is named in the test.
+      const text = await page.locator(".wf-test").innerText();
+      assert.doesNotMatch(text, /schedule|monday|started by|trigger/iu);
+      await page.screenshot({
+        path: `${evidence}/test-step-review.png`,
+        fullPage: true,
+      });
+      const answered = page.waitForResponse((response) =>
+        response.url().endsWith("/answerReview"),
+      );
+      await page.getByRole("button", { name: "Use it", exact: true }).click();
+      assert.deepEqual(await (await answered).json(), { result: "accepted" });
+      await expect(page.locator(".wf-test-line")).toContainText("done", {
+        timeout: 30_000,
+      });
+      await page.screenshot({
+        path: `${evidence}/test-step-done.png`,
+        fullPage: true,
+      });
+      assert.deepEqual(pageErrors, []);
+    })(),
+  ]);
+  if (proof.some((outcome) => outcome.status === "rejected")) {
+    // What the page showed when the proof stopped, for whoever reads the failure.
+    const [shot, text] = await Promise.allSettled([
+      page.screenshot({
+        path: `${process.env.WORKFLOW_REVIEW_EVIDENCE ?? `${root}.botanical/workflow-reviews/shots`}/test-step-failed.png`,
+        fullPage: true,
+      }),
+      page.locator("body").innerText(),
+    ]);
+    log(
+      JSON.stringify({
+        proof: "test-step-page",
+        screenshot: shot.status,
+        text: text.status === "fulfilled" ? text.value : "",
+        pageErrors,
+      }),
+    );
+  }
+  const unrouted = await Promise.allSettled([
+    page.unrouteAll({ behavior: "wait" }),
+  ]);
+  const cleanup = await Promise.allSettled([page.close(), ...requests]);
+  const failures = [...proof, ...unrouted, ...cleanup]
+    .filter((outcome) => outcome.status === "rejected")
+    .map((outcome) => outcome.reason);
+  if (failures.length !== 0)
+    throw new AggregateError(failures, "Hero B test browser proof failed");
 }
 
 // Agent management is a host capability route (packages/oyster/src/host.ts):
@@ -555,6 +692,165 @@ try {
       assert.equal(reviewCompleted.reviews[0].status, "delivered");
     });
   }
+  await step("test-step-hero-b", async () => {
+    // A stand-in for Prints' catalog; the host, the Workflow backend, the run
+    // owner and (under OYSTER_REVIEW_VISUALS) the browser are all real.
+    await install(
+      "prints",
+      new URL("./workflow-prints/index.fixture.ts", import.meta.url),
+      "FakePrints",
+      printsDeclaration,
+    );
+    await approve("prints");
+    const fakePrints = (await call("trellis", "catalog", {})).apps.find(
+      (item) => item.installationId === "prints",
+    );
+    assert.ok(fakePrints, "the fake Prints catalog is visible to Workflows");
+    const coverPrompt =
+      "A quiet moss-covered forest path at dawn, soft light, flat illustration";
+    const heroB = {
+      format: "fungi.workflow/v1",
+      title: "Weekly cover image",
+      apps: { prints: { appId: fakePrints.appId } },
+      input: {
+        type: "object",
+        properties: { scheduledAt: { type: "string" } },
+        required: ["scheduledAt"],
+        additionalProperties: false,
+      },
+      triggers: [
+        {
+          id: "monday",
+          on: "schedule",
+          cron: { expression: "0 9 * * 1", timeZone: "Europe/London" },
+          input: {
+            scheduledAt: { from: { node: "$input", port: "scheduledAt" } },
+          },
+        },
+      ],
+      nodes: [
+        {
+          id: "prompt",
+          kind: "transform",
+          title: "Cover prompt",
+          fields: { prompt: { literal: coverPrompt } },
+        },
+        {
+          id: "cover",
+          kind: "app",
+          title: "Make the cover",
+          app: "prints",
+          method: "generateImage",
+          methodDigest: fakePrints.methods.generateImage.digest,
+          values: {
+            model: { literal: "Flux 1 Schnell" },
+            width: { literal: 1536 },
+            height: { literal: 864 },
+          },
+        },
+        {
+          id: "approve",
+          kind: "review",
+          title: "Use this cover?",
+          show: [{ node: "cover", port: "image" }],
+          reviewers: "runner",
+          timeout: 60_000,
+          choices: [
+            { id: "use", label: "Use it" },
+            { id: "another", label: "Make another" },
+            { id: "skip", label: "Skip this week" },
+          ],
+        },
+      ],
+      edges: [
+        {
+          from: { node: "prompt", port: "prompt" },
+          to: { node: "cover", port: "prompt" },
+        },
+      ],
+      output: { cover: { node: "approve", port: "use" } },
+    };
+    const saved = await call("trellis", "saveDraft", {
+      workflowId: "hero-b",
+      expectedRevision: 0,
+      draft: {
+        definition: heroB,
+        layout: {
+          $input: { x: 0, y: 0 },
+          prompt: { x: 256, y: 0 },
+          cover: { x: 512, y: 0 },
+          approve: { x: 768, y: 0 },
+        },
+      },
+    });
+    assert.equal(saved.kind, "saved", JSON.stringify(saved));
+    const test = {
+      workflowId: "hero-b",
+      expectedRevision: saved.revision,
+      bindings: { prints: "prints" },
+      input: { scheduledAt: "" },
+    };
+    // The step really calls Prints, so nothing runs without a yes.
+    const asked = await call("trellis", "testDraft", {
+      ...test,
+      requestId: "hero-b-ask",
+    });
+    assert.equal(asked.kind, "writes_need_confirmation", JSON.stringify(asked));
+    assert.deepEqual(
+      asked.steps.map((item) => `${item.node}:${item.method}`),
+      ["cover:generateImage"],
+    );
+    assert.deepEqual(await call("prints", "received", {}), []);
+    assert.deepEqual(
+      await call("trellis", "listRuns", { workflowId: "hero-b" }),
+      [],
+    );
+    if (process.env.OYSTER_REVIEW_VISUALS === "1")
+      await testHeroBInEditor("hero-b");
+    else {
+      const started = await call("trellis", "testDraft", {
+        ...test,
+        requestId: "hero-b-run",
+        allowWrites: true,
+      });
+      assert.equal(started.kind, "started", JSON.stringify(started));
+      await until(
+        () => status(started.runId),
+        (value) => value.reviews.some((row) => row.status === "pending"),
+        "the test stops at the review",
+      );
+      assert.deepEqual(
+        await call("trellis", "answerReview", {
+          runId: started.runId,
+          nodeId: "approve",
+          iteration: "0",
+          answer: { choice: "use" },
+        }),
+        { result: "accepted" },
+      );
+    }
+    // Either way: one run, marked Test, never started by the schedule, and
+    // the fake Prints really received the prompt exactly once.
+    const runs = await call("trellis", "listRuns", { workflowId: "hero-b" });
+    assert.equal(runs.length, 1, JSON.stringify(runs));
+    assert.equal(runs[0].source, "test");
+    assert.equal(runs[0].draftRevision, saved.revision);
+    assert.equal("triggerId" in runs[0], false);
+    const finished = await until(
+      () => status(runs[0].runId),
+      (value) => value.status === "complete",
+      "the tested review answer resumes the test",
+    );
+    assert.deepEqual(
+      finished.events
+        .filter((item) => item.state === "complete")
+        .map((item) => item.nodeId),
+      ["prompt", "cover", "approve"],
+    );
+    assert.deepEqual(await call("prints", "received", {}), [
+      { prompt: coverPrompt },
+    ]);
+  });
   await step("pending-replay-cancel-isolation-mcp", async () => {
     const definition = {
       format: "fungi.workflow/v1",
