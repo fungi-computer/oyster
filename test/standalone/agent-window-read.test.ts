@@ -105,6 +105,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
     modelKeys: notInTest,
     sealModelKey: notInTest,
     removeModelKey: notInTest,
+    vault: notInTest,
     approveAppToolPolicy: notInTest,
     connections: notInTest,
     addConnection: notInTest,

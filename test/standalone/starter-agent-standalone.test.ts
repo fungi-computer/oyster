@@ -24,28 +24,64 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
+/**
+ * What the host offers as the starter's Home. `home` is its configured
+ * Computer, which the fleet admits; `refused` is one the fleet will not
+ * resolve; `none` is a host with no configured Computer at all; `throws` is
+ * a fleet that fails the attach outright.
+ */
+type Runtime = "home" | "refused" | "none" | "throws";
+
 /** The owner's Home AGENTS.md as the Agent reports it; `null` content is an absent file. */
 function standalone(
-  home: { attached: boolean; content: string | null } = {
-    attached: true,
-    content: null,
-  },
+  options: { runtime?: Runtime; content?: string | null } = {},
 ) {
+  const runtime = options.runtime ?? "home";
+  const home = { content: options.content ?? null };
   const database = new DatabaseSync(":memory:");
   databases.push(database);
   const env = agentEnv();
   Object.defineProperty(env, "OYSTER_ORIGIN", { value: "https://oyster.test" });
   Object.defineProperty(env, "OYSTER_OWNER_NAME", { value: "owner" });
-  const state = agentDurableObjectState(() => 0);
-  Object.defineProperty(state, "storage", {
+  Object.defineProperty(env, "OYSTER_COMPUTER_ID", {
+    value: runtime === "none" ? "" : "agent-fixture",
+  });
+  Object.defineProperty(env, "TENANCY", {
+    value: { memberById: () => Promise.resolve(owner) },
+  });
+  Object.defineProperty(env, "REGISTRY", {
     value: {
-      ...state.storage,
-      ...cloudflareStorageFixture(fromNodeSqlite(database)),
+      getByName: () => ({
+        computerFleet: (
+          _memberId: string,
+          request: { operation: string; computerId: string },
+        ) =>
+          runtime === "throws"
+            ? Promise.reject(new Error("fleet unavailable"))
+            : Promise.resolve(
+                request.operation === "resolve" && runtime !== "home"
+                  ? null
+                  : { computerId: request.computerId, name: "Home" },
+              ),
+      }),
+    },
+  });
+  const state = agentDurableObjectState(() => 0);
+  Object.defineProperties(state, {
+    // The directory only answers to the name the Team's directory has.
+    id: { value: { ...state.id, name: "agents" } },
+    waitUntil: { value: () => undefined },
+    storage: {
+      value: {
+        ...state.storage,
+        ...cloudflareStorageFixture(fromNodeSqlite(database)),
+      },
     },
   });
   const directory = new AgentDirectory(state, env);
   const policyDirectories: string[] = [];
   const replacements: (string | null)[] = [];
+  const kept: string[] = [];
   Object.defineProperties(env, {
     AGENT_DIRECTORY: { value: { getByName: () => directory } },
     AGENTS: {
@@ -55,19 +91,30 @@ function standalone(
             policyDirectories.push(agentId);
             return Promise.resolve();
           },
+          invalidateComputerConnections: () => Promise.resolve(),
+          // The setup prompt an Agent with no Home keeps on its own record.
+          seedFirstConversation: (content: string, actor: string) => {
+            expect(JSON.parse(actor)).toEqual(owner);
+            kept.push(content);
+            return Promise.resolve();
+          },
           // The create-only write the Home instructions file performs.
-          replaceInstructions: (
+          replaceInstructions: async (
             _actor: string,
             expected: string | null,
             content: string,
           ) => {
             replacements.push(content);
-            if (!home.attached)
-              return Promise.resolve({ error: "no_home" as const });
+            const attached = await directory.readAgentComputers(agentId, owner);
+            if (
+              attached.kind !== "ok" ||
+              attached.projection.attachments.length === 0
+            )
+              return { error: "no_home" as const };
             if (home.content !== expected)
-              return Promise.resolve({ error: "conflict" as const });
+              return { error: "conflict" as const };
             home.content = content;
-            return Promise.resolve({ home: { name: "Home" }, content });
+            return { home: { name: "Home" }, content };
           },
         }),
       },
@@ -78,6 +125,7 @@ function standalone(
     directory,
     policyDirectories,
     replacements,
+    kept,
     home,
   };
 }
@@ -127,7 +175,7 @@ it("seeds the first-run section into a Home with no AGENTS.md, once, and says no
 });
 
 it("leaves an AGENTS.md the owner already has exactly as it is", async () => {
-  const { agents, home } = standalone({ attached: true, content: "mine\n" });
+  const { agents, home } = standalone({ content: "mine\n" });
   expect(await agents.ensureStarter(owner)).toBe("created");
   expect(home.content).toBe("mine\n");
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
@@ -136,7 +184,6 @@ it("leaves an AGENTS.md the owner already has exactly as it is", async () => {
 
 it("never seeds a store that settled its starter before the seed existed", async () => {
   const { agents, directory, home, replacements } = standalone({
-    attached: true,
     content: "written long ago\n",
   });
   const old = await agents.create(
@@ -171,17 +218,79 @@ it("never seeds a store that settled its starter before the seed existed", async
   expect(await empty.agents.ensureStarter(owner)).toBe("already-offered");
   expect(empty.home.content).toBeNull();
   expect(empty.replacements).toEqual([]);
+  // Nor is its Computer-less starter given a Home, or a kept prompt, later.
+  const unattached = await empty.directory.readAgentComputers(
+    early.agentId,
+    owner,
+  );
+  expect(unattached).toMatchObject({
+    kind: "ok",
+    projection: { attachments: [] },
+  });
+  expect(empty.kept).toEqual([]);
 });
 
-it("waits quietly for a Home, then seeds the same starter without a second Agent", async () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  const { agents, home } = standalone({ attached: false, content: null });
-  expect(await agents.ensureStarter(owner)).toBe("failed");
-  expect(await agents.ensureStarter(owner)).toBe("failed");
-  expect(warn).not.toHaveBeenCalled();
-  expect(await agents.list()).toHaveLength(1);
-  home.attached = true;
+it("gives the starter the host's configured Computer as its Home when it is created", async () => {
+  const { agents, directory, home, kept } = standalone();
   expect(await agents.ensureStarter(owner)).toBe("created");
+  const [starter] = await agents.list();
+  const attached = await directory.readAgentComputers(
+    starter?.agentId ?? "",
+    owner,
+  );
+  expect(attached).toMatchObject({
+    kind: "ok",
+    projection: {
+      attachments: [
+        { computerId: "agent-fixture", attachmentId: "starter-home:v1" },
+      ],
+    },
+  });
   expect(home.content).toContain(firstRun);
+  expect(kept).toEqual([]);
+  // A second read neither attaches again nor makes a second Agent.
+  expect(await agents.ensureStarter(owner)).toBe("already-offered");
+  expect(await agents.list()).toHaveLength(1);
+});
+
+it.each(["none", "refused"] as const)(
+  "keeps the setup prompt on the Agent when the host has no Computer to attach (%s)",
+  async (runtime) => {
+    const { agents, directory, home, kept } = standalone({ runtime });
+    expect(await agents.ensureStarter(owner)).toBe("created");
+    const [starter] = await agents.list();
+    expect(
+      await directory.readAgentComputers(starter?.agentId ?? "", owner),
+    ).toMatchObject({ kind: "ok", projection: { attachments: [] } });
+    expect(home.content).toBeNull();
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toContain(firstRun);
+    expect(kept[0]).toContain('skill.load({name: "setup-fungi"})');
+    expect(kept[0]).not.toMatch(/Pro|credit|price|\$|setup\.finish/u);
+    expect(await agents.ensureStarter(owner)).toBe("already-offered");
+    expect(kept).toHaveLength(1);
+    expect(await agents.list()).toHaveLength(1);
+  },
+);
+
+it("still records and seeds the starter when the Home attach fails outright, and reports why", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const { agents, directory, kept } = standalone({ runtime: "throws" });
+  expect(await agents.ensureStarter(owner)).toBe("created");
+  const [starter] = await agents.list();
+  expect(
+    await directory.readAgentComputers(starter?.agentId ?? "", owner),
+  ).toMatchObject({ kind: "ok", projection: { attachments: [] } });
+  expect(kept).toHaveLength(1);
+  expect(kept[0]).toContain(firstRun);
+  await vi.waitFor(() => {
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("starter_agent_failed"),
+    );
+  });
+  expect(String(warn.mock.calls[0]?.[0])).toContain("fleet unavailable");
+  // The ledger was written: the next read neither re-creates nor re-seeds.
+  expect(await agents.ensureStarter(owner)).toBe("already-offered");
+  expect(kept).toHaveLength(1);
   expect(await agents.list()).toHaveLength(1);
 });

@@ -3387,10 +3387,15 @@ test("standalone AGENTS.list names only the Agents the installation may list", a
     assert.equal(result.status, 200, await result.clone().text());
     return (await result.json()).agents;
   };
-  assert.deepEqual(await listed({}, "list-all"), [
-    { agentId: a.agentId, name: "A" },
-    { agentId: b.agentId, name: "B" },
-  ]);
+  // The directory lists by Agent id, which is random: compare as a set.
+  const byId = (left, right) => left.agentId.localeCompare(right.agentId);
+  assert.deepEqual(
+    (await listed({}, "list-all")).toSorted(byId),
+    [
+      { agentId: a.agentId, name: "A" },
+      { agentId: b.agentId, name: "B" },
+    ].toSorted(byId),
+  );
   assert.deepEqual(
     await listed(
       { agentResources: [{ kind: "agent", id: b.agentId }] },

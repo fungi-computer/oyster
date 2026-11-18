@@ -38,6 +38,29 @@ const owner = "owner";
 type SecretGrantRefusal =
   ConnectionRefusal | Readonly<{ error: "unsupported_subject" }>;
 
+/** Why the Vault could not change a stored credential; never its value. */
+export type CredentialRefusal = Readonly<{
+  error: "not_found" | "conflict" | "denied" | "invalid_input";
+}>;
+const credentialRefusal = (cause: unknown): CredentialRefusal => {
+  if (cause instanceof ConnectionsError)
+    switch (cause.code) {
+      case "conflict":
+        return { error: "conflict" };
+      case "denied":
+        return { error: "denied" };
+      case "revoked":
+      case "pending":
+        return { error: "not_found" };
+      case "invalid_input":
+      case "unsupported":
+        return { error: "invalid_input" };
+      default:
+        break;
+    }
+  throw cause;
+};
+
 /**
  * This instance's Agent MCP connections over Veil's connections core. The
  * owner holds every credential; an Agent receives a secret-free projection and
@@ -383,13 +406,99 @@ export function createAgentMcpConnections(options: {
     if (subject.kind === "agent") await options.notify(subject.id);
   }
 
+  /** Every live credential this instance holds, of every kind; never a value. */
+  async function credentials(): Promise<readonly ConnectionView[]> {
+    return (await run(connections.list(owner))).filter(
+      (row) => row.state !== "revoked",
+    );
+  }
+  const live = async (connectionId: string) =>
+    (await credentials()).find((row) => row.connectionId === connectionId);
+
+  /**
+   * The Vault's one write path for a stored credential, write-only: rotate its
+   * value, rename it, rescope an HTTP secret, or give a Connection without one
+   * a bearer value. Grants stay; a widened secret needs its value re-entered.
+   */
+  async function updateCredential(
+    input: Readonly<{
+      connectionId: string;
+      expectedVersion: number;
+      label?: string | undefined;
+      destinations?: HttpDestinations | undefined;
+      secret?: string | undefined;
+    }>,
+  ): Promise<Readonly<{ version: number }> | CredentialRefusal> {
+    const view = await live(input.connectionId);
+    if (view === undefined) return { error: "not_found" };
+    // A signed-in Connection's tokens come from its sign-in, never a paste.
+    if (input.secret !== undefined && view.credential.kind === "oauth")
+      return { error: "invalid_input" };
+    try {
+      const done = await run(
+        connections.update(owner, {
+          requestId: ids.connection.generate(),
+          connectionId: input.connectionId,
+          expectedVersion: input.expectedVersion,
+          label: input.label,
+          destinations: input.destinations,
+          // A rotation keeps the placement; a first value rides as a bearer.
+          credential:
+            input.secret === undefined
+              ? undefined
+              : view.credential.kind === "static"
+                ? view.credential
+                : { kind: "static", placement: "bearer" },
+          secret: input.secret,
+        }),
+      );
+      await notifyHolders(view);
+      return { version: done.version };
+    } catch (cause) {
+      return credentialRefusal(cause);
+    }
+  }
+
+  /** Take a Connection's pasted value out of custody; an HTTP secret is revoked whole instead. */
+  async function clearCredential(
+    input: Readonly<{ connectionId: string; expectedVersion: number }>,
+  ): Promise<Readonly<{ version: number }> | CredentialRefusal> {
+    const view = await live(input.connectionId);
+    if (view === undefined) return { error: "not_found" };
+    if (view.surface.kind === "http" || view.credential.kind !== "static")
+      return { error: "invalid_input" };
+    try {
+      const done = await run(
+        connections.update(owner, {
+          requestId: ids.connection.generate(),
+          connectionId: input.connectionId,
+          expectedVersion: input.expectedVersion,
+          credential: { kind: "none" },
+        }),
+      );
+      await notifyHolders(view);
+      return { version: done.version };
+    } catch (cause) {
+      return credentialRefusal(cause);
+    }
+  }
+  const notifyHolders = (view: ConnectionView) =>
+    Promise.all(
+      view.grants
+        .filter((grant) => grant.subject.kind === "agent")
+        .map((grant) => options.notify(grant.subject.id)),
+    );
+
   return {
     list,
     addSecret,
     secrets,
+    credentials,
+    updateCredential,
+    clearCredential,
     grantSecret,
     ungrantSecret,
-    /** Every recorded use and refusal of one secret, without its value. */
+    /** Every recorded use and refusal of one credential, without its value. */
     secretUsage: (connectionId: string) =>
       run(connections.audit(owner, connectionId)),
     /** Complete one request with a secret on the owner side; the caller names its subject. */

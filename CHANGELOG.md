@@ -1,5 +1,25 @@
 # @fungi.computer/oyster
 
+## 0.45.0
+
+### Minor Changes
+
+- Changes since 0.44.0:
+
+  - fix(oyster): document the Vault types in the public API
+  - fix(oyster): keep the starter setup prompt through a failed or late Home
+  - feat(vault): owner doors for the Vault page on the Hub and Oyster
+  - feat(oyster): give the starter Agent its Home at creation
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/veil@0.10.0
+  - @fungi.computer/shiitake@0.21.4
+  - @fungi.computer/parakeet@0.14.4
+  - @fungi.computer/shiitake-extensions@0.11.14
+  - @fungi.computer/zookeeper@0.0.46
+
 ## 0.44.0
 
 ### Minor Changes

@@ -368,6 +368,7 @@ type OysterAgents = Readonly<{
      error: ModelKeyRefusal;
   }>>;
   removeModelKey: Promise<"deleted" | "absent">;
+  vault: Promise<VaultResult>;
   connections: Promise<readonly Readonly<{
      connectionId: string;
      name: string;
@@ -383,11 +384,11 @@ type OysterAgents = Readonly<{
   }>[]>;
   addConnection: Promise<
      | Readonly<{
-     connectionId: string;
-     authorizeUrl: string | null;
+     error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
    }>
      | Readonly<{
-     error: "not_found" | "duplicate_name" | "limit" | "invalid_endpoint";
+     connectionId: string;
+     authorizeUrl: string | null;
   }>>;
   grantConnection: Promise<
      | Readonly<{
@@ -430,6 +431,18 @@ restores only archive-paused schedules on unarchive.
 
 ---
 
+### CredentialRefusal
+
+```ts
+type CredentialRefusal = Readonly<{
+  error: "not_found" | "conflict" | "denied" | "invalid_input";
+}>;
+```
+
+Why the Vault could not change a stored credential; never its value.
+
+---
+
 ### AgentModelChoice
 
 ```ts
@@ -465,6 +478,27 @@ type StandaloneModelKeyProvider =
 
 Standalone custody takes every catalog provider's API key, plus an owner's
 Cloudflare account and token.
+
+---
+
+### ModelKeyUsage
+
+```ts
+type ModelKeyUsage = Readonly<{
+  keyId: string;
+  subject: Readonly<{
+    kind: "agent";
+    id: string;
+  }> | null;
+  outcome: "upstream_status" | "failed";
+  status: number | null;
+  firstAt: number;
+  lastAt: number;
+  count: number;
+}>;
+```
+
+One recorded use, as the Vault lists it.
 
 ---
 
@@ -513,6 +547,136 @@ type ModelKeySealInput = Readonly<{
 ```
 
 What the owner submits to seal one provider key.
+
+---
+
+### VaultCredential
+
+```ts
+type VaultCredential = Readonly<{
+  connectionId: string;
+  name: string;
+  label: string;
+  kind: "secret" | "mcp" | "openapi";
+  origin: string;
+  destinations: HttpDestinations | null;
+  credential: "value" | "sign-in" | "none";
+  placement: Placement | null;
+  state: Exclude<ConnectionView["state"], "revoked">;
+  version: number;
+  subjects: readonly ConnectionSubject[];
+}>;
+```
+
+One stored credential as the Vault page lists it. No value, ever.
+
+---
+
+### VaultCommand
+
+```ts
+type VaultCommand =
+  | Readonly<{
+      op: "read";
+    }>
+  | Readonly<{
+      op: "addSecret";
+      name: string;
+      label?: string;
+      destinations: HttpDestinations;
+      placement: Placement;
+      secret: string;
+    }>
+  | Readonly<{
+      op: "updateCredential";
+      connectionId: string;
+      expectedVersion: number;
+      label?: string;
+      destinations?: HttpDestinations;
+      secret?: string;
+    }>
+  | Readonly<{
+      op: "revokeCredential";
+      connectionId: string;
+      expectedVersion: number;
+    }>
+  | Readonly<{
+      op: "grantSecret" | "ungrantSecret";
+      connectionId: string;
+      subject: ConnectionSubject;
+    }>
+  | Readonly<{
+      op: "usage";
+      connectionId: string;
+    }>
+  | Readonly<{
+      op: "modelKeyUsage";
+      keyId: string;
+    }>;
+```
+
+One owner request to the instance Vault; values travel in, never out.
+
+---
+
+### VaultRefusal
+
+```ts
+type VaultRefusal = Readonly<{
+  error:
+    | CredentialRefusal["error"]
+    | "duplicate_name"
+    | "limit"
+    | "invalid_endpoint"
+    | "unsupported_subject";
+}>;
+```
+
+Why the Vault refused a command; never a stored value.
+
+---
+
+### VaultView
+
+```ts
+type VaultView = Readonly<{
+  role: Readonly<{
+    manageTeam: true;
+    managePersonal: true;
+  }>;
+  modelKeys: readonly ModelKeyRecord[];
+  credentials: readonly VaultCredential[];
+  coverage: Readonly<{
+    state: "complete";
+  }>;
+}>;
+```
+
+The Vault page listing: every stored credential and model key, with no value.
+
+---
+
+### VaultResult
+
+```ts
+type VaultResult =
+  | VaultView
+  | Readonly<{
+      connectionId: string;
+    }>
+  | Readonly<{
+      version: number;
+    }>
+  | Readonly<{
+      ok: true;
+    }>
+  | Readonly<{
+      usage: readonly ConnectionUsage[] | readonly ModelKeyUsage[];
+    }>
+  | VaultRefusal;
+```
+
+What one Vault command answers: a listing, an id, a version, usage or a refusal.
 
 ---
 

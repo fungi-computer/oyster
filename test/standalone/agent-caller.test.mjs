@@ -3484,7 +3484,11 @@ test("the agent host captures one App source per acquisition and retains agent a
       id: { name: agent.agentId },
       storage: {
         ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
-        get: async () => ({ directoryName: "agents", tenantId: "default" }),
+        // Only the policy pin is stored; every other key is absent.
+        get: async (key) =>
+          key === "app-policy-directory"
+            ? { directoryName: "agents", tenantId: "default" }
+            : undefined,
       },
     },
     env,
@@ -3749,7 +3753,11 @@ test("the Agent tool host derives the same App catalog as the MCP host for Compu
       id: { name: agent.agentId },
       storage: {
         ...cloudflareStorageFixture(fromNodeSqlite(agentDatabase)),
-        get: async () => ({ directoryName: "agents", tenantId: "default" }),
+        // Only the policy pin is stored; every other key is absent.
+        get: async (key) =>
+          key === "app-policy-directory"
+            ? { directoryName: "agents", tenantId: "default" }
+            : undefined,
       },
     },
     env,

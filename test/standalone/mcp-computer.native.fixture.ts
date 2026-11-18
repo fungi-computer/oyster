@@ -89,6 +89,7 @@ const proofAgents = (): OysterAgents => ({
   modelKeys: notInProof,
   sealModelKey: notInProof,
   removeModelKey: notInProof,
+  vault: notInProof,
   approveAppToolPolicy: notInProof,
   connections: notInProof,
   addConnection: notInProof,

@@ -210,6 +210,8 @@ import {
   type ModelKeyRefusal,
   type ModelKeySealInput,
 } from "./model-key-vault.js";
+import { createModelKeyUsage } from "./model-key-usage.js";
+import type { VaultCommand, VaultResult } from "./vault.js";
 import { agentArchiveOwner } from "./agent-archive-owner.js";
 import { agentArchiveProjection } from "../agent-archive-projection.js";
 import {
@@ -361,13 +363,15 @@ const logRedactedFailure = (label: string, cause: unknown): void => {
   });
 };
 
-/** The starter has no Home yet: the owner has not attached a Computer. The seed waits for one. */
-class StarterHomePending extends Error {
-  constructor() {
-    super("The starter Agent has no Home Computer yet");
-    this.name = "StarterHomePending";
-  }
-}
+/** The starter's Home attachment: one fixed id, so a replayed create attaches once. */
+const starterHomeAttachment = "starter-home:v1";
+/** The Agent's own storage key for the setup prompt it carries while it has no Home. */
+const firstConversationKey = "first-conversation";
+/** The kept prompt, and the owner whose grant writes it to a later Home. */
+const firstConversationSchema = z.object({
+  content: z.string().min(1),
+  actor: z.string().min(1),
+});
 
 const noHomeInstructions: OysterAgentInstructions = {
   home: null,
@@ -653,6 +657,8 @@ export type StandaloneAgentsEnv = Readonly<{
   OYSTER_WEBSITE_PROOF_KEY?: string;
   /** Configured standalone-owner identity subject; never a stored member ID. */
   OYSTER_OWNER_NAME?: string;
+  /** The host's own configured Computer; the starter's Home when it is there. */
+  OYSTER_COMPUTER_ID?: string;
   /** Gateway custody remains in Veil; only the host receives these bindings. */
   AI_GATEWAY_AUTH_TOKEN?: string;
   AI_GATEWAY_ACCOUNT_ID?: string;
@@ -1788,6 +1794,70 @@ export abstract class StandaloneAgentBase<
     return this.choice().read();
   }
 
+  /**
+   * Keep the starter's setup prompt on this Agent while it has no Home to hold
+   * an AGENTS.md. Written once; Agents that never needed it have no such key.
+   * `actor` is the owner whose grant later writes it into a Home.
+   */
+  async seedFirstConversation(content: string, actor: string): Promise<void> {
+    if ((await this.ctx.storage.get(firstConversationKey)) === undefined)
+      await this.ctx.storage.put(
+        firstConversationKey,
+        firstConversationSchema.parse({ content, actor }),
+      );
+  }
+
+  /** The instructions every run of this Agent starts from. */
+  protected async agentInstructions(): Promise<{
+    revision: string;
+    text: string;
+  }> {
+    const { appApprovalInstructions } = await import("../mcp.js");
+    const first = await this.firstConversation();
+    return {
+      revision: first === null ? "oyster-7" : "oyster-7+first-conversation",
+      text:
+        instructions +
+        "\n" +
+        appApprovalInstructions +
+        (first === null ? "" : "\n\n" + first),
+    };
+  }
+
+  /**
+   * The kept setup prompt, until a Home exists. Then it moves into that Home's
+   * AGENTS.md when the Home has none (the starter seed's rule), so an
+   * interview that gains a Home midway keeps its instructions, and the kept
+   * copy is dropped. A Home that already has an AGENTS.md is left as it is.
+   */
+  private async firstConversation(): Promise<string | null> {
+    const stored = await this.ctx.storage.get(firstConversationKey);
+    if (stored === undefined) return null;
+    const { content, actor } = firstConversationSchema.parse(stored);
+    const attachments =
+      (await this.preparedComputerSnapshot())?.projection.attachments ?? [];
+    if (attachments.length === 0) return content;
+    // Until the move lands (the Home went away, or its Computer could not
+    // write), the prompt keeps riding in the instructions; a later run retries.
+    let moved: Awaited<ReturnType<typeof this.replaceInstructions>>;
+    try {
+      moved = await this.replaceInstructions(actor, null, content);
+    } catch (cause: unknown) {
+      logRedactedFailure("starter setup prompt move failed", cause);
+      return content;
+    }
+    if ("error" in moved && moved.error !== "conflict") {
+      if (moved.error === "too_large")
+        logRedactedFailure(
+          "starter setup prompt move failed",
+          new Error("The setup prompt exceeds the AGENTS.md limit"),
+        );
+      return content;
+    }
+    await this.ctx.storage.delete(firstConversationKey);
+    return null;
+  }
+
   async setModelChoice(
     input: AgentModelChoice,
   ): Promise<AgentModelChoice | Readonly<{ error: AgentModelRefusal }>> {
@@ -1848,12 +1918,16 @@ export abstract class StandaloneAgentBase<
         apiKey: "oyster-model-key",
         fetch: async (input, init) => {
           const request = new Request(input, init);
-          const sent = await directory.sendModelKey(keyId, {
-            url: request.url,
-            method: request.method,
-            headers: [...request.headers],
-            body: request.body === null ? null : await request.text(),
-          });
+          const sent = await directory.sendModelKey(
+            keyId,
+            {
+              url: request.url,
+              method: request.method,
+              headers: [...request.headers],
+              body: request.body === null ? null : await request.text(),
+            },
+            this.ctx.id.name ?? null,
+          );
           if (!(sent instanceof Response))
             throw new AgentModelRefused(
               sent.error === "key_removed"
@@ -2049,13 +2123,7 @@ export abstract class StandaloneAgentBase<
       meta: { schema: FungiMessageMetaSchema },
       ...this.mail().host,
       instructions: this.channelInstructions({
-        load: async () => {
-          const { appApprovalInstructions } = await import("../mcp.js");
-          return {
-            revision: "oyster-7",
-            text: instructions + "\n" + appApprovalInstructions,
-          };
-        },
+        load: () => this.agentInstructions(),
       }),
       tools: {
         // A run outlasts one ten-minute Computer command; waiting for a
@@ -2402,9 +2470,12 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       headers: readonly (readonly [string, string])[];
       body: string | null;
     }>,
+    /** The Agent the use is audited to; never its prompt or reply. */
+    agentId: string | null = null,
   ): Promise<Response | Readonly<{ error: ModelKeyRefusal }>> {
+    let status: number | null = null;
     try {
-      return await this.modelKeys().send(
+      const response = await this.modelKeys().send(
         keyId,
         new Request(request.url, {
           method: request.method,
@@ -2412,10 +2483,32 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
           body: request.body,
         }),
       );
+      status = response.status;
+      return response;
     } catch (error) {
       if (error instanceof ModelKeyRefused) return { error: error.reason };
       throw error;
+    } finally {
+      this.modelKeyUsage().record({ keyId, agentId, status });
     }
+  }
+
+  private modelKeyUsageOwner:
+    ReturnType<typeof createModelKeyUsage> | undefined;
+  private modelKeyUsage() {
+    return (this.modelKeyUsageOwner ??= createModelKeyUsage({
+      sql: this.ctx.storage.sql,
+    }));
+  }
+
+  /** The Vault page's one owner door: every stored credential, write-only. */
+  async vault(command: VaultCommand): Promise<VaultResult> {
+    const { createInstanceVault } = await import("./vault.js");
+    return createInstanceVault({
+      connections: await this.mcpConnections(),
+      modelKeys: () => this.listModelKeys(),
+      modelKeyUsage: (keyId) => this.modelKeyUsage().list(keyId),
+    })(command);
   }
 
   private redactionSet:
@@ -3813,6 +3906,13 @@ export function standaloneAgents(
     create: created,
     ensureStarter: (principal) => {
       const owner = directory();
+      const reportStarterFailure = (cause: unknown) => {
+        void redactedFailure(cause).then((text) => {
+          console.warn(
+            JSON.stringify({ event: "starter_agent_failed", cause: text }),
+          );
+        });
+      };
       return ensureStarterAgent({
         ledger: {
           read: () => owner.readStarter(),
@@ -3820,7 +3920,9 @@ export function standaloneAgents(
         },
         isOwner: () => oysterPrincipalIsOwner(principal),
         agentCount: () => owner.agentTotal(),
-        // The ordinary create: the same Computer-less Agent, policy and approval any owner create gets.
+        // The ordinary create, then the ordinary owner attach of the host's own
+        // configured Computer as its Home. A host with no such Computer, or one
+        // the attach refuses, leaves the starter without a Home.
         create: async (request) => {
           const agent = await created(
             request.name,
@@ -3828,11 +3930,31 @@ export function standaloneAgents(
             principal,
             "owner-direct",
           );
+          const computerId = env.OYSTER_COMPUTER_ID;
+          // The Agent exists now; a failed Home attach must not fail the
+          // create, or the starter ledger is never written. It is reported,
+          // and the seed falls back to the Agent's own record.
+          if (computerId !== undefined && computerId !== "")
+            await directory()
+              .attachComputer(
+                {
+                  agentId: agent.agentId,
+                  attachmentId: starterHomeAttachment,
+                  computerId,
+                  requestId: starterHomeAttachment,
+                },
+                principal,
+                scope?.tenantId ?? defaultTenant,
+              )
+              .catch((cause: unknown) => {
+                reportStarterFailure(cause);
+              });
           return { status: "created", agentId: agent.agentId };
         },
         // No money step on Oyster: the owner brings their own model, so the
         // seed is only the first-run section, written to a Home that has no
-        // AGENTS.md. A Home the owner already wrote to is left as it is.
+        // AGENTS.md. A Home the owner already wrote to is left as it is. With
+        // no Home, the same section stays on the Agent until it has one.
         seedHome: async (agentId) => {
           await seedStarterHome(async (path, content) => {
             if (path !== "AGENTS.md")
@@ -3842,19 +3964,15 @@ export function standaloneAgents(
             ).replaceInstructions(JSON.stringify(principal), null, content);
             if (!("error" in result)) return;
             if (result.error === "conflict") return;
-            if (result.error === "no_home") throw new StarterHomePending();
+            if (result.error === "no_home")
+              return env.AGENTS.getByName(agentId).seedFirstConversation(
+                content,
+                JSON.stringify(principal),
+              );
             throw new Error(`Starter Home seed refused: ${result.error}`);
           });
         },
-        report: (cause) => {
-          // Waiting for the owner to attach a Computer is not a failure.
-          if (cause instanceof StarterHomePending) return;
-          void redactedFailure(cause).then((text) => {
-            console.warn(
-              JSON.stringify({ event: "starter_agent_failed", cause: text }),
-            );
-          });
-        },
+        report: reportStarterFailure,
       });
     },
     rename: async (agentId, name, principal) => {
@@ -3920,6 +4038,7 @@ export function standaloneAgents(
     modelKeys: () => directory().listModelKeys(),
     sealModelKey: (input) => directory().sealModelKey(input),
     removeModelKey: (keyId) => directory().removeModelKey(keyId),
+    vault: (command) => directory().vault(command),
     policyStatus: async (agentId) => directory().policyStatus(agentId),
     appToolPolicy: (actor) =>
       directory().appToolPolicy(actor, scope?.tenantId ?? defaultTenant),

@@ -542,6 +542,7 @@ const directOwnerPaths = [
   /^\/api\/agent-models\//u,
   /^\/api\/agent-policies\//u,
   /^\/api\/connections(?:\/|$)/u,
+  /^\/api\/vault(?:\/|$)/u,
 ];
 
 /** A host composed with every Oyster-owned table the standalone root serves. */
@@ -763,6 +764,14 @@ test("every host /api route's owner reach is classified", async () => {
     "GET /api/setup direct",
     "POST /api/model-keys direct",
     "DELETE /api/model-keys/:keyId direct",
+    "GET /api/vault direct",
+    "POST /api/vault/secrets direct",
+    "PUT /api/vault/credentials/:connectionId direct",
+    "DELETE /api/vault/credentials/:connectionId direct",
+    "PUT /api/vault/credentials/:connectionId/subjects/:kind/:subjectId direct",
+    "DELETE /api/vault/credentials/:connectionId/subjects/:kind/:subjectId direct",
+    "GET /api/vault/credentials/:connectionId/usage direct",
+    "GET /api/vault/model-keys/:keyId/usage direct",
     "GET /api/workbench/directory direct-or-app",
     "ALL /api/workbench/storage/:installationId/:operation direct-or-app",
     "GET /api/installations direct-or-app",

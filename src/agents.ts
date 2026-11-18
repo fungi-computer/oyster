@@ -20,6 +20,20 @@ export type {
   ModelKeySealInput,
 } from "./standalone/model-key-vault.js";
 export type { StandaloneModelKeyProvider } from "./standalone/model-key-providers.js";
+import type { VaultCommand, VaultResult } from "./standalone/vault.js";
+export type {
+  VaultCommand,
+  VaultCredential,
+  VaultRefusal,
+  VaultResult,
+  VaultView,
+} from "./standalone/vault.js";
+export type { ModelKeyUsage } from "./standalone/model-key-usage.js";
+export type { CredentialRefusal } from "./standalone/agent-connections.js";
+import {
+  destinationsSchema,
+  subjectSchema,
+} from "@fungi.computer/veil/connections";
 import {
   agent,
   agents as agentCollection,
@@ -337,6 +351,8 @@ export type OysterAgents = Readonly<{
   ): Promise<ModelKeyRecord | Readonly<{ error: ModelKeyRefusal }>>;
   /** Remove one key; Agents that chose it then fail with `key_removed`. */
   removeModelKey(keyId: string): Promise<"deleted" | "absent">;
+  /** The Vault page's one owner door: every stored credential, write-only. */
+  vault(command: VaultCommand): Promise<VaultResult>;
   /** Every connection with the Agents that may use it. */
   connections(): Promise<readonly OysterConnection[]>;
   /** Connect one remote MCP server; no Agent has it until the owner grants it. */
@@ -1041,6 +1057,165 @@ export function modelKeyRoutes(
       if (!keyIdPattern.test(keyId)) return refusal(404, "No such key");
       return (await agents.removeModelKey(keyId)) === "deleted"
         ? new Response(null, { status: 204 })
+        : refusal(404, "No such key");
+    })
+    .include(vaultRoutes(agents));
+}
+
+/** Printable ASCII, as Veil seals it; never echoed back. */
+const vaultValue = Schema.String.check(
+  Schema.isPattern(/^[\x21-\x7e]{1,16384}$/u),
+);
+const vaultLabel = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(128),
+);
+const expectedVersion = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(1),
+);
+const addSecretSchema = Schema.Struct({
+  name: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]{0,31}$/u)),
+  label: Schema.optional(vaultLabel),
+  destinations: destinationsSchema,
+  placement: Schema.Union([
+    Schema.Literal("bearer"),
+    Schema.Literal("basic"),
+    Schema.Struct({
+      header: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9-]{1,64}$/u)),
+    }),
+    Schema.Struct({
+      query: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]{1,64}$/u)),
+    }),
+  ]),
+  secret: vaultValue,
+});
+const updateCredentialSchema = Schema.Struct({
+  expectedVersion,
+  label: Schema.optional(vaultLabel),
+  destinations: Schema.optional(destinationsSchema),
+  secret: Schema.optional(vaultValue),
+});
+const revokeCredentialSchema = Schema.Struct({ expectedVersion });
+/** Apps hold no Vault power: the subject kinds the page offers. */
+const vaultSubjectKinds = new Set(["agent", "computer", "team-key"]);
+const vaultRefusalStatus = {
+  not_found: 404,
+  conflict: 409,
+  denied: 403,
+  invalid_input: 400,
+  duplicate_name: 409,
+  limit: 409,
+  invalid_endpoint: 400,
+  unsupported_subject: 400,
+} as const;
+
+/**
+ * The Vault page's owner routes. A value is posted straight here and nothing
+ * ever reads one back; listings and usage carry no value.
+ */
+function vaultRoutes(agents: OysterAgents): Routes<OysterEnv> {
+  const answer = async (command: VaultCommand, status = 200) => {
+    const result = await agents.vault(command);
+    return "error" in result
+      ? refusal(vaultRefusalStatus[result.error], result.error)
+      : Response.json(result, {
+          status,
+          headers: { "cache-control": "private, no-store" },
+        });
+  };
+  const body = async <S extends Schema.Decoder<unknown>>(
+    request: Request,
+    schema: S,
+  ): Promise<S["Type"] | null> => {
+    if (Number(request.headers.get("content-length") ?? "0") > 64 * 1024)
+      return null;
+    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(schema), {
+      onExcessProperty: "error",
+    })(await request.text());
+    return decoded._tag === "None" ? null : decoded.value;
+  };
+  const subjectOf = (kind: string, id: string) => {
+    if (!vaultSubjectKinds.has(kind)) return null;
+    const subject = Schema.decodeUnknownOption(subjectSchema)({ kind, id });
+    return subject._tag === "None" ? null : subject.value;
+  };
+  return routes<OysterEnv>()
+    .get("/api/vault", owner("direct"), () => answer({ op: "read" }))
+    .post("/api/vault/secrets", owner("direct"), async (context) => {
+      const input = await body(context.req.raw, addSecretSchema);
+      return input === null
+        ? refusal(400, "Name the secret, bind it to hosts and paste its value")
+        : answer({ op: "addSecret", ...input }, 201);
+    })
+    .put(
+      "/api/vault/credentials/:connectionId",
+      owner("direct"),
+      async (context) => {
+        const connectionId = context.req.param("connectionId");
+        const input = await body(context.req.raw, updateCredentialSchema);
+        if (!connectionIdPattern.test(connectionId))
+          return refusal(404, "No such credential");
+        return input === null
+          ? refusal(400, "invalid_input")
+          : answer({ op: "updateCredential", connectionId, ...input });
+      },
+    )
+    .delete(
+      "/api/vault/credentials/:connectionId",
+      owner("direct"),
+      async (context) => {
+        const connectionId = context.req.param("connectionId");
+        const input = await body(context.req.raw, revokeCredentialSchema);
+        if (!connectionIdPattern.test(connectionId))
+          return refusal(404, "No such credential");
+        return input === null
+          ? refusal(400, "invalid_input")
+          : answer({ op: "revokeCredential", connectionId, ...input });
+      },
+    )
+    .put(
+      "/api/vault/credentials/:connectionId/subjects/:kind/:subjectId",
+      owner("direct"),
+      (context) => {
+        const connectionId = context.req.param("connectionId");
+        const subject = subjectOf(
+          context.req.param("kind"),
+          context.req.param("subjectId"),
+        );
+        return !connectionIdPattern.test(connectionId) || subject === null
+          ? refusal(400, "invalid_input")
+          : answer({ op: "grantSecret", connectionId, subject });
+      },
+    )
+    .delete(
+      "/api/vault/credentials/:connectionId/subjects/:kind/:subjectId",
+      owner("direct"),
+      (context) => {
+        const connectionId = context.req.param("connectionId");
+        const subject = subjectOf(
+          context.req.param("kind"),
+          context.req.param("subjectId"),
+        );
+        return !connectionIdPattern.test(connectionId) || subject === null
+          ? refusal(400, "invalid_input")
+          : answer({ op: "ungrantSecret", connectionId, subject });
+      },
+    )
+    .get(
+      "/api/vault/credentials/:connectionId/usage",
+      owner("direct"),
+      (context) => {
+        const connectionId = context.req.param("connectionId");
+        return connectionIdPattern.test(connectionId)
+          ? answer({ op: "usage", connectionId })
+          : refusal(404, "No such credential");
+      },
+    )
+    .get("/api/vault/model-keys/:keyId/usage", owner("direct"), (context) => {
+      const keyId = context.req.param("keyId");
+      return keyIdPattern.test(keyId)
+        ? answer({ op: "modelKeyUsage", keyId })
         : refusal(404, "No such key");
     });
 }
