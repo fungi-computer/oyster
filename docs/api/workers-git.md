@@ -198,6 +198,24 @@ Verify a bearer secret and return its current principal.
 `name`: `string`; `scope`: `Scope`\<`Capability`\>; `grantVersion`: `number`;
 `expiresAt`: `number` \| `null`; \}\>\>\>
 
+##### touch()
+
+```ts
+touch(keyId): Promise<KeyOutcome<void>>;
+```
+
+Stamp a key's last-used time; refuses `denied` for an unknown key.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `keyId`   | `string` |
+
+###### Returns
+
+`Promise`\<`KeyOutcome`\<`void`\>\>
+
 ##### live()
 
 ```ts

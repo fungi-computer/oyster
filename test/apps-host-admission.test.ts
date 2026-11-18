@@ -971,6 +971,7 @@ it("only the owner cookie opens a browser page; a named-key session cookie admit
   const keys = {
     live: () => Promise.reject(new Error("No key lookup expected")),
     verify: () => Promise.reject(new Error("No bearer secret expected")),
+    touch: () => Promise.reject(new Error("No key use expected")),
   };
   const app = createOyster({
     ...f.host,

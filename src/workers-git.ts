@@ -657,6 +657,11 @@ export class OysterKeys extends DurableObject<OysterKeysEnv> {
     return this.#store.verify(secret);
   }
 
+  /** Stamp a key's last-used time; refuses `denied` for an unknown key. */
+  touch(keyId: string): ReturnType<KeyStore<OysterKeyCapability>["touch"]> {
+    return this.#store.touch(keyId);
+  }
+
   /** The live facts behind one key id, for the host's `keys.live` port; `null` for an unknown, revoked, expired or suspended key. */
   async live(keyId: string): Promise<LiveOysterKey | null> {
     const result = await this.#store.live({ keyId });

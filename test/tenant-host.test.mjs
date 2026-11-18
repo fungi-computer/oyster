@@ -581,6 +581,7 @@ test("a verified named key is a Team-key writer and canonical members retain the
     OYSTER_OWNER_KEY: "host-owner-key-fixture-123456789",
     KEYS: {
       getByName: () => ({
+        touch: async () => ({ kind: "ok", value: undefined }),
         verify: async () => ({
           kind: "ok",
           value: {

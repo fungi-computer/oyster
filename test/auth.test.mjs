@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  lastUsedGranularityMs,
   ownerKeyAuth,
   ownerKeyCookieName,
   ownerOrKeyAuth,
 } from "../dist/auth.js";
 
-const { Request, URLSearchParams, btoa } = globalThis;
+const { Request, URLSearchParams, btoa, console } = globalThis;
 
 const key = "fixture-owner-key-1234567890"; //gitleaks:allow
 const ownerId = "canonical-stored-owner";
@@ -221,7 +222,12 @@ test("ownerOrKeyAuth admits a verified key only when its own owner matches, neve
           },
         }
       : { kind: "error", error: { code: "denied" } };
-  const auth = ownerOrKeyAuth(key, ownerId, () => ({ verify }));
+  const touched = [];
+  const touch = async (keyId) => {
+    touched.push(keyId);
+    return { kind: "ok", value: undefined };
+  };
+  const auth = ownerOrKeyAuth(key, ownerId, () => ({ verify, touch }));
   // The presented secret verifies to a real key, but that key's own stored
   // owner is not this host's configured owner: never admitted, the same as
   // an unrecognized secret.
@@ -234,7 +240,11 @@ test("ownerOrKeyAuth admits a verified key only when its own owner matches, neve
     { kind: "refused", status: 401 },
   );
   // The same secret, once its stored owner matches, admits as that key.
-  const matching = ownerOrKeyAuth(key, "a-different-owner", () => ({ verify }));
+  assert.deepEqual(touched, []);
+  const matching = ownerOrKeyAuth(key, "a-different-owner", () => ({
+    verify,
+    touch,
+  }));
   assert.deepEqual(
     await matching.authenticate(
       new Request(origin, {
@@ -246,4 +256,64 @@ test("ownerOrKeyAuth admits a verified key only when its own owner matches, neve
       principal: { actor: { kind: "team-key", keyId: "morel" } },
     },
   );
+  // Only an admitted call stamps last use: the refusal above never did.
+  assert.deepEqual(touched, ["morel"]);
+});
+
+test("last use is stamped at most once per window and a failed stamp never fails the call", async () => {
+  const principal = {
+    keyId: "chanterelle",
+    owner: "owner",
+    name: "chanterelle",
+    scope: { grants: [] },
+    grantVersion: 1,
+    expiresAt: null,
+  };
+  const verify = async () => ({ kind: "ok", value: principal });
+  const calls = [];
+  let failure = null;
+  const touch = async (keyId) => {
+    calls.push(keyId);
+    if (failure === "throw") throw new Error("touch unavailable");
+    if (failure === "refuse")
+      return { kind: "error", error: { code: "denied" } };
+    return { kind: "ok", value: undefined };
+  };
+  const auth = ownerOrKeyAuth(key, "owner", () => ({
+    verify,
+    touch,
+  }));
+  const call = () =>
+    auth.authenticate(
+      new Request("https://oyster.example/", {
+        headers: { Authorization: "Bearer oyk_chanterelle" },
+      }),
+    );
+  const realNow = Date.now;
+  const logged = [];
+  const realError = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    let now = 1_000_000;
+    Date.now = () => now;
+    assert.equal((await call()).kind, "admitted");
+    now += lastUsedGranularityMs - 1;
+    assert.equal((await call()).kind, "admitted");
+    assert.deepEqual(calls, ["chanterelle"]);
+    now += 1;
+    assert.equal((await call()).kind, "admitted");
+    assert.deepEqual(calls, ["chanterelle", "chanterelle"]);
+    // A throwing or refusing stamp still admits, and is reported.
+    failure = "throw";
+    now += lastUsedGranularityMs;
+    assert.equal((await call()).kind, "admitted");
+    failure = "refuse";
+    now += lastUsedGranularityMs;
+    assert.equal((await call()).kind, "admitted");
+    assert.equal(calls.length, 4);
+    assert.equal(logged.length, 2);
+  } finally {
+    Date.now = realNow;
+    console.error = realError;
+  }
 });

@@ -1,5 +1,24 @@
 # @fungi.computer/oyster
 
+## 0.40.0
+
+### Minor Changes
+
+- Changes since 0.39.1:
+
+  - fix(oyster): report a failed key stamp with its cause
+  - fix(oyster): stamp a key's last use at most every five minutes
+  - feat(oyster): record a named key's last use on every admitted call
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/veil@0.8.2
+  - @fungi.computer/shiitake@0.21.1
+  - @fungi.computer/parakeet@0.14.1
+  - @fungi.computer/shiitake-extensions@0.11.11
+  - @fungi.computer/zookeeper@0.0.43
+
 ## 0.39.1
 
 ### Patch Changes

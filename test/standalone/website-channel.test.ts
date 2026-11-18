@@ -499,6 +499,7 @@ describe("the owner's website controls", () => {
       ownerOrKeyAuth(ownerKey, "owner", () => ({
         verify: () =>
           Promise.resolve({ kind: "error", error: { code: "denied" } }),
+        touch: () => Promise.resolve({ kind: "ok", value: undefined }),
       })).authenticate,
       { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
     );

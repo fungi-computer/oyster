@@ -28,6 +28,17 @@ const returningCookieName: "oyster_returning" = "oyster_returning";
 
 Marks a browser that has signed in here before; it carries no authority.
 
+---
+
+### lastUsedGranularityMs
+
+```ts
+const lastUsedGranularityMs: number;
+```
+
+How stale a key's last-used time may be: calls inside this window do not
+re-stamp it.
+
 ## Functions
 
 ### ownerKeyAuth()
@@ -62,11 +73,11 @@ The owner key, or a named key admitted as its canonical Team-key actor.
 
 #### Parameters
 
-| Parameter  | Type                                                                   |
-| ---------- | ---------------------------------------------------------------------- |
-| `ownerKey` | `string`                                                               |
-| `ownerId`  | `string`                                                               |
-| `keys`     | () => `Pick`\<[`OysterKeyStore`](keys.md#oysterkeystore), `"verify"`\> |
+| Parameter  | Type                                                                                |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `ownerKey` | `string`                                                                            |
+| `ownerId`  | `string`                                                                            |
+| `keys`     | () => `Pick`\<[`OysterKeyStore`](keys.md#oysterkeystore), `"verify"` \| `"touch"`\> |
 
 #### Returns
 

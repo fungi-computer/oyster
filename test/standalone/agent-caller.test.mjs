@@ -270,6 +270,7 @@ test("standalone owner attaches fleet and configured Computers without an App, r
     KEYS: {
       getByName: () => ({
         live: async () => null,
+        touch: async () => ({ kind: "ok", value: undefined }),
         verify: async (secret) =>
           secret === "nonowner-named-key"
             ? {
@@ -3267,6 +3268,7 @@ test("HTTP credentials and forged agent claims never authenticate an internal ag
             },
           }
         : { kind: "error", error: { code: "denied" } },
+    touch: async () => ({ kind: "ok", value: undefined }),
   }));
   const forged = {
     "X-Oyster-Principal": "agent",

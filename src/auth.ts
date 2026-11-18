@@ -103,13 +103,36 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
   };
 }
 
+/** How stale a key's last-used time may be: calls inside this window do not re-stamp it. */
+export const lastUsedGranularityMs = 5 * 60 * 1000;
+
 /** The owner key, or a named key admitted as its canonical Team-key actor. */
 export function ownerOrKeyAuth(
   ownerKey: string,
   ownerId: string,
-  keys: () => Pick<OysterKeyStore, "verify">,
+  keys: () => Pick<OysterKeyStore, "verify" | "touch">,
 ): OysterAuth {
   const owner = ownerKeyAuth(ownerKey, ownerId);
+  // When this isolate last tried to stamp each key. A key's "Last used" is
+  // accurate to `lastUsedGranularityMs`, so a burst of calls costs one write.
+  const lastStamp = new Map<string, number>();
+  const stampLastUsed = async (keyId: string): Promise<void> => {
+    const now = Date.now();
+    const last = lastStamp.get(keyId);
+    if (last !== undefined && now - last < lastUsedGranularityMs) return;
+    lastStamp.set(keyId, now);
+    // The call is already admitted: a failed stamp is reported, never fatal.
+    try {
+      const touched = await keys().touch(keyId);
+      if (touched.kind !== "ok")
+        console.error("Oyster key last-used stamp refused", {
+          keyId,
+          code: touched.error.code,
+        });
+    } catch (error) {
+      console.error("Oyster key last-used stamp failed", keyId, error);
+    }
+  };
   return {
     resolve: (actor) => owner.resolve(actor),
     async authenticate(request) {
@@ -121,14 +144,17 @@ export function ownerOrKeyAuth(
       // A revoked or expired key, or one belonging to a different owner (a
       // presented secret can never prove that on its own), authenticates as
       // no one; the owner-key result above still stands.
-      return verified.kind === "ok" && verified.value.owner === ownerId
-        ? {
-            kind: "admitted",
-            principal: {
-              actor: { kind: "team-key", keyId: verified.value.keyId },
-            },
-          }
-        : result;
+      if (verified.kind !== "ok" || verified.value.owner !== ownerId)
+        return result;
+      // The one place a named key is admitted for every door (Git, MCP, HTTP):
+      // stamp its Ear Tag last-used time here, so no caller can miss it.
+      await stampLastUsed(verified.value.keyId);
+      return {
+        kind: "admitted",
+        principal: {
+          actor: { kind: "team-key", keyId: verified.value.keyId },
+        },
+      };
     },
     login: (request) =>
       owner.login?.(request) ??

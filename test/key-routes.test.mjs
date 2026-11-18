@@ -65,7 +65,7 @@ function keysNamespace() {
     },
   };
   const stub = new OysterKeys(ctx, {});
-  return { getByName: () => stub };
+  return { getByName: () => stub, database };
 }
 
 function appFor(principal) {
@@ -234,6 +234,72 @@ test("a revoked key is refused 401 on its very next authenticated request", asyn
     kind: "refused",
     status: 401,
   });
+});
+
+test("an admitted call stamps the key's last-used time; a refused one does not", async () => {
+  const keys = keysNamespace();
+  const scope = tenantScope(defaultTenant, "https://oyster.example");
+  const app = createOyster({
+    ...(await computerHost(owner, "fixed-computer")),
+    ownerRoutes: gitAdminRoutes({ KEYS: keys }, scope),
+  });
+  const issued = await app.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "porcini", grants: allAppsGrant }),
+  });
+  assert.equal(issued.status, 201);
+  const { plaintext } = await issued.json();
+  const store = keys.getByName(scope.durableName("keys"));
+  const lastUsedAt = async () => {
+    const listed = await store.list("owner");
+    assert.equal(listed.kind, "ok");
+    return listed.value.find((key) => key.keyId === "porcini").lastUsedAt;
+  };
+  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", () => store);
+  const call = (secret) =>
+    auth.authenticate(
+      new Request("https://oyster.example/apps/notes/", {
+        headers: { Authorization: `Bearer ${secret}` },
+      }),
+    );
+  assert.equal(await lastUsedAt(), null);
+  assert.equal((await call("oyk_not-a-real-key-000000000000")).kind, "refused");
+  assert.equal(await lastUsedAt(), null);
+  const before = Date.now();
+  assert.equal((await call(plaintext)).kind, "admitted");
+  const stamped = await lastUsedAt();
+  assert.ok(stamped >= before);
+  // The owner key is not a named key: it never stamps one.
+  assert.equal((await call(ownerKeySecret)).kind, "admitted");
+  assert.equal(await lastUsedAt(), stamped);
+});
+
+test("a key stored before last-used tracking loads with no last use", async () => {
+  const keys = keysNamespace();
+  const scope = tenantScope(defaultTenant, "https://oyster.example");
+  const app = createOyster({
+    ...(await computerHost(owner, "fixed-computer")),
+    ownerRoutes: gitAdminRoutes({ KEYS: keys }, scope),
+  });
+  const issued = await app.request("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "shiitake", grants: allAppsGrant }),
+  });
+  assert.equal(issued.status, 201);
+  // A row exactly as an earlier release stored it: last_used_at never set.
+  keys.database
+    .prepare(
+      `INSERT INTO ear_tag_oyk_keys (key_id,owner,digest,name,grants,grant_version,expires_at,revoked_at,rate_limit,last_used_at,created_at,updated_at)
+       SELECT 'old-key',owner,'old-digest','old-key',grants,grant_version,NULL,NULL,NULL,NULL,created_at,updated_at FROM ear_tag_oyk_keys WHERE key_id='shiitake'`,
+    )
+    .run();
+  const listed = await keys.getByName(scope.durableName("keys")).list("owner");
+  assert.equal(listed.kind, "ok");
+  const old = listed.value.find((key) => key.keyId === "old-key");
+  assert.equal(old.lastUsedAt, null);
+  assert.equal(old.name, "old-key");
 });
 
 test("an expired key is refused 401 on its very next authenticated request", async () => {

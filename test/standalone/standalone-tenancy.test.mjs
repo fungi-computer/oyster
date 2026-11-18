@@ -577,6 +577,7 @@ test("HTTP and root readers share the stored canonical owner and live membership
           keyId === "named-key"
             ? { keyId, owner: keyOwner, grantVersion: 1, grants: [] }
             : null,
+        touch: async () => ({ kind: "ok", value: undefined }),
         verify: async () => ({
           kind: "ok",
           value: {

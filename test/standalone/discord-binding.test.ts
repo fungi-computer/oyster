@@ -292,6 +292,7 @@ describe("the owner's Discord controls", () => {
       ownerOrKeyAuth(ownerKey, "owner", () => ({
         verify: () =>
           Promise.resolve({ kind: "error", error: { code: "denied" } }),
+        touch: () => Promise.resolve({ kind: "ok", value: undefined }),
       })).authenticate,
       { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
     );
