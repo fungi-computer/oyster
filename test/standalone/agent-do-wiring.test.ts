@@ -127,7 +127,7 @@ it("gives an Oyster Agent skills but no setup.finish, so the setup skill never r
     ({ extensions }) => {
       const ids = extensions.roster.map(({ manifest }) => manifest.id);
       // The skills extension serves the built-in setup-fungi skill; the Hub
-      // alone adds a tool that ends a setup allowance.
+      // alone adds a tool that ends an invite allowance.
       expect(ids).toContain("botanical-skills");
       expect(
         ids.filter((id) => /setup|finish|billing|credit/u.test(id)),

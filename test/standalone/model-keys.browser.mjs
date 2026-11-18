@@ -1,6 +1,8 @@
-// Actual standalone owner HTTP and installed Tourtois: Model keys settings.
+// Actual standalone owner HTTP and installed Tourtois: the Vault in Settings.
 // Without a credential key the owner is refused; with one, the real provider
-// rejects a bogus key and nothing is stored. Agent model choice survives restart.
+// rejects a bogus key and nothing is stored. A secret is added, scoped,
+// rotated and revoked through the owner door, and its value leaves the
+// browser only in those two requests. Agent model choice survives restart.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -46,7 +48,7 @@ async function owner(path, init = {}) {
   });
 }
 
-async function openKeys(page, width) {
+async function openVault(page, width) {
   await page.getByRole("button", { name: "Team and account menu" }).click();
   await page.getByRole("menuitem", { name: /System Settings/ }).click();
   const dialog = page.getByRole("dialog", { name: "System Settings" });
@@ -54,11 +56,11 @@ async function openKeys(page, width) {
   if (width === 390)
     await dialog
       .getByRole("combobox", { name: "Settings category" })
-      .selectOption({ label: "Keys" });
+      .selectOption({ label: "Vault" });
   else
     await dialog
       .getByRole("navigation", { name: "Settings categories" })
-      .getByRole("button", { name: "Keys", exact: true })
+      .getByRole("button", { name: "Vault", exact: true })
       .click();
   return dialog;
 }
@@ -120,10 +122,20 @@ try {
   await page.getByLabel("Owner key").fill(host.key);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.goto(host.origin);
-  let dialog = await openKeys(page, 1440);
-  await expect(dialog.getByText("No model keys yet.")).toBeVisible();
+  let dialog = await openVault(page, 1440);
   await expect(
-    dialog.getByLabel("Agent models").getByText("Key proof"),
+    dialog.getByText(
+      "No model keys yet. Agents use the default model until you add one.",
+    ),
+  ).toBeVisible();
+  // Nothing in the Vault reveals a value.
+  await expect(
+    dialog.getByRole("button", { name: /^(show|reveal|copy)\b/iu }),
+  ).toHaveCount(0);
+  await expect(
+    dialog
+      .getByLabel("Agent models")
+      .locator(".caps-fact-label", { hasText: "Key proof" }),
   ).toBeVisible();
   const addKey = async (label, apiKey) => {
     const form = dialog.getByRole("form", { name: "Add model key" });
@@ -161,7 +173,8 @@ try {
     .selectOption({ label: "OpenAI" });
   await expect(firstForm.getByLabel("Account ID")).toHaveCount(0);
   await addKey("Bogus", `sk-test-${"z".repeat(16)}`);
-  await expect(dialog.getByText(/no credential key/u)).toBeVisible();
+  // Refusals are toasts, outside the Settings dialog.
+  await expect(page.getByText(/no credential key/u)).toBeVisible();
   assert.deepEqual(await (await owner("/api/model-keys")).json(), { keys: [] });
   await page.screenshot({
     path: `${screenshotDirectory}/model-keys-no-custody.png`,
@@ -172,18 +185,94 @@ try {
   await writeFile(configPath, JSON.stringify(config));
   await host.restart();
   await page.reload();
-  dialog = await openKeys(page, 1440);
+  dialog = await openVault(page, 1440);
   await dialog
     .getByRole("form", { name: "Add model key" })
     .getByLabel("Provider")
     .selectOption({ label: "OpenAI" });
   await addKey("Bogus", `sk-test-${"z".repeat(16)}`);
-  await expect(
-    dialog.getByText("The provider rejected this key"),
-  ).toBeVisible();
+  await expect(page.getByText("The provider rejected this key")).toBeVisible();
   assert.deepEqual(await (await owner("/api/model-keys")).json(), { keys: [] });
 
-  // 3. An Agent's persisted model choice survives a restart and shows in Settings.
+  // 3. A secret: add, scope, rotate and revoke through the owner door.
+  const secret = `re_VAULTCANARY_${randomBytes(12).toString("hex")}`;
+  const rotated = `re_VAULTCANARY_${randomBytes(12).toString("hex")}`;
+  const sent = [];
+  page.on("request", (request) => {
+    sent.push({
+      method: request.method(),
+      path: new URL(request.url()).pathname,
+      carries: [secret, rotated].filter(
+        (value) =>
+          request.url().includes(value) ||
+          JSON.stringify(request.headers()).includes(value) ||
+          (request.postData() ?? "").includes(value),
+      ),
+    });
+  });
+  const addSecret = dialog.getByRole("form", { name: "Add secret" });
+  await addSecret.getByLabel("Name").fill("Resend");
+  await addSecret.getByLabel("Reference").fill("resend");
+  await addSecret.getByLabel("Host").fill("api.resend.com");
+  await addSecret.getByLabel("Value").fill(secret);
+  await addSecret.getByRole("button", { name: "Add secret" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "Scope Resend" }),
+  ).toBeVisible();
+  await dialog.getByRole("button", { name: "Scope Resend" }).click();
+  const scope = dialog.getByRole("region", { name: "Scope of Resend" });
+  await scope.getByLabel("Key proof").click();
+  await expect(scope.getByLabel("Key proof")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(dialog.getByText("Used by 1 Agent")).toBeVisible();
+  await page.screenshot({
+    path: `${screenshotDirectory}/vault-secret-scope-1440.png`,
+  });
+  await dialog.getByRole("button", { name: "Scope Resend" }).click();
+  await dialog.getByRole("button", { name: "Rotate Resend" }).click();
+  const rotate = dialog.getByRole("region", { name: "Rotating Resend" });
+  await rotate.getByLabel("New value", { exact: true }).fill(rotated);
+  await rotate.getByRole("button", { name: "Replace value" }).click();
+  await expect(rotate).toHaveCount(0);
+  // Rotation keeps the grant.
+  await expect(dialog.getByText("Used by 1 Agent")).toBeVisible();
+  const listing = await (await owner("/api/vault")).text();
+  assert.equal(listing.includes(secret), false, "the listing has no value");
+  assert.equal(listing.includes(rotated), false, "the listing has no value");
+  const models = await (await owner("/api/agent-models")).text();
+  assert.equal(models.includes(rotated), false, "the Agent API has no value");
+  await dialog.getByRole("button", { name: "Revoke Resend" }).click();
+  await dialog
+    .getByRole("region", { name: "Revoking Resend" })
+    .getByRole("button", { name: "Revoke", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("button", { name: "Scope Resend" }),
+  ).toHaveCount(0);
+  // Each value went out once, to the owner door, in a body.
+  assert.deepEqual(
+    sent
+      .filter((request) => request.carries.length > 0)
+      .map(({ method, path, carries }) => [method, path, carries]),
+    [
+      ["POST", "/api/vault/secrets", [secret]],
+      [
+        "PUT",
+        sent.find((request) => request.carries.includes(rotated))?.path,
+        [rotated],
+      ],
+    ],
+  );
+  assert.match(
+    sent.find((request) => request.carries.includes(rotated))?.path ?? "",
+    /^\/api\/vault\/credentials\/[^/]+$/u,
+  );
+
+  // 4. An Agent's persisted model choice survives a restart. With no stored
+  // key there is no provider catalog to name it from, so Settings lists the
+  // Agent by its model id.
   const choice = await owner(`/api/agent-models/${agentId}`, {
     method: "PUT",
     body: JSON.stringify({
@@ -197,10 +286,16 @@ try {
   assert.equal(choice.status, 200, await choice.clone().text());
   await host.restart();
   await page.reload();
-  dialog = await openKeys(page, 1440);
+  const persisted = await owner(`/api/agent-models/${agentId}`);
+  assert.equal(persisted.status, 200, await persisted.clone().text());
+  assert.match(
+    await persisted.text(),
+    /"modelId":"@cf\/meta\/llama-3\.3-70b-instruct-fp8-fast"/u,
+  );
+  dialog = await openVault(page, 1440);
   await expect(
     dialog
-      .getByLabel("Agent models")
+      .getByRole("list", { name: "Agent models" })
       .getByText("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
   ).toBeVisible();
   await page.screenshot({
@@ -208,7 +303,7 @@ try {
   });
   assert.deepEqual(errors, []);
   log(
-    "PASS Model keys: no-custody refusal, provider rejection, restart-persisted Agent model",
+    "PASS Vault: no-custody refusal, provider rejection, secret add/scope/rotate/revoke, restart-persisted Agent model",
   );
 } catch (cause) {
   error(host.output());

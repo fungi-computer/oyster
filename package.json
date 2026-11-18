@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.45.0",
+  "version": "0.46.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -397,7 +397,7 @@
     "@fungi.computer/lantern": "0.4.2",
     "@fungi.computer/mycelium": "0.4.7",
     "@fungi.computer/nacre": "0.8.3",
-    "@fungi.computer/parakeet": "0.14.4",
+    "@fungi.computer/parakeet": "0.14.5",
     "@fungi.computer/puffball": "0.12.0",
     "@fungi.computer/seam": "0.2.6",
     "@fungi.computer/shiitake": "0.21.4",

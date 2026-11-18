@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.46.0
+
+### Minor Changes
+
+- Changes since 0.45.0:
+
+  - fix(vault): name an Agent's model by its id when no catalog is loaded
+  - feat(tourtois): one Vault for model keys and credentials
+  - feat(hub): admit invite-funded Teams like any funded Team
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.14.5
+
 ## 0.45.0
 
 ### Minor Changes

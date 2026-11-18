@@ -79,9 +79,9 @@ Finish with one useful result, not a tour.
      that host has no money step, so say nothing about Pro or wallets and call
      nothing.
 
-## Setup credit
+## Credit
 
-- When the `setup.finish` description says less than $0.15 of setup credit
-  remains, finish the step in hand, then do step 5 without starting a crawl.
+- When the `setup.finish` description says less than $0.15 of credit remains,
+  finish the step in hand, then do step 5 without starting a crawl.
 - Reach step 5 only after the first useful result. A hand-off before that leaves
   the person with nothing.
