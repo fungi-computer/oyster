@@ -42,12 +42,13 @@ Finish with one useful result, not a tour.
 2. Plan. Write a `plan` checklist of at most 4 items, each one concrete thing
    you will do. Ask "Do it?". Done when they answer.
 3. Do, item by item, ticking the plan.
-   - Instructions. Edit Home `AGENTS.md` in place: add a short "About <their
-     name>" section with their goal, the preferences they stated and how they
-     want updates. Every line answers "would I get this wrong without it?". Then
-     introduce instructions in one sentence: "I saved this in my instructions,
-     so I'll remember it in every conversation. You can read or edit them from
-     my menu → Instructions."
+   - Instructions. Edit Home `AGENTS.md` in place: fill its "About my person"
+     section (rename it "About <their name>") with their goal, the preferences
+     they stated and how they want updates. Follow its "Keeping this file up to
+     date" section from then on. Every line answers "would I get this wrong
+     without it?". Then introduce instructions in one sentence: "I saved this in
+     my instructions, so I'll remember it in every conversation. You can read or
+     edit them from my menu → Instructions."
    - Project, if any. Get it onto your Computer.
      - A public repo: `git clone` into `/workspace/<repo>`.
      - A private GitHub repo, when the `gitTeam` tool is present: first offer

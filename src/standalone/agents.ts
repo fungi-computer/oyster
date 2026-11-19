@@ -2239,6 +2239,7 @@ export abstract class StandaloneAgentBase<
         roster: [
           ...extensions.roster,
           homeExtension({
+            instructionsRoot: "",
             computers: {
               prepare: async () => {
                 await this.preparedComputerSnapshot();
@@ -3955,7 +3956,7 @@ export function standaloneAgents(
         // AGENTS.md. A Home the owner already wrote to is left as it is. With
         // no Home, the same section stays on the Agent until it has one.
         seedHome: async (agentId) => {
-          await seedStarterHome(async (path, content) => {
+          await seedStarterHome("AGENTS.md", async (path, content) => {
             if (path !== "AGENTS.md")
               throw new Error(`The starter seeds only AGENTS.md, not ${path}`);
             const result = await env.AGENTS.getByName(

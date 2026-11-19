@@ -212,13 +212,29 @@ describe("starter Agent laws", () => {
       if (!homes.has(path)) homes.set(path, content);
       return Promise.resolve();
     };
-    await seedStarterHome(writeIfMissing);
+    await seedStarterHome("AGENTS.md", writeIfMissing);
     const seeded = homes.get("AGENTS.md") ?? "";
     expect(seeded).toContain("## First conversation");
     expect(seeded).toContain('skill.load({name: "setup-fungi"})');
     expect(seeded).toContain("delete this section");
+    expect(seeded).toContain("computer://home/AGENTS.md and load");
+    // The Agent keeps its own instructions current, and never saves secrets.
+    expect(seeded).toContain("## About my person");
+    expect(seeded).toContain("## Keeping this file up to date");
+    expect(seeded).toContain("Never save secrets");
     homes.set("AGENTS.md", "mine");
-    await seedStarterHome(writeIfMissing);
+    await seedStarterHome("AGENTS.md", writeIfMissing);
     expect(homes.get("AGENTS.md")).toBe("mine");
+  });
+
+  it("names the file where the host keeps it", async () => {
+    const homes = new Map<string, string>();
+    await seedStarterHome("/workspace/AGENTS.md", (path, content) => {
+      homes.set(path, content);
+      return Promise.resolve();
+    });
+    expect(homes.get("/workspace/AGENTS.md")).toContain(
+      "computer://home/workspace/AGENTS.md and load",
+    );
   });
 });

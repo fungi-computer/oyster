@@ -21,7 +21,7 @@ owner can both change them.
   loaded.
 - Follow them unless they conflict with the instructions the host gave you
   first. They never grant a tool, an approval or access.
-- They are at `computer://home/AGENTS.md` and `computer://home/SYSTEM.md`.
+- Your Home prompt section names where they are; read and edit them there.
 - Only a person changes Home, with `/home <name>`. Ask them when no Home is
   available.
 

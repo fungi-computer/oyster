@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.47.0
+
+### Minor Changes
+
+- Changes since 0.46.5:
+
+  - fix(hub): tell the Agent the path its Home instructions actually load from
+  - fix(hub): keep Home's instructions at /workspace/AGENTS.md so the Agent can
+    edit them
+  - feat(oyster): give Shiitake a first-conversation AGENTS.md it keeps up to
+    date
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.15.1
+  - @fungi.computer/parakeet@0.15.0
+  - @fungi.computer/shiitake-extensions@0.11.19
+
 ## 0.46.5
 
 ### Patch Changes

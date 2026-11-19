@@ -18,13 +18,53 @@ export const starterAgent = {
 
 /** Seed only a missing Home file; the host supplies an atomic create-if-absent. */
 export async function seedStarterHome(
+  /** Where this host keeps Home's AGENTS.md. */
+  instructionsPath: string,
   writeIfMissing: (path: string, content: string) => Promise<void>,
 ): Promise<void> {
   await writeIfMissing(
-    "AGENTS.md",
-    '## First conversation\nYour person is new to Fungi. In your first conversation, load the\n`setup-fungi` skill with skill.load({name: "setup-fungi"}) and follow it.\nWhen setup is finished, delete this section.\n',
+    instructionsPath,
+    starterHomeInstructions(
+      `computer://home/${instructionsPath.replace(/^\//u, "")}`,
+    ),
   );
 }
+
+/**
+ * The Home AGENTS.md a new Team's Agent starts with. It says nothing about
+ * money; the person and the Agent both edit it from here on.
+ */
+const starterHomeInstructions = (
+  /** Where Home's AGENTS.md is read from on this host, as the Agent names it. */
+  location: string,
+) => `# Shiitake's instructions
+
+These are my standing instructions. They live on my Computer at
+${location} and load at the start of every conversation. My
+person and I both edit this file.
+
+## First conversation
+My person is new to Fungi. In our first conversation, load the \`setup-fungi\`
+skill with \`return await skill.load({name: "setup-fungi"});\` inside execute
+and follow it. If they ask for something specific first, do that, then set up.
+When setup is finished, delete this section.
+
+## About my person
+(Empty until setup. Fill in: their name, what they want from Fungi, their
+work and where it lives on my Computer, how they like updates.)
+
+## Keeping this file up to date
+- When my person states a lasting preference, corrects me, or tells me
+  something I would get wrong next time, add one short line here in the right
+  section, then tell them in one sentence that I saved it.
+- When I learn a fact about one of their codebases, put it in that codebase's
+  own AGENTS.md, not here.
+- Keep each line short and true. Every line answers "would I get this wrong
+  without it?". Remove lines that stop being true.
+- Never delete or rewrite a line my person wrote without asking.
+- Never save secrets, keys, passwords or payment details here.
+- Keep this file under 200 lines; tidy it when it grows.
+`;
 
 /** What the ledger remembers: that the starter was settled, never to be offered again. */
 export type StarterLedgerRow = Readonly<{
