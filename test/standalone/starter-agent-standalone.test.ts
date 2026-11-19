@@ -34,8 +34,14 @@ type Runtime = "home" | "refused" | "none" | "throws";
 
 /** The owner's Home AGENTS.md as the Agent reports it; `null` content is an absent file. */
 function standalone(
-  options: { runtime?: Runtime; content?: string | null } = {},
+  options: {
+    runtime?: Runtime;
+    content?: string | null;
+    /** The first create reserves the Agent, then never answers. */
+    cutFirstCreate?: boolean;
+  } = {},
 ) {
+  let cut = options.cutFirstCreate === true;
   const runtime = options.runtime ?? "home";
   const home = { content: options.content ?? null };
   const database = new DatabaseSync(":memory:");
@@ -89,6 +95,10 @@ function standalone(
         getByName: (agentId: string) => ({
           usePolicyDirectory: () => {
             policyDirectories.push(agentId);
+            if (cut) {
+              cut = false;
+              return new Promise<void>(() => undefined);
+            }
             return Promise.resolve();
           },
           invalidateComputerConnections: () => Promise.resolve(),
@@ -122,6 +132,8 @@ function standalone(
   });
   return {
     agents: standaloneAgents(env),
+    /** A new adapter, as each Worker request builds one. */
+    request: () => standaloneAgents(env),
     directory,
     policyDirectories,
     replacements,
@@ -130,9 +142,19 @@ function standalone(
   };
 }
 
+/** The background Home seed has settled: the next read finds the starter offered. */
+async function seeded(agents: {
+  ensureStarter(principal: typeof owner): Promise<string>;
+}) {
+  await vi.waitFor(async () => {
+    expect(await agents.ensureStarter(owner)).toBe("already-offered");
+  });
+}
+
 it("offers the owner one Shiitake on an empty Team, through the ordinary create, once", async () => {
   const { agents, policyDirectories } = standalone();
-  expect(await agents.ensureStarter(owner)).toBe("created");
+  expect(await agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(agents);
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
   const listed = await agents.list();
   expect(listed.map(({ name }) => name)).toEqual(["Shiitake"]);
@@ -153,7 +175,8 @@ it("leaves a Team with an Agent alone and never re-creates a renamed starter", a
   expect((await agents.list()).map(({ name }) => name)).toEqual(["Mine"]);
 
   const second = standalone();
-  expect(await second.agents.ensureStarter(owner)).toBe("created");
+  expect(await second.agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(second.agents);
   const [starter] = await second.agents.list();
   await second.agents.rename(starter?.agentId ?? "", "Moss", owner);
   expect(await second.agents.ensureStarter(owner)).toBe("already-offered");
@@ -166,7 +189,8 @@ const firstRun = "## First conversation";
 
 it("seeds the first-run section into a Home with no AGENTS.md, once, and says nothing about money", async () => {
   const { agents, home, replacements } = standalone();
-  expect(await agents.ensureStarter(owner)).toBe("created");
+  expect(await agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(agents);
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
   expect(replacements).toHaveLength(1);
   expect(home.content).toContain(firstRun);
@@ -176,7 +200,8 @@ it("seeds the first-run section into a Home with no AGENTS.md, once, and says no
 
 it("leaves an AGENTS.md the owner already has exactly as it is", async () => {
   const { agents, home } = standalone({ content: "mine\n" });
-  expect(await agents.ensureStarter(owner)).toBe("created");
+  expect(await agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(agents);
   expect(home.content).toBe("mine\n");
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
   expect(home.content).toBe("mine\n");
@@ -197,6 +222,8 @@ it("never seeds a store that settled its starter before the seed existed", async
     outcome: "created",
     agentId: old.agentId,
     at: 0,
+    attemptAt: null,
+    failure: null,
   });
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
   expect(replacements).toEqual([]);
@@ -214,6 +241,8 @@ it("never seeds a store that settled its starter before the seed existed", async
     outcome: "created",
     agentId: early.agentId,
     at: 0,
+    attemptAt: null,
+    failure: null,
   });
   expect(await empty.agents.ensureStarter(owner)).toBe("already-offered");
   expect(empty.home.content).toBeNull();
@@ -232,7 +261,8 @@ it("never seeds a store that settled its starter before the seed existed", async
 
 it("gives the starter the host's configured Computer as its Home when it is created", async () => {
   const { agents, directory, home, kept } = standalone();
-  expect(await agents.ensureStarter(owner)).toBe("created");
+  expect(await agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(agents);
   const [starter] = await agents.list();
   const attached = await directory.readAgentComputers(
     starter?.agentId ?? "",
@@ -257,7 +287,8 @@ it.each(["none", "refused"] as const)(
   "keeps the setup prompt on the Agent when the host has no Computer to attach (%s)",
   async (runtime) => {
     const { agents, directory, home, kept } = standalone({ runtime });
-    expect(await agents.ensureStarter(owner)).toBe("created");
+    expect(await agents.ensureStarter(owner)).toBe("seeding");
+    await seeded(agents);
     const [starter] = await agents.list();
     expect(
       await directory.readAgentComputers(starter?.agentId ?? "", owner),
@@ -276,7 +307,8 @@ it.each(["none", "refused"] as const)(
 it("still records and seeds the starter when the Home attach fails outright, and reports why", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const { agents, directory, kept } = standalone({ runtime: "throws" });
-  expect(await agents.ensureStarter(owner)).toBe("created");
+  expect(await agents.ensureStarter(owner)).toBe("seeding");
+  await seeded(agents);
   const [starter] = await agents.list();
   expect(
     await directory.readAgentComputers(starter?.agentId ?? "", owner),
@@ -293,4 +325,44 @@ it("still records and seeds the starter when the Home attach fails outright, and
   expect(await agents.ensureStarter(owner)).toBe("already-offered");
   expect(kept).toHaveLength(1);
   expect(await agents.list()).toHaveLength(1);
+});
+
+it("finishes the starter across Worker requests, each with a new adapter, through waitUntil", async () => {
+  const { request, home } = standalone();
+  const kept: Promise<unknown>[] = [];
+  expect(await request().ensureStarter(owner, (work) => kept.push(work))).toBe(
+    "seeding",
+  );
+  // The response is sent; only the work handed to waitUntil carries on.
+  await Promise.all(kept);
+  expect(kept.length).toBeGreaterThan(0);
+  expect(home.content).toContain(firstRun);
+  expect(await request().ensureStarter(owner)).toBe("already-offered");
+  expect(await request().list()).toHaveLength(1);
+});
+
+it("resumes a create a Worker request cut off after it reserved the Agent", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  try {
+    vi.setSystemTime(1_000_000);
+    const { request, home } = standalone({ cutFirstCreate: true });
+    const first = request().ensureStarter(owner);
+    // The read stops waiting for the create after five seconds.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await first).toBe("starting");
+    expect(await request().list()).toHaveLength(1);
+    // The next request finds the attempt still within its bound.
+    expect(await request().ensureStarter(owner)).toBe("starting");
+    // Past it, the cut-off create is replayed, never read as a full Team.
+    // The clock moves without running timers: the cut-off request is gone.
+    vi.setSystemTime(1_000_000 + 60_001);
+    expect(await request().ensureStarter(owner)).toBe("seeding");
+    await vi.waitFor(async () => {
+      expect(await request().ensureStarter(owner)).toBe("already-offered");
+    });
+    expect(home.content).toContain(firstRun);
+    expect(await request().list()).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

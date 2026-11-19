@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.47.2
+
+### Patch Changes
+
+- Changes since 0.47.1:
+
+  - fix(oyster): keep the starter agent state durable across restarts and
+    requests
+  - fix(oyster): bound the starter agent create so a read never waits on it
+  - fix(hub): answer the agent list without waiting on the starter home seed
+
 ## 0.47.1
 
 ### Patch Changes

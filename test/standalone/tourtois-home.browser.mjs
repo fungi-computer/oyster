@@ -268,7 +268,9 @@ async function installChild(installationId, displayName) {
   };
   if (gillProof) {
     const fixture = await import("./gill-declaration.fixture.ts");
-    declaration = fixture.gillDeclaration;
+    // Both installed children share the Gill fixture; each keeps its own name,
+    // or the desktop would list "Second App" as a second "Proof App".
+    declaration = { ...fixture.gillDeclaration, displayName };
     const built = await build({
       entryPoints: [`${root}test/standalone/gill-facet.fixture.ts`],
       bundle: true,
@@ -840,9 +842,18 @@ async function proveAppWindows(page, width, shot) {
   }
 
   // Minimize keeps the App's globalThis.document mounted; restore shows the same one.
-  await paneOf(page, "Proof App")
-    .getByRole("button", { name: "Minimize Proof App", exact: true })
-    .click();
+  // A phone folds the window keys into the window's one command menu.
+  if (width === 390) {
+    await paneOf(page, "Proof App")
+      .getByRole("button", { name: "More for Proof App", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Minimize window", exact: true })
+      .click();
+  } else
+    await paneOf(page, "Proof App")
+      .getByRole("button", { name: "Minimize Proof App", exact: true })
+      .click();
   await expect(paneOf(page, "Proof App")).toBeHidden();
   assert.equal(
     await page.evaluate(() =>
@@ -936,6 +947,41 @@ async function packShellFork() {
   });
   await rm(clone, { recursive: true, force: true });
   return { directory, release: result.release };
+}
+
+/**
+ * Tourtois restores the member's open windows and layout on the next visit.
+ * Each viewport pass starts from a fresh session, as a first visit would.
+ */
+async function resetWindowSession() {
+  const read = await globalThis.fetch(
+    `${origin}/api/workbench/storage/tourtois/read?key=windows`,
+    { headers },
+  );
+  assert.equal(read.status, 200, await read.clone().text());
+  const stored = Schema.decodeUnknownSync(appStorageReadResultSchema)(
+    await read.json(),
+  );
+  assert.equal(stored.kind, "accepted");
+  if (stored.value.member === null) return;
+  const reset = await globalThis.fetch(
+    `${origin}/api/workbench/storage/tourtois/write`,
+    {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: "windows",
+        scope: "member",
+        basedOn: stored.value.member.revision,
+        value: { tiled: true, active: null, windows: [] },
+      }),
+    },
+  );
+  assert.equal(reset.status, 200, await reset.clone().text());
+  const mutation = Schema.decodeUnknownSync(appStorageMutationResultSchema)(
+    await reset.json(),
+  );
+  assert.equal(mutation.kind, "accepted");
 }
 
 /** The shell modules a page imported, by path. */
@@ -1070,6 +1116,7 @@ try {
     [390, "dark"],
   ]) {
     const shot = `${width}-${colorScheme}`;
+    await resetWindowSession();
     const page = await browser.newPage({
       viewport: { width, height: width === 390 ? 844 : 900 },
       reducedMotion: "reduce",
@@ -1142,8 +1189,12 @@ try {
           ).toBeVisible();
       }
     } else {
+      // The launcher's Apps list; a restored window and its App bar button
+      // carry the same name.
       await expect(
-        desktop.getByRole("button", { name: "Proof App", exact: true }),
+        desktop
+          .getByRole("list", { name: "Apps", exact: true })
+          .getByRole("button", { name: "Proof App", exact: true }),
       ).toBeVisible();
     }
     if (appSet) {

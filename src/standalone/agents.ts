@@ -288,6 +288,7 @@ import {
   createStarterLedger,
   ensureStarterAgent,
   seedStarterHome,
+  type StarterLedger,
   type StarterLedgerRow,
   type StarterLedgerStore,
 } from "../starter-agent.js";
@@ -3451,6 +3452,9 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   recordStarter(row: StarterLedgerRow): void {
     this.starterLedger.record(row);
   }
+  forgetStarter(): void {
+    this.starterLedger.forget();
+  }
   /** Every Agent in the directory, archived ones included. */
   agentTotal(): number {
     return this.directory.list(this.grant()).length;
@@ -3850,6 +3854,13 @@ export function standaloneAgents(
     scope === undefined
       ? env.AGENT_DIRECTORY.getByName(directoryName)
       : agentDirectoryForScope(env, scope);
+  // The starter's state lives in the directory's storage: this adapter is
+  // rebuilt for every Worker request, so it remembers nothing itself.
+  const starterLedger: StarterLedger = {
+    read: () => directory().readStarter(),
+    record: (row) => directory().recordStarter(row),
+    forget: () => directory().forgetStarter(),
+  };
   const toAgent = (entry: AgentEntry): OysterAgent => ({
     agentId: entry.agentId,
     name: entry.name,
@@ -3904,7 +3915,7 @@ export function standaloneAgents(
       return agent.setArchived(archived);
     },
     create: created,
-    ensureStarter: (principal) => {
+    ensureStarter: (principal, keepAlive) => {
       const owner = directory();
       const reportStarterFailure = (cause: unknown) => {
         void redactedFailure(cause).then((text) => {
@@ -3914,10 +3925,8 @@ export function standaloneAgents(
         });
       };
       return ensureStarterAgent({
-        ledger: {
-          read: () => owner.readStarter(),
-          record: (row) => owner.recordStarter(row),
-        },
+        ledger: starterLedger,
+        keepAlive,
         isOwner: () => oysterPrincipalIsOwner(principal),
         agentCount: () => owner.agentTotal(),
         // The ordinary create, then the ordinary owner attach of the host's own

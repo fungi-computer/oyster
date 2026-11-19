@@ -227,8 +227,13 @@ export type OysterAgents = Readonly<{
   /**
    * Offer the owner their starter Agent on an empty Team's first owner read;
    * it creates through this host's ordinary `create` and never fails the read.
+   * Work the read does not wait for is handed to `keepAlive` (the Worker's
+   * `waitUntil`), so it outlives the response.
    */
-  ensureStarter(principal: TenantPrincipal): Promise<StarterOutcome>;
+  ensureStarter(
+    principal: TenantPrincipal,
+    keepAlive?: (work: Promise<unknown>) => void,
+  ): Promise<StarterOutcome>;
   /** Owner-only HTTP transition; creator Agents use their own control tool. */
   setArchived(
     agentId: string,
@@ -620,7 +625,9 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
             return refusal(400, "Choose a valid archive view");
           // The owner's own directory read is the starter Agent's one trigger.
           if (everyAgent && authority.kind === "owner" && selected !== "true")
-            await agents.ensureStarter(authority.principal);
+            await agents.ensureStarter(authority.principal, (work) => {
+              context.executionCtx.waitUntil(work);
+            });
           const listed = await agents.list({ archived: selected === "true" });
           const reached: OysterAgent[] = [];
           for (const item of listed)

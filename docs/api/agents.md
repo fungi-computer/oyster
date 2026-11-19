@@ -685,6 +685,8 @@ What one Vault command answers: a listing, an id, a version, usage or a refusal.
 ```ts
 type StarterOutcome =
   | "created"
+  | "seeding"
+  | "starting"
   | "already-offered"
   | "team-not-empty"
   | "unfunded"
@@ -692,7 +694,9 @@ type StarterOutcome =
   | "failed";
 ```
 
-How one offer of the starter Agent settled; only `created` made an Agent.
+How one offer of the starter Agent settled. `created` and `seeding` both mean
+the Agent exists; `seeding` means its Home seed is still running; `starting`
+means its create is still running.
 
 ## Variables
 
