@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.46.5
+
+### Patch Changes
+
+- Changes since 0.46.4:
+
+  - Updated starter Apps for the Veil release.
+
+- Updated dependencies
+  - @fungi.computer/veil@0.11.0
+  - @fungi.computer/shiitake@0.21.8
+  - @fungi.computer/parakeet@0.14.9
+  - @fungi.computer/shiitake-extensions@0.11.18
+  - @fungi.computer/zookeeper@0.0.50
+
 ## 0.46.4
 
 ### Patch Changes
