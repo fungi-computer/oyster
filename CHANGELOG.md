@@ -1,5 +1,38 @@
 # @fungi.computer/oyster
 
+## 0.47.1
+
+### Patch Changes
+
+- Changes since 0.47.0:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Agar release.
+  - Updated starter Apps for the Parakeet release.
+  - Updated starter Apps for the Knapsack release.
+  - Updated starter Apps for the Veil release.
+  - Updated starter Apps for the Darkroom release.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.23.1
+  - @fungi.computer/darkroom@0.11.9
+  - @fungi.computer/knapsack@0.4.21
+  - @fungi.computer/parakeet@0.16.0
+  - @fungi.computer/veil@0.11.1
+  - @fungi.computer/braid@0.6.2
+  - @fungi.computer/nacre@0.8.4
+  - @fungi.computer/shiitake@0.21.9
+  - @fungi.computer/workflows-wire@0.7.2
+  - @fungi.computer/computer@0.15.2
+  - @fungi.computer/computer-contract@0.5.8
+  - @fungi.computer/shiitake-extensions@0.11.20
+  - @fungi.computer/zookeeper@0.0.51
+
 ## 0.47.0
 
 ### Minor Changes
