@@ -84,6 +84,14 @@ const fleetIds = defineIdFamily({
 const fleetComputerId = z.strictObject({
   computerId: z.string().min(1).max(256),
 });
+/**
+ * `reason: true` asks for a failed start's plain-words reason. Callers that
+ * never ask get the state shape every released client decodes strictly.
+ */
+const fleetStateRead = z.strictObject({
+  computerId: z.string().min(1).max(256),
+  reason: z.literal(true).exactOptional(),
+});
 const fleetCreate = z.strictObject({
   name: computerCreateRequestSchema.shape.name
     .unwrap()
@@ -159,14 +167,19 @@ export function computerControlSpecs(port: ComputerControlPort) {
       replay: "safe" as const,
       access: "read" as const,
       description:
-        "Read runtime state without waking a Computer, including its live admission queue position.",
-      input: fleetComputerId,
+        "Read runtime state without waking a Computer, including its live admission queue position. Pass reason: true to get why a failed start failed.",
+      input: fleetStateRead,
       output: computerStateSchema,
       /** Return liveness without waking the runtime. */
-      execute: (
-        input: z.output<typeof fleetComputerId>,
+      execute: async (
+        input: z.output<typeof fleetStateRead>,
         context: InvocationContext,
-      ) => port.state(input.computerId, context),
+      ): Promise<z.output<typeof computerStateSchema>> => {
+        const state = await port.state(input.computerId, context);
+        if (state.state !== "start_failed" || input.reason === true)
+          return state;
+        return { state: state.state };
+      },
     },
     start: {
       replay: "unsafe" as const,

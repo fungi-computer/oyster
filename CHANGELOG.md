@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.47.4
+
+### Patch Changes
+
+- Changes since 0.47.3:
+
+  - fix(hub): send a failed start's reason only to readers that decode it
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.23.2
+  - @fungi.computer/computer@0.16.0
+  - @fungi.computer/braid@0.6.3
+  - @fungi.computer/darkroom@0.11.10
+  - @fungi.computer/nacre@0.8.5
+  - @fungi.computer/parakeet@0.16.1
+  - @fungi.computer/shiitake@0.21.10
+  - @fungi.computer/workflows-wire@0.7.3
+  - @fungi.computer/shiitake-extensions@0.11.21
+  - @fungi.computer/zookeeper@0.0.52
+
 ## 0.47.3
 
 ### Patch Changes
