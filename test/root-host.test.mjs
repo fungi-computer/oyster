@@ -98,9 +98,24 @@ async function fixture(homeInstallationId, anonymous = false, computerId) {
         claim: () => {
           throw new Error("Invalid claim must not reach storage");
         },
-        events: () =>
-          Promise.resolve(new Response("event: ready\ndata: {}\n\n")),
       }),
+      watchStorage: (ownerId, watches) => {
+        calls.push({ ownerId, watches });
+        return Promise.resolve(
+          new globalThis.ReadableStream({
+            start(controller) {
+              watches.forEach((_, watch) => {
+                controller.enqueue(
+                  new globalThis.TextEncoder().encode(
+                    `event: watch\ndata: ${JSON.stringify({ watch, kind: "ready" })}\n\n`,
+                  ),
+                );
+              });
+              controller.close();
+            },
+          }),
+        );
+      },
     },
   };
   if (computerId !== undefined) host.computerId = computerId;
@@ -279,6 +294,67 @@ test("storage uses admitted owner identity and the canonical key decoder", async
     ).status,
     400,
   );
+});
+
+test("one shared stream carries many admitted storage watches and refuses bad ones", async () => {
+  const { app, calls } = await fixture();
+  const watch = (installationId, key) => JSON.stringify([installationId, key]);
+  const query = (...watches) =>
+    new globalThis.URLSearchParams(
+      watches.map((raw) => ["watch", raw]),
+    ).toString();
+  const url = (text) => `/api/workbench/storage-events?${text}`;
+  assert.equal(
+    (
+      await app.request(url(query(watch("desktop-fork", "desktop"))), {
+        headers: { Authorization: "key" },
+      })
+    ).status,
+    403,
+  );
+  for (const bad of [
+    "",
+    query("not-json"),
+    query(watch("desktop-fork", "Bad Key!")),
+    query(watch("desktop-fork", "desktop"), "not-json"),
+  ])
+    assert.equal(
+      (await app.request(url(bad), { headers: { Authorization: "owner" } }))
+        .status,
+      400,
+    );
+  const response = await app.request(
+    url(
+      query(watch("desktop-fork", "desktop"), watch("other-fork", "desktop")),
+    ),
+    { headers: { Authorization: "owner" } },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Content-Type"), "text/event-stream");
+  const reader = response.body.getReader();
+  const decoder = new globalThis.TextDecoder();
+  let text = "";
+  while ((text.match(/\n\n/g) ?? []).length < 2) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value);
+  }
+  await reader.cancel();
+  const watches = text
+    .split("\n\n")
+    .filter(Boolean)
+    .map((block) => JSON.parse(block.split("data: ")[1]).watch)
+    .sort();
+  assert.deepEqual(watches, [0, 1]);
+  assert.deepEqual(calls, [
+    {
+      ownerId: "admitted-owner",
+      watches: [
+        ["desktop-fork", "desktop"],
+        ["other-fork", "desktop"],
+      ],
+    },
+  ]);
 });
 
 test("storage rejects forged admission fields before calling its owner", async () => {

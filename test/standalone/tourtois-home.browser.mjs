@@ -1133,15 +1133,19 @@ try {
       eventStream.on("Network.requestWillBeSent", (event) => {
         if (
           new URL(event.request.url).pathname ===
-          "/api/workbench/storage/proof/events"
+          "/api/workbench/storage-events"
         )
           markerRequests.add(event.requestId);
       });
       await eventStream.send("Network.enable");
       eventStream.on("Network.eventSourceMessageReceived", (event) => {
         if (!markerRequests.has(event.requestId)) return;
-        if (event.eventName === "ready") markerReady++;
-        if (event.eventName === "changed") markerChanges++;
+        // The page's one shared stream tags each frame with what it says.
+        if (event.eventName !== "watch") return;
+        const frame = JSON.parse(event.data);
+        if (frame.kind === "ready") markerReady++;
+        if (frame.kind === "changed" && frame.event.key === "widget-changed")
+          markerChanges++;
       });
     }
     page.on("pageerror", (error) => errors.push(error.message));

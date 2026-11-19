@@ -173,6 +173,7 @@ import {
   type VerifiedRelease,
 } from "./release.js";
 import { createGitDoor, type GitDoorTarget } from "./git.js";
+import { maxStorageWatches, storageWatchSchema } from "./storage-watch-wire.js";
 import { getCookie } from "hono/cookie";
 import { returningCookieName } from "./auth.js";
 import { buildGitPassPrefix, presentedGitKey } from "./git-auth.js";
@@ -502,11 +503,15 @@ export type OysterHost = Readonly<{
     storage(
       installationId: string,
       ownerId: string,
-    ): Pick<AppStorageWire, "read" | "write" | "reset" | "claim"> &
-      Readonly<{
-        /** Stream changes for an admitted declared storage key. */
-        events(key: string): Promise<Response>;
-      }>;
+    ): Pick<AppStorageWire, "read" | "write" | "reset" | "claim">;
+    /**
+     * Watch many declared storage keys as one stream of server-sent frames,
+     * each key under fresh owner admission; cancelling it releases them all.
+     */
+    watchStorage(
+      ownerId: string,
+      watches: readonly (readonly [string, string])[],
+    ): Promise<ReadableStream<Uint8Array>>;
   }>;
   /** Root-selected home installation; the core never imports a specific home App. */
   homeInstallationId?: string;
@@ -1300,6 +1305,43 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       });
     },
   );
+  // One shared stream for every storage key a page watches, so a page with
+  // many open Apps stays under an HTTP/1.1 host's six-connection limit.
+  table.get(
+    "/api/workbench/storage-events",
+    owner("direct-or-app"),
+    async (context, { principal }) => {
+      const workbench = host.workbench;
+      if (workbench === undefined) return refusal(404, "Not found");
+      const decoded = (context.req.queries("watch") ?? []).map((raw) =>
+        Schema.decodeUnknownOption(Schema.fromJsonString(storageWatchSchema))(
+          raw,
+        ),
+      );
+      const watches = decoded.flatMap((watch) =>
+        watch._tag === "Some" &&
+        Schema.decodeUnknownOption(appStorageKeyNameSchema)(watch.value[1])
+          ._tag === "Some"
+          ? [watch.value]
+          : [],
+      );
+      if (
+        watches.length === 0 ||
+        watches.length !== decoded.length ||
+        watches.length > maxStorageWatches
+      )
+        return refusal(400, "Invalid storage watches");
+      return new Response(
+        await workbench.watchStorage(oysterPrincipalId(principal), watches),
+        {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-store",
+          },
+        },
+      );
+    },
+  );
   table.all(
     "/api/workbench/storage/:installationId/:operation",
     owner("direct-or-app"),
@@ -1311,17 +1353,12 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         oysterPrincipalId(principal),
       );
       const operation = context.req.param("operation");
-      if (
-        (operation === "read" || operation === "events") &&
-        context.req.method === "GET"
-      ) {
+      if (operation === "read" && context.req.method === "GET") {
         const key = Schema.decodeUnknownOption(appStorageKeyNameSchema)(
           context.req.query("key"),
         );
         if (key._tag === "None") return refusal(400, "Invalid storage key");
-        return operation === "read"
-          ? Response.json(await view.read(key.value))
-          : view.events(key.value);
+        return Response.json(await view.read(key.value));
       }
       if (operation === "claim" && context.req.method === "POST") {
         const input = Schema.decodeUnknownOption(appStorageClaimSchema, {

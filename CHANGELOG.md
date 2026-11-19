@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.47.3
+
+### Patch Changes
+
+- Changes since 0.47.2:
+
+  - fix(oyster): watch storage keys through one owner stream
+  - fix(oyster): share one storage event stream per page
+
 ## 0.47.2
 
 ### Patch Changes

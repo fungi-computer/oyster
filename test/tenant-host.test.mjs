@@ -444,7 +444,7 @@ test("workbench directory and every storage operation use the host-selected regi
           storageRead: (...args) => record("read", ...args),
           storageWrite: (...args) => record("write", ...args),
           storageReset: (...args) => record("reset", ...args),
-          storageEvents: (...args) => record("events", ...args),
+          storageWatch: (...args) => record("watch", ...args),
         };
       },
     },
@@ -463,13 +463,17 @@ test("workbench directory and every storage operation use the host-selected regi
     await storage.read("desktop");
     await storage.write(write);
     await storage.reset(reset);
-    await storage.events("desktop");
+    await host.workbench.watchStorage("owner", [["notes", "desktop"]]);
     assert.deepEqual(calls.splice(0), [
       { name, operation: "directory", args: [] },
       { name, operation: "read", args: ["notes", "owner", "desktop"] },
       { name, operation: "write", args: ["notes", "owner", write] },
       { name, operation: "reset", args: ["notes", "owner", reset] },
-      { name, operation: "events", args: ["notes", "owner", "desktop"] },
+      {
+        name,
+        operation: "watch",
+        args: ["owner", [["notes", "desktop"]]],
+      },
     ]);
   }
 });

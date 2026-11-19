@@ -15,6 +15,7 @@ import {
   type AppStorageReset,
   type AppStorageClaim,
 } from "@fungi.computer/agar/storage";
+import { storageEvents } from "./storage-events.js";
 
 const NativeTarget: new () => object = RpcTarget;
 function path(installationId: string, operation: string) {
@@ -33,15 +34,75 @@ async function reply(response: Response) {
 }
 class StorageEvents extends NativeTarget implements AppStorageEventHandle {
   readonly #abort = new AbortController();
-  constructor(private readonly url: string) {
+  constructor(
+    private readonly installationId: string,
+    private readonly key: string,
+  ) {
     super();
   }
+  /**
+   * The App's own event stream, carried by the page's one shared stream. A
+   * refused watch answers like a refused read, with the owner's code.
+   */
   fetch(request: Request): Promise<Response> {
-    return fetch(this.url, {
-      credentials: "same-origin",
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.any([request.signal, this.#abort.signal]),
+    const signal = AbortSignal.any([request.signal, this.#abort.signal]);
+    const encoder = new TextEncoder();
+    return new Promise((answer) => {
+      let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let answered = false;
+      let stop: () => void = () => undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start: (opened) => {
+          controller = opened;
+        },
+        cancel: () => {
+          stop();
+        },
+      });
+      const reply = (response: Response) => {
+        answered = true;
+        answer(response);
+      };
+      stop = storageEvents.subscribe(
+        this.installationId,
+        this.key,
+        (message) => {
+          if (message.kind === "rejected") {
+            stop();
+            if (answered) controller?.error(new Error(message.code));
+            else
+              reply(
+                Response.json(
+                  { kind: "rejected", code: message.code },
+                  { status: 403 },
+                ),
+              );
+            return;
+          }
+          controller?.enqueue(
+            encoder.encode(
+              message.kind === "ready"
+                ? "event: ready\ndata: {}\n\n"
+                : `event: changed\ndata: ${JSON.stringify(message.event)}\n\n`,
+            ),
+          );
+          if (!answered)
+            reply(
+              new Response(body, {
+                headers: { "Content-Type": "text/event-stream" },
+              }),
+            );
+        },
+      );
+      signal.addEventListener(
+        "abort",
+        () => {
+          stop();
+          if (answered) controller?.close();
+          else reply(new Response(null, { status: 499 }));
+        },
+        { once: true },
+      );
     });
   }
   close(): Promise<void> {
@@ -108,11 +169,7 @@ class Storage extends NativeTarget implements AppStorageWire {
   }
   openEvents(raw: string): Promise<AppStorageEventHandle> {
     const key = Schema.decodeUnknownSync(appStorageKeyNameSchema)(raw);
-    return Promise.resolve(
-      new StorageEvents(
-        `${path(this.installationId, "events")}?${new URLSearchParams({ key })}`,
-      ),
-    );
+    return Promise.resolve(new StorageEvents(this.installationId, key));
   }
 }
 /** The existing Agar storage wire, scoped to an admitted installation and owner. */

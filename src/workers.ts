@@ -53,6 +53,8 @@ import { installationWorkerEntrypoint } from "./installation-execution.js";
 export { installationWorkerEntrypoint };
 import { approvedBindingGrants, scopedBindings } from "./apps/gate.js";
 import { appMethodReplySchema } from "@fungi.computer/agar/backend";
+import type { StorageWatch } from "./storage-watch-wire.js";
+import { storageWatchStream } from "./storage-watch-stream.js";
 import {
   nativeGitFrameMethods,
   nativeGitMethodNameSchema,
@@ -106,7 +108,6 @@ import { fileCapabilities, type FileSource } from "./files.js";
 import { DurableObject, type WorkerEntrypoint } from "cloudflare:workers";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import {
   parseReleaseId,
   parseSha256Digest,
@@ -597,39 +598,20 @@ export class OysterRegistry<
         return Promise.resolve({ kind: "rejected", code: "invalid" });
     }
   }
-  /** Open the existing App-storage invalidation stream under fresh owner admission. */
-  async storageEvents(
-    installationId: string,
+  /** Watch many storage keys as one stream, each under fresh owner admission. */
+  storageWatch(
     ownerId: string,
-    key: string,
-  ): Promise<Response> {
-    const view = this.storageView(installationId, () =>
-      Promise.resolve(ownerId),
-    );
-    const admitted = await this.storageResult(view.read(key));
-    if (admitted.kind === "rejected")
-      return Response.json(admitted, { status: 403 });
-    return new Response(
-      Stream.toReadableStream(
-        view
-          .events(key)
-          .pipe(
-            Stream.map((event) =>
-              new TextEncoder().encode(
-                event === null
-                  ? "event: ready\ndata: {}\n\n"
-                  : `event: changed\ndata: ${JSON.stringify(event)}\n\n`,
-              ),
-            ),
-          ),
-      ),
-      {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-store",
-        },
-      },
-    );
+    watches: readonly StorageWatch[],
+  ): ReadableStream<Uint8Array> {
+    return storageWatchStream(watches, async ([installationId, key]) => {
+      const view = this.storageView(installationId, () =>
+        Promise.resolve(ownerId),
+      );
+      const admitted = await this.storageResult(view.read(key));
+      return admitted.kind === "rejected"
+        ? admitted
+        : { kind: "accepted", value: view.events(key) };
+    });
   }
   private storageResult<A>(
     program: Effect.Effect<A, AppStorageError>,
@@ -2431,8 +2413,9 @@ export function oysterWorkerHost(
           registry().storageReset(installationId, ownerId, input),
         claim: (input) =>
           registry().storageClaim(installationId, ownerId, input),
-        events: (key) => registry().storageEvents(installationId, ownerId, key),
       }),
+      watchStorage: (ownerId, watches) =>
+        registry().storageWatch(ownerId, watches),
     },
     guestLimits: guestLimits(options.guestLimits),
     artifacts,

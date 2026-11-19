@@ -1,4 +1,6 @@
 import { observeDesktopGill } from "./gill-observation.js";
+import { watchStorageKey } from "./storage-events.js";
+import { showStorageRefusal } from "./storage-notice.js";
 import { OysterAgentBrowserHost } from "./agent-browser.js";
 import { createShellAppAccess } from "./app-access.js";
 import { createWindowLaunchTracker } from "./window-launch.js";
@@ -283,10 +285,9 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
         onChanged,
         () =>
           gill.watch !== undefined && "storage" in gill.watch
-            ? new EventSource(
-                `/api/workbench/storage/${encodeURIComponent(installationId)}/events?${new URLSearchParams({ key: gill.watch.storage })}`,
-                { withCredentials: true },
-              )
+            ? watchStorageKey(installationId, gill.watch.storage, (code) => {
+                showStorageRefusal(installationId, code);
+              })
             : null,
         window,
       );

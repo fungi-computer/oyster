@@ -773,6 +773,7 @@ test("every host /api route's owner reach is classified", async () => {
     "GET /api/vault/credentials/:connectionId/usage direct",
     "GET /api/vault/model-keys/:keyId/usage direct",
     "GET /api/workbench/directory direct-or-app",
+    "GET /api/workbench/storage-events direct-or-app",
     "ALL /api/workbench/storage/:installationId/:operation direct-or-app",
     "GET /api/installations direct-or-app",
     "PUT /api/artifacts/:artifactRef direct-or-app",

@@ -528,9 +528,8 @@ type OysterHost = Readonly<{
         }>;
         installing?: readonly InstallingApp[];
      }>>;
-     storage: Pick<AppStorageWire, "read" | "write" | "reset" | "claim"> & Readonly<{
-        events: Promise<Response>;
-     }>;
+     storage: Pick<AppStorageWire, "read" | "write" | "reset" | "claim">;
+     watchStorage: Promise<ReadableStream<Uint8Array<ArrayBufferLike>>>;
   }>;
   homeInstallationId?: string;
   pageScript?: string;

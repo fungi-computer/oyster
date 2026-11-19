@@ -452,7 +452,7 @@ try {
   });
   const watchAbort = new AbortController();
   const watch = await fetch(
-    `${origin}/api/workbench/storage/notes/events?key=desktop`,
+    `${origin}/api/workbench/storage-events?${new globalThis.URLSearchParams({ watch: JSON.stringify(["notes", "desktop"]) })}`,
     {
       headers: auth,
       signal: AbortSignal.any([watchAbort.signal, AbortSignal.timeout(10000)]),
@@ -462,7 +462,7 @@ try {
   const notices = watch.body.getReader();
   assert.match(
     new TextDecoder().decode((await notices.read()).value),
-    /event: ready/,
+    /"kind":"ready"/,
   );
   const written = await call("write", {
     basedOn: null,
@@ -471,7 +471,7 @@ try {
   assert.equal(written.kind, "accepted");
   assert.match(
     new TextDecoder().decode((await notices.read()).value),
-    /event: changed/,
+    /"kind":"changed"/,
   );
   watchAbort.abort();
   await notices.cancel().catch((cause) => {
