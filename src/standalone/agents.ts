@@ -3419,7 +3419,6 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     const archived = this.archiveProjection().archivedIds();
     return this.directory
       .list(this.grant())
-      .toReversed()
       .filter(({ agentId }) =>
         options?.archived === true
           ? archived.has(agentId)

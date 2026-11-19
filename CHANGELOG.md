@@ -1,5 +1,23 @@
 # @fungi.computer/oyster
 
+## 0.46.3
+
+### Patch Changes
+
+- Changes since 0.46.2:
+
+  - fix(oyster): mask a held private key through its end line after the ceiling
+  - fix(oyster): hold an unfinished private key or curl command in the build log
+  - fix(agents): list agents oldest first on oyster and the hub
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/shiitake@0.21.6
+  - @fungi.computer/veil@0.10.2
+  - @fungi.computer/parakeet@0.14.7
+  - @fungi.computer/shiitake-extensions@0.11.16
+  - @fungi.computer/zookeeper@0.0.48
+
 ## 0.46.2
 
 ### Patch Changes

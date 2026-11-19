@@ -4,6 +4,7 @@ import { boundedDiagnostic } from "@fungi.computer/bird-dog/effect";
 import {
   loadPatternRedactor,
   maskSpans,
+  type MatchFollower,
   type PatternMatch,
   type PatternRedactor,
 } from "@fungi.computer/veil/redaction";
@@ -168,6 +169,7 @@ export async function createBuildJobLog(
   const { redactor } = await loadRedactorOrWithhold(loadRedactor);
   let pending = "";
   let scannedLength = 0;
+  let masking: MatchFollower | undefined;
   const scan = (final: boolean) => {
     if (redactor === undefined) {
       pending = "";
@@ -175,7 +177,24 @@ export async function createBuildJobLog(
       if (final) ring.append(textToBytes(redactionWithheld));
       return;
     }
-    const matches = redactor.find(pending);
+    // A private key without its end line, or a curl command with lines still
+    // to come, is never released raw: it is held from its opener, and masked
+    // whole if the output ends first, or through its end if the held text
+    // reaches the ceiling first.
+    const open = redactor.openFrom(pending);
+    const ceiling = pending.length > maxPendingText;
+    // Still held from the start: nothing can leave, so skip the full scan.
+    if (!final && !ceiling && open?.opener.start === 0) {
+      scannedLength = pending.length;
+      return;
+    }
+    const whole =
+      open !== undefined &&
+      (final || (ceiling && open.opener.start < pending.length - scanWindow));
+    // A block masked whole needs a full scan only of the text before it.
+    const matches = redactor.find(
+      whole ? pending.slice(0, open.opener.start) : pending,
+    );
     if (matches === undefined) {
       // Over Veil's size ceiling: withhold this text, never pass it raw.
       ring.append(textToBytes(redactionWithheld));
@@ -183,15 +202,31 @@ export async function createBuildJobLog(
       scannedLength = 0;
       return;
     }
-    if (final) {
-      ring.append(textToBytes(maskSpans(pending, secretsOf(matches))));
+    const masks = secretsOf(matches);
+    if (whole) {
+      ring.append(
+        textToBytes(
+          maskSpans(pending, [
+            ...masks,
+            { start: open.opener.start, end: pending.length },
+          ]),
+        ),
+      );
+      // The rest of the block, through its end, is masked as it arrives.
+      if (!final) masking = open.follow();
       pending = "";
       scannedLength = 0;
       return;
     }
-    if (pending.length > maxPendingText) {
+    if (final) {
+      ring.append(textToBytes(maskSpans(pending, masks)));
+      pending = "";
+      scannedLength = 0;
+      return;
+    }
+    if (ceiling) {
       // Ceiling: emit all but the last window, masked on both sides of the cut.
-      const text = maskSpans(pending, secretsOf(matches));
+      const text = maskSpans(pending, masks);
       ring.append(textToBytes(text.slice(0, text.length - scanWindow)));
       pending = text.slice(text.length - scanWindow);
       scannedLength = pending.length;
@@ -200,7 +235,10 @@ export async function createBuildJobLog(
     // A match reaching into the last window could still grow with later
     // output, so it stays pending raw, with its whole match as rescan context.
     // Walking by descending start also holds any match that overlaps one held.
-    let cut = pending.length - scanWindow;
+    let cut = Math.min(
+      pending.length - scanWindow,
+      open?.opener.start ?? Infinity,
+    );
     for (const { match } of [...matches].sort(
       (left, right) => right.match.start - left.match.start,
     ))
@@ -210,7 +248,7 @@ export async function createBuildJobLog(
         textToBytes(
           maskSpans(
             pending.slice(0, cut),
-            secretsOf(matches).filter(({ end }) => end <= cut),
+            masks.filter(({ end }) => end <= cut),
           ),
         ),
       );
@@ -224,9 +262,24 @@ export async function createBuildJobLog(
       return ring.allocatedBytes;
     },
     append(bytes: Uint8Array) {
-      pending += bytesToText(bytes);
+      let text = bytesToText(bytes);
+      if (masking !== undefined) {
+        const end = masking.read(text);
+        if (end === undefined) return;
+        masking = undefined;
+        text = text.slice(end);
+      }
+      pending += text;
+      // Held text doubles before its next rescan, so holding stays linear.
       if (
-        pending.length >= Math.max(2 * scanWindow, scannedLength + scanWindow)
+        pending.length >=
+        Math.min(
+          maxPendingText + 1,
+          Math.max(
+            2 * scanWindow,
+            scannedLength + Math.max(scanWindow, scannedLength),
+          ),
+        )
       )
         scan(false);
     },
