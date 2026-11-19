@@ -3080,6 +3080,7 @@ type OysterInvocationHost = BackgroundFrameState &
       count: number;
       ms: number;
     };
+    failure: FrameFailureSlot;
     artifact: Backend;
     declaration: AppDeclaration | null;
     method?: Readonly<{
@@ -3497,3 +3498,15 @@ Re-exports [r2ArtifactStore](cloudflare.md#r2artifactstore)
 ### ownerKeyAuth
 
 Re-exports [ownerKeyAuth](auth.md#ownerkeyauth)
+
+---
+
+### FrameFailure
+
+Re-exports [FrameFailure](cloudflare.md#framefailure)
+
+---
+
+### FrameFailureSlot
+
+Re-exports [FrameFailureSlot](cloudflare.md#framefailureslot)

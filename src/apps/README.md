@@ -1,8 +1,10 @@
 # App installation contract
 
-The standalone host uses these pure contracts through `oyster/apps`. Hosts
+`oyster/apps` is the one owner of App permission decisions: a standalone Oyster
+and Hub both ask its `admits` and its install and change-grants reducers. Hosts
 retain their installation stores, transactions, receipts, revocation and live
-resource checks. The Hub's record and gate switches remain separate slices.
+resource checks: Hub in TeamDO's App owner, a standalone Oyster in
+`installations.compareAndPut`. Neither host keeps a second permission policy.
 
 An installation pins its immutable Release and artifact digest, and records the
 `declaredOperationsDigest` of the last write. `deriveDeclaredOperations` takes

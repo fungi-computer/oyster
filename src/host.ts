@@ -141,6 +141,7 @@ import {
 } from "./apps/operations.js";
 import {
   appMethodRefusalStatus,
+  type AppFailureReason,
   type AppMethodReply,
 } from "@fungi.computer/agar/backend";
 import type { AppCapabilityId, HostActor } from "@fungi.computer/puffball/app";
@@ -277,6 +278,10 @@ export type InstanceResult<T> =
         | "AbortError"
         | "TimeoutError"
         | "Other";
+      /** Why a `failed` execution failed, when the execution owner recorded it. */
+      reason?: AppFailureReason;
+      /** Names the owner's log line for that failure; shown to the person who reports it. */
+      ref?: string;
     }>;
 
 /** One running App Instance, wherever the host runs it. */
@@ -588,11 +593,27 @@ function noStoreRefusal(status: number, error: string): Response {
   );
 }
 
-function instanceRefusal(
-  code: AppInstanceErrorCode | "failed",
-  causeClass?: Extract<InstanceResult<never>, { ok: false }>["causeClass"],
-): Response {
+/** The refused arm of an Instance result, whichever operation settled it. */
+type InstanceFailure = Omit<
+  Extract<InstanceResult<never>, { ok: false }>,
+  "ok"
+>;
+
+function instanceRefusal({
+  code,
+  causeClass,
+  reason,
+  ref,
+}: InstanceFailure): Response {
   if (code === "failed") {
+    // The owner recorded why: say it in the closed body Apps' pages decode.
+    if (reason !== undefined)
+      return Response.json(
+        ref === undefined
+          ? { error: "App execution unavailable", reason }
+          : { error: "App execution unavailable", reason, ref },
+        { status: 502 },
+      );
     if (causeClass === undefined)
       console.error("AppInstance failure", {
         stage: "instance_execution",
@@ -1427,7 +1448,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         { ...selectionOf(installation), status: installation.status },
         installation.release,
       );
-    return result.ok ? null : instanceRefusal(result.code, result.causeClass);
+    return result.ok ? null : instanceRefusal(result);
   };
   const apply = async (
     installation: Installation,
@@ -1440,7 +1461,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         { ...selectionOf(installation), status: installation.status },
         installation.release,
       );
-    return result.ok ? null : instanceRefusal(result.code, result.causeClass);
+    return result.ok ? null : instanceRefusal(result);
   };
 
   table.post(
@@ -1682,7 +1703,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         copyOwned.authority,
         form.requestId,
       );
-      if (!opened.ok) return instanceRefusal(opened.code, opened.causeClass);
+      if (!opened.ok) return instanceRefusal(opened);
       return new Response(null, {
         status: 303,
         headers: {
@@ -1712,8 +1733,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         copyOwned.authority,
         form.copyId,
       );
-      if (!discarded.ok)
-        return instanceRefusal(discarded.code, discarded.causeClass);
+      if (!discarded.ok) return instanceRefusal(discarded);
       return new Response(null, {
         status: 303,
         headers: { Location: "/recovery", "Cache-Control": "no-store" },
@@ -1728,8 +1748,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       const copyOwned = await copyOwner(context, principal);
       if (copyOwned instanceof Response) return copyOwned;
       const observed = await copyOwned.copies.inspect(copyOwned.authority);
-      if (!observed.ok)
-        return instanceRefusal(observed.code, observed.causeClass);
+      if (!observed.ok) return instanceRefusal(observed);
       if (observed.value?.copyId !== context.req.param("copyId"))
         return noStoreRefusal(404, "Test copy expired or discarded");
       return appTestCopyPage(
@@ -1804,9 +1823,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         input,
         invocationCallerContext(copyOwned.principal, null, host.tenantId),
       );
-      return result.ok
-        ? methodResponse(result.value)
-        : instanceRefusal(result.code, result.causeClass);
+      return result.ok ? methodResponse(result.value) : instanceRefusal(result);
     },
   );
 
@@ -2382,7 +2399,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       )
         return refusal(404, "Gill is not declared");
       if (installation.instanceId === null)
-        return instanceRefusal("invalid_invocation_facts");
+        return instanceRefusal({ code: "invalid_invocation_facts" });
       const params = request.params ?? {};
       const declared = gill.params ?? [];
       if (
@@ -2485,14 +2502,17 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       const result = await host.instances
         .get(facts.instanceId, limits)
         .gill(facts, release.api, source, { id: viewId, ...selectors });
-      if (!result.ok) return instanceRefusal(result.code, result.causeClass);
+      if (!result.ok) return instanceRefusal(result);
       try {
         const reply = decodeGillReply(result.value);
         return Response.json(
           "viewId" in reply ? decodeDeclaredGillResponse(reply, gill) : reply,
         );
       } catch (error) {
-        return instanceRefusal("failed", causeClass(error));
+        return instanceRefusal({
+          code: "failed",
+          causeClass: causeClass(error),
+        });
       }
     },
   );
@@ -2557,7 +2577,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         name,
         input,
       );
-    if (!result.ok) return instanceRefusal(result.code, result.causeClass);
+    if (!result.ok) return instanceRefusal(result);
     return methodResponse(result.value);
   };
 

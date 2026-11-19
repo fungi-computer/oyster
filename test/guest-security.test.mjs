@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { createOyster } from "../dist/host.js";
 import { instanceIds } from "../dist/index.js";
 import { failureDiagnostic } from "../dist/cause-class.js";
+import { describeAppError, readAppFailure } from "@fungi.computer/agar/errors";
 import { computerHost } from "./computer-host.fixture.mjs";
 import { registerHooks } from "node:module";
 import { URL } from "node:url";
@@ -550,6 +551,45 @@ test("host method refusals forward only the available closed cause class", async
     if (causeClass !== undefined) diagnostic.causeClass = causeClass;
     assert.deepEqual(logs.at(-1), ["AppInstance failure", diagnostic]);
   }
+});
+
+test("a failure the owner explained answers the closed refusal body the page words", async () => {
+  const host = await computerHost(
+    { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+    null,
+  );
+  const app = createOyster({
+    ...host,
+    instances: {
+      get: () => ({
+        call: async () => ({
+          ok: false,
+          code: "failed",
+          causeClass: "ZodError",
+          reason: "binding_reply_invalid",
+          ref: "frame_fixture",
+        }),
+      }),
+    },
+  });
+  const response = await app.request("/apps/context-probe/methods/context", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 502);
+  const failure = await readAppFailure(response.clone());
+  assert.equal(failure.reason, "binding_reply_invalid");
+  assert.equal(failure.ref, "frame_fixture");
+  assert.deepEqual(await response.json(), {
+    error: "App execution unavailable",
+    reason: "binding_reply_invalid",
+    ref: "frame_fixture",
+  });
+  assert.match(
+    describeAppError(failure).message,
+    /answer we couldn.t read.*ref frame_fixture/,
+  );
 });
 
 test("a reused UI verdict never skips backend construction on prepare or apply", async (t) => {

@@ -161,6 +161,39 @@ Method descriptors for the closed App binding vocabulary.
 
 ---
 
+### FrameBindingEntrypointMethod
+
+```ts
+type FrameBindingEntrypointMethod = Omit<
+  FrameBindingMethod<unknown>,
+  "decodeResult"
+>;
+```
+
+What the binding entrypoint needs of a method: its argument grammar and
+operation policy. It never decodes a reply; the frame owner does, with the full
+[FrameBindingMethod](#framebindingmethod).
+
+---
+
+### FrameBindingEntrypointMethods
+
+```ts
+type FrameBindingEntrypointMethods = Readonly<
+  Partial<
+    Record<
+      AppBackendBindingName,
+      Readonly<Record<string, FrameBindingEntrypointMethod>>
+    >
+  >
+>;
+```
+
+The entrypoint's view of [FrameBindingMethods](#framebindingmethods): no reply
+decoders.
+
+---
+
 ### AppFacetStub
 
 ```ts
@@ -300,6 +333,44 @@ wrap.
 | Type Parameter |
 | -------------- |
 | `Methods`      |
+
+---
+
+### FrameFailure
+
+```ts
+type FrameFailure = Readonly<{
+  reason: Extract<AppFailureReason, "binding_reply_invalid">;
+  binding: string;
+  method: string;
+  path: string;
+}>;
+```
+
+Why one invocation failed on the host's side, written by the frame owner and
+read by the same invocation when its guest call rejects. Only host-known names
+and a field path: a failure that crossed the guest facet is never trusted for
+text.
+
+---
+
+### FrameFailureSlot
+
+```ts
+type FrameFailureSlot = Readonly<{
+  record: void;
+  read:
+    | Readonly<{
+        reason: Extract<AppFailureReason, "binding_reply_invalid">;
+        binding: string;
+        method: string;
+        path: string;
+      }>
+    | undefined;
+}>;
+```
+
+One slot per invocation; the first host failure wins.
 
 ---
 
@@ -627,10 +698,10 @@ One native binding factory for both Hub and standalone, preserving RPC values.
 
 #### Parameters
 
-| Parameter  | Type                                                                                                      |
-| ---------- | --------------------------------------------------------------------------------------------------------- |
-| `methods`  | [`FrameBindingMethods`](#framebindingmethods)\<`Result`\>                                                 |
-| `dispatch` | (`env`, `props`, `method`, `args`) => `Promise`\<[`FrameBindingReply`](#framebindingreply)\<`unknown`\>\> |
+| Parameter  | Type                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------- |
+| `methods`  | [`FrameBindingEntrypointMethods`](#framebindingentrypointmethods)                                        |
+| `dispatch` | (`env`, `props`, `method`, `args`) => `Promise`\<[`FrameBindingReply`](#framebindingreply)\<`Result`\>\> |
 
 #### Returns
 
@@ -755,6 +826,82 @@ Guest code gets only host gatekeeper bindings and no ambient outbound access.
 #### Returns
 
 [`AppInstance`](index.md#appinstance)\<`Host`\>
+
+---
+
+### createFrameFailureSlot()
+
+```ts
+function createFrameFailureSlot(): FrameFailureSlot;
+```
+
+A fresh, empty failure slot for one invocation.
+
+#### Returns
+
+[`FrameFailureSlot`](#framefailureslot)
+
+---
+
+### rejectedFieldPath()
+
+```ts
+function rejectedFieldPath(cause): string;
+```
+
+The field a reply decoder rejected: the deepest path among its (nested union)
+issues.
+
+#### Parameters
+
+| Parameter | Type    |
+| --------- | ------- |
+| `cause`   | `Error` |
+
+#### Returns
+
+`string`
+
+---
+
+### decodeBindingReply()
+
+```ts
+function decodeBindingReply<Result>(
+  descriptor,
+  call,
+  reply,
+  failure,
+  logged,
+): Result;
+```
+
+Decode one connection reply with its method's descriptor: the only place a reply
+is decoded, where it first arrives and the frame that asked is in hand. A reply
+the descriptor rejects is our bug, not the App's: it is recorded on the frame
+(and named in the log, never its values) before the exception reaches the guest,
+which cannot be trusted to say why. `logged` names the frame and invocation in
+that log line.
+
+#### Type Parameters
+
+| Type Parameter |
+| -------------- |
+| `Result`       |
+
+#### Parameters
+
+| Parameter    | Type                                                                                |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `descriptor` | `Pick`\<[`FrameBindingMethod`](#framebindingmethod)\<`Result`\>, `"decodeResult"`\> |
+| `call`       | `Readonly`\<\{ `binding`: `string`; `method`: `string`; \}\>                        |
+| `reply`      | `unknown`                                                                           |
+| `failure`    | [`FrameFailureSlot`](#framefailureslot)                                             |
+| `logged`     | `Readonly`\<`Record`\<`string`, `string` \| `null`\>\>                              |
+
+#### Returns
+
+`Result`
 
 ## References
 

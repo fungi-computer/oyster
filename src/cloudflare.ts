@@ -311,6 +311,7 @@ export type FrameBindingProps = Readonly<{
 export type FrameBindingMethod<Result> = Readonly<{
   /** Decode the guest's positional arguments with the maintained method grammar. */
   decodeArgs: (raw: readonly unknown[]) => readonly unknown[];
+  /** Decode the host's reply; the frame owner calls it once, where the reply first arrives. */
   decodeResult: z.ZodType<Result>["parse"];
   /** Determine the declared operations needed for these decoded arguments. */
   requiredOperations: (args: readonly unknown[]) => readonly string[];
@@ -318,12 +319,40 @@ export type FrameBindingMethod<Result> = Readonly<{
   requestedResource?: (args: readonly unknown[]) => ResourceRef;
 }>;
 
+export {
+  createFrameFailureSlot,
+  decodeBindingReply,
+  rejectedFieldPath,
+  type FrameFailure,
+  type FrameFailureSlot,
+} from "./frame-failure.js";
+
 /** Method descriptors for the closed App binding vocabulary. */
 export type FrameBindingMethods<Result> = Readonly<
   Partial<
     Record<
       AppBackendBindingName,
       Readonly<Record<string, FrameBindingMethod<Result>>>
+    >
+  >
+>;
+
+/**
+ * What the binding entrypoint needs of a method: its argument grammar and
+ * operation policy. It never decodes a reply; the frame owner does, with the
+ * full {@link FrameBindingMethod}.
+ */
+export type FrameBindingEntrypointMethod = Omit<
+  FrameBindingMethod<unknown>,
+  "decodeResult"
+>;
+
+/** The entrypoint's view of {@link FrameBindingMethods}: no reply decoders. */
+export type FrameBindingEntrypointMethods = Readonly<
+  Partial<
+    Record<
+      AppBackendBindingName,
+      Readonly<Record<string, FrameBindingEntrypointMethod>>
     >
   >
 >;
@@ -369,13 +398,13 @@ export function decodeFrameBindingProps(raw: unknown): FrameBindingProps {
 
 /** One native binding factory for both Hub and standalone, preserving RPC values. */
 export function frameBindingEntrypoint<Env, Result>(
-  methods: FrameBindingMethods<Result>,
+  methods: FrameBindingEntrypointMethods,
   dispatch: (
     env: Env,
     props: FrameBindingProps,
     method: string,
     args: readonly unknown[],
-  ) => Promise<FrameBindingReply<unknown>>,
+  ) => Promise<FrameBindingReply<Result>>,
 ): typeof WorkerEntrypoint<Env, FrameBindingProps> {
   return class FrameBinding extends WorkerEntrypoint<Env, FrameBindingProps> {
     static {
@@ -415,10 +444,10 @@ export function frameBindingEntrypoint<Env, Result>(
             if (decoded.kind === "local_refusal") return decoded;
             if (descriptor === undefined)
               throw new AppInstanceError("invalid_invocation_facts");
-            return {
-              kind: "result",
-              value: descriptor.decodeResult(decoded.value),
-            };
+            // The frame owner already decoded this reply with the method's
+            // `decodeResult`; decoding it again here would hide a bad reply from
+            // the frame it belongs to.
+            return reply;
           },
         });
       }

@@ -135,6 +135,10 @@ const secretsOf = (matches: readonly PatternMatch[]) =>
 /** What a host writes where it cannot redact: the ADR's form, never raw output. */
 export const redactionWithheld = "[output withheld: redaction unavailable]";
 
+/** The log's last line when a private key opens and the output ends before it closes. */
+export const keyWithheld = "[output withheld until the key ends]";
+const privateKeyRule = "private-key";
+
 /**
  * The redactor, or undefined when its rules cannot load: callers then write
  * {@link redactionWithheld} and never the unredacted text.
@@ -170,6 +174,10 @@ export async function createBuildJobLog(
   let pending = "";
   let scannedLength = 0;
   let masking: MatchFollower | undefined;
+  let maskingKey = false;
+  const appendKeyNote = () => {
+    ring.append(textToBytes(`\n${keyWithheld}\n`));
+  };
   const scan = (final: boolean) => {
     if (redactor === undefined) {
       pending = "";
@@ -213,7 +221,10 @@ export async function createBuildJobLog(
         ),
       );
       // The rest of the block, through its end, is masked as it arrives.
-      if (!final) masking = open.follow();
+      if (!final) {
+        masking = open.follow();
+        maskingKey = open.ruleId === privateKeyRule;
+      } else if (open.ruleId === privateKeyRule) appendKeyNote();
       pending = "";
       scannedLength = 0;
       return;
@@ -267,6 +278,7 @@ export async function createBuildJobLog(
         const end = masking.read(text);
         if (end === undefined) return;
         masking = undefined;
+        maskingKey = false;
         text = text.slice(end);
       }
       pending += text;
@@ -285,6 +297,8 @@ export async function createBuildJobLog(
     },
     finish(): BuildJobLog {
       scan(true);
+      // A key masked past the ceiling that never closed ends the log with the note.
+      if (masking !== undefined && maskingKey) appendKeyNote();
       return ring.finish();
     },
   };

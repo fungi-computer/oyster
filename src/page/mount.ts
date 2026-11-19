@@ -25,6 +25,7 @@ export type { OysterAppConfig } from "../page-config.js";
 import * as Schema from "effect/Schema";
 import {
   AppError,
+  readAppFailure,
   createCapabilityRegistry,
   type AppPermissions,
   type AppSetup,
@@ -122,11 +123,7 @@ async function answer(response: Response): Promise<WhistleJsonValue> {
       code: "CAPABILITY_DENIED",
       retryable: false,
     });
-  if (!response.ok)
-    throw new AppError("App backend request failed", {
-      code: "HOST_FAILURE",
-      retryable: response.status >= 500,
-    });
+  if (!response.ok) throw await readAppFailure(response);
   return parseJsonValue(await response.json());
 }
 

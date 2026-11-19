@@ -256,6 +256,8 @@ type InstanceResult<T> =
         | "AbortError"
         | "TimeoutError"
         | "Other";
+      reason?: AppFailureReason;
+      ref?: string;
     }>;
 ```
 

@@ -830,6 +830,20 @@ async function proveAppWindows(page, width, shot) {
       target.x > second.x + second.width || target.y > second.y + second.height,
     );
     assert.equal(await windowAt(page, target.x, target.y), "Proof App");
+    // A guest claiming focus with no click must not raise its own window.
+    const proofFrame = await (
+      await paneOf(page, "Proof App")
+        .locator(".tourtois-pane-body iframe")
+        .elementHandle()
+    ).contentFrame();
+    await proofFrame.evaluate(() =>
+      globalThis.dispatchEvent(new globalThis.FocusEvent("focus")),
+    );
+    await page.waitForTimeout(600);
+    await expect(paneOf(page, "Proof App")).toHaveAttribute(
+      "data-active",
+      "false",
+    );
     await page.mouse.click(target.x, target.y);
     await expect(paneOf(page, "Proof App")).toHaveAttribute(
       "data-active",

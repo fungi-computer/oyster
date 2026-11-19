@@ -1,5 +1,40 @@
 # @fungi.computer/oyster
 
+## 0.47.5
+
+### Patch Changes
+
+- Changes since 0.47.4:
+
+  - fix(oyster): note an unclosed private key at the end of the build log
+  - fix(agar,hub,oyster): keep one pending focus check per mount and require
+    page focus
+  - fix(hub): keep released computer refusal shapes on the wire
+  - fix(oyster): name a standalone App's unreadable connection reply as the
+    failure cause
+  - fix(agar,hub,oyster): do not hold an App's focus call and wire its browser
+    proof
+  - fix(oyster): stop the binding entrypoint's types implying it decodes replies
+  - fix(agar,hub,oyster): raise an App window only for focus the host sees
+  - fix(oyster): leave a connection reply's decoding to its frame owner
+  - fix(oyster): raise an App window on its own focus report
+  - fix(oyster): tell the person why the page host's App request failed
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.24.0
+  - @fungi.computer/computer@0.16.1
+  - @fungi.computer/veil@0.11.2
+  - @fungi.computer/braid@0.6.4
+  - @fungi.computer/darkroom@0.11.11
+  - @fungi.computer/nacre@0.8.6
+  - @fungi.computer/parakeet@0.16.2
+  - @fungi.computer/shiitake@0.21.11
+  - @fungi.computer/workflows-wire@0.7.4
+  - @fungi.computer/shiitake-extensions@0.11.22
+  - @fungi.computer/zookeeper@0.0.53
+
 ## 0.47.4
 
 ### Patch Changes

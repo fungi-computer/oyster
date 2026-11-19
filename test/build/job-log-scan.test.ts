@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { loadPatternRedactor } from "@fungi.computer/veil/redaction";
 import {
   createBuildJobLog,
+  keyWithheld,
   redactionWithheld,
 } from "../../src/build/job-log.js";
 
@@ -97,6 +98,42 @@ it("holds a private key whose body is split by more than a scan window", async (
   const { retained, oneShot } = await scanThrough(text, every(text, 61));
   for (const line of body) expect(retained).not.toContain(line);
   expect(retained).toBe(oneShot());
+});
+
+it("ends the log with a note when a private key opens and never closes", async () => {
+  const body = keyBody(10);
+  const text = `ok\n${begin}\n${body.join("\n")}\n`;
+  const { retained } = await scanThrough(text, every(text, 61));
+  for (const line of body) expect(retained).not.toContain(line);
+  expect(retained).toContain("ok\n");
+  expect(retained.trimEnd().endsWith(keyWithheld)).toBe(true);
+  expect(keyWithheld).toContain("output withheld until the key ends");
+});
+
+it("ends the log with the note when a key past the ceiling never closes", async () => {
+  const body = keyBody(10);
+  const text = `${begin}\n${body.join("\n")}\n${filler(3_000_000)}`;
+  const { retained } = await scanThrough(text, every(text, 4096));
+  for (const line of body) expect(retained).not.toContain(line);
+  expect(retained.trimEnd().endsWith(keyWithheld)).toBe(true);
+});
+
+it("adds no note when a private key closes", async () => {
+  const text = `${begin}\n${keyBody(10).join("\n")}\n${end}\nafter\n`;
+  const { retained, oneShot } = await scanThrough(text, every(text, 61));
+  expect(retained).not.toContain("withheld");
+  expect(retained).toBe(oneShot());
+});
+
+it("adds no key note for an unfinished curl command", async () => {
+  const text = `curl https://x.test/ -u builder:`;
+  const open = (await loadPatternRedactor()).openFrom(text);
+  // The input really opens a hold, so the assertions below are not vacuous.
+  expect(open?.ruleId).toMatch(/^curl-auth-/);
+  const { retained } = await scanThrough(text, []);
+  expect(retained).not.toContain("curl https://x.test/");
+  expect(retained).toContain("[REDACTED]");
+  expect(retained).not.toContain(keyWithheld);
 });
 
 it("holds a curl command whose credentials arrive past a scan window on its line", async () => {

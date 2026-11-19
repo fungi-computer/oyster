@@ -2015,6 +2015,46 @@ test("a declared port reaches native processStart with the host key and returns 
   });
 });
 
+test("a Computer reply the descriptor rejects fails the call with its recorded reason and ref", async (t) => {
+  const { env } = fixture();
+  const { call } = await instanceBinding(t, env, ["processStart"]);
+  const native = env.COMPUTER.getByName;
+  env.COMPUTER.getByName = (id) => {
+    const computer = native(id);
+    return {
+      ...computer,
+      // The Shed bad reply: a process without its `endedReason`.
+      value: async (...args) => {
+        const process = await computer.value(...args);
+        return Object.fromEntries(
+          Object.entries(process).filter(([field]) => field !== "endedReason"),
+        );
+      },
+    };
+  };
+  const logs = [];
+  const original = globalThis.console.error;
+  globalThis.console.error = (...args) => logs.push(args);
+  t.after(() => {
+    globalThis.console.error = original;
+  });
+  const failed = await call((computer) =>
+    computer.processStart({ command: "node server.mjs" }),
+  );
+  globalThis.console.error = original;
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, "failed");
+  assert.equal(failed.reason, "binding_reply_invalid");
+  assert.match(failed.ref, /^app_frame_/);
+  const logged = logs.find(([line]) => line === "App binding reply invalid");
+  assert.deepEqual(logged[1], {
+    binding: "COMPUTER",
+    method: "processStart",
+    path: "endedReason",
+    frameId: failed.ref,
+  });
+});
+
 test("law 2a: closing the frame immediately before native send creates no process", async (t) => {
   const { env, calls } = fixture();
   const { call, close } = await instanceBinding(t, env, ["processStart"]);

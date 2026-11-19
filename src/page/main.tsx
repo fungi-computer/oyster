@@ -18,6 +18,7 @@ import {
   type AppPermissions,
   type AppSetup,
 } from "@fungi.computer/agar";
+import { frameFocusRaiser } from "@fungi.computer/agar/host";
 import { appRightStates } from "./app-rights.js";
 import { createOysterAppPermissionsPort } from "./app-permissions-port.js";
 import type { WorkbenchSetupPort } from "@fungi.computer/nacre/workbench";
@@ -335,6 +336,9 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
         },
         mount: async (options) => {
           const frame = document.createElement("iframe");
+          const raiseOnFocus = frameFocusRaiser(frame, window, () => {
+            void options.events.onFocus?.(true);
+          });
           frame.sandbox.value = appSandbox;
           // A frame permission, not a relaxation of the App's sandbox.
           frame.allowFullscreen = true;
@@ -410,9 +414,16 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
               requestComputerChoice: () =>
                 options.events.onComputerChoice?.() ??
                 Promise.reject(unavailable("Computer choice")),
-              reportFocus: () =>
-                options.events.onFocus?.(document.activeElement === frame) ??
-                Promise.resolve(),
+              // The App's report is a hint, never the proof: any guest can send
+              // one with no click. Raise only for focus this page can see, a
+              // few frames later because the browser moves activeElement after
+              // the child's own focus event.
+              // The check is not awaited: a hidden page pauses animation
+              // frames, and the App's call must not wait on that.
+              reportFocus: (focus) => {
+                if (focus.surface !== null) raiseOnFocus();
+                return Promise.resolve();
+              },
               reportNavigation: (state) =>
                 options.events.onNavigationState?.(state) ?? Promise.resolve(),
               reportStatus: (items) =>

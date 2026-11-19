@@ -17,6 +17,12 @@ import {
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import {
+  FrameFailureError,
+  createFrameFailureSlot,
+  decodeBindingReply,
+  type FrameFailureSlot,
+} from "./frame-failure.js";
+import {
   bootCapabilityGrantSchema,
   bootCapabilityLeaseSchema,
   reportBootPage,
@@ -198,6 +204,7 @@ import {
 } from "./app-sources.js";
 
 export { r2ArtifactStore, r2FileSource, ownerKeyAuth };
+export type { FrameFailure, FrameFailureSlot } from "./frame-failure.js";
 
 /** Native values returned by the standalone Git, event and JSON binding owners. */
 export type OysterBindingResult =
@@ -208,6 +215,8 @@ export type OysterInvocationHost = BackgroundFrameState &
   Readonly<{
     /** This frame's guest binding packets and the wall time they waited. */
     bindingWaits: { count: number; ms: number };
+    /** The reason this frame's own owner failed it, read when its guest call rejects. */
+    failure: FrameFailureSlot;
     artifact: Backend;
     declaration: AppDeclaration | null;
     /** The verified declared method; opaque backend and lifecycle frames have none. */
@@ -988,6 +997,21 @@ function result<T>(run: Effect.Effect<T, Error>): Promise<InstanceResult<T>> {
             causeClass: causeClass(error),
             code: error.code,
           };
+        if (error instanceof FrameFailureError) {
+          console.error("AppInstance failure", {
+            stage: "instance_operation",
+            code: "failed",
+            reason: error.failure.reason,
+            ref: error.ref,
+          });
+          return {
+            ok: false as const,
+            causeClass: causeClass(error),
+            code: "failed" as const,
+            reason: error.failure.reason,
+            ref: error.ref,
+          };
+        }
         const diagnostic = failureDiagnostic(error);
         console.error("AppInstance failure", {
           stage: "instance_operation",
@@ -1690,7 +1714,13 @@ export class OysterInstance<
     if (this.frames.active(props.frameId) !== frame)
       throw new AppInstanceError("revoked");
     assertBackgroundBinding(frame, props.binding);
-    return descriptor.decodeResult(result);
+    return decodeBindingReply(
+      descriptor,
+      { binding: props.binding, method },
+      result,
+      frame.host.failure,
+      { frameId: frame.frameId },
+    );
   }
   /** Last provider-accepted ref recorded by this installation's journal. */
   async gitTip(
@@ -1875,6 +1905,7 @@ export class OysterInstance<
     }
     let host: OysterInvocationHost = {
       bindingWaits: { count: 0, ms: 0 },
+      failure: createFrameFailureSlot(),
       artifact: { release, ...resolved },
       declaration: resolved.declaration,
       origin: "unchecked",
@@ -1885,11 +1916,20 @@ export class OysterInstance<
     // checks them against the owner state the host applied to it, never by
     // calling back up to the registry.
     let admitted = verified;
+    let frameRef = "";
     try {
       return await this.frames.run(scoped, host, (frame) => {
         admitted = Date.now();
+        frameRef = frame.frameId;
         return work(this.runtimeFor(limits), frame);
       });
+    } catch (cause) {
+      const failure = host.failure.read();
+      // A typed refusal already says why; only a generic rejection takes the
+      // host's own recorded reason.
+      if (failure === undefined || cause instanceof AppInstanceError)
+        throw cause;
+      throw new FrameFailureError(failure, frameRef, { cause });
     } finally {
       reportSlowInvocation(methodName ?? facts.subject.kind, host, {
         entered,
