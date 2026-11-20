@@ -139,8 +139,8 @@ export type AiBinding = {
 };
 
 /**
- * Agents on a standalone Oyster Worker. Each agent is Shiitake's public
- * Cloudflare host (`ShiitakeDO`), one Durable Object per agent; a directory
+ * Agents on a standalone Oyster Worker. Each agent is one Durable Object that
+ * composes its Session engine (Shiitake today, see `agent-engine.ts`); a directory
  * Durable Object names them and keeps the member's visits. The model comes
  * from a pluggable `ModelSource`; the default runs Workers AI through the
  * Worker's AI binding, with no API token.
@@ -193,7 +193,7 @@ import {
   standaloneHomeInstructionsFile,
   type StandaloneComputerEnv,
 } from "./computer.js";
-import { ShiitakeDO } from "@fungi.computer/shiitake/cloudflare";
+import { shiitakeEngine, type AgentEngine } from "./agent-engine.js";
 import { agentStoreKeeping } from "./agent-store.js";
 import {
   CredentialError,
@@ -257,7 +257,10 @@ import {
   createFingerprintSet,
   type FingerprintSet,
 } from "@fungi.computer/veil/redaction";
-import type { SessionRedactor } from "@fungi.computer/shiitake";
+import type {
+  ColdSessionPageRequest,
+  SessionRedactor,
+} from "@fungi.computer/shiitake";
 import { z } from "zod";
 import {
   type FrameBindingMethods,
@@ -714,10 +717,41 @@ export type AgentInboxRows = Readonly<{
   revision: number;
 }>;
 
-/** One agent: Shiitake's Cloudflare host over this Durable Object; its root supplies `hostFor`. */
+/**
+ * One agent: this Durable Object keeps Oyster's own Agent state and composes
+ * one Session engine; its root supplies `hostFor`.
+ */
 export abstract class StandaloneAgentBase<
   Env extends StandaloneAgentEnv = StandaloneAgentEnv,
-> extends ShiitakeDO<Env> {
+> extends DurableObject<Env> {
+  #engine: AgentEngine | undefined;
+  /** The Session engine this Agent composes; Shiitake over this Agent's options. */
+  protected engine(): AgentEngine {
+    return shiitakeEngine(this.ctx, this.env, () => this.shiitakeOptions());
+  }
+  private agentEngine(): AgentEngine {
+    return (this.#engine ??= this.engine());
+  }
+  /** The engine's open Session agent. */
+  protected shiitake() {
+    return this.agentEngine().agent();
+  }
+  /** One bounded page of the engine's cold Sessions, for the store keeper. */
+  protected readColdSessions(request: ColdSessionPageRequest) {
+    return this.agentEngine().coldSessions(request);
+  }
+  /** Persist a wake and run one engine reconciliation pass. */
+  protected wakeRuntime() {
+    return this.agentEngine().wake();
+  }
+  /** Reconcile due runtime and host work through the engine. */
+  override alarm() {
+    return this.agentEngine().alarm();
+  }
+  /** The host's own routes first, then the engine's Session wire. */
+  override fetch(request: Request) {
+    return this.hostFetch(request) ?? this.agentEngine().fetch(request);
+  }
   private archiveControlOwner: ReturnType<typeof agentArchiveOwner> | undefined;
   private archiveControl() {
     return (this.archiveControlOwner ??= agentArchiveOwner({
@@ -1329,13 +1363,15 @@ export abstract class StandaloneAgentBase<
     const { Knapsack } = await import("@fungi.computer/knapsack");
     return (this.uiOwner ??= Knapsack.ui({
       id: "oyster-ui",
-      hasSession: (sessionId) => this.hasStoredSession(sessionId),
+      hasSession: (sessionId) => this.agentEngine().hasStoredSession(sessionId),
     }));
   }
 
-  protected override hostFetch(
-    request: Request,
-  ): Promise<Response> | undefined {
+  /**
+   * The host's own routes, in front of the engine's: a response answers the
+   * request, undefined lets the engine serve it.
+   */
+  protected hostFetch(request: Request): Promise<Response> | undefined {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/models" && request.method === "GET")
       return this.readAgentModels();
@@ -1354,7 +1390,7 @@ export abstract class StandaloneAgentBase<
       pathname.endsWith(`/extensions/${homeContract.id}/commands/home`)
     )
       return this.preparedComputerSnapshot().then(() =>
-        this.runtimeOwner().fetch(request),
+        this.agentEngine().fetch(request),
       );
     return undefined;
   }
@@ -1397,11 +1433,12 @@ export abstract class StandaloneAgentBase<
     );
   }
 
-  protected override async closeShiitake(): Promise<void> {
+  /** Close the browser connection and the engine before storage erasure. */
+  protected async closeShiitake(): Promise<void> {
     try {
       await (await this.ui()).close();
     } finally {
-      await super.closeShiitake();
+      await this.agentEngine().close();
     }
   }
 
@@ -2067,7 +2104,7 @@ export abstract class StandaloneAgentBase<
    * dropping them removes a suspended website's run refusal and turn capture,
    * and it must run discordReplyWork or an evicted Discord run never answers.
    */
-  protected override async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
+  protected async shiitakeOptions(): Promise<CloudflareShiitakeOptions> {
     const [
       { oysterAgentExtensions },
       { Knapsack },
@@ -2324,15 +2361,14 @@ export abstract class StandaloneAgentBase<
     return sessions.send(grant, id, sessionId, message);
   }
 
-  /** Latest inbox clock from the same Shiitake owner, without reading Session rows. */
-  async revision(): Promise<number> {
-    await this.shiitake();
-    return this.readInboxRevision();
+  /** Latest inbox clock from the engine, without reading Session rows. */
+  revision(): Promise<number> {
+    return this.agentEngine().inboxRevision();
   }
 
   /** Every live Session of this agent, as inbox rows. */
   async inboxRows(): Promise<AgentInboxRows> {
-    const changes = await this.readInboxChanges(0, 1_000);
+    const changes = await this.agentEngine().inboxChanges(0, 1_000);
     const rows: OysterSessionRow[] = [];
     for (const row of changes.rows) {
       if ("deleted" in row) continue;

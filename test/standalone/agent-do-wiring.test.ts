@@ -13,6 +13,7 @@ import {
   agentEnv,
   unavailable,
 } from "./agent-do-state.fixture.js";
+import type { AgentEngine } from "../../src/standalone/agent-engine.js";
 
 /** The production Agent class, with only its root host and model door filled in. */
 class ProbedAgent extends StandaloneAgentBase {
@@ -44,6 +45,79 @@ async function withProbe(
     database.close();
   }
 }
+
+/** The production Agent class over a recording engine instead of Shiitake. */
+class EngineProbedAgent extends ProbedAgent {
+  readonly calls: string[] = [];
+  protected override engine(): AgentEngine {
+    const calls = this.calls;
+    return {
+      kind: "shiitake",
+      fetch: (request) => {
+        calls.push(`fetch ${new URL(request.url).pathname}`);
+        return Promise.resolve(new Response("from the engine"));
+      },
+      alarm: () => {
+        calls.push("alarm");
+        return Promise.resolve();
+      },
+      wake: () => {
+        calls.push("wake");
+        return Promise.resolve();
+      },
+      agent: () => {
+        calls.push("agent");
+        return Promise.reject(new Error("engine agent"));
+      },
+      inboxChanges: (after, limit) => {
+        calls.push(`inbox ${String(after)} ${String(limit)}`);
+        return Promise.resolve({
+          rows: [{ sessionId: "gone", deleted: true }],
+          through: 7,
+          latest: 7,
+        });
+      },
+      inboxRevision: () => {
+        calls.push("revision");
+        return Promise.resolve(7);
+      },
+      hasStoredSession: () => Promise.resolve(false),
+      coldSessions: () => Promise.reject(new Error("not read here")),
+      close: () => Promise.resolve(),
+    };
+  }
+}
+
+it("routes the Agent's Session wire, alarm, inbox and App sends through its engine", async () => {
+  const database = new DatabaseSync(":memory:");
+  const state = agentDurableObjectState(() => 100_000_000);
+  Object.assign(state.storage.sql, { exec: fromNodeSqlite(database).sql.exec });
+  try {
+    const agent = new EngineProbedAgent(state, agentEnv());
+    const response = await agent.fetch(
+      new Request("https://agent.test/sessions"),
+    );
+    expect(await response.text()).toBe("from the engine");
+    await agent.alarm();
+    expect(await agent.revision()).toBe(7);
+    expect(await agent.inboxRows()).toEqual({ rows: [], revision: 7 });
+    await expect(
+      agent.sendFromApp("installation-1", "session-1", {
+        requestId: "request-1",
+        text: "hello",
+      }),
+    ).rejects.toThrow("engine agent");
+    expect(agent.calls).toEqual([
+      "fetch /sessions",
+      "alarm",
+      "revision",
+      "inbox 0 1000",
+      "agent",
+    ]);
+  } finally {
+    database.close();
+  }
+});
 
 it("hands Shiitake a storage-pressure check over the Agent's own measured store", async () => {
   let databaseSize = 100_000_000;

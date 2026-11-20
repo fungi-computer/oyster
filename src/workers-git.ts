@@ -704,10 +704,34 @@ export type WebhookDelivery = Readonly<{
   state: "pending" | "delivered" | "failed";
   attempts: number;
   lastStatus: number | null;
+  /**
+   * Why a pending delivery is held without spending its retries: the host's
+   * keyring cannot open the subscription's signing secret. A delivery held
+   * past the hold limit is failed and keeps the reason, prefixed
+   * "Held 7 days: ". Null otherwise.
+   */
+  heldReason: string | null;
   updatedAt: number;
 }>;
 
 const RETRY_DELAYS_MS = [10_000, 60_000, 300_000, 1_800_000, 7_200_000];
+/** How often a delivery held on the keyring checks it again. */
+const HELD_RECHECK_MS = 60_000;
+/** A held delivery fails after this long, so held rows cannot pile up forever. */
+const HOLD_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A keyring fault is the host's configuration, not the receiver's: the
+ * delivery waits for it without counting attempts, so none is lost.
+ */
+const heldReasons = {
+  "keyring-missing":
+    "No webhook keyring is configured (OYSTER_CREDENTIAL_KEY), so this delivery is held until one is.",
+  "keyring-malformed":
+    "The webhook keyring (OYSTER_CREDENTIAL_KEY) is malformed, so this delivery is held until it is fixed.",
+  "keyring-unknown-key":
+    "The webhook keyring does not hold the key this subscription's secret was sealed with, so this delivery is held until that key is restored.",
+} as const;
+type HeldReason = keyof typeof heldReasons;
 const subscriptionRow = Schema.Struct({
   id: Schema.String,
   installation_id: Schema.String,
@@ -722,6 +746,13 @@ const deliveryRow = Schema.Struct({
   state: Schema.Literals(["pending", "delivered", "failed"]),
   attempts: Schema.Number,
   last_status: Schema.NullOr(Schema.Number),
+  held_reason: Schema.NullOr(
+    Schema.Literals([
+      "keyring-missing",
+      "keyring-malformed",
+      "keyring-unknown-key",
+    ]),
+  ),
   updated_at: Schema.Number,
 });
 const typesSchema = Schema.fromJsonString(Schema.Array(Schema.String));
@@ -759,6 +790,38 @@ const webhookSubscriptions002: SealedTable002 = {
   },
 };
 
+/**
+ * Open a subscription's signing secret. A keyring fault holds the delivery;
+ * a corrupt or tampered secret, or any other failure to open, counts as a
+ * failed attempt, never sent unsigned.
+ */
+async function openSigningSecret(
+  sealer: SecretSealer | undefined,
+  subscription: string,
+  sealed: string,
+): Promise<
+  | Readonly<{ kind: "open"; secret: string }>
+  | Readonly<{ kind: "held"; reason: HeldReason }>
+  | Readonly<{ kind: "unopened" }>
+> {
+  if (sealer === undefined) return { kind: "held", reason: "keyring-missing" };
+  const opened = await Effect.runPromise(
+    Effect.result(
+      Effect.tryPromise({
+        try: () => sealer.open(subscriptionContext(subscription), sealed),
+        catch: (cause) => cause,
+      }),
+    ),
+  );
+  if (Result.isSuccess(opened)) return { kind: "open", secret: opened.success };
+  const cause = opened.failure;
+  if (cause instanceof CredentialError && cause.code === "unavailable")
+    return { kind: "held", reason: "keyring-malformed" };
+  if (cause instanceof CredentialError && cause.code === "unknown-key")
+    return { kind: "held", reason: "keyring-unknown-key" };
+  return { kind: "unopened" };
+}
+
 function toSubscription(row: unknown): WebhookSubscription {
   const decoded = Schema.decodeUnknownSync(subscriptionRow)(row);
   return {
@@ -790,9 +853,23 @@ export class OysterWebhooks<
       CREATE TABLE IF NOT EXISTS oyster_deliveries (
         id TEXT PRIMARY KEY, subscription TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL,
         state TEXT NOT NULL, attempts INTEGER NOT NULL, next_at INTEGER NOT NULL,
-        last_status INTEGER, updated_at INTEGER NOT NULL) STRICT;
+        last_status INTEGER, updated_at INTEGER NOT NULL, held_reason TEXT,
+        held_since INTEGER) STRICT;
       CREATE INDEX IF NOT EXISTS oyster_deliveries_due ON oyster_deliveries(state, next_at);
     `);
+    // An older Oyster's deliveries table has no hold columns; its rows keep
+    // their state and attempts and read as not held.
+    const deliveryColumns = Schema.decodeUnknownSync(columnNames)(
+      ctx.storage.sql.exec("PRAGMA table_info(oyster_deliveries)").toArray(),
+    ).map(({ name }) => name);
+    for (const [column, type] of [
+      ["held_reason", "TEXT"],
+      ["held_since", "INTEGER"],
+    ] as const)
+      if (!deliveryColumns.includes(column))
+        ctx.storage.sql.exec(
+          `ALTER TABLE oyster_deliveries ADD COLUMN ${column} ${type}`,
+        );
     this.#recipients = createRecipientDeliveries({
       sql: ctx.storage.sql,
       now: () => Date.now(),
@@ -911,7 +988,7 @@ export class OysterWebhooks<
   deliveries(subscription: string): WebhookDelivery[] {
     return this.ctx.storage.sql
       .exec(
-        "SELECT id, subscription, type, state, attempts, last_status, updated_at FROM oyster_deliveries WHERE subscription = ? ORDER BY updated_at DESC LIMIT 50",
+        "SELECT id, subscription, type, state, attempts, last_status, held_reason, updated_at FROM oyster_deliveries WHERE subscription = ? ORDER BY updated_at DESC LIMIT 50",
         subscription,
       )
       .toArray()
@@ -924,6 +1001,12 @@ export class OysterWebhooks<
           state: decoded.state,
           attempts: decoded.attempts,
           lastStatus: decoded.last_status,
+          heldReason:
+            decoded.held_reason === null
+              ? null
+              : decoded.state === "failed"
+                ? `Held 7 days: ${heldReasons[decoded.held_reason]}`
+                : heldReasons[decoded.held_reason],
           updatedAt: decoded.updated_at,
         };
       });
@@ -978,8 +1061,9 @@ export class OysterWebhooks<
         type: string;
         body: string;
         attempts: number;
+        held_since: number | null;
       }>(
-        "SELECT id, subscription, type, body, attempts FROM oyster_deliveries WHERE state = 'pending' AND next_at <= ? ORDER BY next_at LIMIT 25",
+        "SELECT id, subscription, type, body, attempts, held_since FROM oyster_deliveries WHERE state = 'pending' AND next_at <= ? ORDER BY next_at LIMIT 25",
         now,
       )
       .toArray();
@@ -991,31 +1075,31 @@ export class OysterWebhooks<
             delivery.subscription,
           )
           .toArray()[0];
-        let status: number | null = null;
-        // A secret that does not open counts as a failed attempt: retried,
-        // then failed like a refusal, never sent unsigned.
         const secret =
           target === undefined
             ? undefined
-            : await Effect.runPromise(
-                Effect.result(
-                  Effect.tryPromise(async () => {
-                    if (sealer === undefined)
-                      throw new CredentialError("unavailable");
-                    return sealer.open(
-                      subscriptionContext(delivery.subscription),
-                      target.sealed_secret,
-                    );
-                  }),
-                ),
+            : await openSigningSecret(
+                sealer,
+                delivery.subscription,
+                target.sealed_secret,
               );
-        if (
-          target !== undefined &&
-          secret !== undefined &&
-          Result.isSuccess(secret)
-        ) {
+        if (secret?.kind === "held") {
+          const heldSince = delivery.held_since ?? now;
+          this.ctx.storage.sql.exec(
+            "UPDATE oyster_deliveries SET state = ?, next_at = ?, held_reason = ?, held_since = ?, updated_at = ? WHERE id = ?",
+            now - heldSince >= HOLD_LIMIT_MS ? "failed" : "pending",
+            now + HELD_RECHECK_MS,
+            secret.reason,
+            heldSince,
+            Date.now(),
+            delivery.id,
+          );
+          return;
+        }
+        let status: number | null = null;
+        if (target !== undefined && secret?.kind === "open") {
           const attempt = await attemptWebhook(
-            { url: target.url, secret: secret.success },
+            { url: target.url, secret: secret.secret },
             delivery,
           );
           status = attempt.kind === "response" ? attempt.status : null;
@@ -1023,7 +1107,7 @@ export class OysterWebhooks<
         const attempts = delivery.attempts + 1;
         const delivered = status !== null && status >= 200 && status < 300;
         this.ctx.storage.sql.exec(
-          "UPDATE oyster_deliveries SET state = ?, attempts = ?, next_at = ?, last_status = ?, updated_at = ? WHERE id = ?",
+          "UPDATE oyster_deliveries SET state = ?, attempts = ?, next_at = ?, last_status = ?, held_reason = NULL, held_since = NULL, updated_at = ? WHERE id = ?",
           delivered
             ? "delivered"
             : target === undefined || attempts > RETRY_DELAYS_MS.length

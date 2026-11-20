@@ -1,5 +1,23 @@
 # @fungi.computer/oyster
 
+## 0.50.3
+
+### Patch Changes
+
+- Changes since 0.50.2:
+
+  - fix(veil): treat an edited record key id as tampering
+  - fix(oyster): spend retries on a corrupt webhook secret and fail long holds
+  - fix(oyster): hold webhook deliveries on a keyring fault without spending
+    retries
+
+- Updated dependencies
+  - @fungi.computer/veil@0.11.3
+  - @fungi.computer/shiitake@0.21.12
+  - @fungi.computer/parakeet@0.16.4
+  - @fungi.computer/shiitake-extensions@0.12.1
+  - @fungi.computer/zookeeper@0.0.54
+
 ## 0.50.2
 
 ### Patch Changes

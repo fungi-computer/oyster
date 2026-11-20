@@ -4,7 +4,7 @@ import { encode as encodeBase64 } from "effect/encoding/Base64";
 import { encode as encodeBase64Url } from "effect/encoding/Base64Url";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { armedWorkflowTriggerSchema } from "@fungi.computer/braid/runtime";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
@@ -14,7 +14,6 @@ import {
   discordReplies002,
 } from "../../src/channels/discord-replies.js";
 import { credentialMigration002 } from "../../src/credential-migration-002.js";
-import { StandaloneEventDelivery } from "../../src/standalone/instance.js";
 import {
   instanceSecretCustody,
   instanceSecretSealer,
@@ -23,10 +22,8 @@ import {
   workflowWebhookCustody,
   workflowWebhookKeys002,
 } from "../../src/webhook-custody.js";
-import {
-  agentDurableObjectState,
-  unavailable,
-} from "./agent-do-state.fixture.js";
+import { unavailable } from "./agent-do-state.fixture.js";
+import { eventDelivery } from "./event-delivery.fixture.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const env = {
@@ -266,55 +263,6 @@ it("without a keyring migration 002 leaves a plaintext webhook store closed and 
     database.close();
   }
 });
-
-/** Durable Object SQL over Node SQLite, with the cursor fields the owner reads. */
-function durableSql(database: DatabaseSync) {
-  return {
-    exec(statement: string, ...bindings: SQLInputValue[]) {
-      const prepared = database.prepare(statement);
-      if (prepared.columns().length > 0) {
-        const rows = prepared.all(...bindings);
-        return { toArray: () => rows, one: () => rows[0], rowsWritten: 0 };
-      }
-      if (bindings.length === 0) {
-        database.exec(statement);
-        return { toArray: () => [], one: unavailable, rowsWritten: 0 };
-      }
-      const { changes } = prepared.run(...bindings);
-      return {
-        toArray: () => [],
-        one: unavailable,
-        rowsWritten: Number(changes),
-      };
-    },
-  };
-}
-
-function eventDelivery(
-  database: DatabaseSync,
-  configured: Partial<typeof env>,
-) {
-  const state = agentDurableObjectState(() => 0);
-  let alarm: number | null = null;
-  Object.defineProperty(state, "storage", {
-    value: {
-      sql: durableSql(database),
-      transactionSync: fromNodeSqlite(database).transactionSync,
-      getAlarm: () => Promise.resolve(alarm),
-      setAlarm: (at: number) => {
-        alarm = at;
-        return Promise.resolve();
-      },
-    },
-  });
-  Object.defineProperty(state, "blockConcurrencyWhile", {
-    value: (body: () => Promise<void>) => body(),
-  });
-  return new StandaloneEventDelivery(state, {
-    ...configured,
-    WORKFLOW_RUNS: { getByName: unavailable },
-  });
-}
 
 it("migration 002 seals a seeded plaintext subscription; deliveries still sign with its secret and the store's bytes hold none", async () => {
   const { path, database } = await fileStore();

@@ -400,6 +400,7 @@ deliveries(subscription): Readonly<{
   state: "pending" | "failed" | "delivered";
   attempts: number;
   lastStatus: number | null;
+  heldReason: string | null;
   updatedAt: number;
 }>[];
 ```
@@ -416,7 +417,8 @@ Recent deliveries for one subscription, newest first.
 
 `Readonly`\<\{ `id`: `string`; `subscription`: `string`; `type`: `string`;
 `state`: `"pending"` \| `"failed"` \| `"delivered"`; `attempts`: `number`;
-`lastStatus`: `number` \| `null`; `updatedAt`: `number`; \}\>[]
+`lastStatus`: `number` \| `null`; `heldReason`: `string` \| `null`; `updatedAt`:
+`number`; \}\>[]
 
 ##### enqueue()
 
@@ -1623,6 +1625,7 @@ type WebhookDelivery = Readonly<{
   state: "pending" | "delivered" | "failed";
   attempts: number;
   lastStatus: number | null;
+  heldReason: string | null;
   updatedAt: number;
 }>;
 ```

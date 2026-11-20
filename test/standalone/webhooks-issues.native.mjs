@@ -404,6 +404,7 @@ const deliveryList = z.array(
     state: z.enum(["pending", "delivered", "failed"]),
     attempts: z.number(),
     lastStatus: z.number().nullable(),
+    heldReason: z.string().nullable(),
     updatedAt: z.number(),
   }),
 );
