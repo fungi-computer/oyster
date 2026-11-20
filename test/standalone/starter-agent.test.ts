@@ -445,11 +445,11 @@ describe("starter Agent laws", () => {
 
   it("writes the first-run section only to a missing AGENTS.md", async () => {
     const homes = new Map<string, string>();
-    const writeIfMissing = (path: string, content: string) => {
-      if (!homes.has(path)) homes.set(path, content);
+    const writeIfMissing = (content: string) => {
+      if (!homes.has("AGENTS.md")) homes.set("AGENTS.md", content);
       return Promise.resolve();
     };
-    await seedStarterHome("AGENTS.md", writeIfMissing);
+    await seedStarterHome(writeIfMissing);
     const seeded = homes.get("AGENTS.md") ?? "";
     expect(seeded).toContain("## First conversation");
     expect(seeded).toContain('skill.load({name: "setup-fungi"})');
@@ -460,18 +460,7 @@ describe("starter Agent laws", () => {
     expect(seeded).toContain("## Keeping this file up to date");
     expect(seeded).toContain("Never save secrets");
     homes.set("AGENTS.md", "mine");
-    await seedStarterHome("AGENTS.md", writeIfMissing);
+    await seedStarterHome(writeIfMissing);
     expect(homes.get("AGENTS.md")).toBe("mine");
-  });
-
-  it("names the file where the host keeps it", async () => {
-    const homes = new Map<string, string>();
-    await seedStarterHome("/workspace/AGENTS.md", (path, content) => {
-      homes.set(path, content);
-      return Promise.resolve();
-    });
-    expect(homes.get("/workspace/AGENTS.md")).toContain(
-      "computer://home/workspace/AGENTS.md and load",
-    );
   });
 });

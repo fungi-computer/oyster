@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { text } from "node:stream/consumers";
 import { Schema } from "effect";
+import { z } from "zod";
 import { expect, it } from "vitest";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
@@ -41,6 +42,7 @@ type Outcome =
 async function fixture(
   uploadStatus = 201,
   outcome: Outcome = { state: "succeeded", available: true },
+  previewStatus = 200,
 ) {
   const decoded = Schema.decodeUnknownSync(releaseSchema)(release);
   const installation = await approvedInstallation({
@@ -50,10 +52,19 @@ async function fixture(
     instanceId: instanceIds.instance.generate(),
   });
   let requestId: string | undefined;
+  let installationName = "cli-demo";
   const directory = await mkdtemp(join(tmpdir(), "oyster-install-cli-"));
   await mkdir(join(directory, "artifacts"));
   await writeFile(join(directory, "artifacts/ui"), "fixture-ui");
   await writeFile(join(directory, "release.json"), JSON.stringify(release));
+  // A second, different Release in its own directory.
+  const second = await mkdtemp(join(tmpdir(), "oyster-install-cli-second-"));
+  await mkdir(join(second, "artifacts"));
+  await writeFile(join(second, "artifacts/ui"), "fixture-ui-two");
+  await writeFile(
+    join(second, "release.json"),
+    JSON.stringify({ ...release, appId: "app_other", releaseId: "rel_other" }),
+  );
   const received: {
     method: string;
     url: string;
@@ -81,11 +92,37 @@ async function fixture(
     }
     const operation = {
       requestId,
-      requestedInstallationId: "cli-demo",
-      installationId: "cli-demo",
+      requestedInstallationId: installationName,
+      installationId: installationName,
       release,
     };
+    if (request.url === "/api/installations/preview") {
+      if (previewStatus >= 400) {
+        json(previewStatus, JSON.stringify({ error: "fixture refusal" }));
+        return;
+      }
+      const posted = z
+        .looseObject({
+          release: z.looseObject({ appId: z.string() }),
+        })
+        .parse(JSON.parse(received.at(-1)?.body ?? "{}"));
+      json(
+        200,
+        JSON.stringify({
+          name: posted.release.appId,
+          capabilities:
+            posted.release.appId === "app_cli"
+              ? ["app.storage", "agent.list", "approvals"]
+              : ["app.storage", "computer.readFile"],
+          update: null,
+        }),
+      );
+      return;
+    }
     if (request.method === "POST") {
+      installationName = z
+        .looseObject({ installationId: z.string().default("app-cli") })
+        .parse(JSON.parse(received.at(-1)?.body ?? "{}")).installationId;
       // The durable owner acknowledges the retained command, then settles it.
       requestId = installationRequestIdSchema.parse(
         request.headers["idempotency-key"],
@@ -129,8 +166,9 @@ async function fixture(
   const url = "http://127.0.0.1:" + String(address.port);
   return {
     directory,
+    second,
     received,
-    run: (source: string) =>
+    run: (source: string, ...flags: string[]) =>
       new Promise<{ code: number | null; stdout: string; stderr: string }>(
         (done, reject) => {
           const child = spawn(
@@ -141,8 +179,9 @@ async function fixture(
               cli,
               "install",
               source,
-              "--installation-id",
-              "cli-demo",
+              ...(flags.length === 0
+                ? ["--installation-id", "cli-demo", "--yes"]
+                : flags),
             ],
             {
               cwd: packageRoot,
@@ -177,6 +216,7 @@ async function fixture(
         });
       });
       await rm(directory, { recursive: true, force: true });
+      await rm(second, { recursive: true, force: true });
     },
   };
 }
@@ -193,25 +233,25 @@ it.each(["directory", "release.json"])(
       expect(f.received.map((request) => request.method)).toEqual([
         "PUT",
         "POST",
+        "POST",
         "GET",
       ]);
       expect(f.received[0]?.url).toContain(
         "/api/artifacts/artifact%3Aui?digest=sha256:",
       );
       expect(f.received[0]?.body).toBe("fixture-ui");
-      expect(f.received[1]?.url).toBe("/api/installations");
-      expect(JSON.parse(f.received[1]?.body ?? "null")).toEqual({
+      expect(f.received[1]?.url).toBe("/api/installations/preview");
+      expect(f.received[2]?.url).toBe("/api/installations");
+      expect(JSON.parse(f.received[2]?.body ?? "null")).toEqual({
         release,
         installationId: "cli-demo",
       });
-      expect(f.received[2]?.url).toMatch(
+      expect(f.received[3]?.url).toMatch(
         /^\/api\/installations\/cli-demo\/status\?requestId=/u,
       );
-      expect(f.received.map((request) => request.authorization)).toEqual([
-        "Bearer " + key,
-        "Bearer " + key,
-        "Bearer " + key,
-      ]);
+      expect(f.received.map((request) => request.authorization)).toEqual(
+        f.received.map(() => "Bearer " + key),
+      );
       expect(result.stdout).toContain("cli-demo");
     } finally {
       await f.close();
@@ -261,6 +301,7 @@ it("a non-OK installation response is failure, never a printed success", async (
     expect(f.received.map((request) => request.method)).toEqual([
       "PUT",
       "POST",
+      "POST",
       "GET",
     ]);
   } finally {
@@ -279,7 +320,63 @@ it("historical success without its exact current version is not printed as an in
     expect(f.received.map((request) => request.method)).toEqual([
       "PUT",
       "POST",
+      "POST",
       "GET",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("shows each declared permission once and installs nothing when the owner has not confirmed", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run(f.directory, "--installation-id", "cli-demo");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Install cancelled; nothing was installed");
+    expect(result.stderr).toContain("Store App data");
+    expect(result.stderr).toContain("List Agents");
+    // The ask-class permission is listed apart, as waiting for approval.
+    expect(result.stderr).toContain("Not granted by installing");
+    expect(result.stderr).toContain("Review approvals");
+    expect(f.received.map((request) => request.url)).toEqual([
+      expect.stringContaining("/api/artifacts/"),
+      "/api/installations/preview",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("lists several different Releases' permissions once and installs none before the owner confirms", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run(f.directory, f.second);
+    expect(result.code).toBe(1);
+    // Both Apps declare App storage; it is listed once, naming both.
+    expect(result.stderr.match(/Store App data/gu)).toHaveLength(1);
+    expect(result.stderr).toContain("(app_cli, app_other)");
+    expect(result.stderr).toContain("Read files");
+    expect(f.received.map((request) => request.url)).toEqual([
+      expect.stringContaining("/api/artifacts/"),
+      "/api/installations/preview",
+      expect.stringContaining("/api/artifacts/"),
+      "/api/installations/preview",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("a failed preview installs nothing and says why", async () => {
+  const f = await fixture(201, { state: "succeeded", available: true }, 422);
+  try {
+    const result = await f.run(f.directory, "--yes");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Install preview failed (422)");
+    expect(f.received.map((request) => request.url)).toEqual([
+      expect.stringContaining("/api/artifacts/"),
+      "/api/installations/preview",
     ]);
   } finally {
     await f.close();

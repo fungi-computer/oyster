@@ -1,3 +1,4 @@
+import { agentWorkspacePath } from "@fungi.computer/computer/files";
 import { PortAccessError } from "@fungi.computer/computer/port-access";
 import {
   attachedBackendId,
@@ -398,6 +399,9 @@ export function standaloneComputerSize(
     : computerSizeSchema.parse(row.size);
 }
 
+/** Set once the Workspace root's Home AGENTS.md has been copied under /workspace. */
+const homeInstructionsRootMarker = "home-instructions-root:v1";
+
 /** Durable workspace and existing backings, with fleet checks at native acceptance. */
 export class ComputerDO
   extends NativeComputerDO
@@ -418,6 +422,52 @@ export class ComputerDO
       COMPUTER_EGRESS: (options) =>
         state.exports.OysterComputerEgress({ props: options.props }),
     });
+  }
+
+  #homeInstructionsCopied: Promise<void> | undefined;
+  #homeInstructionsDone = false;
+
+  /**
+   * Once per Computer, copy an owner's Home AGENTS.md from the Workspace root,
+   * where the owner editor used to write it and no guest could see it, to
+   * /workspace/AGENTS.md, the file an Agent's relative path names. The root copy
+   * is kept. The copy pulls every attached guest first and happens only while
+   * /workspace/AGENTS.md is absent: when both exist, nothing changes, the
+   * conflict is logged and the Agent uses the /workspace file. A guest that
+   * cannot be pulled leaves the marker unset, so the next request tries again.
+   */
+  protected override async prepareFiles(): Promise<void> {
+    if (this.#homeInstructionsDone) return;
+    this.#homeInstructionsCopied ??= this.#copyHomeInstructions().finally(
+      () => {
+        this.#homeInstructionsCopied = undefined;
+      },
+    );
+    await this.#homeInstructionsCopied;
+  }
+
+  async #copyHomeInstructions(): Promise<void> {
+    try {
+      if (
+        (await this.state.storage.get(homeInstructionsRootMarker)) !== undefined
+      ) {
+        this.#homeInstructionsDone = true;
+        return;
+      }
+      const copied = await this.copyWorkspaceFileIfFree(
+        "/AGENTS.md",
+        agentWorkspacePath("AGENTS.md"),
+      );
+      if (copied === "unknown") return;
+      if (copied === "conflict")
+        console.warn("home-instructions-root-conflict", {
+          computerId: this.#id(),
+        });
+      await this.state.storage.put(homeInstructionsRootMarker, true);
+      this.#homeInstructionsDone = true;
+    } catch (cause) {
+      console.error("Home AGENTS.md copy under /workspace failed", cause);
+    }
   }
 
   /**
@@ -1251,7 +1301,7 @@ export function standaloneHomeInstructionsFile(
   actor: string,
 ) {
   const authority = grant(computerId, actor);
-  const path = "/AGENTS.md";
+  const path = agentWorkspacePath("AGENTS.md");
   return {
     read: async (): Promise<string | null> => {
       const bytes = await computer.fileRead(authority, path);

@@ -204,6 +204,27 @@ export type GrantRefusal = Readonly<{
 const approves = (role: TeamRole | null): boolean =>
   role !== null && teamRoleAtLeast(role, "admin");
 
+/**
+ * What an install approves, for the reducer and for the confirmation shown
+ * before it. An approver's install approves the install-class set; a member's
+ * approves only the App's own storage, so every other capability waits.
+ */
+export function installApprovedCapabilities<
+  Capability extends ApprovedGrant["capability"],
+>(
+  role: TeamRole | null,
+  capabilities: readonly Capability[],
+  builtInShell = false,
+): Capability[] {
+  return capabilities.filter(
+    (capability) =>
+      capability === "app.storage" ||
+      (approves(role) &&
+        (permissionCatalog[capability].consent === "install" ||
+          (capability === "team.workbenchHost" && builtInShell))),
+  );
+}
+
 const declaredRow = (
   declared: DeclaredOperations,
   capability: ApprovedGrant["capability"],
@@ -285,26 +306,21 @@ export function applyGrantCommand(
       // An approver's install approves the install-class set. A member's
       // install approves only the App's own storage, which touches nothing
       // beyond the App's own data; every other capability waits for an approver.
-      grants = context.declaration.capabilities
-        .filter(
-          (capability) =>
-            capability === "app.storage" ||
-            (approves(context.principal.role) &&
-              (permissionCatalog[capability].consent === "install" ||
-                (capability === "team.workbenchHost" &&
-                  context.builtInShell === true))),
-        )
-        .map((capability): ApprovedGrant => ({
+      grants = installApprovedCapabilities(
+        context.principal.role,
+        context.declaration.capabilities,
+        context.builtInShell === true,
+      ).map((capability): ApprovedGrant => ({
+        capability,
+        capabilityApproved: true,
+        operations: declared(capability),
+        fingerprints: fingerprintsOf(
+          context.declaredOperations,
           capability,
-          capabilityApproved: true,
-          operations: declared(capability),
-          fingerprints: fingerprintsOf(
-            context.declaredOperations,
-            capability,
-            declared(capability),
-          ),
-          resources: "tenant-scope",
-        }));
+          declared(capability),
+        ),
+        resources: "tenant-scope",
+      }));
       break;
     case "change-grants": {
       for (const { capability, grant } of command.changes) {

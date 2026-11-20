@@ -65,6 +65,7 @@ const { backendMediaType } = await import("@fungi.computer/puffball/backend");
 const {
   standaloneWorkspace,
   standaloneComputerCapabilities,
+  standaloneHomeInstructionsFile,
   ComputerDO,
   computerInvocation,
   computerFrameMethods,
@@ -80,6 +81,8 @@ const {
 } = await import("@fungi.computer/computer-contract");
 const { FleetGrantRefused, createFleetComputers } =
   await import("@fungi.computer/computer/fleet");
+const { createWorkspaceFilesPort } =
+  await import("@fungi.computer/computer/files");
 const { OysterBinding, standaloneBindings } =
   await import("../../src/standalone/instance.ts");
 const { defaultTenant, tenantScope } =
@@ -4210,4 +4213,262 @@ test("App build preflight reports typed no_backend for a local-only Computer", a
   } finally {
     database.close();
   }
+});
+
+/**
+ * A Computer whose Workspace is seeded as an older release left it: through the
+ * raw Workspace, before any request reaches `prepareFiles` and its copy. With
+ * `guest`, a hosted runtime is attached and running; its pull and push are the
+ * fake below, since a real container is not part of this proof.
+ *
+ * The fake guest keeps `files` (what the machine holds) and `dirty` (paths it
+ * changed since the last pull). `pull` copies dirty paths into the Workspace;
+ * `push` writes the Workspace's AGENTS.md over the guest's ("the Computer
+ * wins"), so a push that precedes a pull loses the guest's edit.
+ */
+function fakeGuest(files = {}, dirty = []) {
+  return {
+    files: new Map(Object.entries(files)),
+    dirty: new Set(dirty),
+    pullFails: false,
+    calls: [],
+  };
+}
+
+function seededHomeComputer(t, guest) {
+  let building = false;
+  const patched = new WeakSet();
+  class Seeded extends ComputerDO {
+    // The Workspace is built with no backend; only the routing questions below
+    // see the fake guest, so no container or VM is constructed for this proof.
+    attachedBackends() {
+      return guest === undefined || building
+        ? []
+        : [{ kind: "platform-container" }];
+    }
+    containerRunning() {
+      return Promise.resolve(guest !== undefined);
+    }
+    workspace() {
+      building = true;
+      try {
+        const workspace = super.workspace();
+        if (guest !== undefined && !patched.has(workspace)) {
+          patched.add(workspace);
+          workspace.pull = async () => {
+            guest.calls.push("pull");
+            if (guest.pullFails) throw new Error("the guest is unreachable");
+            for (const path of guest.dirty)
+              await workspace.fs.writeFile(path, guest.files.get(path));
+            guest.dirty.clear();
+            return { applied: 0, skipped: 0 };
+          };
+          workspace.push = async () => {
+            guest.calls.push("push");
+            for (const path of ["/workspace/AGENTS.md"]) {
+              const present = await workspace.fs.stat(path).then(
+                () => true,
+                () => false,
+              );
+              if (present)
+                guest.files.set(
+                  path,
+                  await workspace.fs.readFile(path, "utf8"),
+                );
+            }
+            return 0;
+          };
+        }
+        return workspace;
+      } finally {
+        building = false;
+      }
+    }
+    async seedWorkspace(seed) {
+      const workspace = this.workspace();
+      await workspace.ready();
+      await workspace.fs.mkdir("/workspace", { recursive: true });
+      for (const [path, text] of Object.entries(seed))
+        await workspace.fs.writeFile(path, text);
+    }
+    async workspaceText(path) {
+      const workspace = this.workspace();
+      await workspace.ready();
+      const stat = await workspace.fs.stat(path).then(
+        () => true,
+        (cause) => (cause?.code === "ENOENT" ? false : Promise.reject(cause)),
+      );
+      return stat ? await workspace.fs.readFile(path, "utf8") : null;
+    }
+    async files() {
+      await this.prepareFiles();
+      return createWorkspaceFilesPort(await this.readyWorkspace(), this);
+    }
+  }
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const computer = new Seeded(kvState(database, "workspace"), {});
+  const authority = {
+    computerId: "workspace",
+    actions: new Set(["files.readBytes", "files.edit"]),
+    expiresAt: Date.now() + 60_000,
+    provenance: { actor: "owner:owner" },
+  };
+  return { computer, authority };
+}
+
+/** Run `work` with console.warn and console.error captured. */
+async function withCapturedConsole(work) {
+  const lines = { warn: [], error: [] };
+  const { warn, error } = globalThis.console;
+  globalThis.console.warn = (...args) => lines.warn.push(args);
+  globalThis.console.error = (...args) => lines.error.push(args);
+  try {
+    await work();
+  } finally {
+    globalThis.console.warn = warn;
+    globalThis.console.error = error;
+  }
+  return lines;
+}
+
+const readAgentsMd = (files) =>
+  files.read({ path: "AGENTS.md", offset: 0, limit: 1_000 });
+
+test("an owner's Home AGENTS.md saved at the Workspace root is copied under /workspace once and the root copy is kept", async (t) => {
+  const { computer, authority } = seededHomeComputer(t);
+  await computer.seedWorkspace({ "/AGENTS.md": "Owner text.\n" });
+  // The first request that reaches the Workspace does the copy.
+  const files = await computer.files();
+  assert.equal(await computer.workspaceText("/AGENTS.md"), "Owner text.\n");
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Owner text.\n",
+  );
+  // Files (the Home loader reads exactly "AGENTS.md" through it), the owner's
+  // editor and the native byte read all return the owner's text.
+  assert.equal((await readAgentsMd(files)).content, "Owner text.\n");
+  const editor = standaloneHomeInstructionsFile(
+    computer,
+    "workspace",
+    "owner:owner",
+  );
+  assert.equal(await editor.read(), "Owner text.\n");
+  assert.deepEqual(await editor.replace("Owner text.\n", "Edited.\n"), {
+    kind: "replaced",
+    path: "/workspace/AGENTS.md",
+    bytes: 8,
+  });
+  assert.equal((await readAgentsMd(files)).content, "Edited.\n");
+  assert.equal(
+    new globalThis.TextDecoder().decode(
+      await computer.fileRead(authority, "/workspace/AGENTS.md"),
+    ),
+    "Edited.\n",
+  );
+  // The marker holds: a root file that changes later is not copied again.
+  await computer.seedWorkspace({ "/AGENTS.md": "Root changed later.\n" });
+  await computer.files();
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Edited.\n",
+  );
+});
+
+test("when both a root and a /workspace AGENTS.md exist, neither changes and the /workspace file is the one loaded", async (t) => {
+  const { computer } = seededHomeComputer(t);
+  await computer.seedWorkspace({
+    "/AGENTS.md": "Owner text at the root.\n",
+    "/workspace/AGENTS.md": "Agent text in the guest.\n",
+  });
+  let files;
+  const lines = await withCapturedConsole(async () => {
+    files = await computer.files();
+  });
+  assert.equal(
+    await computer.workspaceText("/AGENTS.md"),
+    "Owner text at the root.\n",
+  );
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Agent text in the guest.\n",
+  );
+  assert.equal(
+    (await readAgentsMd(files)).content,
+    "Agent text in the guest.\n",
+  );
+  assert.deepEqual(lines.warn, [
+    ["home-instructions-root-conflict", { computerId: "workspace" }],
+  ]);
+});
+
+test("a Computer with no root AGENTS.md is marked without change", async (t) => {
+  const { computer } = seededHomeComputer(t);
+  await computer.seedWorkspace({ "/workspace/AGENTS.md": "Guest only.\n" });
+  const files = await computer.files();
+  assert.equal((await readAgentsMd(files)).content, "Guest only.\n");
+  assert.equal(await computer.workspaceText("/AGENTS.md"), null);
+});
+
+test("the copy pulls a running guest first, so a guest edit the Workspace has not seen wins and the root copy is kept", async (t) => {
+  const guest = fakeGuest({ "/workspace/AGENTS.md": "Guest edit.\n" }, [
+    "/workspace/AGENTS.md",
+  ]);
+  const { computer, authority } = seededHomeComputer(t, guest);
+  await computer.seedWorkspace({ "/AGENTS.md": "Owner text.\n" });
+  const lines = await withCapturedConsole(async () => {
+    await computer.fileRead(authority, "/workspace/AGENTS.md");
+  });
+  assert.equal(guest.calls[0], "pull");
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Guest edit.\n",
+  );
+  assert.equal(guest.files.get("/workspace/AGENTS.md"), "Guest edit.\n");
+  assert.equal(await computer.workspaceText("/AGENTS.md"), "Owner text.\n");
+  assert.deepEqual(lines.warn, [
+    ["home-instructions-root-conflict", { computerId: "workspace" }],
+  ]);
+});
+
+test("a guest that cannot be pulled leaves the copy undone and the marker unset until a later request can pull it", async (t) => {
+  const guest = fakeGuest({ "/workspace/AGENTS.md": "Guest edit.\n" }, [
+    "/workspace/AGENTS.md",
+  ]);
+  guest.pullFails = true;
+  const { computer, authority } = seededHomeComputer(t, guest);
+  await computer.seedWorkspace({ "/AGENTS.md": "Owner text.\n" });
+  await withCapturedConsole(async () => {
+    await computer.fileRead(authority, "/AGENTS.md");
+  });
+  // Nothing was copied or pushed: the guest's unpulled edit is intact.
+  assert.equal(await computer.workspaceText("/workspace/AGENTS.md"), null);
+  assert.equal(guest.files.get("/workspace/AGENTS.md"), "Guest edit.\n");
+  assert.equal(guest.calls.includes("push"), false);
+  // The next request pulls the guest's edit in; it wins over the owner's file.
+  guest.pullFails = false;
+  await withCapturedConsole(async () => {
+    await computer.fileRead(authority, "/AGENTS.md");
+  });
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Guest edit.\n",
+  );
+  assert.equal(guest.files.get("/workspace/AGENTS.md"), "Guest edit.\n");
+  assert.equal(await computer.workspaceText("/AGENTS.md"), "Owner text.\n");
+});
+
+test("a copy made with a running guest attached is pushed to it after the pull, never before", async (t) => {
+  const guest = fakeGuest();
+  const { computer, authority } = seededHomeComputer(t, guest);
+  await computer.seedWorkspace({ "/AGENTS.md": "Owner text.\n" });
+  await computer.fileRead(authority, "/workspace/AGENTS.md");
+  assert.equal(
+    await computer.workspaceText("/workspace/AGENTS.md"),
+    "Owner text.\n",
+  );
+  assert.equal(await computer.workspaceText("/AGENTS.md"), "Owner text.\n");
+  assert.equal(guest.files.get("/workspace/AGENTS.md"), "Owner text.\n");
+  assert.equal(guest.calls[0], "pull");
+  assert.ok(guest.calls.indexOf("push") > guest.calls.indexOf("pull"));
 });

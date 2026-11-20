@@ -78,4 +78,9 @@ export {
   type AppToolPolicy,
 } from "./tools.js";
 
+export {
+  installConfirmation,
+  type InstallConfirmation,
+  type InstallConfirmationLine,
+} from "./install-confirmation.js";
 export { permissionCatalog, type PermissionCatalogEntry } from "./catalog.js";

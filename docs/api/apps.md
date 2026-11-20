@@ -338,6 +338,38 @@ admission.
 
 ---
 
+### InstallConfirmationLine
+
+```ts
+type InstallConfirmationLine = Readonly<{
+  capability: AppCapabilityId;
+  label: string;
+  description: string;
+  warning: string | null;
+  apps: readonly string[];
+}>;
+```
+
+One declared permission as the install confirmation words it.
+
+---
+
+### InstallConfirmation
+
+```ts
+type InstallConfirmation = Readonly<{
+  granted: readonly InstallConfirmationLine[];
+  needsApproval: readonly InstallConfirmationLine[];
+}>;
+```
+
+Every permission an install declares, once, for one confirmation. `granted` is
+what confirming approves; `needsApproval` is what stays refused until an owner
+approves it. Both come from the rule the install reducer applies, so the list
+cannot promise more or less than the install does.
+
+---
+
 ### ResourceRef
 
 ```ts
@@ -1859,6 +1891,27 @@ stay outside this pure gate.
 #### Returns
 
 [`GateDecision`](#gatedecision)
+
+---
+
+### installConfirmation()
+
+```ts
+function installConfirmation(role, apps): InstallConfirmation;
+```
+
+Merge any number of Apps into one combined, once-per-permission list.
+
+#### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `role`    | `"member"` \| `"owner"` \| `"admin"` \| `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `apps`    | readonly `Readonly`\<\{ `name`: `string`; `capabilities`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"` \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \| `"channels.personal.manage"`)[]; \}\>[] |
+
+#### Returns
+
+[`InstallConfirmation`](#installconfirmation)
 
 ---
 

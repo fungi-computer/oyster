@@ -242,7 +242,6 @@ function PermissionEditor({
   const [retired, setRetired] = useState(false);
   const [refreshNeeded, setRefreshNeeded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
   const [otherOpen, setOtherOpen] = useState(false);
@@ -298,8 +297,7 @@ function PermissionEditor({
       await onAccepted?.();
       if (!mounted.current) return;
       setRefreshNeeded(false);
-      setSaved(true);
-      setMessage("Permissions saved");
+      toast.success("Permissions saved", { toasterId: describeId });
     } catch (cause) {
       console.error("App permissions surrounding-screen refresh failed", cause);
       if (!mounted.current) return;
@@ -327,7 +325,6 @@ function PermissionEditor({
     if (view === null || saving || retired || !view.canEdit) return;
     setSaving(true);
     setRefreshNeeded(false);
-    setSaved(false);
     setMessage(null);
     try {
       if (!uncertain) {
@@ -615,15 +612,6 @@ function PermissionEditor({
       )}
       {showFooter && (
         <FormFooter divider={false}>
-          {message !== null && saved && !uncertain && !refreshNeeded && (
-            <Status
-              role="status"
-              size="compact"
-              glyph="dot"
-              tone="success"
-              label={message}
-            />
-          )}
           {refreshNeeded && (
             <Button
               type="button"

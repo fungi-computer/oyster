@@ -275,6 +275,10 @@ Install an App Release that `packRelease` produced with the `oyster` command:
 oyster install ./notes-release --installation-id notes
 ```
 
+It lists what the App asks for and asks you to confirm once. Several Releases
+may be given, and then one list covers them all. Add `--yes` to confirm without
+asking; a run with no terminal and no `--yes` installs nothing.
+
 When you need more, add one layer at a time:
 
 - `@fungi.computer/oyster/workers-git`: `oysterGitRoot` adds the git door, keys,

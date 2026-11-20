@@ -110,6 +110,7 @@ import { admits, scopedBindings, grantsFor } from "./apps/gate.js";
 import {
   appCallTargetName,
   appPermissionPageSchema,
+  pendingCapabilities,
   permissionSaveSchema,
   type ResourceOption,
 } from "./apps/permissions.js";
@@ -168,7 +169,9 @@ import {
 import {
   parseRelease,
   readCachedVerified,
+  ReleaseError,
   sha256,
+  verifyRelease,
   type ArtifactStore,
   type VerifiedObjectCache,
   type VerifiedRelease,
@@ -1463,6 +1466,54 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       );
     return result.ok ? null : instanceRefusal(result);
   };
+
+  // What installing this Release would ask for, before anything is installed;
+  // the CLI shows it once and the owner confirms. The artifacts are already
+  // uploaded, and verification is the same one install runs. Over an existing
+  // installation the install keeps its current grants, so `update` names only
+  // what would newly wait for approval.
+  table.post("/api/installations/preview", owner("direct"), async (context) => {
+    let release;
+    let installationId;
+    try {
+      const request = Schema.decodeUnknownSync(installRequestSchema)(
+        await context.req.json(),
+      );
+      release = parseRelease(request.release);
+      installationId =
+        request.installationId ?? release.appId.replaceAll("_", "-");
+    } catch {
+      return refusal(400, "Invalid install request");
+    }
+    try {
+      const verified = await verifyRelease(host.artifacts, release);
+      const declaration = verified.declaration ?? emptyAppDeclaration;
+      const existing = await host.installations.get(installationId);
+      return Response.json({
+        name: release.appId,
+        capabilities: declaration.capabilities,
+        update:
+          // A deleted id is retired: installing it again is a fresh install.
+          existing === null || existing.status === "deleted"
+            ? null
+            : {
+                installationId,
+                needsApproval: pendingCapabilities(
+                  existing.authority,
+                  declaration,
+                  await deriveDeclaredOperations(
+                    verified.release,
+                    declaration,
+                    host.capabilities ?? [],
+                  ),
+                ),
+              },
+      });
+    } catch (cause) {
+      if (cause instanceof ReleaseError) return refusal(422, cause.code);
+      throw cause;
+    }
+  });
 
   table.post(
     "/api/installations",

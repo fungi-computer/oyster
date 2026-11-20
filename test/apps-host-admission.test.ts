@@ -716,6 +716,76 @@ it("records the owner's explicit operation approval at the installation HTTP bou
   });
 });
 
+it("previews what a fresh install asks for without installing anything", async () => {
+  const { app, release } = await fixture();
+  const preview = (body: Schema.Json) =>
+    app.request("/api/installations/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const response = await preview({ release });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    name: release.appId,
+    capabilities: ["computer.readFile"],
+    update: null,
+  });
+  expect((await preview({})).status).toBe(400);
+  expect(await (await app.request("/api/installations")).json()).toEqual([]);
+});
+
+it("previews an update as keeping its grants, naming what newly waits for approval", async () => {
+  const f = await fixture();
+  await f.install();
+  const response = await f.app.request("/api/installations/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      release: await f.upgradedRelease(),
+      installationId: "notes",
+    }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    update: { installationId: "notes", needsApproval: ["computer.writeFile"] },
+  });
+});
+
+it("previews an install over a deleted installation as a fresh install", async () => {
+  const f = await fixture();
+  await f.install();
+  expect(
+    (await f.app.request("/api/installations/notes", { method: "DELETE" }))
+      .status,
+  ).toBe(204);
+  const response = await f.app.request("/api/installations/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ release: f.release, installationId: "notes" }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ update: null });
+});
+
+it("refuses a preview of a Release whose artifact digest does not match", async () => {
+  const { app, release } = await fixture();
+  const response = await app.request("/api/installations/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      release: {
+        ...release,
+        artifact: {
+          ...release.artifact,
+          artifactDigest: `sha256:${"0".repeat(64)}`,
+        },
+      },
+    }),
+  });
+  expect(response.status).toBe(422);
+});
+
 it("ordinary destinations, including the Tourtois name, require pinned owner approval", async () => {
   const { app, release, records, install, completePost } = await fixture(
     false,
@@ -964,6 +1034,21 @@ const toolPrincipals: { name: string; principal: TenantPrincipal }[] = [
   { name: "key", principal: { actor: { kind: "team-key", keyId: "key" } } },
   { name: "Agent", principal: { actor: { kind: "agent", agentId: "agent" } } },
 ];
+it.each(toolPrincipals)(
+  "refuses an install preview from a $name, as it refuses the install",
+  async ({ principal }) => {
+    const f = await fixture();
+    f.setPrincipal(principal);
+    const response = await f.app.request("/api/installations/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ release: f.release }),
+    });
+    expect(response.status).toBeGreaterThanOrEqual(401);
+    expect(response.status).toBeLessThan(500);
+  },
+);
+
 it("only the owner cookie opens a browser page; a named-key session cookie admits nobody", async () => {
   const f = await fixture();
   await f.install("notes");

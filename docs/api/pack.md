@@ -317,6 +317,134 @@ retains its original lifetime.
 
 ---
 
+### previewRelease()
+
+```ts
+function previewRelease(input): Promise<{
+  name: string;
+  capabilities: readonly (
+    | "computer.list"
+    | "computer.readFile"
+    | "computer.writeFile"
+    | "computer.execute"
+    | "approvals"
+    | "agent.list"
+    | "agent.manage"
+    | "agent.rename"
+    | "agent.avatar"
+    | "agent.instructions"
+    | "agent.toolPolicy"
+    | "agent.read"
+    | "agent.send"
+    | "llm.generation"
+    | "media.generation"
+    | "media.share"
+    | "games:servers"
+    | "git.repository"
+    | "apps.open"
+    | "apps.call"
+    | "app.storage"
+    | "app.events.emit"
+    | "team.workbenchHost"
+    | "marketplace.browse"
+    | "marketplace.purchase"
+    | "workflow.run"
+    | "workflow.publish"
+    | "workflow.arm"
+    | "world"
+    | "channels.read"
+    | "channels.personal.manage"
+  )[];
+  update: {
+    installationId: string;
+    needsApproval: readonly (
+      | "computer.list"
+      | "computer.readFile"
+      | "computer.writeFile"
+      | "computer.execute"
+      | "approvals"
+      | "agent.list"
+      | "agent.manage"
+      | "agent.rename"
+      | "agent.avatar"
+      | "agent.instructions"
+      | "agent.toolPolicy"
+      | "agent.read"
+      | "agent.send"
+      | "llm.generation"
+      | "media.generation"
+      | "media.share"
+      | "games:servers"
+      | "git.repository"
+      | "apps.open"
+      | "apps.call"
+      | "app.storage"
+      | "app.events.emit"
+      | "team.workbenchHost"
+      | "marketplace.browse"
+      | "marketplace.purchase"
+      | "workflow.run"
+      | "workflow.publish"
+      | "workflow.arm"
+      | "world"
+      | "channels.read"
+      | "channels.personal.manage"
+    )[];
+  } | null;
+  release: {
+    releaseId: ReleaseId;
+    appId: AppId;
+    artifact: {
+      artifactRef: ArtifactRef;
+      artifactDigest: Sha256Digest;
+      provenance: {
+        sourceRevision: SourceRevision;
+        sourceTreeDigest: Sha256Digest;
+        buildRecipeDigest: Sha256Digest;
+      };
+    };
+  };
+}>;
+```
+
+Upload one built Release and ask the Oyster what installing it would request, so
+an owner can confirm several Releases once before any install.
+
+#### Parameters
+
+| Parameter | Type                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; \}\> |
+
+#### Returns
+
+`Promise`\<\{ `name`: `string`; `capabilities`: readonly ( \| `"computer.list"`
+\| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
+\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`)[]; `update`: \| \{
+`installationId`: `string`; `needsApproval`: readonly ( \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
+\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`)[]; \} \| `null`; `release`:
+\{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
+`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
+`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
+`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; \}\>
+
+---
+
 ### installRelease()
 
 ```ts
@@ -333,9 +461,9 @@ is reported as an unconfirmed observation, not refusal.
 
 #### Parameters
 
-| Parameter | Type                                                                                                                                                                                                                                                                         |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; `onAdmitted?`: (`operation`) => `void`; `onCompleted?`: (`operation`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
+| Parameter | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `directory`: `string`; `url`: `string`; `key`: `string`; `installationId?`: `string`; `uploaded?`: \{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; `onAdmitted?`: (`operation`) => `void`; `onCompleted?`: (`operation`) => `Promise`\<`void`\>; \}\> & `Readonly`\<\{ `waitMs?`: `number`; `signal?`: `AbortSignal`; \}\> |
 
 #### Returns
 

@@ -16,7 +16,7 @@ function computer(initial: string | null) {
     },
     fileReplace: (authority, path, expected, content) => {
       grants.push(authority.provenance.actor);
-      expect(path).toBe("/AGENTS.md");
+      expect(path).toBe("/workspace/AGENTS.md");
       if (stored !== expected)
         return Promise.resolve({ kind: "conflict" as const });
       stored = content;

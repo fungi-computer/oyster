@@ -162,7 +162,21 @@ it("Shell uses one compact row and inline confirmation, saving every pending per
       ],
     ],
   ]);
-  expect(container.textContent).toContain("Permissions saved");
+  // The confirmation is a toast, never text that reflows the form. It
+  // survives a re-render with the same props after the directory refetch;
+  // neither host remounts the view on save.
+  const savedToasts = () =>
+    [...document.querySelectorAll("[data-sonner-toast]")]
+      .map((toast) => toast.textContent)
+      .join(" ");
+  expect(savedToasts()).toContain("Permissions saved");
+  expect(container.textContent).not.toContain("Permissions saved");
+  await act(() => {
+    root.render(createElement(AppPermissionsView, { port, appKey: "desktop" }));
+    return Promise.resolve();
+  });
+  expect(savedToasts()).toContain("Permissions saved");
+  expect(container.textContent).not.toContain("Permissions saved");
   expect(
     container.querySelector('[aria-label="Shell not allowed"]'),
   ).not.toBeNull();

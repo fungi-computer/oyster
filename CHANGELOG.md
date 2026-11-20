@@ -1,5 +1,25 @@
 # @fungi.computer/oyster
 
+## 0.48.0
+
+### Minor Changes
+
+- Changes since 0.47.5:
+
+  - fix(oyster): preview an install over a deleted id as fresh
+  - fix(oyster): move install callers to the confirmation and cover updates
+  - fix(oyster): copy the root AGENTS.md after pulling the guest
+  - feat(oyster): show one install confirmation for the whole install
+  - fix(computer): resolve an agent's relative file paths from /workspace
+  - fix(oyster): show permissions saved as a toast
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.16.2
+  - @fungi.computer/shiitake-extensions@0.11.23
+
 ## 0.47.5
 
 ### Patch Changes

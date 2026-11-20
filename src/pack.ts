@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
+import { appCapabilityIdSchema } from "@fungi.computer/puffball/app";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
 import {
   installOnOyster,
@@ -236,6 +237,92 @@ export async function installFromSource(
   }
 }
 
+/** Read a built Release directory and upload its artifacts; uploads are idempotent. */
+async function uploadRelease(
+  input: Readonly<{
+    directory: string;
+    url: string;
+    key: string;
+    signal: AbortSignal;
+  }>,
+) {
+  const directory = resolve(input.directory);
+  const release = Schema.decodeUnknownSync(
+    Schema.fromJsonString(releaseSchema),
+  )(await readFile(join(directory, "release.json"), "utf8"));
+  const authorization = { Authorization: `Bearer ${input.key}` };
+  for (const file of await filesUnder(join(directory, "artifacts"))) {
+    const bytes = new Uint8Array(await readFile(file));
+    const artifactRef = `artifact:${relative(join(directory, "artifacts"), file)}`;
+    const digest: Sha256Digest = parseSha256Digest(await sha256(bytes));
+    const response = await fetch(
+      new URL(
+        `/api/artifacts/${encodeURIComponent(artifactRef)}?digest=${digest}`,
+        input.url,
+      ),
+      {
+        method: "PUT",
+        headers: authorization,
+        body: bytes,
+        signal: input.signal,
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `Artifact upload failed (${String(response.status)}): ${artifactRef}`,
+      );
+  }
+  return release;
+}
+
+const releasePreviewSchema = Schema.Struct({
+  name: Schema.String,
+  capabilities: Schema.Array(appCapabilityIdSchema),
+  /** Set when this Release would update an existing installation. */
+  update: Schema.NullOr(
+    Schema.Struct({
+      installationId: Schema.String,
+      needsApproval: Schema.Array(appCapabilityIdSchema),
+    }),
+  ),
+});
+
+/**
+ * Upload one built Release and ask the Oyster what installing it would
+ * request, so an owner can confirm several Releases once before any install.
+ */
+export async function previewRelease(
+  input: Readonly<{
+    directory: string;
+    url: string;
+    key: string;
+    installationId?: string | undefined;
+  }>,
+) {
+  const signal = installationObservationSignal({});
+  const release = await uploadRelease({ ...input, signal });
+  const response = await fetch(
+    new URL("/api/installations/preview", input.url),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ release }),
+      signal,
+    },
+  );
+  if (!response.ok)
+    throw new Error(
+      `Install preview failed (${String(response.status)}): ${await response.text()}`,
+    );
+  return {
+    ...Schema.decodeUnknownSync(releasePreviewSchema)(await response.json()),
+    release,
+  };
+}
+
 /**
  * Upload a packed Release to an Oyster and install it. The host installs a
  * new installation (201) or switches an existing one to this Release (200),
@@ -252,6 +339,8 @@ export async function installRelease(
     /** The Oyster owner key. */
     key: string;
     installationId?: string;
+    /** The Release `previewRelease` already read and uploaded; skips both. */
+    uploaded?: Awaited<ReturnType<typeof uploadRelease>>;
     /** Report owner-correlated admission without shortening the completion wait. */
     onAdmitted?: (operation: InstallationOperation) => void;
     /** Runs once with the completed operation, before the response is made. */
@@ -262,27 +351,7 @@ export async function installRelease(
   // One installer budget for uploads + observation, not an App authority grant.
   const signal = installationObservationSignal(input);
   signal.throwIfAborted();
-  const directory = resolve(input.directory);
-  const release = Schema.decodeUnknownSync(
-    Schema.fromJsonString(releaseSchema),
-  )(await readFile(join(directory, "release.json"), "utf8"));
-  const authorization = { Authorization: `Bearer ${input.key}` };
-  for (const file of await filesUnder(join(directory, "artifacts"))) {
-    const bytes = new Uint8Array(await readFile(file));
-    const artifactRef = `artifact:${relative(join(directory, "artifacts"), file)}`;
-    const digest: Sha256Digest = parseSha256Digest(await sha256(bytes));
-    const response = await fetch(
-      new URL(
-        `/api/artifacts/${encodeURIComponent(artifactRef)}?digest=${digest}`,
-        input.url,
-      ),
-      { method: "PUT", headers: authorization, body: bytes, signal },
-    );
-    if (!response.ok)
-      throw new Error(
-        `Artifact upload failed (${String(response.status)}): ${artifactRef}`,
-      );
-  }
+  const release = input.uploaded ?? (await uploadRelease({ ...input, signal }));
   let installation: Parameters<typeof installOnOyster>[0] = {
     url: input.url,
     key: input.key,

@@ -18,29 +18,19 @@ export const starterAgent = {
 
 /** Seed only a missing Home file; the host supplies an atomic create-if-absent. */
 export async function seedStarterHome(
-  /** Where this host keeps Home's AGENTS.md. */
-  instructionsPath: string,
-  writeIfMissing: (path: string, content: string) => Promise<void>,
+  writeIfMissing: (content: string) => Promise<void>,
 ): Promise<void> {
-  await writeIfMissing(
-    instructionsPath,
-    starterHomeInstructions(
-      `computer://home/${instructionsPath.replace(/^\//u, "")}`,
-    ),
-  );
+  await writeIfMissing(starterHomeInstructions);
 }
 
 /**
  * The Home AGENTS.md a new Team's Agent starts with. It says nothing about
  * money; the person and the Agent both edit it from here on.
  */
-const starterHomeInstructions = (
-  /** Where Home's AGENTS.md is read from on this host, as the Agent names it. */
-  location: string,
-) => `# Shiitake's instructions
+const starterHomeInstructions = `# Shiitake's instructions
 
 These are my standing instructions. They live on my Computer at
-${location} and load at the start of every conversation. My
+computer://home/AGENTS.md and load at the start of every conversation. My
 person and I both edit this file.
 
 ## First conversation
