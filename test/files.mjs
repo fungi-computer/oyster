@@ -1,4 +1,4 @@
-/* global Request, TextEncoder, TextDecoder, console */
+/* global Request, ReadableStream, TextEncoder, TextDecoder, console */
 import assert from "node:assert/strict";
 import { normalizeFilePath } from "../dist/files.js";
 import { capabilityFixture } from "../dist/testing/index.js";
@@ -118,4 +118,44 @@ const replaced = await call("/files/replace", {
   body: JSON.stringify({ path: "/n.md", expectedContent: "no", content: "x" }),
 });
 assert.deepEqual(await replaced.json(), { kind: "conflict" });
+
+// A chunked body has no Content-Length to trust: the route stops reading as
+// soon as it passes the limit, instead of buffering all of it first.
+const chunkedBody = (chunks, chunkBytes, prefix = "") => {
+  let pulled = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (pulled === 0 && prefix !== "") controller.enqueue(encode(prefix));
+      if (pulled === chunks) return controller.close();
+      pulled += 1;
+      controller.enqueue(new Uint8Array(chunkBytes).fill(97));
+    },
+  });
+  return { stream, pulled: () => pulled };
+};
+const MiB = 1024 * 1024;
+const upload = chunkedBody(40, MiB);
+const tooLarge = await call("/files/content?path=/big.bin", {
+  method: "PUT",
+  body: upload.stream,
+  duplex: "half",
+});
+assert.equal(tooLarge.status, 413);
+assert.ok(upload.pulled() < 30, `read ${String(upload.pulled())} MiB`);
+assert.equal(await source.read("/big.bin"), null);
+const edit = chunkedBody(80, MiB, '{"path":"/n.md","expectedContent":"');
+const editTooLarge = await call("/files/replace", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: edit.stream,
+  duplex: "half",
+});
+assert.equal(editTooLarge.status, 413);
+assert.ok(edit.pulled() < 60, `read ${String(edit.pulled())} MiB`);
+const folder = await call("/files/mkdir", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ path: `/${"d".repeat(16 * 1024)}` }),
+});
+assert.equal(folder.status, 413);
 console.log("oyster files: ok");

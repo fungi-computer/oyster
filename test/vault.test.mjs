@@ -1,4 +1,4 @@
-/* global Headers, Request, Response */
+/* global Headers, ReadableStream, Request, Response, TextEncoder */
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -308,4 +308,40 @@ test("model-key uses are listed per key and Agent, coalesced within a minute", a
   } finally {
     h.database.close();
   }
+});
+
+test("an oversized chunked body is refused while it is read, with no Content-Length to trust", async () => {
+  const h = fixture();
+  // One JSON body, streamed in 16 KiB pieces with no Content-Length.
+  const chunked = (prefix, bytes, suffix) => {
+    const pieces = [prefix, "x".repeat(bytes), suffix];
+    return new ReadableStream({
+      pull(controller) {
+        const next = pieces.shift();
+        if (next === undefined) return controller.close();
+        for (let at = 0; at < next.length; at += 16 * 1024)
+          controller.enqueue(
+            new TextEncoder().encode(next.slice(at, at + 16 * 1024)),
+          );
+      },
+    });
+  };
+  const before = h.dump();
+  const secret = await h.call("/api/vault/secrets", {
+    method: "POST",
+    duplex: "half",
+    body: chunked(
+      '{"name":"big","destinations":[{"host":"api.example.com","methods":["GET"]}],"placement":"bearer","secret":"',
+      200 * 1024,
+      '"}',
+    ),
+  });
+  assert.equal(secret.status, 413);
+  assert.equal(h.dump(), before);
+  const modelKey = await h.call("/api/model-keys", {
+    method: "POST",
+    duplex: "half",
+    body: chunked('{"provider":"openai","name":"big","key":"', 64 * 1024, '"}'),
+  });
+  assert.equal(modelKey.status, 413);
 });

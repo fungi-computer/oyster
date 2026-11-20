@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.50.1
+
+### Patch Changes
+
+- Changes since 0.50.0:
+
+  - fix(oyster): refuse oversized bodies while they are read
+  - fix(oyster): read the owner session cookie with hono's cookie parser
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.12.3
+  - @fungi.computer/parakeet@0.16.3
+
 ## 0.50.0
 
 ### Minor Changes

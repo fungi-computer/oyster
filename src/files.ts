@@ -6,6 +6,7 @@
  * the Oyster's workspace unchanged. Other sources (a git repository) implement
  * the same `FileSource`.
  */
+import { bodyAtMost } from "./body-limit.js";
 import { computer, routes, type Routes } from "./authorization.js";
 import * as Schema from "effect/Schema";
 import {
@@ -63,6 +64,10 @@ export type FileSource = Readonly<{
 }>;
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+/** A replace carries the expected and the new text: each at most a file. */
+const MAX_REPLACE_REQUEST_BYTES = 2 * MAX_FILE_BYTES + 64 * 1024;
+/** A mkdir carries one path of at most 4,096 characters. */
+const MAX_PATH_REQUEST_BYTES = 16 * 1024;
 const MAX_LIST = 1000;
 
 /** Normalize an absolute path; `null` when it is not one or escapes the root. */
@@ -151,41 +156,52 @@ function createFileRoutes(source: FileSource): Routes<CapabilityEnv> {
           headers: { "Content-Type": "application/octet-stream" },
         });
   });
-  table.put("/content", computer(), async (context) => {
-    const path = pathOf(context.req.query("path"));
-    if (path === null || path === "/") return refusal(400, "Invalid path");
-    const length = Number(context.req.header("content-length") ?? "0");
-    if (length > MAX_FILE_BYTES) return refusal(413, "File too large");
-    const bytes = new Uint8Array(await context.req.arrayBuffer());
-    if (bytes.length > MAX_FILE_BYTES) return refusal(413, "File too large");
-    await source.write(path, bytes);
-    return new Response(null, { status: 204 });
-  });
-  table.post("/mkdir", computer(), async (context) => {
-    const body = Schema.decodeUnknownOption(mkdirSchema)(
-      await context.req.json(),
-    );
-    const path =
-      body._tag === "Some" ? normalizeFilePath(body.value.path) : null;
-    if (path === null || path === "/") return refusal(400, "Invalid path");
-    await source.mkdir(path);
-    return new Response(null, { status: 204 });
-  });
-  table.post("/replace", computer(), async (context) => {
-    const body = Schema.decodeUnknownOption(replaceSchema)(
-      await context.req.json(),
-    );
-    const path =
-      body._tag === "Some" ? normalizeFilePath(body.value.path) : null;
-    if (body._tag === "None" || path === null)
-      return refusal(400, "Invalid request");
-    return Response.json(
-      await source.replace(
-        path,
-        body.value.expectedContent,
-        body.value.content,
-      ),
-    );
-  });
+  table.put(
+    "/content",
+    computer(),
+    async (context) => {
+      const path = pathOf(context.req.query("path"));
+      if (path === null || path === "/") return refusal(400, "Invalid path");
+      await source.write(path, new Uint8Array(await context.req.arrayBuffer()));
+      return new Response(null, { status: 204 });
+    },
+    bodyAtMost(MAX_FILE_BYTES, "File too large"),
+  );
+  table.post(
+    "/mkdir",
+    computer(),
+    async (context) => {
+      const body = Schema.decodeUnknownOption(mkdirSchema)(
+        await context.req.json(),
+      );
+      const path =
+        body._tag === "Some" ? normalizeFilePath(body.value.path) : null;
+      if (path === null || path === "/") return refusal(400, "Invalid path");
+      await source.mkdir(path);
+      return new Response(null, { status: 204 });
+    },
+    bodyAtMost(MAX_PATH_REQUEST_BYTES),
+  );
+  table.post(
+    "/replace",
+    computer(),
+    async (context) => {
+      const body = Schema.decodeUnknownOption(replaceSchema)(
+        await context.req.json(),
+      );
+      const path =
+        body._tag === "Some" ? normalizeFilePath(body.value.path) : null;
+      if (body._tag === "None" || path === null)
+        return refusal(400, "Invalid request");
+      return Response.json(
+        await source.replace(
+          path,
+          body.value.expectedContent,
+          body.value.content,
+        ),
+      );
+    },
+    bodyAtMost(MAX_REPLACE_REQUEST_BYTES),
+  );
   return table;
 }

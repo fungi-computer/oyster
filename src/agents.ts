@@ -8,6 +8,7 @@ import type { AppSetup } from "@fungi.computer/agar";
  * transport (`/browser/…`), served by the adapter behind the same App grants.
  */
 import type { Env } from "hono";
+import { bodyAtMost } from "./body-limit.js";
 import type { TenantPrincipal } from "./tenant.js";
 import type {
   ModelKeyRecord,
@@ -1045,20 +1046,23 @@ export function modelKeyRoutes(
         ...(await computerSetup?.()),
       }),
     )
-    .post("/api/model-keys", owner("direct"), async (context) => {
-      const length = Number(context.req.header("content-length") ?? "0");
-      if (length > 32 * 1024) return refusal(413, "Request too large");
-      const input = Schema.decodeUnknownOption(
-        Schema.fromJsonString(sealRequestSchema),
-        { onExcessProperty: "error" },
-      )(await context.req.text());
-      if (input._tag === "None")
-        return refusal(400, "Choose a provider, name the key and paste it");
-      const sealed = await agents.sealModelKey(input.value);
-      return "error" in sealed
-        ? refusal(modelKeyRefusalStatus[sealed.error], sealed.error)
-        : Response.json(sealed, { status: 201 });
-    })
+    .post(
+      "/api/model-keys",
+      owner("direct"),
+      async (context) => {
+        const input = Schema.decodeUnknownOption(
+          Schema.fromJsonString(sealRequestSchema),
+          { onExcessProperty: "error" },
+        )(await context.req.text());
+        if (input._tag === "None")
+          return refusal(400, "Choose a provider, name the key and paste it");
+        const sealed = await agents.sealModelKey(input.value);
+        return "error" in sealed
+          ? refusal(modelKeyRefusalStatus[sealed.error], sealed.error)
+          : Response.json(sealed, { status: 201 });
+      },
+      bodyAtMost(32 * 1024),
+    )
     .delete("/api/model-keys/:keyId", owner("direct"), async (context) => {
       const keyId = context.req.param("keyId");
       if (!keyIdPattern.test(keyId)) return refusal(404, "No such key");
@@ -1131,12 +1135,11 @@ function vaultRoutes(agents: OysterAgents): Routes<OysterEnv> {
           headers: { "cache-control": "private, no-store" },
         });
   };
+  const vaultBodyLimit = bodyAtMost(64 * 1024);
   const body = async <S extends Schema.Decoder<unknown>>(
     request: Request,
     schema: S,
   ): Promise<S["Type"] | null> => {
-    if (Number(request.headers.get("content-length") ?? "0") > 64 * 1024)
-      return null;
     const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(schema), {
       onExcessProperty: "error",
     })(await request.text());
@@ -1149,12 +1152,20 @@ function vaultRoutes(agents: OysterAgents): Routes<OysterEnv> {
   };
   return routes<OysterEnv>()
     .get("/api/vault", owner("direct"), () => answer({ op: "read" }))
-    .post("/api/vault/secrets", owner("direct"), async (context) => {
-      const input = await body(context.req.raw, addSecretSchema);
-      return input === null
-        ? refusal(400, "Name the secret, bind it to hosts and paste its value")
-        : answer({ op: "addSecret", ...input }, 201);
-    })
+    .post(
+      "/api/vault/secrets",
+      owner("direct"),
+      async (context) => {
+        const input = await body(context.req.raw, addSecretSchema);
+        return input === null
+          ? refusal(
+              400,
+              "Name the secret, bind it to hosts and paste its value",
+            )
+          : answer({ op: "addSecret", ...input }, 201);
+      },
+      vaultBodyLimit,
+    )
     .put(
       "/api/vault/credentials/:connectionId",
       owner("direct"),
@@ -1167,6 +1178,7 @@ function vaultRoutes(agents: OysterAgents): Routes<OysterEnv> {
           ? refusal(400, "invalid_input")
           : answer({ op: "updateCredential", connectionId, ...input });
       },
+      vaultBodyLimit,
     )
     .delete(
       "/api/vault/credentials/:connectionId",
@@ -1180,6 +1192,7 @@ function vaultRoutes(agents: OysterAgents): Routes<OysterEnv> {
           ? refusal(400, "invalid_input")
           : answer({ op: "revokeCredential", connectionId, ...input });
       },
+      vaultBodyLimit,
     )
     .put(
       "/api/vault/credentials/:connectionId/subjects/:kind/:subjectId",
@@ -1263,25 +1276,28 @@ export function connectionRoutes(agents: OysterAgents): Routes<OysterEnv> {
           connections,
         });
       })
-      .post("/api/connections", owner("direct"), async (context) => {
-        const length = Number(context.req.header("content-length") ?? "0");
-        if (length > 16 * 1024) return refusal(413, "Request too large");
-        const input = Schema.decodeUnknownOption(
-          Schema.fromJsonString(connectionInputSchema),
-          { onExcessProperty: "error" },
-        )(await context.req.text());
-        if (input._tag === "None")
-          return refusal(
-            400,
-            "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
-          );
-        if (input.value.oauth !== undefined && input.value.bearer !== null)
-          return refusal(400, "Choose a token or sign-in, not both");
-        const added = await agents.addConnection(input.value);
-        return "error" in added
-          ? refusal(connectionRefusalStatus[added.error], added.error)
-          : Response.json(added, { status: 201 });
-      })
+      .post(
+        "/api/connections",
+        owner("direct"),
+        async (context) => {
+          const input = Schema.decodeUnknownOption(
+            Schema.fromJsonString(connectionInputSchema),
+            { onExcessProperty: "error" },
+          )(await context.req.text());
+          if (input._tag === "None")
+            return refusal(
+              400,
+              "Name the server (lowercase letters, digits, _) and give its https:// endpoint",
+            );
+          if (input.value.oauth !== undefined && input.value.bearer !== null)
+            return refusal(400, "Choose a token or sign-in, not both");
+          const added = await agents.addConnection(input.value);
+          return "error" in added
+            ? refusal(connectionRefusalStatus[added.error], added.error)
+            : Response.json(added, { status: 201 });
+        },
+        bodyAtMost(16 * 1024),
+      )
       // The authorization server's redirect: the owner's browser, signed in.
       .get("/api/connections/callback", owner("direct"), async (context) => {
         const query = context.req.query();
@@ -1324,8 +1340,6 @@ export function connectionRoutes(agents: OysterAgents): Routes<OysterEnv> {
             !agentIdPattern.test(agentId)
           )
             return refusal(404, "No such connection");
-          const length = Number(context.req.header("content-length") ?? "0");
-          if (length > 64 * 1024) return refusal(413, "Request too large");
           const input = Schema.decodeUnknownOption(
             Schema.fromJsonString(accessSchema),
             { onExcessProperty: "error" },
@@ -1341,6 +1355,7 @@ export function connectionRoutes(agents: OysterAgents): Routes<OysterEnv> {
             ? refusal(connectionRefusalStatus[granted.error], granted.error)
             : new Response(null, { status: 204 });
         },
+        bodyAtMost(64 * 1024),
       )
       .delete(
         "/api/connections/:connectionId/agents/:agentId",

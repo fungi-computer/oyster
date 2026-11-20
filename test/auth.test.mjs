@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   lastUsedGranularityMs,
@@ -145,6 +146,45 @@ test("neutral login keeps the digest cookie attributes and rotates with the key"
       status: 401,
     },
   );
+});
+
+test("the owner cookie is read with the cookie grammar, keeping existing sessions", async () => {
+  const auth = ownerKeyAuth(key, ownerId);
+  // The value every existing session holds: the digest login has always set.
+  const session = `sha256:${createHash("sha256").update(`oyster:${key}`).digest("hex")}`;
+  const admitted = {
+    kind: "admitted",
+    principal: { actor: { kind: "member", memberId: ownerId }, role: "owner" },
+  };
+  const refused = { kind: "refused", status: 401 };
+  const cases = [
+    [`oyster_session=${session}`, admitted],
+    [`oyster_returning=1; theme=a=b=c; oyster_session=${session}`, admitted],
+    [`oyster_session="${session}"`, admitted],
+    [`  other=1 ;  oyster_session = ${session}  `, admitted],
+    [
+      `oyster_session=${session}; oyster_session=sha256:${"0".repeat(64)}`,
+      admitted,
+    ],
+    [
+      `oyster_session=sha256:${"0".repeat(64)}; oyster_session=${session}`,
+      refused,
+    ],
+    [`xoyster_session=${session}; oyster_session_old=${session}`, refused],
+    [`oyster_session=sha256:${"0".repeat(64)}`, refused],
+    ["oyster_returning=1", refused],
+    ["", refused],
+  ];
+  for (const [cookie, expected] of cases)
+    assert.deepEqual(
+      await auth.authenticate(
+        new Request(origin, {
+          headers: cookie === "" ? {} : { Cookie: cookie },
+        }),
+      ),
+      expected,
+      cookie,
+    );
 });
 
 test("neutral login refuses wrong and missing key input", async () => {

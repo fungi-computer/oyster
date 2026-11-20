@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { parse } from "hono/utils/cookie";
 import type { OysterAuth, OysterAuthResult } from "./host.js";
 import { presentedGitKey } from "./git-auth.js";
 import { sha256 } from "./release.js";
@@ -56,16 +57,13 @@ export function ownerKeyAuth(ownerKey: string, ownerId = "owner"): OysterAuth {
           ? owner
           : { kind: "refused", status: 401 };
       }
-      const cookie = (request.headers.get("Cookie") ?? "")
-        .split(";")
-        .map((part) => part.trim())
-        .find((part) => part.startsWith(`${ownerKeyCookieName}=`));
+      const cookie = parse(
+        request.headers.get("Cookie") ?? "",
+        ownerKeyCookieName,
+      )[ownerKeyCookieName];
       if (
         cookie !== undefined &&
-        (await constantTimeEqual(
-          cookie.slice(ownerKeyCookieName.length + 1),
-          await sessionValue,
-        ))
+        (await constantTimeEqual(cookie, await sessionValue))
       )
         return owner;
       return { kind: "refused", status: 401 };

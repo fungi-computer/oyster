@@ -164,9 +164,12 @@ async function loadRedactorOrWithhold(
  * (S3's gitleaks rules) runs before a byte is retained, so the stored log and
  * every `?log` read of it are already scrubbed. `loadRedactor` is Veil's
  * loader unless a caller wraps it (a test that counts scanned characters).
+ * `pendingCeiling` is the held-text ceiling; only tests lower it, so ceiling
+ * cases run on a few windows of text instead of megabytes.
  */
 export async function createBuildJobLog(
   loadRedactor: () => Promise<PatternRedactor> = loadPatternRedactor,
+  pendingCeiling = maxPendingText,
 ) {
   const ring = createBoundedLog();
   // A rule table that cannot load stores the withheld notice, never the output.
@@ -190,7 +193,7 @@ export async function createBuildJobLog(
     // whole if the output ends first, or through its end if the held text
     // reaches the ceiling first.
     const open = redactor.openFrom(pending);
-    const ceiling = pending.length > maxPendingText;
+    const ceiling = pending.length > pendingCeiling;
     // Still held from the start: nothing can leave, so skip the full scan.
     if (!final && !ceiling && open?.opener.start === 0) {
       scannedLength = pending.length;
@@ -286,7 +289,7 @@ export async function createBuildJobLog(
       if (
         pending.length >=
         Math.min(
-          maxPendingText + 1,
+          pendingCeiling + 1,
           Math.max(
             2 * scanWindow,
             scannedLength + Math.max(scanWindow, scannedLength),

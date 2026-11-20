@@ -44,31 +44,41 @@ const every = (text: string, size: number) =>
 /**
  * Feeds `text` in `chunk`-byte events through the real scan loop and the real
  * redactor, counting every character the loop hands its full rule scan.
+ * `pendingCeiling` lowers the held-text ceiling for the cases that cross it.
  */
-async function scanThrough(text: string, cuts: readonly number[]) {
+async function scanThrough(
+  text: string,
+  cuts: readonly number[],
+  pendingCeiling?: number,
+) {
   const redactor = await loadPatternRedactor();
   let scanned = 0;
-  const capture = await createBuildJobLog(() =>
-    Promise.resolve({
-      ...redactor,
-      find: (input: string) => {
-        scanned += input.length;
-        return redactor.find(input);
-      },
-      redact: (input: string) => {
-        scanned += input.length;
-        return redactor.redact(input);
-      },
-    }),
+  const capture = await createBuildJobLog(
+    () =>
+      Promise.resolve({
+        ...redactor,
+        find: (input: string) => {
+          scanned += input.length;
+          return redactor.find(input);
+        },
+        redact: (input: string) => {
+          scanned += input.length;
+          return redactor.redact(input);
+        },
+      }),
+    pendingCeiling,
   );
   // `cuts` are the event boundaries after the first event's start.
   const bytes = new TextEncoder().encode(text);
   const starts = [0, ...cuts];
   for (const [index, at] of starts.entries())
     capture.append(bytes.subarray(at, starts[index + 1] ?? bytes.length));
+  // Text held from its start is released before the end only by the ceiling.
+  const releasedBeforeEnd = capture.allocatedBytes > 0;
   const result = capture.finish();
   return {
     scanned,
+    releasedBeforeEnd,
     truncated: result.truncated,
     retained: new TextDecoder().decode(base64url.decode(result.output)),
     oneShot: () => redactor.redact(text).text,
@@ -91,6 +101,9 @@ const begin = ["-----BEGIN", "RSA PRIVATE KEY-----"].join(" ");
 const end = ["-----END", "RSA PRIVATE KEY-----"].join(" ");
 const filler = (characters: number) =>
   `${"x".repeat(79)}\n`.repeat(Math.ceil(characters / 80));
+// Eight scan windows: the ceiling cases cross it with the same ratios as the
+// 1 MiB production ceiling, on an eighth of the text.
+const ceiling = 128 * 1024;
 
 it("holds a private key whose body is split by more than a scan window", async () => {
   const body = keyBody(25);
@@ -112,8 +125,13 @@ it("ends the log with a note when a private key opens and never closes", async (
 
 it("ends the log with the note when a key past the ceiling never closes", async () => {
   const body = keyBody(10);
-  const text = `${begin}\n${body.join("\n")}\n${filler(3_000_000)}`;
-  const { retained } = await scanThrough(text, every(text, 4096));
+  const text = `${begin}\n${body.join("\n")}\n${filler(3 * ceiling)}`;
+  const { retained, releasedBeforeEnd } = await scanThrough(
+    text,
+    every(text, 4096),
+    ceiling,
+  );
+  expect(releasedBeforeEnd).toBe(true);
   for (const line of body) expect(retained).not.toContain(line);
   expect(retained.trimEnd().endsWith(keyWithheld)).toBe(true);
 });
@@ -147,8 +165,13 @@ it("holds a curl command whose credentials arrive past a scan window on its line
 
 it("masks an unfinished private key whole at the ceiling and stays linear", async () => {
   const body = keyBody(25);
-  const text = `${begin}\n${body.slice(0, 10).join("\n")}\n${filler(3_000_000)}${body.slice(10).join("\n")}\n`;
-  const { scanned, retained } = await scanThrough(text, every(text, 4096));
+  const text = `${begin}\n${body.slice(0, 10).join("\n")}\n${filler(3 * ceiling)}${body.slice(10).join("\n")}\n`;
+  const { scanned, retained, releasedBeforeEnd } = await scanThrough(
+    text,
+    every(text, 4096),
+    ceiling,
+  );
+  expect(releasedBeforeEnd).toBe(true);
   for (const line of body) expect(retained).not.toContain(line);
   expect(scanned).toBeLessThan(4 * text.length);
 });
@@ -159,13 +182,18 @@ it.each([0, 4096])(
   async (size) => {
     const body = keyBody(10);
     const remainder = ["TAILSECRET", "zz9"].join("");
-    const head = `${begin}\n${body.join("\n")}\n`.padEnd(1_100_000, "y");
+    const head = `${begin}\n${body.join("\n")}\n`.padEnd(
+      Math.ceil(1.1 * ceiling),
+      "y",
+    );
     for (const after of ["after\n", `after\n${"z\n".repeat(30_000)}`]) {
       const text = `${head}${remainder}\n${end}\n${after}`;
-      const { retained } = await scanThrough(
+      const { retained, releasedBeforeEnd } = await scanThrough(
         text,
         size === 0 ? [head.length] : every(text, size),
+        ceiling,
       );
+      expect(releasedBeforeEnd).toBe(true);
       for (const line of [...body, remainder])
         expect(retained).not.toContain(line);
       expect(retained.endsWith(after)).toBe(true);
