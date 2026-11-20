@@ -363,94 +363,97 @@ The catalog-valid avatar an owner may choose for an Agent.
 ### agentAvatarProjectionSchema
 
 ```ts
-const agentAvatarProjectionSchema: ZodDiscriminatedUnion<
-  [
-    ZodObject<
-      {
-        v: ZodLiteral<1>;
-        character: ZodLiteral<"mushroom">;
-        appearance: ZodObject<
-          {
-            [key: string]: ZodOptional<
-              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
-            >;
-          },
-          $strict
-        >;
-        expression: ZodString;
-        renderStyle: ZodEnum<{
-          plain: "plain";
-          pencil: "pencil";
-          manga: "manga";
-          riso: "riso";
-          halftone: "halftone";
-          blueprint: "blueprint";
-          crt: "crt";
-          watercolor: "watercolor";
-        }>;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        v: ZodLiteral<1>;
-        character: ZodLiteral<"cat">;
-        appearance: ZodObject<
-          {
-            [key: string]: ZodOptional<
-              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
-            >;
-          },
-          $strict
-        >;
-        expression: ZodString;
-        renderStyle: ZodEnum<{
-          plain: "plain";
-          pencil: "pencil";
-          manga: "manga";
-          riso: "riso";
-          halftone: "halftone";
-          blueprint: "blueprint";
-          crt: "crt";
-          watercolor: "watercolor";
-        }>;
-      },
-      $strict
-    >,
-    ZodObject<
-      {
-        v: ZodLiteral<1>;
-        character: ZodLiteral<"burger">;
-        appearance: ZodObject<
-          {
-            [key: string]: ZodOptional<
-              ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
-            >;
-          },
-          $strict
-        >;
-        expression: ZodString;
-        renderStyle: ZodEnum<{
-          plain: "plain";
-          pencil: "pencil";
-          manga: "manga";
-          riso: "riso";
-          halftone: "halftone";
-          blueprint: "blueprint";
-          crt: "crt";
-          watercolor: "watercolor";
-        }>;
-      },
-      $strict
-    >,
-  ],
-  "character"
+const agentAvatarProjectionSchema: ZodLazy<
+  ZodDiscriminatedUnion<
+    [
+      ZodObject<
+        {
+          v: ZodLiteral<1>;
+          character: ZodLiteral<"mushroom">;
+          appearance: ZodObject<
+            {
+              [key: string]: ZodOptional<
+                ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+              >;
+            },
+            $strict
+          >;
+          expression: ZodString;
+          renderStyle: ZodEnum<{
+            plain: "plain";
+            pencil: "pencil";
+            manga: "manga";
+            riso: "riso";
+            halftone: "halftone";
+            blueprint: "blueprint";
+            crt: "crt";
+            watercolor: "watercolor";
+          }>;
+        },
+        $strict
+      >,
+      ZodObject<
+        {
+          v: ZodLiteral<1>;
+          character: ZodLiteral<"cat">;
+          appearance: ZodObject<
+            {
+              [key: string]: ZodOptional<
+                ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+              >;
+            },
+            $strict
+          >;
+          expression: ZodString;
+          renderStyle: ZodEnum<{
+            plain: "plain";
+            pencil: "pencil";
+            manga: "manga";
+            riso: "riso";
+            halftone: "halftone";
+            blueprint: "blueprint";
+            crt: "crt";
+            watercolor: "watercolor";
+          }>;
+        },
+        $strict
+      >,
+      ZodObject<
+        {
+          v: ZodLiteral<1>;
+          character: ZodLiteral<"burger">;
+          appearance: ZodObject<
+            {
+              [key: string]: ZodOptional<
+                ZodUnion<readonly [ZodString, ZodNumber, ZodBoolean]>
+              >;
+            },
+            $strict
+          >;
+          expression: ZodString;
+          renderStyle: ZodEnum<{
+            plain: "plain";
+            pencil: "pencil";
+            manga: "manga";
+            riso: "riso";
+            halftone: "halftone";
+            blueprint: "blueprint";
+            crt: "crt";
+            watercolor: "watercolor";
+          }>;
+        },
+        $strict
+      >,
+    ],
+    "character"
+  >
 >;
 ```
 
 The avatar as a closed record, for contracts that refuse open maps (Hub
 projections): each character's appearance names only its own controls, then the
-catalog refines it exactly as `agentAvatarSchema` does.
+catalog refines it exactly as `agentAvatarSchema` does. Built on first use:
+constructing it is Worker startup cost no request there needs.
 
 ---
 

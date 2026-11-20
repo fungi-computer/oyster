@@ -47,15 +47,23 @@ const deferred = [
   [/\/xmlbuilder2\//, "the first provenance embed"],
   [/\/node-webpmux\//, "the first WebP provenance embed"],
   [/\/@nangohq\/node\//, "the first Nango webhook"],
+  // The in-shell commands and the just-bash they run on execute inside the
+  // Dynamic Worker a Computer starts; the host Durable Object only needs the
+  // backend that starts it (cloudflare-computer's worker-shell/backend entry).
+  [
+    /\/backends\/worker-shell\/index\.js$/,
+    "nothing; import the backend entry that only starts shells",
+  ],
+  [/\/just-bash\/dist\/bundle\//, "a Computer's shell, inside its own Worker"],
 ];
 
 /**
  * Bundled bytes the standalone Worker reaches through static imports (about
- * 13.5 MB, a third of it the browser page script as a string). Raise it only
- * with a startup profile (`pnpm run check:startup`) showing the cost is paid
- * for; prefer deferring the new import to the request that needs it.
+ * 9.4 MB). Raise it only with a startup profile (`pnpm run check:startup`)
+ * showing the cost is paid for; prefer deferring the new import to the request
+ * that needs it.
  */
-const eagerBytesBudget = 14_000_000;
+const eagerBytesBudget = 10_000_000;
 
 test("the standalone Worker defers heavy SDKs and stays within its eager code budget", async () => {
   const out = await mkdtemp(join(tmpdir(), "oyster-startup-graph-"));

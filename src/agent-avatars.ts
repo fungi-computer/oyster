@@ -43,22 +43,26 @@ function closedCharacterAvatar<C extends keyof typeof avatarCatalog>(
 /**
  * The avatar as a closed record, for contracts that refuse open maps (Hub
  * projections): each character's appearance names only its own controls,
- * then the catalog refines it exactly as `agentAvatarSchema` does.
+ * then the catalog refines it exactly as `agentAvatarSchema` does. Built on
+ * first use: constructing it is Worker startup cost no request there needs.
  */
-export const agentAvatarProjectionSchema = z
-  .discriminatedUnion("character", [
-    closedCharacterAvatar("mushroom"),
-    closedCharacterAvatar("cat"),
-    closedCharacterAvatar("burger"),
-  ])
-  .superRefine((avatar, context) => {
-    for (const issue of agentAvatarSchema.safeParse(avatar).error?.issues ?? [])
-      context.addIssue({
-        code: "custom",
-        path: issue.path,
-        message: issue.message,
-      });
-  });
+export const agentAvatarProjectionSchema = z.lazy(() =>
+  z
+    .discriminatedUnion("character", [
+      closedCharacterAvatar("mushroom"),
+      closedCharacterAvatar("cat"),
+      closedCharacterAvatar("burger"),
+    ])
+    .superRefine((avatar, context) => {
+      for (const issue of agentAvatarSchema.safeParse(avatar).error?.issues ??
+        [])
+        context.addIssue({
+          code: "custom",
+          path: issue.path,
+          message: issue.message,
+        });
+    }),
+);
 
 /** A projected avatar as the Avatar descriptor Sprite draws. */
 export function avatarFromProjection(

@@ -20,7 +20,11 @@ const wrangler = join(oyster, "node_modules/wrangler/bin/wrangler.js");
 const config = join(oyster, "deploy/wrangler.jsonc");
 const runs = 5;
 // A local profile window of ~350 ms preceded a refused deploy (code 10021);
-// after deferring heavy SDKs it is ~280 ms on botanical-hel1.
+// after deferring heavy SDKs it is ~280 ms on botanical-hel1. Oyster 0.49.0
+// was refused once more (and passed on retry) at a ~460 ms median window on a
+// loaded box; deferring the shell backend's in-shell commands and the avatar
+// projection schema took the same box's median to ~385 ms (active CPU 296 ->
+// 223 ms), measured with the two bundles' profiles interleaved.
 const budgetMs = Number(process.argv[2] ?? 320);
 
 const run = (args) =>

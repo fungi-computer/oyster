@@ -1,5 +1,23 @@
 # @fungi.computer/oyster
 
+## 0.50.5
+
+### Patch Changes
+
+- Changes since 0.50.4:
+
+  - perf(oyster): build the avatar projection schema on first use
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.16.4
+  - @fungi.computer/knapsack@0.4.22
+  - @fungi.computer/computer-contract@0.5.9
+  - @fungi.computer/parakeet@0.16.5
+  - @fungi.computer/shiitake@0.21.13
+  - @fungi.computer/shiitake-extensions@0.12.2
+  - @fungi.computer/zookeeper@0.0.55
+
 ## 0.50.4
 
 ### Patch Changes
