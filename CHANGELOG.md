@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.50.0
+
+### Minor Changes
+
+- Changes since 0.49.1:
+
+  - fix(oyster): require same-origin JSON on Computer REST mutations
+  - feat(oyster): expose Computer commands files and ports over REST
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.12.0
+
 ## 0.49.1
 
 ### Patch Changes

@@ -25,6 +25,7 @@
     "src/browser/boot.ts",
     "src/browser/boot-once.ts",
     "src/computer.ts",
+    "src/computer-api.ts",
     "src/root-data.ts",
     "src/page/mount.ts",
     "src/tenant.ts",

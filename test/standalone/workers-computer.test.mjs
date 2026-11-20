@@ -4472,3 +4472,152 @@ test("a copy made with a running guest attached is pushed to it after the pull, 
   assert.equal(guest.calls[0], "pull");
   assert.ok(guest.calls.indexOf("push") > guest.calls.indexOf("pull"));
 });
+
+test("REST commands retain caller request identity, native budgets and owner-scoped process replay", async (t) => {
+  const calls = [];
+  class RestComputer extends ComputerDO {
+    async executeOperationAfterAcceptance(input, accept, kind, budget) {
+      accept();
+      calls.push({ kind, input, budget });
+      return { requestId: input.requestId, status: "running", output: null };
+    }
+    async startProcessAfterAcceptance(input, accept) {
+      accept();
+      calls.push({ kind: "start", input });
+      return { error: "no_runtime" };
+    }
+  }
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const computer = new RestComputer(
+    { id: { name: "rest-a" }, storage: fromNodeSqlite(database) },
+    {},
+  );
+  const authority = {
+    computerId: "rest-a",
+    actions: new Set(["exec", "processStart"]),
+    expiresAt: Date.now() + 60000,
+    provenance: { actor: "owner:member-a" },
+  };
+  const requestId = "019b0123-4567-7890-8123-456789abcdef";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await computer.apiOperation(authority, {
+      operation: "exec",
+      input: { requestId, command: "printf ok", timeoutMs: 600000 },
+    });
+    assert.equal(result.requestId, requestId);
+  }
+  assert.deepEqual(
+    calls.map((call) => call.input.requestId),
+    [requestId, requestId],
+  );
+  assert.deepEqual(calls[0].budget, { maximumTimeMs: 600000 });
+  assert.equal(calls[0].kind, "exec");
+  await computer.apiOperation(authority, {
+    operation: "start",
+    input: { requestId: "same", command: "sleep 60" },
+  });
+  assert.equal(calls.at(-1).input.requestScope, "rest:owner:member-a");
+  const prior = calls.length;
+  assert.deepEqual(
+    await computer.apiOperation(
+      { ...authority, actions: new Set() },
+      { operation: "exec", input: { requestId, command: "x" } },
+    ),
+    { error: "denied" },
+  );
+  assert.equal(calls.length, prior);
+});
+
+test("REST file and port operations preserve native bounds and redact thrown details", async (t) => {
+  const calls = [];
+  class RestFiles extends ComputerDO {
+    async callAfterAcceptance(operation, input, accept) {
+      accept();
+      calls.push({ operation, input });
+      if (input.path === "/private") throw new Error("synthetic-file-secret");
+      if (operation === "read")
+        return { path: input.path, content: "file text" };
+      if (operation === "write")
+        return { path: input.path, bytes: input.content.length };
+      if (operation === "list")
+        return { path: input.path, entries: [], nextOffset: null };
+      if (operation === "remove") return { path: input.path };
+      throw new Error("Unexpected native operation");
+    }
+    async exposePortAfterAcceptance(input, accept) {
+      accept();
+      calls.push({ operation: "exposePort", input });
+      return { port: input.port, exposed: true };
+    }
+  }
+  const database = new DatabaseSync(":memory:");
+  t.after(() => database.close());
+  const computer = new RestFiles(
+    { id: { name: "rest-files" }, storage: fromNodeSqlite(database) },
+    {},
+  );
+  const authority = {
+    computerId: "rest-files",
+    actions: new Set([
+      "files.read",
+      "files.write",
+      "files.list",
+      "files.remove",
+      "exposePort",
+    ]),
+    expiresAt: Date.now() + 60000,
+    provenance: { actor: "owner:member-a" },
+  };
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "read",
+      input: { path: "/a" },
+    }),
+    { path: "/a", content: "file text" },
+  );
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "write",
+      input: { path: "/a", content: "a" },
+    }),
+    { path: "/a", bytes: 1 },
+  );
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "list",
+      input: { path: "/", limit: 10, offset: 0 },
+    }),
+    { path: "/", entries: [], nextOffset: null },
+  );
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "remove",
+      input: { path: "/a" },
+    }),
+    { path: "/a" },
+  );
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "expose",
+      input: { port: 8080 },
+    }),
+    { port: 8080, exposed: true },
+  );
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "read",
+      input: { path: "/private" },
+    }),
+    { error: "unavailable" },
+  );
+  const prior = calls.length;
+  assert.deepEqual(
+    await computer.apiOperation(authority, {
+      operation: "write",
+      input: { path: "/a", content: "é".repeat(70000) },
+    }),
+    { error: "too_large" },
+  );
+  assert.equal(calls.length, prior);
+});

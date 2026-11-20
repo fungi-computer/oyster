@@ -22,6 +22,7 @@
 | [build-contract](build-contract.md)                       | -           |
 | [build](build.md)                                         | -           |
 | [cloudflare](cloudflare.md)                               | -           |
+| [computer-api](computer-api.md)                           | -           |
 | [computer](computer.md)                                   | -           |
 | [files](files.md)                                         | -           |
 | [git](git.md)                                             | -           |

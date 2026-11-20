@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.49.1",
+  "version": "0.50.0",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -353,6 +353,10 @@
     "./machine-link/workers": {
       "types": "./dist/machine-link/workers.d.ts",
       "import": "./dist/machine-link/workers.js"
+    },
+    "./computer-api": {
+      "types": "./dist/computer-api.d.ts",
+      "import": "./dist/computer-api.js"
     }
   },
   "scripts": {
@@ -401,7 +405,7 @@
     "@fungi.computer/puffball": "0.12.0",
     "@fungi.computer/seam": "0.2.6",
     "@fungi.computer/shiitake": "0.21.11",
-    "@fungi.computer/shiitake-extensions": "0.11.23",
+    "@fungi.computer/shiitake-extensions": "0.12.0",
     "@fungi.computer/sigils": "0.3.2",
     "@fungi.computer/sprite": "0.2.2",
     "@fungi.computer/sprite-zdog": "0.3.2",

@@ -1,6 +1,17 @@
 import { agentWorkspacePath } from "@fungi.computer/computer/files";
 import { PortAccessError } from "@fungi.computer/computer/port-access";
 import {
+  ComputerFileTooLargeError,
+  ComputerProcessNotFoundError,
+  ComputerPortReservedError,
+  maximumFileBytes,
+  genericComputerExecutionBudget,
+} from "@fungi.computer/computer-contract";
+import {
+  computerApiRequestSchema,
+  type ComputerApiRequest,
+} from "../computer-api.js";
+import {
   attachedBackendId,
   computerSizeSchema,
   defaultComputerSize,
@@ -953,6 +964,81 @@ export class ComputerDO
     return output.parse(
       await this.callAfterAcceptance(tool, input, accept, vault),
     );
+  }
+
+  /** Public REST reuses native receipts, process retention and files; it owns no store. */
+  async apiOperation(
+    authority: ComputerGrant,
+    request: ComputerApiRequest,
+  ): Promise<
+    | StandaloneComputerResult
+    | Readonly<{ error: "too_large" | "unavailable" | "denied" }>
+  > {
+    try {
+      const parsed = Schema.decodeUnknownSync(computerApiRequestSchema, {
+        onExcessProperty: "error",
+      })(request);
+      switch (parsed.operation) {
+        case "exec":
+          return await this.executeOperationAfterAcceptance(
+            { ...parsed.input, timeoutMs: parsed.input.timeoutMs ?? 10_000 },
+            () => {
+              this.#accept(authority, "exec");
+            },
+            "exec",
+            genericComputerExecutionBudget,
+          );
+        case "start":
+          return await this.value(authority, "processStart", {
+            ...parsed.input,
+            requestScope: `rest:${authority.provenance.actor}`,
+          });
+        case "logs":
+          return await this.value(authority, "processLogs", parsed.input);
+        case "kill":
+          return await this.value(authority, "processKill", parsed.input);
+        case "read":
+          return readOutputSchema.parse(
+            await this.callAfterAcceptance("read", parsed.input, () => {
+              this.#accept(authority, "files.read");
+            }),
+          );
+        case "write":
+          if (
+            new TextEncoder().encode(parsed.input.content).byteLength >
+            maximumFileBytes
+          )
+            return { error: "too_large" };
+          return await this.value(authority, "files.write", parsed.input);
+        case "list":
+          return await this.value(authority, "files.list", parsed.input);
+        case "remove":
+          return await this.value(authority, "files.remove", parsed.input);
+        case "expose":
+          return await this.value(authority, "exposePort", parsed.input);
+      }
+    } catch (cause) {
+      if (cause instanceof ComputerFileTooLargeError)
+        return { error: "too_large" };
+      if (
+        cause instanceof ComputerProcessNotFoundError ||
+        missingFile.safeParse(cause).success
+      )
+        return { error: "not_found" };
+      if (
+        cause instanceof z.ZodError ||
+        Schema.isSchemaError(cause) ||
+        cause instanceof ComputerPortReservedError
+      )
+        return { error: "invalid" };
+      if (
+        cause instanceof ComputerOperationConflictError ||
+        cause instanceof ComputerPortConflictError
+      )
+        return { error: "conflict" };
+      if (cause instanceof FleetGrantRefused) return { error: "denied" };
+      return { error: "unavailable" };
+    }
   }
 
   /** JSON operations keep the Computer's maintained parsers and execution engine. */

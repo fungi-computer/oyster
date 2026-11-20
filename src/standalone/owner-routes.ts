@@ -1,3 +1,4 @@
+import { standaloneComputerApiRoutes } from "./computer-api.js";
 /**
  * The standalone root's owner routes: App source seeding, builds, the Computer
  * fleet, Agent Computer attachment, website channels and Workflow webhook
@@ -32,7 +33,7 @@ import type { StandaloneWorkflowEnv } from "./workflows.js";
 /** The bindings the standalone owner routes reach, resolved per request. */
 export type StandaloneOwnerRoutesEnv = AppSourceBindingEnv &
   Pick<StandaloneAgentsEnv, "AGENTS" | "OYSTER_ORIGIN"> &
-  Pick<StandaloneComputerEnv, "REGISTRY"> &
+  Pick<StandaloneComputerEnv, "REGISTRY" | "COMPUTER"> &
   Pick<StandaloneAgentsEnv, "AGENT_DIRECTORY"> &
   Pick<StandaloneWorkflowEnv, "WORKFLOW_RUNS">;
 
@@ -48,6 +49,9 @@ export function standaloneOwnerRoutes(
   const owned = appSourceOwnerRoutes(env, scope)
     .include(standaloneBuildRoutes(registry))
     .include(trialStarterRoutes(registry))
+    .include(
+      standaloneComputerApiRoutes(registry, (id) => env.COMPUTER.getByName(id)),
+    )
     .include(standaloneComputerFleetRoutes(registry))
     .include(
       standaloneAgentComputerRoutes({
