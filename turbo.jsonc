@@ -23,6 +23,7 @@
         "@fungi.computer/inkcap#build",
         "@fungi.computer/prints#build",
         "@fungi.computer/trellis#build",
+        "@fungi.computer/truffle#build",
       ],
       "inputs": [
         "$TURBO_DEFAULT$",

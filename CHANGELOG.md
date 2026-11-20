@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.52.2
+
+### Patch Changes
+
+- Changes since 0.52.1:
+
+  - Updated starter Apps for the Trellis release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+  - @fungi.computer/caps@0.12.4
+  - @fungi.computer/parakeet@0.16.8
+
 ## 0.52.1
 
 ### Patch Changes
