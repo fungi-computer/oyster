@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.52.0
+
+### Minor Changes
+
+- Changes since 0.51.0:
+
+  - feat(release): write the Node floor into the versions table and add its page
+
 ## 0.51.0
 
 ### Minor Changes
