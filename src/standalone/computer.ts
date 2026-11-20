@@ -39,6 +39,7 @@ import {
   PreviewRefused,
   type PreviewSelector,
 } from "./preview.js";
+import { advertisedComputerCapabilities } from "./computer-capabilities.js";
 import { standaloneTenancy, type StandaloneTenancyEnv } from "./tenancy.js";
 import { Base64 } from "effect/encoding";
 import * as z from "zod";
@@ -49,7 +50,10 @@ import {
   installationProcessScope,
   processStartInputSchema,
   processStartToolInputSchema,
-  computerCapabilities,
+  computerServiceViewSchema,
+  serviceListOutputSchema,
+  serviceLogsOutputSchema,
+  serviceRemoveOutputSchema,
   computerToolResultSchema,
   readOutputSchema,
 } from "@fungi.computer/computer-contract";
@@ -196,6 +200,10 @@ export type StandaloneComputerResult =
   | z.output<typeof processKillOutputSchema>
   | z.output<typeof processLogsOutputSchema>
   | z.output<typeof processWaitOutputSchema>
+  | z.output<typeof computerServiceViewSchema>
+  | z.output<typeof serviceListOutputSchema>
+  | z.output<typeof serviceLogsOutputSchema>
+  | z.output<typeof serviceRemoveOutputSchema>
   | z.output<typeof computerProcessSchema>
   | ComputerPorts["ports"][number]
   | z.output<typeof computerOperationResultSchema>
@@ -290,6 +298,22 @@ const computerTools = {
   kill_process: { action: "processKill", output: processKillOutputSchema },
   process_logs: { action: "processLogs", output: processLogsOutputSchema },
   wait_process: { action: "processWait", output: processWaitOutputSchema },
+  declare_service: {
+    action: "serviceDeclare",
+    output: computerServiceViewSchema,
+  },
+  list_services: { action: "serviceList", output: serviceListOutputSchema },
+  service_logs: { action: "serviceLogs", output: serviceLogsOutputSchema },
+  stop_service: { action: "serviceStop", output: computerServiceViewSchema },
+  start_service: { action: "serviceStart", output: computerServiceViewSchema },
+  restart_service: {
+    action: "serviceRestart",
+    output: computerServiceViewSchema,
+  },
+  remove_service: {
+    action: "serviceRemove",
+    output: serviceRemoveOutputSchema,
+  },
 } as const satisfies Record<
   string,
   Readonly<{ action: ComputerAction; output: z.ZodType }>
@@ -307,6 +331,13 @@ const computerTool = z.enum([
   "kill_process",
   "process_logs",
   "wait_process",
+  "declare_service",
+  "list_services",
+  "service_logs",
+  "stop_service",
+  "start_service",
+  "restart_service",
+  "remove_service",
 ]);
 
 /**
@@ -1354,7 +1385,7 @@ export function standaloneWorkspace(
       return {
         // Every Computer advertises the same static operations.
         getCapabilities: () =>
-          Promise.resolve(computerValueSchema.parse(computerCapabilities())),
+          Promise.resolve(advertisedComputerCapabilities()),
         call: async (capabilityId, input) =>
           computerValueSchema.parse(
             await computer().tool(

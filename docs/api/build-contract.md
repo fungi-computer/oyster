@@ -1329,6 +1329,12 @@ Re-exports [pinsCurrentToolchain](build.md#pinscurrenttoolchain)
 
 ---
 
+### captureConfig
+
+Re-exports [captureConfig](build.md#captureconfig)
+
+---
+
 ### digestPinnedRecipe
 
 Re-exports [digestPinnedRecipe](build.md#digestpinnedrecipe)

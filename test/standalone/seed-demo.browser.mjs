@@ -127,6 +127,15 @@ worker.stderr.on("data", (chunk) => {
 });
 const stopped = new Promise((resolve) => worker.once("exit", resolve));
 let browser;
+// The queued merge completes in the background; give it real room to settle
+// past "Merging…" instead of racing a short UI timeout. A merged Change
+// drops its status line and links its merge commit instead.
+async function expectMerged(app) {
+  await expect(
+    app.getByRole("link", { name: "View commit", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
 /** A public Oyster App method call, parsed with its real wire contract. */
 async function callBonsai(method, input, schema, credential) {
   const response = await globalThis.fetch(
@@ -344,9 +353,11 @@ async function runProof() {
             await app
               .getByRole("heading", { name: new RegExp(`^#${changeNumber} `) })
               .waitFor();
+            // The owner merged this Change; its page links the merge commit
+            // in place of a merge button.
             await expect(
-              app.getByRole("button", { name: "Merge into main", exact: true }),
-            ).toBeDisabled();
+              app.getByRole("link", { name: "View commit", exact: true }),
+            ).toBeVisible();
           } else {
             await expect(
               app.getByRole("link", { name: /Changes/ }),
@@ -560,12 +571,7 @@ async function runProof() {
       await liveApp
         .getByRole("button", { name: "Merge into main", exact: true })
         .click();
-      // The queued merge completes in the background; give it real room to
-      // settle past "Merging…" instead of racing a short UI timeout.
-      await expect(liveApp.getByRole("status")).toHaveText(
-        /^Merged as [0-9a-f]{7}\.$/u,
-        { timeout: 30_000 },
-      );
+      await expectMerged(liveApp);
       // The enoki Change now really conflicts with the merged main: real
       // paths, no canned fixture.
       const enokiChange = proposed.changes.find((change) =>
@@ -670,12 +676,7 @@ async function runProof() {
       await liveApp
         .getByRole("button", { name: "Merge into main", exact: true })
         .click();
-      // The queued merge completes in the background; give it real room to
-      // settle past "Merging…" instead of racing a short UI timeout.
-      await expect(liveApp.getByRole("status")).toHaveText(
-        /^Merged as [0-9a-f]{7}\.$/u,
-        { timeout: 30_000 },
-      );
+      await expectMerged(liveApp);
       // The owner pushes their own branch directly and opens a Change on it;
       // as the Team's sole member, their own Approve records as self.
       const topicDirectory = `${work}/topic`;
@@ -759,12 +760,7 @@ async function runProof() {
       await liveApp
         .getByRole("button", { name: "Merge into main", exact: true })
         .click();
-      // The queued merge completes in the background; give it real room to
-      // settle past "Merging…" instead of racing a short UI timeout.
-      await expect(liveApp.getByRole("status")).toHaveText(
-        /^Merged as [0-9a-f]{7}\.$/u,
-        { timeout: 30_000 },
-      );
+      await expectMerged(liveApp);
       await livePage.close();
     }
     // A fresh probe repository can be deleted outright; the canonical

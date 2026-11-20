@@ -454,8 +454,8 @@ async function appPermissionsProof(t, control = {}) {
         "Tourtois consumes accepted from its actual frame and refreshes Settings",
       );
       await permissions
-        .getByRole("status")
-        .filter({ hasText: /^Permissions saved$/u })
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "Permissions saved" })
         .waitFor();
       assert.equal(writes, 1, "Confirmation commits one permission change");
       await shell
@@ -497,8 +497,8 @@ async function appPermissionsProof(t, control = {}) {
         .getByRole("button", { name: "Confirm allow", exact: true })
         .click();
       await page
-        .getByRole("status")
-        .filter({ hasText: /^Permissions saved$/u })
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "Permissions saved" })
         .waitFor();
       assert.equal(writes, 2);
       await page.reload();

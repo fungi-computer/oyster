@@ -7,10 +7,14 @@ import { AgentModelRefused } from "../../src/standalone/agent-model-choice.js";
 import { standaloneAgents } from "../../src/standalone/agents.js";
 import { standaloneTenancy } from "../../src/standalone/tenancy.js";
 import { oysterPrincipalIsOwner } from "../../src/authorization.js";
+import { modelKeyBaseUrl } from "@fungi.computer/veil/model-keys";
 
 export * from "../../src/standalone/worker.js";
 
-/** Catalog admission needs a validated key record, never a live provider secret. */
+/**
+ * Catalog admission needs a validated key record and the key's provider base,
+ * never a live provider secret.
+ */
 export class AgentDirectory extends NativeAgentDirectory {
   override modelKey(
     keyId: string,
@@ -24,6 +28,14 @@ export class AgentDirectory extends NativeAgentDirectory {
           validatedAt: 1,
         })
       : super.modelKey(keyId);
+  }
+
+  override modelKeyBaseUrl(
+    keyId: string,
+  ): ReturnType<NativeAgentDirectory["modelKeyBaseUrl"]> {
+    return keyId === "model-proof-openai"
+      ? Promise.resolve({ baseUrl: modelKeyBaseUrl("openai") })
+      : super.modelKeyBaseUrl(keyId);
   }
 }
 

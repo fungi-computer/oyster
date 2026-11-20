@@ -83,6 +83,65 @@ describe("the built-in skill bundle", () => {
     expect(text).not.toMatch(/Shed|Trellis|Bonsai/u);
   });
 
+  it("ends setup with a one-time naming offer that renames only when the person picks a name", () => {
+    const text = (
+      platformSkillFiles.find(({ path }) => path === "setup-fungi/SKILL.md")
+        ?.content ?? ""
+    ).replace(/\s+/gu, " ");
+    const finish = text.slice(text.indexOf("5. Finish."));
+    const offer = finish.slice(finish.indexOf("Offer a name"));
+    expect(offer).toContain("Keep Shiitake");
+    expect(offer).toContain("two names you suggest");
+    expect(offer).toContain("free text");
+    expect(offer).toContain("`self.rename`");
+    expect(offer).toMatch(/only when they pick a new name/u);
+    expect(offer).toMatch(/does not count against the 3 questions/u);
+    expect(offer).toMatch(/When the `self` tool is absent, skip it/u);
+    // Once, and before the hand-off.
+    expect(finish.split("Offer a name")).toHaveLength(2);
+    expect(finish.indexOf("Offer a name")).toBeLessThan(
+      finish.indexOf("call `setup.finish()`"),
+    );
+  });
+
+  it("offers dashboard widgets only for what was set up, adds one only when tapped, and never the hidden Apps", () => {
+    const text = (
+      platformSkillFiles.find(({ path }) => path === "setup-fungi/SKILL.md")
+        ?.content ?? ""
+    ).replace(/\s+/gu, " ");
+    const finish = text.slice(text.indexOf("5. Finish."));
+    const offer = finish.slice(
+      finish.indexOf("Offer"),
+      finish.indexOf("Delete the"),
+    );
+    const dashboard = offer.slice(offer.indexOf("Add to your dashboard") - 80);
+    expect(dashboard).toContain("Add to your dashboard");
+    for (const widget of [
+      "Grove Inbox",
+      "Inkcap Recent Files",
+      "Prints Recent Outputs",
+    ])
+      expect(dashboard).toContain(widget);
+    expect(dashboard).toContain("`widgets.available`");
+    expect(dashboard).toContain("`layout.get`");
+    expect(dashboard).toContain("`layout.place`");
+    expect(dashboard).toMatch(/basedOn/u);
+    expect(dashboard).toMatch(/only when the person taps/u);
+    expect(dashboard).toMatch(/never add one yourself/iu);
+    expect(dashboard).toMatch(/skip a widget whose required parameter/u);
+    expect(dashboard).toMatch(/When those methods are absent, skip it/u);
+    expect(finish.indexOf("Add to your dashboard")).toBeLessThan(
+      finish.indexOf("Delete the"),
+    );
+    expect(finish.indexOf("Offer a name")).toBeLessThan(
+      finish.indexOf("Add to your dashboard"),
+    );
+    // The offers are not a tour: nothing before step 5 mentions the dashboard.
+    expect(text.slice(0, text.indexOf("5. Finish."))).not.toMatch(
+      /dashboard/iu,
+    );
+  });
+
   it("gives the money line only to a host that has setup.finish", () => {
     const text =
       platformSkillFiles.find(({ path }) => path === "setup-fungi/SKILL.md")

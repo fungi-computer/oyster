@@ -1,5 +1,43 @@
 # @fungi.computer/oyster
 
+## 0.53.0
+
+### Minor Changes
+
+- Changes since 0.52.2:
+
+  - feat(computer): let an Agent declare services that survive sleep
+  - feat(oyster): offer a rename and dashboard widgets at the end of setup
+  - feat(computer): slim image with pinned fungi-tools installs
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.12.5
+  - @fungi.computer/computer-contract@0.6.0
+  - @fungi.computer/computer@0.17.0
+  - @fungi.computer/watchdog@0.1.5
+  - @fungi.computer/parakeet@0.16.9
+  - @fungi.computer/agar@0.25.1
+  - @fungi.computer/bird-dog@0.3.8
+  - @fungi.computer/braid@0.6.6
+  - @fungi.computer/carrier@0.2.6
+  - @fungi.computer/puffball@0.13.1
+  - @fungi.computer/shiitake@0.21.16
+  - @fungi.computer/shiitake-extensions@0.12.5
+  - @fungi.computer/veil@0.11.6
+  - @fungi.computer/workflows-wire@0.7.6
+  - @fungi.computer/seam@0.2.7
+  - @fungi.computer/forage@0.4.1
+  - @fungi.computer/mycelium@0.4.9
+  - @fungi.computer/nacre@0.8.8
+  - @fungi.computer/zookeeper@0.0.58
+  - @fungi.computer/darkroom@0.11.14
+  - @fungi.computer/knapsack@0.4.24
+
 ## 0.52.2
 
 ### Patch Changes

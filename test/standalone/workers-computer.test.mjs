@@ -77,8 +77,9 @@ const {
   ComputerFileConflict,
   mintComputerProcessId,
   ComputerPortConflictError,
-  computerCapabilities,
 } = await import("@fungi.computer/computer-contract");
+const { advertisedComputerCapabilities } =
+  await import("../../src/standalone/computer-capabilities.ts");
 const { FleetGrantRefused, createFleetComputers } =
   await import("@fungi.computer/computer/fleet");
 const { createWorkspaceFilesPort } =
@@ -3973,7 +3974,7 @@ test("MCP Computer tools carry the HTTP routes' caller grant; visitors and Agent
     assert.ok(computer);
     assert.deepEqual(
       await computer.getCapabilities(new globalThis.AbortController().signal),
-      computerCapabilities(),
+      advertisedComputerCapabilities(),
     );
     assert.deepEqual(await computer.call("exec", { command: "ls" }), {
       status: "succeeded",
@@ -4471,6 +4472,120 @@ test("a copy made with a running guest attached is pushed to it after the pull, 
   assert.equal(guest.files.get("/workspace/AGENTS.md"), "Owner text.\n");
   assert.equal(guest.calls[0], "pull");
   assert.ok(guest.calls.indexOf("push") > guest.calls.indexOf("pull"));
+});
+
+test("an Oyster Computer advertises the declared-service tools after the native ones", async () => {
+  const { advertisedComputerCapabilities } =
+    await import("../../dist/standalone/computer-capabilities.js");
+  const ids = advertisedComputerCapabilities().map(({ id }) => id);
+  assert.deepEqual(ids.slice(-7), [
+    "declare_service",
+    "list_services",
+    "service_logs",
+    "stop_service",
+    "start_service",
+    "restart_service",
+    "remove_service",
+  ]);
+  assert.ok(ids.includes("start_process"));
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test("Agent tools declare, list, stop, start and remove services on a sleeping Computer without waking it", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    const computer = new ComputerDO(
+      { id: { name: "services-host" }, storage: fromNodeSqlite(database) },
+      {},
+    );
+    const grant = {
+      computerId: "services-host",
+      actions: new Set([
+        "serviceDeclare",
+        "serviceList",
+        "serviceLogs",
+        "serviceStop",
+        "serviceStart",
+        "serviceRestart",
+        "serviceRemove",
+      ]),
+      expiresAt: Date.now() + 60_000,
+      provenance: { actor: "owner:owner" },
+    };
+    const declared = await computer.tool(grant, "declare_service", {
+      name: "web",
+      command: "node server.js",
+      port: 3000,
+    });
+    assert.equal(declared.name, "web");
+    assert.equal(declared.enabled, true);
+    assert.deepEqual(declared.status, { state: "asleep" });
+    assert.equal(declared.declaredBy, "agent");
+    assert.deepEqual(
+      (await computer.tool(grant, "list_services", {})).services.map(
+        ({ name, status }) => [name, status.state],
+      ),
+      [["web", "asleep"]],
+    );
+    assert.equal(
+      (await computer.tool(grant, "stop_service", { name: "web" })).enabled,
+      false,
+    );
+    assert.equal(
+      (await computer.tool(grant, "start_service", { name: "web" })).enabled,
+      true,
+    );
+    assert.equal(
+      (await computer.tool(grant, "restart_service", { name: "web" })).enabled,
+      true,
+    );
+    assert.deepEqual(
+      await computer.tool(grant, "service_logs", { name: "web" }),
+      {
+        name: "web",
+        lines: [],
+        truncated: false,
+      },
+    );
+    // The declaration holds its port against a process, and unknown names are refused plainly.
+    await assert.rejects(
+      computer.tool(grant, "declare_service", {
+        name: "api",
+        command: "true",
+        port: 8080,
+      }),
+      /reserved/u,
+    );
+    await assert.rejects(
+      computer.tool(grant, "stop_service", { name: "missing" }),
+      /no service named missing/u,
+    );
+    assert.deepEqual(
+      await computer.tool(grant, "remove_service", { name: "web" }),
+      {
+        name: "web",
+        removed: true,
+      },
+    );
+    assert.deepEqual(await computer.tool(grant, "list_services", {}), {
+      services: [],
+    });
+    // A grant without the action is refused before any declaration is stored.
+    for (const [tool, input] of [
+      ["declare_service", { name: "x", command: "true" }],
+      ["list_services", {}],
+      ["remove_service", { name: "x" }],
+    ])
+      await assert.rejects(
+        computer.tool({ ...grant, actions: new Set(["exec"]) }, tool, input),
+        FleetGrantRefused,
+      );
+    assert.deepEqual(await computer.tool(grant, "list_services", {}), {
+      services: [],
+    });
+  } finally {
+    database.close();
+  }
 });
 
 test("REST commands retain caller request identity, native budgets and owner-scoped process replay", async (t) => {

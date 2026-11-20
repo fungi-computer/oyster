@@ -1786,11 +1786,29 @@ try {
   // Publication is a durable job the editor observes (a status read every
   // second, then a paused "Publication is still running" note). Wait for that
   // outcome, not for a wall-clock guess a loaded host overruns.
-  const publishAndAwaitRun = async () => {
+  // On a phone the host header keeps the first primary command as a button
+  // and moves the rest, such as Publish beside Publish & run, into its menu.
+  const paneCommand = async (name) => {
+    const button = workflowsPane.getByRole("button", { name, exact: true });
+    if (await button.isVisible()) {
+      await button.click();
+      return;
+    }
     await workflowsPane
-      .getByRole("button", { name: "Publish", exact: true })
+      .getByRole("button", { name: "More for Trellis", exact: true })
       .click();
-    const run = workflowsPane.locator('button[aria-label="Run"]:enabled');
+    await uiPage.getByRole("menuitem", { name, exact: true }).click();
+  };
+  // An editable draft offers Publish, or Publish & run beside a run panel.
+  const publishOffered = () =>
+    workflowsPane.getByRole("button", { name: /^Publish/u }).first();
+  const publishAndAwaitRun = async () => {
+    await paneCommand("Publish");
+    const run = workflowsPane.getByRole("button", {
+      name: "Run",
+      exact: true,
+      disabled: false,
+    });
     const stopped = workflowsFrame.locator(
       '.wf-bar-note[role="alert"], .wf-bar-note[role="status"]',
     );
@@ -1804,26 +1822,33 @@ try {
     await expectUi(run, "publication enabled Run").toHaveCount(1);
   };
   // Trellis publishes navigation into its host header; content stays framed.
+  // Trellis's sections (Workflows, Runs, Templates, Schedules) and a
+  // workflow's tools (Canvas, Runs, Triggers) are tabs inside its frame.
+  const sections = workflowsFrame.getByRole("tablist", {
+    name: "Trellis sections",
+  });
   const chooseScope = async (name) => {
-    const scope = workflowsPane.locator('[data-caps-window-crumb="scope"]');
-    // On a phone, Editor's Draft leaves Scope as a hidden ancestor. Use the
-    // host's ordinary Back action to return home, including after a failed leg.
-    if (!(await scope.isVisible())) {
+    // Inside a workflow the sections give way to its tools; the host's
+    // ordinary Back action returns to the section the workflow opened from.
+    for (let attempt = 0; !(await sections.isVisible()) && attempt < 3;) {
+      attempt += 1;
       await workflowsPane
         .getByRole("button", { name: "Back in Trellis", exact: true })
         .click();
-      await expectUi(scope).toBeVisible();
     }
-    await scope.click();
-    await uiPage.getByRole("menuitem", { name, exact: true }).click();
+    await sections.getByRole("tab", { name, exact: true }).click();
   };
   const chooseTool = async (name) => {
-    await workflowsPane.locator('[data-caps-window-crumb="tool"]').click();
-    await uiPage.getByRole("menuitem", { name, exact: true }).click();
+    await workflowsFrame
+      .getByRole("tablist", { name: "Workflow tools" })
+      .getByRole("tab", { name, exact: true })
+      .click();
   };
   const chooseWorkflow = async (workflowId) => {
-    await chooseScope("All workflows…");
-    await workflowsFrame.locator(`[data-workflow-id="${workflowId}"]`).click();
+    await chooseScope("Workflows");
+    await workflowsFrame
+      .locator(`[data-workflow-id="${workflowId}"] button.wf-home-name`)
+      .click();
   };
   try {
     await step("shell-open-trellis", async () => {
@@ -1871,14 +1896,15 @@ try {
         );
         throw cause;
       }
-      await expectUi(workflowsFrame.locator("main.wf-runs")).toBeVisible({
+      // Trellis opens on its Workflows table; the runs are one scope away.
+      await expectUi(workflowsFrame.locator("main.wf-home")).toBeVisible({
         timeout: 30_000,
       });
-      await expectUi(
-        uiPage
-          .locator('.tourtois-app-pane[aria-label="Trellis"]')
-          .locator('[data-caps-window-crumb="scope"]'),
-      ).toHaveText("All runs");
+      const scope = workflowsPane.locator('[data-caps-window-crumb="scope"]');
+      await expectUi(scope).toHaveCount(0);
+      await chooseScope("Runs");
+      await expectUi(workflowsFrame.locator("main.wf-runs")).toBeVisible();
+      await expectUi(scope).toHaveText("All runs");
       await expectUi(
         workflowsFrame.locator("main.wf-runs [data-run-id]").first(),
       ).toBeVisible();
@@ -1901,9 +1927,7 @@ try {
         .getByRole("button", { name: "Use template", exact: true })
         .click();
       try {
-        await expectUi(
-          workflowsPane.getByRole("button", { name: "Publish", exact: true }),
-        ).toBeVisible({ timeout: 15_000 });
+        await expectUi(publishOffered()).toBeVisible({ timeout: 15_000 });
       } catch (cause) {
         const evidence =
           process.env.WORKFLOW_UI_EVIDENCE ??
@@ -1931,10 +1955,15 @@ try {
       ).toBeVisible({ timeout: 15_000 });
       await workflowsFrame
         .getByLabel("Report to chat")
+        // The editor stays mounted, hidden, beside the other tools.
+        .filter({ visible: true })
         .selectOption({ label: "Workflow report chat" });
-      await workflowsFrame.getByRole("switch", { name: "Arm opened" }).click();
+      // One On switch arms every published trigger of the workflow.
+      await workflowsFrame.getByRole("switch", { name: "Workflow on" }).click();
       await expectUi(
-        workflowsFrame.locator('[data-trigger-id="opened"]').getByText("Armed"),
+        workflowsFrame
+          .locator('[data-trigger-id="opened"]')
+          .getByText("On", { exact: true }),
       ).toBeVisible({ timeout: 15_000 });
       // A real Bonsai Change (fork + push + open), never a bare push: the
       // template's own triggers fire on Change lifecycle events, not git.push.
@@ -2045,9 +2074,7 @@ try {
       await expectUi(eventRow).toContainText("Event", { timeout: 15_000 });
       await eventRow.getByRole("button").click();
       await expectUi(
-        workflowsFrame.locator(
-          `.wf-run-detail[data-run-id="${eventRun.runId}"]`,
-        ),
+        workflowsFrame.locator(`.wf-run-view[data-run-id="${eventRun.runId}"]`),
       ).toContainText("Started by change.opened");
     });
     await step("ui-schedule-run", async () => {
@@ -2064,18 +2091,15 @@ try {
       await scheduleRow.getByRole("button").click();
       await expectUi(
         workflowsFrame.locator(
-          `.wf-run-detail[data-run-id="${scheduleRun.runId}"]`,
+          `.wf-run-view[data-run-id="${scheduleRun.runId}"]`,
         ),
       ).toContainText("Started by schedule");
     });
     await step("ui-fork-publish-manual-run-delivery", async () => {
       // Fork as draft from the host menu, then run with Agent delivery.
       await chooseWorkflow("ui-report");
-      await chooseTool("Editor");
-      await workflowsPane
-        .getByRole("button", { name: "More", exact: true })
-        .click();
-      await uiPage.getByRole("menuitem", { name: "Fork", exact: true }).click();
+      await chooseTool("Canvas");
+      await paneCommand("Fork");
       await expectUi(
         workflowsFrame.getByText("Fork a published workflow"),
       ).toBeVisible({ timeout: 15_000 });
@@ -2086,9 +2110,7 @@ try {
       await workflowsFrame
         .getByRole("button", { name: "Open draft", exact: true })
         .click();
-      await expectUi(
-        workflowsPane.getByRole("button", { name: "Publish", exact: true }),
-      ).toBeVisible({ timeout: 15_000 });
+      await expectUi(publishOffered()).toBeVisible({ timeout: 15_000 });
       await publishAndAwaitRun();
       await workflowsPane.locator('[data-caps-window-crumb="version"]').click();
       const publishedVersion = uiPage.getByRole("menuitem", { name: /^v1 / });
@@ -2099,16 +2121,20 @@ try {
         .click();
       await workflowsFrame
         .getByLabel("Report to chat")
+        // The editor stays mounted, hidden, beside the other tools.
+        .filter({ visible: true })
         .selectOption({ label: "Workflow report chat" });
       await workflowsFrame
         .getByRole("button", { name: "Run v1", exact: true })
         .click();
-      // Running v1 selects Runs in the host header and the real run in content.
+      // Running v1 selects the workflow's Runs tab and the real run in it.
       await expectUi(
-        workflowsPane.locator('[data-caps-window-crumb="tool"]'),
-      ).toContainText("Runs", { timeout: 15_000 });
+        workflowsFrame
+          .getByRole("tablist", { name: "Workflow tools" })
+          .getByRole("tab", { name: "Runs", exact: true }),
+      ).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
       const manualRunId = await workflowsFrame
-        .locator(".wf-run-detail")
+        .locator(".wf-run-view")
         .getAttribute("data-run-id");
       assert.ok(manualRunId, "the manual run auto-selects in Runs");
       const manualRuns = await call("trellis", "listRuns", {
@@ -2120,7 +2146,7 @@ try {
         "the selected run has a real manual source",
       );
       await expectUi(
-        workflowsFrame.locator(`.wf-run-detail[data-run-id="${manualRunId}"]`),
+        workflowsFrame.locator(`.wf-run-view[data-run-id="${manualRunId}"]`),
       ).toContainText("Started by You");
       const manualStatus = await until(
         () => call("trellis", "runStatus", { runId: manualRunId }),
@@ -2174,8 +2200,11 @@ try {
       allStepsAttempted,
     }),
   );
+  // One log per failed run: a rerun must not overwrite the Worker's request
+  // timings and console output from the failure being diagnosed.
+  const failedAt = new Date().toISOString().replaceAll(":", "-");
   await nativeHost.recordFailure({
-    diagnostic: `${root}.botanical/workflow-reviews/native-${runtime}.log`,
+    diagnostic: `${root}.botanical/workflow-reviews/native-${runtime}-${failedAt}.log`,
     description: "Native Workflow proof failed",
   });
   throw cause;

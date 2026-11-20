@@ -176,12 +176,16 @@ test(
               const { page } = session;
               assert.equal(await page.locator("h1").innerText(), heading);
               assert.ok(await page.locator(".caps-trading-card").isVisible());
+              // The help card hugs its content instead of a fixed 5:7 plate.
               const card = await page
                 .locator(".caps-trading-card")
-                .boundingBox();
+                .evaluate((element) => ({
+                  content: element.scrollHeight,
+                  height: element.clientHeight,
+                }));
               assert.ok(
-                Math.abs(card.width / card.height - 5 / 7) < 0.01,
-                "the full card keeps its 5:7 ratio",
+                card.content <= card.height,
+                "the full card shows all of its content",
               );
               assert.equal(await page.locator(".ability-steps li").count(), 3);
               assert.ok(
@@ -448,10 +452,11 @@ test(
                   body,
                 }),
               );
-              response.writeHead(
-                result.status,
-                Object.fromEntries(result.headers),
-              );
+              // Sign-in sets two cookies; a header object would keep one.
+              const outgoing = Object.fromEntries(result.headers);
+              const cookies = result.headers.getSetCookie();
+              if (cookies.length > 0) outgoing["set-cookie"] = cookies;
+              response.writeHead(result.status, outgoing);
               response.end(Buffer.from(await result.arrayBuffer()));
             });
             await new Promise((done) => server.listen(0, "127.0.0.1", done));

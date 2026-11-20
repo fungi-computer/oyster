@@ -8,7 +8,6 @@ import {
 } from "@fungi.computer/computer/fleet";
 import {
   ComputerCommandTooLongError,
-  computerCapabilities,
   computerValueSchema,
   parseComputerExecInput,
 } from "@fungi.computer/computer-contract";
@@ -32,6 +31,7 @@ import type {
 } from "../agent-computer-source.js";
 import { type OysterEnv } from "../host.js";
 import { owner, routes as routeTable, type Routes } from "../authorization.js";
+import { advertisedComputerCapabilities } from "./computer-capabilities.js";
 import type { StandaloneAgentComputerRpc } from "./computer.js";
 
 /** The directory supplies live authority; this adapter never invents a grant. */
@@ -149,9 +149,7 @@ export function standaloneAgentComputerPorts(
     computer: {
       getCapabilities: (signal) => {
         signal.throwIfAborted();
-        return Promise.resolve(
-          computerValueSchema.parse(computerCapabilities()),
-        );
+        return Promise.resolve(advertisedComputerCapabilities());
       },
       call: async (capabilityId, input, context) => {
         context.signal.throwIfAborted();

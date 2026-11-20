@@ -114,8 +114,8 @@ test("framed grants keep the owner editor, omit Back, and report dirty and accep
     .getByRole("button", { name: "Confirm revoke", exact: true })
     .click();
   await frame
-    .getByRole("status")
-    .filter({ hasText: "Permissions saved." })
+    .locator("[data-sonner-toast]")
+    .filter({ hasText: "Permissions saved" })
     .waitFor();
   const messages = await page.evaluate(() => globalThis.permissionMessages);
   assert.deepEqual(
@@ -305,7 +305,9 @@ test("owner consent submits explicit Release-bound approvals through the install
           .getByRole("heading", { name: "Bonsai permissions" })
           .waitFor();
         // The identity heading is server-rendered; wait for the interactive editor.
-        await page.getByRole("checkbox", { name: "Send events" }).waitFor();
+        await page
+          .getByRole("switch", { name: "This App: Send events" })
+          .waitFor();
         assert.equal(
           await page.locator("html").getAttribute("data-theme"),
           theme === "dark" ? "mocha" : "latte",
@@ -321,7 +323,9 @@ test("owner consent submits explicit Release-bound approvals through the install
             colorScheme === "dark" ? "mocha" : "latte",
           );
         }
-        const send = page.getByRole("checkbox", { name: "Send events" });
+        const send = page.getByRole("switch", {
+          name: "This App: Send events",
+        });
         assert.equal(await send.isChecked(), false);
         await page.screenshot({
           path: new globalThis.URL(
@@ -333,7 +337,7 @@ test("owner consent submits explicit Release-bound approvals through the install
         await send.check();
         await page.getByRole("button", { name: "Save permissions" }).click();
         await page
-          .getByRole("status")
+          .locator("[data-sonner-toast]")
           .filter({ hasText: "Permissions saved" })
           .waitFor();
         assert.equal(requests.length, 1);
@@ -366,7 +370,9 @@ test("owner consent submits explicit Release-bound approvals through the install
         );
         await page.reload();
         assert.equal(
-          await page.getByRole("checkbox", { name: "Send events" }).isChecked(),
+          await page
+            .getByRole("switch", { name: "This App: Send events" })
+            .isChecked(),
           true,
         );
         assert.equal(requests.length, 1);

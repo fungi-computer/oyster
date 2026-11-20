@@ -4,11 +4,9 @@ import {
   type FilesPort,
   type KnapsackComputer,
 } from "@fungi.computer/knapsack";
-import {
-  computerCapabilities,
-  computerValueSchema,
-} from "@fungi.computer/computer-contract";
+import {} from "@fungi.computer/computer-contract";
 import type { CapabilitySource } from "@fungi.computer/mycelium";
+import { advertisedComputerCapabilities } from "./standalone/computer-capabilities.js";
 import type {
   AgentComputerAdmission,
   AgentComputerProjection,
@@ -143,9 +141,7 @@ export function createAgentComputerSurface(): CapabilitySource {
           },
           computer: {
             getCapabilities: () =>
-              Promise.resolve(
-                computerValueSchema.parse(computerCapabilities()),
-              ),
+              Promise.resolve(advertisedComputerCapabilities()),
             call: refusedBeforeRun,
           },
         },

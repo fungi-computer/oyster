@@ -72,6 +72,21 @@ Finish with one useful result, not a tour.
    can see its output.
 5. Finish.
    - Say in two lines what you set up and where to change it.
+   - Offer a name, once. Ask with `question.ask`: "Keep Shiitake" first, then
+     two names you suggest that fit their goal, and free text always allowed.
+     This offer does not count against the 3 questions. Call `self.rename` with
+     the name only when they pick a new name, and say in one line that you are
+     now called that. When the `self` tool is absent, skip it.
+   - Offer "Add to your dashboard" for what you set up. Call `widgets.available`
+     and offer only the widgets that match what you did: Grove Inbox, Inkcap
+     Recent Files, Prints Recent Outputs. Ask once with `question.ask`, one
+     option per widget plus "Not now". This offer does not count against the 3
+     questions. Add a widget only when the person taps it: call `layout.get`,
+     then `layout.place` with its `surfaceId`, `gillId`, a size the widget
+     lists, `scope` "member" and `basedOn` the revision `layout.get` returned.
+     Pass `params` only for the keys the widget lists, with values you know, and
+     skip a widget whose required parameter you cannot fill. Never add one
+     yourself. When those methods are absent, skip it.
    - Delete the "First conversation" section from Home `AGENTS.md`.
    - When the `setup.finish` tool is available, say one more line: "That's you
      set up. To keep going with me, start Pro, or link your wallet if you're a

@@ -335,7 +335,10 @@ export function pinsCurrentToolchain(recipe: PinnedRecipe): boolean {
   return entries(currentToolchain(recipe)) === entries(recipe.toolchain);
 }
 
-function captureConfig(input: AppPublisherCoreConfigInput): CapturedConfig {
+/** Decode and pin one App Publisher configuration, with its recipe digest. */
+export function captureConfig(
+  input: AppPublisherCoreConfigInput,
+): CapturedConfig {
   let decoded: Schema.Schema.Type<typeof AppPublisherCoreConfigSchema>;
   try {
     decoded = Schema.decodeUnknownSync(AppPublisherCoreConfigSchema)(input);

@@ -68,11 +68,11 @@ async function openComputers(page, width) {
   if (width === 390)
     await dialog
       .getByRole("combobox", { name: "Settings category" })
-      .selectOption({ label: "Internet access" });
+      .selectOption({ label: "Computers" });
   else
     await dialog
       .getByRole("navigation", { name: "Settings categories" })
-      .getByRole("button", { name: "Internet access", exact: true })
+      .getByRole("button", { name: "Computers", exact: true })
       .click();
 }
 

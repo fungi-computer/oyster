@@ -1196,6 +1196,38 @@ policy describes a build this code does not perform.
 
 ---
 
+### captureConfig()
+
+```ts
+function captureConfig(input): CapturedConfig;
+```
+
+Decode and pin one App Publisher configuration, with its recipe digest.
+
+#### Parameters
+
+| Parameter                              | Type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`                                | \{ `appId`: `string`; `recipe`: \{ `kind?`: `"bundled-html"` \| `"source-html"`; `entry`: `string`; `assets?`: \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \}; `assetBase?`: `string`; `backend`: \| \{ `entry?`: `string`; `runtime`: \{ `kind`: `"durable-facet"` \| `"region"`; `stateSchema`: `number`; \}; `compatibilityDate`: `string`; `exportName`: `string`; \} \| `null`; `maxOutputBytes`: `number`; \}; \} |
+| `input.appId`                          | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe`                         | \{ `kind?`: `"bundled-html"` \| `"source-html"`; `entry`: `string`; `assets?`: \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \}; `assetBase?`: `string`; `backend`: \| \{ `entry?`: `string`; `runtime`: \{ `kind`: `"durable-facet"` \| `"region"`; `stateSchema`: `number`; \}; `compatibilityDate`: `string`; `exportName`: `string`; \} \| `null`; `maxOutputBytes`: `number`; \}                                     |
+| `input.recipe.kind?`                   | `"bundled-html"` \| `"source-html"`                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `input.recipe.entry`                   | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.assets?`                 | \{ `maxManifestBytes`: `number`; `maxObjects`: `number`; `maxObjectBytes`: `number`; `maxTotalBytes`: `number`; \}                                                                                                                                                                                                                                                                                                                                                                          |
+| `input.recipe.assets.maxManifestBytes` | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.assets.maxObjects`       | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.assets.maxObjectBytes`   | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.assets.maxTotalBytes`    | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.assetBase?`              | `string`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `input.recipe.backend`                 | \| \{ `entry?`: `string`; `runtime`: \{ `kind`: `"durable-facet"` \| `"region"`; `stateSchema`: `number`; \}; `compatibilityDate`: `string`; `exportName`: `string`; \} \| `null`                                                                                                                                                                                                                                                                                                           |
+| `input.recipe.maxOutputBytes`          | `number`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+#### Returns
+
+[`CapturedConfig`](#capturedconfig)
+
+---
+
 ### digestPinnedRecipe()
 
 ```ts
@@ -1695,6 +1727,36 @@ Local proving adapter; it builds only the captured extracted snapshot.
 #### Returns
 
 [`BuildExecutor`](#buildexecutor)
+
+---
+
+### createLocalCandidatesPreparer()
+
+```ts
+function createLocalCandidatesPreparer(options): Readonly<{
+  prepareCandidates: (
+    releaseIds,
+  ) => Effect.Effect<readonly PreparedCandidate[], AppPublisherError>;
+}>;
+```
+
+Prepare several first-party Apps from one capture of one commit: one source
+snapshot, one frozen install and each workspace TypeScript config compiled once,
+then each App's stylesheets, page, declaration and backend in order. Every App
+keeps its own recipe digest and the capture's provenance; the first failure
+stops the pass.
+
+#### Parameters
+
+| Parameter | Type                                                                                                                                                                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `options` | `Readonly`\<\{ `configs`: readonly [`AppPublisherCoreConfigInput`](#apppublishercoreconfiginput)[]; `sourceCapture`: [`SourceCapture`](#sourcecapture); `executor`: `Omit`\<[`LocalBuildExecutorOptions`](#localbuildexecutoroptions), `"packageScripts"`\>; \}\> |
+
+#### Returns
+
+`Readonly`\<\{ `prepareCandidates`: (`releaseIds`) => `Effect.Effect`\<readonly
+[`PreparedCandidate`](#preparedcandidate)[],
+[`AppPublisherError`](#apppublishererror)\>; \}\>
 
 ---
 

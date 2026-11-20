@@ -4,13 +4,26 @@ description:
   Change how you work on this Agent's Computer. Edit your standing instructions
   and voice, add a skill of your own, or replace a built-in skill. Use when
   asked to remember a rule for every conversation, change your tone, or teach
-  yourself a repeatable task.
+  yourself a repeatable task, or install a missing Computer toolchain or agent
+  CLI.
 ---
 
 # Fungible computing
 
 Your standing instructions and your skills are files on a Computer. You and your
 owner can both change them.
+
+## Computer tools
+
+On a hosted Fungi Computer, if go, rust or an agent CLI is missing, run
+`fungi-tools install <tool>` through that Computer's exec operation. Select
+`go`, `rust` (for rustc and cargo), `claude`, `codex`, `opencode` or `pi`. Go
+and Rust persist in that Computer's home. Agent CLIs live in a cache that is
+cleared when the Computer sleeps; after a wake their first use reinstalls the
+same pinned version and prints `installing <tool> (one-time after wake)`. A
+failed install is an error to report, not a reason to fetch an unpinned
+installer. This command does not supply provider keys or sign the CLI in.
+Member-attached machines use their own installed tools.
 
 ## Instructions and voice
 

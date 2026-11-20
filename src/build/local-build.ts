@@ -13,6 +13,7 @@ import {
   packageScriptArguments,
 } from "./snapshot-package-store.js";
 import { isInsideSnapshot } from "./snapshot-programs/snapshot-path.js";
+import { sharedTypeScriptCompiler } from "./shared-workspace.js";
 import {
   writeImmutableArtifact,
   type ImmutableArtifactObjects,
@@ -30,6 +31,7 @@ import {
   type WorkspaceBuild,
 } from "./workspace-build.js";
 import type { WorkspaceBuildStep } from "./build-step.js";
+import type { ReleaseId } from "@fungi.computer/puffball";
 import { readBundledHtml } from "./bundled-html.js";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -74,16 +76,20 @@ import { pruneSharedLockfile } from "@pnpm/lockfile.pruner";
 import {
   AppPublisherError,
   appBackendExportConditions,
+  captureConfig,
   createAppPublisher,
+  createCapturedCandidatePreparer,
   pinnedRecipeSchema,
   pinsCurrentToolchain,
   type AppPublisher,
+  type AppPublisherCoreConfigInput,
   type ArtifactWriter,
   type BuildExecutor,
   type BuildExecutorOutput,
   type BuildOutput,
   type CapturedSource,
   type PinnedRecipe,
+  type PreparedCandidate,
   type ReleaseCreator,
   type SourceCapture,
   type StoredArtifact,
@@ -1001,10 +1007,22 @@ export type LocalBuildExecutorOptions = Readonly<{
   onOutput?: (stream: "stdout" | "stderr", bytes: Uint8Array) => void;
 }>;
 
+/**
+ * One capture's dependency phase, shared by every App a pass builds from it:
+ * the one frozen install over all their selectors, and each TypeScript config
+ * already compiled in this tree.
+ */
+type SharedWorkspace = Readonly<{
+  snapshotPath: string;
+  selectors: ReadonlySet<string>;
+  compiled: Set<string>;
+}>;
+
 function rebuildViteSnapshot(
   sourceSnapshotPath: string,
   recipe: import("./effect.js").PinnedRecipe,
   options: LocalBuildExecutorOptions,
+  shared: SharedWorkspace | null,
 ): Effect.Effect<BuildExecutorOutput, unknown> {
   if (recipe.kind === "source-html")
     return rebuildNpmSnapshot(sourceSnapshotPath, recipe, options);
@@ -1036,15 +1054,26 @@ function rebuildViteSnapshot(
         ),
       );
     const installStarted = performance.now();
-    yield* run([
-      ...productionWorkspaceSelectors(html),
-      ...frozenSnapshotInstallArguments(
-        options.packageStoreDirectory,
-        options.packageCacheDirectory,
-      ),
-    ]);
+    if (shared === null)
+      yield* run([
+        ...productionWorkspaceSelectors(html),
+        ...frozenSnapshotInstallArguments(
+          options.packageStoreDirectory,
+          options.packageCacheDirectory,
+        ),
+      ]);
+    else if (
+      shared.snapshotPath !== sourceSnapshotPath ||
+      !productionWorkspaceSelectors(html).every((selector) =>
+        shared.selectors.has(selector),
+      )
+    )
+      return yield* Effect.fail(
+        new Error("The shared install did not hydrate this App's workspace"),
+      );
     const buildStarted = performance.now();
-    options.onPhase?.("install", buildStarted - installStarted);
+    if (shared === null)
+      options.onPhase?.("install", buildStarted - installStarted);
     const appDirectory = join(sourceSnapshotPath, html.directory);
     const dependencies = join(appDirectory, ".publisher-dependencies.mjs");
     const program = join(appDirectory, ".publisher-build.mjs");
@@ -1061,8 +1090,14 @@ function rebuildViteSnapshot(
     );
     // Keep the derived order and every diagnostic/emit check. Consecutive
     // projects share one warmed compiler; stylesheet steps stay separate.
+    // A shared pass compiles each TypeScript config once: an earlier App
+    // emitted it from this same tree with the same pinned compiler.
+    const steps = html.steps.filter(
+      (step) =>
+        step.kind !== "typescript" || !shared?.compiled.has(step.config),
+    );
     const groups: WorkspaceBuildStep[][] = [];
-    for (const step of html.steps) {
+    for (const step of steps) {
       const last = groups.at(-1);
       if (
         step.kind === "typescript" &&
@@ -1102,6 +1137,9 @@ function rebuildViteSnapshot(
         ],
         appDirectory,
       );
+      for (const compiled of group)
+        if (compiled.kind === "typescript")
+          shared?.compiled.add(compiled.config);
     }
     yield* run(
       [
@@ -1464,6 +1502,13 @@ export function localSnapshotBuildOptions(
 export function createLocalBuildExecutor(
   options: LocalBuildExecutorOptions = {},
 ): BuildExecutor {
+  return createWorkspaceBuildExecutor(options, null);
+}
+
+function createWorkspaceBuildExecutor(
+  options: LocalBuildExecutorOptions,
+  shared: SharedWorkspace | null,
+): BuildExecutor {
   const emissions = new WeakMap<
     CapturedSource,
     Awaited<ReturnType<typeof createDefinitionEmission>>
@@ -1544,7 +1589,7 @@ export function createLocalBuildExecutor(
                 catch: () =>
                   new Error("Captured HTML bundle failed validation"),
               })
-            : rebuildViteSnapshot(source.snapshotPath, recipe, options);
+            : rebuildViteSnapshot(source.snapshotPath, recipe, options, shared);
           const code = yield* compiler.build(source, {
             bundle: true,
             entry,
@@ -1574,7 +1619,7 @@ export function createLocalBuildExecutor(
         });
       }
       return recipe.format !== "esm"
-        ? rebuildViteSnapshot(source.snapshotPath, recipe, options)
+        ? rebuildViteSnapshot(source.snapshotPath, recipe, options, shared)
         : Effect.acquireUseRelease(
             Effect.tryPromise({
               try: () => {
@@ -1674,6 +1719,152 @@ export function createLocalBuildExecutor(
         : Effect.succeed(declaration);
     },
   };
+}
+
+/**
+ * The root scratch files one App's build writes once (`wx`) and reads back:
+ * its Vite output, single-file page and emitted definition. A shared pass
+ * removes them after each App so the next App writes the same paths.
+ */
+const appScratchFiles = [
+  ".publisher-output",
+  ".publisher.html",
+  ".fungi-built-definition.mjs",
+] as const;
+
+/**
+ * The shared dependency phase for every App a pass builds from one capture:
+ * each App's workspace build is derived and checked as its own build checks
+ * it, then one frozen install hydrates all of them. The dependency compiler
+ * loads TypeScript from each App's own `node_modules`, so every App must
+ * resolve the same compiler before one App's emit may stand for another's.
+ */
+function prepareSharedWorkspace(
+  snapshotPath: string,
+  recipes: readonly PinnedRecipe[],
+  options: LocalBuildExecutorOptions,
+): Effect.Effect<SharedWorkspace, unknown> {
+  return Effect.gen(function* () {
+    const env = snapshotBuildEnvironment(snapshotPath);
+    const run = (args: readonly string[]) =>
+      runHtmlCommand(args, snapshotPath, env, "pnpm", options.onOutput);
+    if ((yield* run(["--version"])).trim() !== "11.24.0")
+      return yield* Effect.fail(new Error("Publisher requires pnpm 11.24.0"));
+    const builds: WorkspaceBuild[] = [];
+    for (const recipe of recipes) {
+      if (
+        recipe.kind === "source-html" ||
+        recipe.kind === "bundled-html" ||
+        recipe.format === "esm" ||
+        !pinsCurrentToolchain(recipe)
+      )
+        return yield* Effect.fail(
+          new Error("A shared pass builds only workspace Vite Apps"),
+        );
+      const html = yield* capturedWorkspaceBuild(
+        snapshotPath,
+        recipe.entry,
+        run,
+        recipe.backend?.entry ?? null,
+      );
+      yield* Effect.tryPromise({
+        try: () => checkPinnedWorkspaceToolchain(snapshotPath, html, recipe),
+        catch: (error) => error,
+      });
+      if (html.steps.some((step) => step.kind === "script"))
+        return yield* Effect.fail(
+          new Error(
+            "This source builds a dependency with its package script, which only a Computer build runs",
+          ),
+        );
+      builds.push(html);
+    }
+    const selectors = builds.flatMap(productionWorkspaceSelectors);
+    const started = performance.now();
+    yield* run([
+      ...selectors,
+      ...frozenSnapshotInstallArguments(
+        options.packageStoreDirectory,
+        options.packageCacheDirectory,
+      ),
+    ]);
+    options.onPhase?.("install", performance.now() - started);
+    yield* Effect.try(() =>
+      sharedTypeScriptCompiler(
+        snapshotPath,
+        builds.map((html) => html.directory),
+      ),
+    );
+    return { snapshotPath, selectors: new Set(selectors), compiled: new Set() };
+  });
+}
+
+/**
+ * Prepare several first-party Apps from one capture of one commit: one source
+ * snapshot, one frozen install and each workspace TypeScript config compiled
+ * once, then each App's stylesheets, page, declaration and backend in order.
+ * Every App keeps its own recipe digest and the capture's provenance; the
+ * first failure stops the pass.
+ */
+export function createLocalCandidatesPreparer(
+  options: Readonly<{
+    configs: readonly AppPublisherCoreConfigInput[];
+    sourceCapture: SourceCapture;
+    executor: Omit<LocalBuildExecutorOptions, "packageScripts">;
+  }>,
+): Readonly<{
+  /** Prepare each configured App, in order, under its Release ID. */
+  prepareCandidates: (
+    releaseIds: readonly ReleaseId[],
+  ) => Effect.Effect<readonly PreparedCandidate[], AppPublisherError>;
+}> {
+  const configs = options.configs.map(captureConfig);
+  const prepareCandidates = (releaseIds: readonly ReleaseId[]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (releaseIds.length !== configs.length)
+          return yield* Effect.fail(new AppPublisherError("configuration"));
+        const source = yield* options.sourceCapture
+          .capture()
+          .pipe(Effect.mapError(() => new AppPublisherError("source")));
+        const shared = yield* prepareSharedWorkspace(
+          source.snapshotPath,
+          configs.map(({ recipe }) => recipe),
+          options.executor,
+        ).pipe(
+          Effect.mapError((cause) => new AppPublisherError("build", { cause })),
+        );
+        const prepared: PreparedCandidate[] = [];
+        for (const [index, config] of configs.entries()) {
+          const releaseId = releaseIds[index];
+          if (releaseId === undefined)
+            return yield* Effect.fail(new AppPublisherError("configuration"));
+          prepared.push(
+            yield* createCapturedCandidatePreparer(config, {
+              sourceCapture: { capture: () => Effect.succeed(source) },
+              buildExecutor: createWorkspaceBuildExecutor(
+                options.executor,
+                shared,
+              ),
+            }).prepareCandidate(releaseId),
+          );
+          yield* Effect.tryPromise({
+            try: () =>
+              Promise.all(
+                appScratchFiles.map((file) =>
+                  rm(join(source.snapshotPath, file), {
+                    recursive: true,
+                    force: true,
+                  }),
+                ),
+              ),
+            catch: (cause) => new AppPublisherError("build", { cause }),
+          });
+        }
+        return prepared;
+      }),
+    );
+  return Object.freeze({ prepareCandidates });
 }
 
 /** The configured artifact directory as write-once immutable objects. */

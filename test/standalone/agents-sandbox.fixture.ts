@@ -14,6 +14,7 @@ import standalone, {
   type StandaloneEnv,
 } from "../../src/standalone/worker.js";
 import { oysterPrincipalIsOwner } from "@fungi.computer/oyster/authorization";
+import { defaultTenant } from "../../src/tenant.js";
 
 // The standalone root's own Durable Object classes, as its Wrangler config
 // binds them (the root's workspace reads StandaloneRegistry.selectedComputer).
@@ -131,7 +132,15 @@ export default {
       )
         return new Response("Unauthorized", { status: 401 });
       url.pathname = url.pathname.slice("/luna".length);
-      return env.LUNA.getByName("owner-luna").fetch(new Request(url, request));
+      const luna = env.LUNA.getByName("owner-luna");
+      // Every real Agent is created through the directory, which pins it;
+      // Session redaction reads that directory's stored credentials and
+      // fails closed for an unpinned Agent.
+      await luna.usePolicyDirectory({
+        directoryName: "agents",
+        tenantId: defaultTenant,
+      });
+      return luna.fetch(new Request(url, request));
     }
     if (url.pathname === "/probe") {
       const canonical = new Request("https://oyster.test/probe", request);
@@ -156,7 +165,14 @@ export default {
         kind: "agent",
         agentId: agent.agentId,
       });
-      const probe = await env.PROBE.getByName(agent.agentId).probe();
+      // Pinned to the directory like the Agent it created, so Session
+      // redaction reads that directory's stored credentials.
+      const sandbox = env.PROBE.getByName(agent.agentId);
+      await sandbox.usePolicyDirectory({
+        directoryName: "agents",
+        tenantId: defaultTenant,
+      });
+      const probe = await sandbox.probe();
       return Response.json({
         probe,
         policy,

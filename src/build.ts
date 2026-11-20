@@ -9,6 +9,7 @@ export {
   createFirstPartyAppSourceDistribution,
   localSnapshotBuildOptions,
   createLocalBuildExecutor,
+  createLocalCandidatesPreparer,
   createLocalArtifactWriter,
   createLocalAppPublisher,
   type FirstPartyAppSourceDistribution,
