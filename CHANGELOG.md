@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.50.2
+
+### Patch Changes
+
+- Changes since 0.50.1:
+
+  - fix(oyster): keep the Workers SqlStorage global out of published types
+
 ## 0.50.1
 
 ### Patch Changes

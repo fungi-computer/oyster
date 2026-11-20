@@ -39,8 +39,19 @@ export type ModelKeyUsage = Readonly<{
   count: number;
 }>;
 
+/**
+ * The Durable Object SQL this store needs, as a structural type, so the
+ * published declarations never name the Workers-only `SqlStorage` global.
+ */
+export type ModelKeyUsageSql = Readonly<{
+  exec: (
+    statement: string,
+    ...bindings: (string | number | null)[]
+  ) => Readonly<{ toArray: () => readonly unknown[] }>;
+}>;
+
 export function createModelKeyUsage(options: {
-  sql: SqlStorage;
+  sql: ModelKeyUsageSql;
   now?: () => number;
 }) {
   const { sql } = options;
