@@ -344,6 +344,7 @@ function previewBuiltRelease(input): Promise<{
     | "agent.avatar"
     | "agent.instructions"
     | "agent.toolPolicy"
+    | "agent.stop"
     | "agent.read"
     | "agent.send"
     | "llm.generation"
@@ -379,6 +380,7 @@ function previewBuiltRelease(input): Promise<{
       | "agent.avatar"
       | "agent.instructions"
       | "agent.toolPolicy"
+      | "agent.stop"
       | "agent.read"
       | "agent.send"
       | "llm.generation"
@@ -419,16 +421,17 @@ whether it would update an existing installation.
 \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `update`: \| \{
-`installationId`: `string`; `needsApproval`: readonly ( \| `"computer.list"` \|
-`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
-`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
-`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
+`"media.generation"` \| `"media.share"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
+`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.stop"` \|
 `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
 \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
 \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
@@ -455,6 +458,7 @@ function previewRelease(input): Promise<{
     | "agent.avatar"
     | "agent.instructions"
     | "agent.toolPolicy"
+    | "agent.stop"
     | "agent.read"
     | "agent.send"
     | "llm.generation"
@@ -490,6 +494,7 @@ function previewRelease(input): Promise<{
       | "agent.avatar"
       | "agent.instructions"
       | "agent.toolPolicy"
+      | "agent.stop"
       | "agent.read"
       | "agent.send"
       | "llm.generation"
@@ -543,16 +548,17 @@ Releases once before any install.
 \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `update`: \| \{
-`installationId`: `string`; `needsApproval`: readonly ( \| `"computer.list"` \|
-`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
-`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
-`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
+`"media.generation"` \| `"media.share"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
+`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.stop"` \|
 `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
 \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
 \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|

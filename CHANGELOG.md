@@ -1,5 +1,36 @@
 # @fungi.computer/oyster
 
+## 0.51.0
+
+### Minor Changes
+
+- Changes since 0.50.5:
+
+  - feat(agar): add the agent.stop capability for stop all
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.25.0
+  - @fungi.computer/forage@0.4.0
+  - @fungi.computer/puffball@0.13.0
+  - @fungi.computer/shiitake-extensions@0.12.3
+  - @fungi.computer/braid@0.6.5
+  - @fungi.computer/darkroom@0.11.13
+  - @fungi.computer/nacre@0.8.7
+  - @fungi.computer/parakeet@0.16.6
+  - @fungi.computer/shiitake@0.21.14
+  - @fungi.computer/workflows-wire@0.7.5
+  - @fungi.computer/knapsack@0.4.23
+  - @fungi.computer/mycelium@0.4.8
+  - @fungi.computer/veil@0.11.4
+  - @fungi.computer/zookeeper@0.0.56
+  - @fungi.computer/computer@0.16.5
+  - @fungi.computer/computer-contract@0.5.10
+
 ## 0.50.5
 
 ### Patch Changes

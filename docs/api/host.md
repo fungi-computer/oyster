@@ -1393,6 +1393,7 @@ type InstallationOperations = Readonly<{
                  | ...
                  | ...
                  | ...
+                 | ...
                  | ...;
               capabilityApproved: true;
               operations: readonly ...[];
@@ -1905,6 +1906,7 @@ function verifyRelease(
            | "agent.avatar"
            | "agent.instructions"
            | "agent.toolPolicy"
+           | "agent.stop"
            | "agent.read"
            | "agent.send"
            | "llm.generation"
@@ -1975,6 +1977,7 @@ function verifyRelease(
            | "agent.avatar"
            | "agent.instructions"
            | "agent.toolPolicy"
+           | "agent.stop"
            | "agent.read"
            | "agent.send"
            | "llm.generation"
@@ -2038,6 +2041,7 @@ function verifyRelease(
            | "agent.avatar"
            | "agent.instructions"
            | "agent.toolPolicy"
+           | "agent.stop"
            | "agent.read"
            | "agent.send"
            | "llm.generation"
@@ -2126,6 +2130,7 @@ function verifyRelease(
         | "agent.avatar"
         | "agent.instructions"
         | "agent.toolPolicy"
+        | "agent.stop"
         | "agent.read"
         | "agent.send"
         | "llm.generation"
@@ -2223,12 +2228,12 @@ standalone HTML.
 `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
 `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \|
 `"agent.rename"` \| `"agent.avatar"` \| `"agent.instructions"` \|
-`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"`
-\| `"media.generation"` \| `"media.share"` \| `"games:servers"` \|
-`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
-`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
-`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
-`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"agent.toolPolicy"` \| `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"media.share"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
 `"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<...\>[];
 `guidance?`: `string`; `handlers`: readonly `"file.open"`[]; `receives?`:
 readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
@@ -2247,27 +2252,28 @@ readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
 `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<...\>[]; `guidance?`: `string`; `handlers`: readonly
-`"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`;
-`roles`: readonly (`"files"` \| `"dashboard"` \| `"inbox"` \| `"media"` \|
-`"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<...\>[];
-`commands?`: readonly `Readonly`\<...\>[]; `gills?`: readonly
-`AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: ...; `sync?`: ...;
-\}\>; \}\>; `format`: `"fungi-app-v1"`; `ui`: \{ `mediaType`:
-`"text/html; charset=utf-8"` \| `"application/vnd.fungi.app-assets+json"`;
-`artifactRef`: `ArtifactRef`; `digest`: `Sha256Digest`; `version`: `string`;
-`byteLength`: `number`; \}; \} \| \{ `declaration?`: `Readonly`\<\{ `api?`:
-`Readonly`\<\{ `methods`: ...; `toolFamily?`: ...; `events?`: ...; \}\>;
-`displayName?`: `string`; `capabilities`: readonly ( \| `"computer.list"` \|
-`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
-`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
-`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
+`"media.generation"` \| `"media.share"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<...\>[];
+`guidance?`: `string`; `handlers`: readonly `"file.open"`[]; `receives?`:
+readonly `"git.push"`[]; `icon?`: `string`; `roles`: readonly (`"files"` \|
+`"dashboard"` \| `"inbox"` \| `"media"` \| `"sessions"` \| `"terminal"`)[];
+`storage?`: readonly `Readonly`\<...\>[]; `commands?`: readonly
+`Readonly`\<...\>[]; `gills?`: readonly `AppDeclaredGill`[]; `backend?`:
+`Readonly`\<\{ `bindings`: ...; `sync?`: ...; \}\>; \}\>; `format`:
+`"fungi-app-v1"`; `ui`: \{ `mediaType`: `"text/html; charset=utf-8"` \|
+`"application/vnd.fungi.app-assets+json"`; `artifactRef`: `ArtifactRef`;
+`digest`: `Sha256Digest`; `version`: `string`; `byteLength`: `number`; \}; \} \|
+\{ `declaration?`: `Readonly`\<\{ `api?`: `Readonly`\<\{ `methods`: ...;
+`toolFamily?`: ...; `events?`: ...; \}\>; `displayName?`: `string`;
+`capabilities`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.stop"` \|
 `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
 \| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
 \| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
@@ -2296,12 +2302,12 @@ readonly ...; `pending?`: ... \| ...; `hidden?`: ... \| ...; `present?`: ... \|
 `"computer.list"` \| `"computer.readFile"` \| `"computer.writeFile"` \|
 `"computer.execute"` \| `"approvals"` \| `"agent.list"` \| `"agent.manage"` \|
 `"agent.rename"` \| `"agent.avatar"` \| `"agent.instructions"` \|
-`"agent.toolPolicy"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"`
-\| `"media.generation"` \| `"media.share"` \| `"games:servers"` \|
-`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
-`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
-`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
-`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"agent.toolPolicy"` \| `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"media.share"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
 `"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<\{ `appId`:
 `string`; `methods`: readonly ...[]; \}\>[]; `guidance?`: `string`; `handlers`:
 readonly `"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`:
@@ -2347,6 +2353,7 @@ function resolveBackend(store, release): Promise<
         | "agent.avatar"
         | "agent.instructions"
         | "agent.toolPolicy"
+        | "agent.stop"
         | "agent.read"
         | "agent.send"
         | "llm.generation"
@@ -2419,21 +2426,22 @@ root artifact, then the backend descriptor it names.
 \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; `calls?`: readonly
-`Readonly`\<\{ `appId`: ...; `methods`: ...; \}\>[]; `guidance?`: `string`;
-`handlers`: readonly `"file.open"`[]; `receives?`: readonly `"git.push"`[];
-`icon?`: `string`; `roles`: readonly (`"files"` \| `"dashboard"` \| `"inbox"` \|
-`"media"` \| `"sessions"` \| `"terminal"`)[]; `storage?`: readonly
-`Readonly`\<\{ `key`: ...; `scopes`: ...; `maxBytes`: ...; \}\>[]; `commands?`:
-readonly `Readonly`\<\{ `id`: ...; `title`: ...; `category`: ...;
-`description?`: ...; `sigil?`: ...; `projections?`: ...; \}\>[]; `gills?`:
-readonly `AppDeclaredGill`[]; `backend?`: `Readonly`\<\{ `bindings`: readonly
-...[]; `sync?`: ... \| ...; \}\>; \}\> \| `null`; \}\> \| `null`\>
+`"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
+`"media.generation"` \| `"media.share"` \| `"games:servers"` \|
+`"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
+`"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
+`"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
+`"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `calls?`: readonly `Readonly`\<\{ `appId`: ...;
+`methods`: ...; \}\>[]; `guidance?`: `string`; `handlers`: readonly
+`"file.open"`[]; `receives?`: readonly `"git.push"`[]; `icon?`: `string`;
+`roles`: readonly (`"files"` \| `"dashboard"` \| `"inbox"` \| `"media"` \|
+`"sessions"` \| `"terminal"`)[]; `storage?`: readonly `Readonly`\<\{ `key`: ...;
+`scopes`: ...; `maxBytes`: ...; \}\>[]; `commands?`: readonly `Readonly`\<\{
+`id`: ...; `title`: ...; `category`: ...; `description?`: ...; `sigil?`: ...;
+`projections?`: ...; \}\>[]; `gills?`: readonly `AppDeclaredGill`[]; `backend?`:
+`Readonly`\<\{ `bindings`: readonly ...[]; `sync?`: ... \| ...; \}\>; \}\> \|
+`null`; \}\> \| `null`\>
 
 ## References
 

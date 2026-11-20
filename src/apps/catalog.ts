@@ -100,6 +100,13 @@ export const permissionCatalog = {
     "createAgents",
     "install",
   ),
+  "agent.stop": entry(
+    "agents",
+    "Stop Agents",
+    "stop an Agent and the Agents it started, and pause their schedules.",
+    "createAgents",
+    "install",
+  ),
   "agent.read": entry(
     "agents",
     "Read Agent conversations",
