@@ -15,6 +15,8 @@ const configSchema = z.object({
     )
     .optional(),
   minify: z.boolean().optional(),
+  keep_names: z.boolean().optional(),
+  upload_source_maps: z.boolean().optional(),
   durable_objects: z.object({
     bindings: z.array(z.object({ class_name: z.string() })),
   }),
@@ -110,7 +112,22 @@ describe("Cloudflare Computer container capacity", () => {
 });
 
 describe("Cloudflare Worker startup budget", () => {
-  it("minifies the published standalone example so startup stays under the CPU limit (10021)", () => {
-    expect(read("examples/standalone/wrangler.jsonc").minify).toBe(true);
-  });
+  // Every config that deploys the whole standalone Worker to Cloudflare. The
+  // unminified bundle has been refused with error 10021 (startup CPU limit),
+  // and esbuild's name preservation adds a wrapper call to every function and
+  // class the bundle declares, which Worker startup then pays for. The Worker
+  // reads no function or class name, so neither is kept. Source maps go up with
+  // the Worker so a minified stack in the Cloudflare logs names its source.
+  for (const path of [
+    "deploy/wrangler.jsonc",
+    "deploy/wrangler.contest.jsonc",
+    "examples/standalone/wrangler.jsonc",
+  ]) {
+    it(`${path} minifies without preserving names, with source maps, so startup stays under the CPU limit (10021)`, () => {
+      const config = read(path);
+      expect(config.minify).toBe(true);
+      expect(config.keep_names).toBe(false);
+      expect(config.upload_source_maps).toBe(true);
+    });
+  }
 });

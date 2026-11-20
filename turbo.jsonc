@@ -28,6 +28,7 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/tooling/proof-runner/agar-v2-app.fixture.mjs",
         "$TURBO_ROOT$/tooling/repository/scripts/{test-file-pool,proof-budget}.{mjs,d.mts}",
+        "$TURBO_ROOT$/tooling/repository/scripts/run-test-legs.mjs",
         "$TURBO_ROOT$/tooling/proof-runner/proof-time-bound.sh",
         "$TURBO_ROOT$/tooling/proof-runner/{isolated-chromium,owned-loopback,socket-relay}.mjs",
         "$TURBO_ROOT$/tooling/celld-platform/runtime/**",

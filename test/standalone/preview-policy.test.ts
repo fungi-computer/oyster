@@ -41,10 +41,12 @@ async function fixture(
   if (origins === null)
     throw new Error("Fixture preview configuration rejected");
   const seen: Request[] = [];
+  let owner = "owner";
   const preview = createStandalonePreview(storage, computerId, origins, {
     accept: (ownerId) => {
       if (ownerId !== "owner") throw new Error("Fixture requires owner");
     },
+    isOwner: (ownerId) => Promise.resolve(ownerId === owner),
     forward: async (_port, request, accept) => {
       accept();
       seen.push(request);
@@ -89,7 +91,10 @@ async function fixture(
         ),
       { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
     );
-  return { storage, preview, fetch, seen, entry };
+  const setOwner = (next: string) => {
+    owner = next;
+  };
+  return { storage, preview, fetch, seen, entry, setOwner };
 }
 function session(response: Response) {
   return response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -257,6 +262,18 @@ describe("Oyster private port previews", () => {
       (await f.fetch(new Request(url, { headers: { cookie } }))).status,
     ).toBe(401);
   });
+  it("ends an open preview session once its member is no longer the owner", async () => {
+    const f = await fixture();
+    const issued = await f.preview.issueOwner("owner", 5173);
+    const cookie = session(await f.fetch(new Request(issued.previewUrl)));
+    const page = () =>
+      f.fetch(new Request(`${previewOrigin}/page`, { headers: { cookie } }));
+    expect((await page()).status).toBe(200);
+    f.setOwner("successor");
+    expect((await page()).status).toBe(401);
+    expect(f.seen).toHaveLength(1);
+  });
+
   it("uses stable flat hosts and keeps host sessions bound to their port", async () => {
     const bindings = {
       OYSTER_ORIGIN: env.OYSTER_ORIGIN,

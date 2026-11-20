@@ -189,7 +189,8 @@ import {
   type PageAssetLoader,
 } from "./page-assets.js";
 import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
-import { hostPage, hostPageAsset, type HostPageState } from "./host-page.js";
+import type { HostPageState } from "./host-page.js";
+import { renderHostPage, serveHostPageAsset } from "./host-page-lazy.js";
 import { parseAccept } from "hono/utils/accept";
 import { parseArtifactRef, type AppApi } from "@fungi.computer/puffball";
 import type { AppMethodCallContext } from "@fungi.computer/puffball/app";
@@ -1030,12 +1031,12 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
   const page = async (
     state: HostPageState,
     options: Omit<
-      Parameters<typeof hostPage>[0],
+      Parameters<typeof renderHostPage>[0],
       "state" | "title" | "stylesheets"
     > = {},
   ) => {
     const { loginFonts, styles } = await assets();
-    return hostPage({
+    return renderHostPage({
       state,
       title,
       stylesheets: [styles.path, loginFonts.path],
@@ -1045,7 +1046,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
   table.get(
     "/_oyster/host-assets/*",
     publicRoute("content-addressed host illustrations and layout"),
-    (context) => hostPageAsset(new URL(context.req.url).pathname),
+    (context) => serveHostPageAsset(new URL(context.req.url).pathname),
   );
   table.get("/login", publicRoute("the sign-in form"), (context) =>
     page("login", {
@@ -2049,7 +2050,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           headers: { "Cache-Control": "no-store" },
         });
       const pageAssets = await assets();
-      const response = await hostPage({
+      const response = await renderHostPage({
         state: "permissions",
         title,
         stylesheets: [pageAssets.loginFonts.path, pageAssets.styles.path],
@@ -2797,7 +2798,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         "Host page assets unavailable; serving recovery document",
         cause,
       );
-      rendered = await hostPage({ state, title, status: response.status });
+      rendered = await renderHostPage({
+        state,
+        title,
+        status: response.status,
+      });
     }
     // Keep timing, robots and retry metadata from the original refusal.
     response.headers.forEach((value, name) => {

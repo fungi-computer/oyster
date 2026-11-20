@@ -1,8 +1,9 @@
 import { readFile, realpath } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
-import { build, type BuildOptions } from "esbuild";
+import type { BuildOptions } from "esbuild";
 import { parse, type DefaultTreeAdapterTypes } from "parse5";
+import { loadLazily } from "../lazy-import.js";
 import { isInsideSnapshot } from "./snapshot-programs/snapshot-path.js";
 
 // Only code contributes package imports. Vite, not this planning pass, owns
@@ -77,6 +78,11 @@ export async function appRuntimeImports(options: {
       modules.push({ entryPoints: [await contained(join(root, path))] });
 
   const imports = new Set<string>();
+  // esbuild is loaded by the first App build, not by Worker startup.
+  const { build } = await loadLazily(
+    () => import("esbuild"),
+    "Oyster's App build tool (esbuild)",
+  );
   for (const module of modules) {
     const result = await build({
       ...module,

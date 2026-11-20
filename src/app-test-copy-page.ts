@@ -78,10 +78,11 @@ export async function appTestCopyPage(
           </form>
           <a href="/recovery">App recovery</a>
         </header>
+        <!-- No src: the page module navigates the frame once it listens, so a
+             first document cannot claim the connection and then be replaced. -->
         <iframe
           id="oyster-app"
           sandbox="${appSandbox}"
-          src="${config.uiUrl}"
           title="${installationId} test copy"
         ></iframe>
         <script type="application/json" id="oyster-config">

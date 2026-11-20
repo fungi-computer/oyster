@@ -23,6 +23,13 @@ const config = join(oyster, "deploy/wrangler.jsonc");
 /** Loaded on first use, never at startup: [module path pattern, first-use owner]. */
 const deferred = [
   [/\/dist\/page-script\.js$/, "the first host page or page-asset request"],
+  // The host page's React renderer, Caps components and animation library only
+  // run when a request renders a page.
+  [/\/dist\/host-page\.js$/, "the first host page or page-asset request"],
+  [/\/react-dom\/server\.browser\.js$/, "the first host page render"],
+  [/\/animejs\//, "the first host page render"],
+  // esbuild bundles an App's imports; only a build request needs it.
+  [/\/esbuild\/lib\/main\.js$/, "the first App build"],
   [
     /\/roster\/conversation-agents\.js$/,
     "the Agent owner's first runtime construction",
@@ -59,11 +66,11 @@ const deferred = [
 
 /**
  * Bundled bytes the standalone Worker reaches through static imports (about
- * 9.4 MB). Raise it only with a startup profile (`pnpm run check:startup`)
+ * 8.9 MB). Raise it only with a startup profile (`pnpm run check:startup`)
  * showing the cost is paid for; prefer deferring the new import to the request
  * that needs it.
  */
-const eagerBytesBudget = 10_000_000;
+const eagerBytesBudget = 9_100_000;
 
 test("the standalone Worker defers heavy SDKs and stays within its eager code budget", async () => {
   const out = await mkdtemp(join(tmpdir(), "oyster-startup-graph-"));

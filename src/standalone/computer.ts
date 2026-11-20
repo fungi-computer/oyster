@@ -723,6 +723,9 @@ export class ComputerDO
         accept: (ownerId) => {
           this.#accept(this.#previewGrant(ownerId), "listPorts");
         },
+        isOwner: async (ownerId) =>
+          (await (await standaloneTenancy(this.previewBindings)).owner())?.actor
+            .memberId === ownerId,
         forward: (port, request, accept) =>
           this.portPreviewAfterAcceptance(port, request, accept),
       },

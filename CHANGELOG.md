@@ -1,5 +1,31 @@
 # @fungi.computer/oyster
 
+## 0.52.1
+
+### Patch Changes
+
+- Changes since 0.52.0:
+
+  - fix(oyster): keep the host page renderer's exports visible to dead-code
+    analysis
+  - fix(oyster): name the feature when a lazily loaded module fails to load
+  - perf(oyster): start the Worker with headroom under Cloudflare's CPU limit
+  - fix(oyster): let the test copy page navigate its App frame once it listens
+  - fix(computer): end a port preview session when its viewer loses access
+  - fix(veil): hold back only text that could begin a stored value
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer-contract@0.5.11
+  - @fungi.computer/computer@0.16.6
+  - @fungi.computer/shiitake@0.21.15
+  - @fungi.computer/veil@0.11.5
+  - @fungi.computer/parakeet@0.16.7
+  - @fungi.computer/shiitake-extensions@0.12.4
+  - @fungi.computer/zookeeper@0.0.57
+
 ## 0.52.0
 
 ### Minor Changes

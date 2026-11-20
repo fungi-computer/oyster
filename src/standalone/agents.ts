@@ -2590,7 +2590,10 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
       key === undefined
         ? crypto.getRandomValues(new Uint8Array(32))
         : Result.getOrElse(decodeBase64Url(key), () => new Uint8Array(0));
-    return createFingerprintSet(ownerKey, [...values]);
+    // The set goes only to this Oyster's own Agents, which run in the same
+    // Worker that holds the values, so it may carry short-prefix fingerprints:
+    // live output then waits only on text that begins a stored value.
+    return createFingerprintSet(ownerKey, [...values], { prefixes: true });
   }
 
   private mcpOwner: ReturnType<typeof createAgentMcpConnections> | undefined;

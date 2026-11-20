@@ -428,7 +428,12 @@ try {
     );
     await page.getByRole("link", { name: "Roll back", exact: true }).click();
     await page.getByRole("button", { name: "Roll back", exact: true }).click();
-    await page.waitForURL(`${origin}/recovery?requestId=*`);
+    await page.waitForURL(
+      (url) =>
+        url.pathname === "/recovery" &&
+        url.searchParams.get("installationId") === "notes" &&
+        url.searchParams.has("requestId"),
+    );
     const requestId = new URL(page.url()).searchParams.get("requestId");
     assert.ok(requestId, "The form redirects to its correlated observation");
     const signal = AbortSignal.timeout(20_000);

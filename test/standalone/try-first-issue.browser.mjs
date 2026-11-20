@@ -109,36 +109,31 @@ try {
       .getByRole("button", { name, exact: true })
       .click();
   };
-  const findFrame = async (text) => {
-    let found;
-    await waitFor(async () => {
-      for (const frame of page.frames()) {
-        if (frame === page.mainFrame()) continue;
-        if (await frame.getByText(text, { exact: true }).first().isVisible()) {
-          found = frame;
-          return true;
-        }
-      }
-      return false;
-    }, `App must show ${text}`);
-    return found;
+  // A FrameLocator re-resolves when an App reloads its frame, so a check
+  // never lands on a detached frame.
+  const appFrame = async (app, text) => {
+    const frame = page
+      .locator(`.tourtois-app-pane[aria-label="${app}"] iframe`)
+      .contentFrame();
+    await expect(frame.getByText(text, { exact: true }).first()).toBeVisible({
+      timeout: 60_000,
+    });
+    return frame;
   };
   await open("Bonsai");
-  let bonsai = await findFrame("Approve Git access");
+  let bonsai = await appFrame("Bonsai", "Approve Git access");
   await bonsai
     .getByRole("button", { name: "Approve Git access", exact: true })
     .click();
   await page.getByRole("button", { name: "Approve", exact: true }).click();
-  bonsai = await findFrame("Start your first repository");
+  bonsai = await appFrame("Bonsai", "Start your first repository");
+  // A suggested name creates its repository in one click.
   await bonsai.getByRole("button", { name: "notes", exact: true }).click();
-  await bonsai
-    .getByRole("button", { name: "Create repository", exact: true })
-    .click();
   await bonsai.getByRole("link", { name: "Issues", exact: true }).click();
   await bonsai
     .getByRole("button", { name: "Write the first issue", exact: true })
     .click();
-  const inkcap = await findFrame("notes · main");
+  const inkcap = await appFrame("Inkcap", "notes · main");
   const editor = inkcap.getByRole("textbox", {
     name: "issues/general/01-first-issue.md",
     exact: true,
@@ -151,9 +146,12 @@ try {
   });
   await editor.press("ControlOrMeta+End");
   await page.keyboard.insertText("\nFirst issue browser proof.\n");
+  // The tab strip's More menu offers Save once the document has changes.
+  await inkcap.getByRole("button", { name: "More", exact: true }).click();
   await expect(
-    inkcap.getByRole("button", { name: "Save", exact: true }),
+    inkcap.getByRole("menuitem", { name: "Save", exact: true }),
   ).toBeEnabled();
+  await page.keyboard.press("Escape");
   await editor.press("ControlOrMeta+s");
   await expect(page.getByText(/^Synced ·/u).first()).toBeVisible({
     timeout: 60_000,
@@ -180,14 +178,18 @@ try {
       },
     )
     .toBe(true);
-  for (const width of [1440, 390]) {
+  // End on the desktop width, where the window title bar offers Close.
+  for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.screenshot({ path: join(artifacts, `synced-${width}.png`) });
   }
-  await page.getByRole("button", { name: "Close Inkcap", exact: true }).click();
+  await page
+    .locator('.tourtois-app-pane[aria-label="Inkcap"]')
+    .getByRole("button", { name: "Close Inkcap", exact: true })
+    .click();
   await page.reload();
   await open("Bonsai");
-  bonsai = await findFrame("notes");
+  bonsai = await appFrame("Bonsai", "notes");
   // Reopen the repository after a full reload, then read its committed issues.
   const repository = bonsai
     .getByRole("link", { name: "notes", exact: true })

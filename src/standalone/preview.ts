@@ -117,6 +117,8 @@ function entryUrl(
 }
 export type PreviewNative = Readonly<{
   accept: (ownerId: string) => void;
+  /** Whether this member ID is still the Oyster's owner. */
+  isOwner: (ownerId: string) => Promise<boolean>;
   forward: (
     port: number,
     request: Request,
@@ -130,7 +132,14 @@ export function createStandalonePreview(
   origins: PreviewOrigins,
   native: PreviewNative,
 ) {
-  const access = new ComputerPortAccess(storage);
+  // A preview session names the owner who opened it; it ends when that
+  // member is no longer the owner.
+  const access = new ComputerPortAccess(storage, {
+    admitted: (principal) =>
+      "ownerId" in principal
+        ? native.isOwner(principal.ownerId)
+        : Promise.resolve(false),
+  });
   const issueOwner = async (ownerId: string, port: number) => {
     const target = previewUrl(origins, computerId, port);
     const token = await access.issue(port, { ownerId }, () => {
