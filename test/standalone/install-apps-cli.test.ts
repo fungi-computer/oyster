@@ -8,6 +8,27 @@ import type {
   StarterAppSetResult,
 } from "../../src/standalone/app-set.js";
 
+const installedRecord = (
+  installationId: string,
+  jobId: string,
+): InstalledStarterApp => ({
+  installationId,
+  jobId,
+  published: "recorded",
+  seedRevision: "git:seed",
+  sourceRevision: "git:source",
+  installed: "installed",
+  release: null,
+  timings: {
+    fetch: 0,
+    publish: 0,
+    queue: 0,
+    build: 0,
+    install: 0,
+    computer: null,
+  },
+});
+
 it("importing the CLI module does not dispatch a command", () => {
   const cli = resolve(
     import.meta.dirname,
@@ -38,27 +59,9 @@ it("importing the CLI module does not dispatch a command", () => {
 });
 
 it("the import-safe handler prints failed Apps and sets a non-zero exit code", async () => {
-  const record = (
-    installationId: string,
-    jobId: string,
-  ): InstalledStarterApp => ({
-    installationId,
-    jobId,
-    published: "recorded",
-    seedRevision: "git:seed",
-    sourceRevision: "git:source",
-    installed: "installed",
-    release: null,
-    timings: {
-      fetch: 0,
-      publish: 0,
-      queue: 0,
-      build: 0,
-      install: 0,
-      computer: null,
-    },
-  });
+  const record = installedRecord;
   const result: StarterAppSetResult = {
+    declined: false,
     installed: [record("tourtois", "build_1"), record("shed", "build_3")],
     failed: [
       { installationId: "bonsai", reason: "bonsai build failed: compile" },
@@ -81,6 +84,105 @@ it("the import-safe handler prints failed Apps and sets a non-zero exit code", a
     );
     expect(chunks.join("")).toContain("shed  installed");
     expect(chunks.join("")).toContain("Installed 2 Apps; failed 1");
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = originalCode;
+    vi.unstubAllEnvs();
+  }
+});
+
+it("shows what built, what failed and why, and the permissions, then asks once", async () => {
+  const originalCode = process.exitCode;
+  const stream = new PassThrough();
+  const chunks: string[] = [];
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
+  const ui = new Cli({ brand: "fungi", output: stream, interactive: false });
+  let answer: boolean | undefined;
+  try {
+    vi.stubEnv("OYSTER_URL", "https://oyster.test");
+    vi.stubEnv("OYSTER_OWNER_KEY", "key");
+    const { installApps: installAppsCommand } =
+      await import("../../src/standalone/install-apps-cli.js");
+    const install = async (
+      options: Parameters<
+        typeof import("../../src/standalone/app-set.js").installStandaloneAppSet
+      >[0],
+    ): Promise<StarterAppSetResult> => {
+      answer = await options.confirm({
+        previews: [
+          {
+            installationId: "tourtois",
+            name: "app_tourtois",
+            capabilities: ["app.storage", "agent.list"],
+            update: null,
+          },
+        ],
+        failed: [
+          { installationId: "bonsai", reason: "bonsai build failed: compile" },
+        ],
+      });
+      return { declined: !answer, installed: [], failed: [] };
+    };
+    // No terminal and no --yes: nothing is installed.
+    await expect(installAppsCommand([], install, ui)).rejects.toThrow(
+      "Install cancelled; nothing was installed",
+    );
+    expect(answer).toBe(false);
+    const shown = chunks.join("");
+    expect(shown).toContain("Built");
+    expect(shown).toContain("bonsai: bonsai build failed: compile");
+    expect(shown).toContain("Store App data");
+    expect(shown).toContain("List Agents");
+    // --yes confirms the same review without asking.
+    await installAppsCommand(["--yes"], install, ui);
+    expect(answer).toBe(true);
+  } finally {
+    process.exitCode = originalCode;
+    vi.unstubAllEnvs();
+  }
+});
+
+it("--yes with one failed App installs the rest and exits 1", async () => {
+  const originalCode = process.exitCode;
+  const stream = new PassThrough();
+  const chunks: string[] = [];
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
+  const ui = new Cli({ brand: "fungi", output: stream, interactive: false });
+  try {
+    vi.stubEnv("OYSTER_URL", "https://oyster.test");
+    vi.stubEnv("OYSTER_OWNER_KEY", "key");
+    const { installApps: installAppsCommand } =
+      await import("../../src/standalone/install-apps-cli.js");
+    const failed = [
+      { installationId: "bonsai", reason: "bonsai build failed: compile" },
+    ];
+    let confirmed: boolean | undefined;
+    await installAppsCommand(
+      ["--yes"],
+      async (options) => {
+        confirmed = await options.confirm({
+          previews: [
+            {
+              installationId: "tourtois",
+              name: "app_tourtois",
+              capabilities: ["app.storage"],
+              update: null,
+            },
+          ],
+          failed,
+        });
+        return {
+          declined: !confirmed,
+          installed: confirmed ? [installedRecord("tourtois", "build_1")] : [],
+          failed,
+        };
+      },
+      ui,
+    );
+    expect(confirmed).toBe(true);
+    const shown = chunks.join("");
+    expect(shown).toContain("tourtois  installed");
+    expect(shown).toContain("bonsai  failed: bonsai build failed: compile");
     expect(process.exitCode).toBe(1);
   } finally {
     process.exitCode = originalCode;

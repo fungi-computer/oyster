@@ -1714,6 +1714,7 @@ test("install-apps immediately recovers all seven Apps after reset: Agents and S
         fileURLToPath(new URL("../../../", import.meta.url)),
         "--concurrency",
         "1",
+        "--yes",
       ],
       (options) =>
         installStandaloneAppSet({

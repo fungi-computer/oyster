@@ -4,7 +4,7 @@ import { basename, dirname, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { Cli } from "@fungi.computer/lantern";
-import { installConfirmation, permissionCatalog } from "./apps/index.js";
+import { installPreviewNotes } from "./install-preview.js";
 import { installRelease, previewRelease } from "./pack.js";
 
 export const installReleaseUsage =
@@ -72,43 +72,8 @@ export async function installReleaseCommand(
       });
     return found;
   });
-  // A fresh install grants by the shared rule; an update keeps its current
-  // grants, so it lists only what newly waits for approval.
-  const confirmation = installConfirmation(
-    "owner",
-    previews.filter(({ update }) => update === null),
-  );
-  const lines = (rows: typeof confirmation.granted) =>
-    rows.map(
-      (row) =>
-        `${row.label}: ${row.description}${row.warning === null ? "" : ` ${row.warning}`} (${row.apps.join(", ")})`,
-    );
-  if (confirmation.granted.length > 0)
-    ui.note(
-      `Installing ${previews
-        .filter(({ update }) => update === null)
-        .map(({ name }) => name)
-        .join(", ")} lets them:`,
-      lines(confirmation.granted),
-    );
-  if (confirmation.needsApproval.length > 0)
-    ui.note(
-      "Not granted by installing; approve in Settings > Permissions:",
-      lines(confirmation.needsApproval),
-    );
-  for (const { name, update } of previews)
-    if (update !== null)
-      ui.note(
-        `Updating ${update.installationId} (${name}) keeps its current permissions:`,
-        update.needsApproval.length === 0
-          ? ["Nothing new is requested."]
-          : [
-              "Newly requested, waiting for approval in Settings > Permissions:",
-              ...update.needsApproval.map(
-                (capability) => permissionCatalog[capability].label,
-              ),
-            ],
-      );
+  for (const note of installPreviewNotes(previews))
+    ui.note(note.title, [...note.lines]);
   if (values.yes !== true) {
     const answer = await ui.confirm({
       message: `Install ${String(previews.length)} App${previews.length === 1 ? "" : "s"} with these permissions?`,

@@ -45,6 +45,7 @@ import { appPermissionPageSchema } from "../../src/apps/permissions.js";
 import {
   installStandaloneAppSet,
   standaloneAppSet,
+  type StarterAppReview,
   type StarterAppSource,
   type StarterApp,
   noStarterBuildBackendMessage,
@@ -459,6 +460,17 @@ function oyster(
   return calls;
 }
 
+/** The owner confirms, and the Oyster reports each App as a fresh install. */
+const confirmed = {
+  confirm: () => Promise.resolve(true),
+  preview: () =>
+    Promise.resolve({
+      name: "app_starter",
+      capabilities: ["app.storage" as const],
+      update: null,
+    }),
+};
+
 let checkout: Extract<StarterAppSource, { kind: "checkout" }>;
 
 const install = (
@@ -469,6 +481,7 @@ const install = (
   only?: readonly string[],
 ) =>
   installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     concurrency,
     only,
@@ -633,6 +646,7 @@ it("does not treat an edge 502 as the outcome of a replacement installation", as
       Schema.Struct({ port: Schema.Number }),
     )(server.address());
     const result = await installStandaloneAppSet({
+      ...confirmed,
       source: checkout,
       url: `http://127.0.0.1:${String(address.port)}`,
       key: "key",
@@ -989,17 +1003,16 @@ it("publishes, builds on the Computer and installs each App's own Release, Tourt
   expect(published[0]).toBe("tourtois");
   const installs = calls.filter((call) => call === "POST /api/installations");
   expect(installs).toHaveLength(standaloneAppSet.length);
-  // Each App is installed only after its own build settled.
-  expect(calls.slice(0, 8)).toEqual([
+  // Nothing installs until every build has settled and the owner confirmed.
+  expect(calls.slice(0, 4)).toEqual([
     "GET /api/build-backend",
     "POST /api/builds",
     "GET /api/builds/build_0",
     "GET /api/builds/build_0",
-    "POST /api/installations",
-    "GET /api/installations/tourtois/status",
-    "GET /api/installations/tourtois/grants",
-    "PUT /api/installations/tourtois/grants",
   ]);
+  expect(calls.lastIndexOf("POST /api/builds")).toBeLessThan(
+    calls.indexOf("POST /api/installations"),
+  );
 });
 
 it("installs only the named Apps, in starter order, and nothing else", async () => {
@@ -1345,6 +1358,7 @@ it.each([
 it("shows the older-store refusal instead of a bare publish failure", async () => {
   oyster(() => "succeeded");
   const result = await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     url: "https://oyster.test",
     key: "key",
@@ -1368,6 +1382,7 @@ it("shows the older-store refusal instead of a bare publish failure", async () =
 it("gives up on a build that does not finish within its wait", async () => {
   oyster(() => "succeeded");
   const result = await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     url: "https://oyster.test",
     key: "key",
@@ -1421,6 +1436,7 @@ it("cancels a build status read that hangs, within the build budget", async () =
   );
   const started = Date.now();
   const result = await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     url: "https://oyster.test",
     key: "key",
@@ -1558,6 +1574,7 @@ it("clones each App's own repository and roots its recipe there", async () => {
     }
     const entries: string[] = [];
     await installStandaloneAppSet({
+      ...confirmed,
       source: {
         kind: "repositories",
         base: `file://${base}`,
@@ -1626,6 +1643,7 @@ it("reads a build's status before its first idle wait", async () => {
     return Promise.resolve(registry.route(input, init));
   });
   await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     concurrency: 1,
     url: "https://oyster.test",
@@ -1648,12 +1666,10 @@ it("reads a build's status before its first idle wait", async () => {
   });
   // Every build is already done at its first read, so nothing ever idles.
   expect(calls).not.toContain("sleep");
-  expect(calls.slice(0, 5)).toEqual([
+  expect(calls.slice(0, 3)).toEqual([
     "GET /api/build-backend",
     "POST /api/builds",
     "GET /api/builds/build_0",
-    "POST /api/installations",
-    "GET /api/installations/tourtois/status",
   ]);
 });
 
@@ -1691,6 +1707,7 @@ it("starts an App's build before unrelated Apps finish seeding", async () => {
     return Promise.resolve(registry.route(input, init));
   });
   await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     concurrency: 1,
     url: "https://oyster.test",
@@ -1757,6 +1774,7 @@ it("settles a build in flight and reports a failed seed", async () => {
     return registry.route(input, init);
   });
   const result = await installStandaloneAppSet({
+    ...confirmed,
     source: checkout,
     concurrency: 1,
     url: "https://oyster.test",
@@ -1790,47 +1808,85 @@ it("settles a build in flight and reports a failed seed", async () => {
   expect(events).toEqual(atReturn);
 });
 
-it("settles an in-flight build and reports an approval failure", async () => {
+it("reports one App's approval failure and still installs the others", async () => {
   const registry = starterRegistry();
-  const calls = oyster(() => "succeeded", registry);
+  oyster(() => "succeeded", registry);
   const transport = fetch;
-  let startedSecond: () => void = () => undefined;
-  const secondBuild = new Promise<void>((resolve) => {
-    startedSecond = resolve;
-  });
-  let refusedFirst: () => void = () => undefined;
-  const firstRefusal = new Promise<void>((resolve) => {
-    refusedFirst = resolve;
-  });
-  vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
-    if (input.pathname === "/api/builds" && init.method === "POST") {
-      const body = Schema.decodeUnknownSync(requestBody)(init.body ?? "{}");
-      if (body.appId === "app_bonsai") startedSecond();
-    }
-    if (input.pathname === "/api/builds/build_1") await firstRefusal;
-    if (
-      input.pathname === "/api/installations/tourtois/grants" &&
-      init.method === "PUT"
-    ) {
-      await secondBuild;
-      refusedFirst();
-      return new Response(null, { status: 403 });
-    }
-    return transport(input, init);
-  });
+  vi.stubGlobal("fetch", (input: URL, init: RequestInit) =>
+    input.pathname === "/api/installations/tourtois/grants" &&
+    init.method === "PUT"
+      ? Promise.resolve(new Response(null, { status: 403 }))
+      : transport(input, init),
+  );
   const result = await install([], 2);
   expect(result.failed[0]).toEqual({
     installationId: "tourtois",
     reason: "tourtois approval failed (403)",
   });
-  expect(calls.filter((call) => call === "POST /api/builds")).toHaveLength(
-    standaloneAppSet.length,
-  );
   expect(registry.records.get("bonsai")?.authority.authorityVersion).toBe(1);
-  expect(registry.records.get("tourtois")?.authority.authorityVersion).toBe(1);
-  const atRejection = [...calls];
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  expect(calls).toEqual(atRejection);
+});
+
+it("never installs an App whose build failed, and installs the others once confirmed", async () => {
+  const registry = starterRegistry();
+  const calls = oyster(
+    (appId) => (appId === "app_bonsai" ? "failed" : "succeeded"),
+    registry,
+  );
+  const result = await install([]);
+  expect(result.declined).toBe(false);
+  expect(result.failed.map(({ installationId }) => installationId)).toEqual([
+    "bonsai",
+  ]);
+  expect(result.installed.map(({ installationId }) => installationId)).toEqual(
+    standaloneAppSet
+      .map(({ installationId }) => installationId)
+      .filter((id) => id !== "bonsai"),
+  );
+  expect(registry.records.has("bonsai")).toBe(false);
+  expect(
+    calls.filter((call) => call === "POST /api/installations"),
+  ).toHaveLength(standaloneAppSet.length - 1);
+});
+
+it("shows every build's outcome to the owner before installing, and installs nothing when declined", async () => {
+  const registry = starterRegistry();
+  // Bonsai's build fails; every other App builds.
+  const calls = oyster(
+    (appId) => (appId === "app_bonsai" ? "failed" : "succeeded"),
+    registry,
+  );
+  let review: StarterAppReview | undefined;
+  const result = await installStandaloneAppSet({
+    ...confirmed,
+    confirm: (shown) => {
+      review = shown;
+      // The Oyster has installed nothing at the moment the owner is asked.
+      expect(calls).not.toContain("POST /api/installations");
+      return Promise.resolve(false);
+    },
+    source: checkout,
+    concurrency: 1,
+    url: "https://oyster.test",
+    key: "key",
+    report: () => undefined,
+    publish: (app) =>
+      Promise.resolve(
+        Response.json({
+          kind: "recorded",
+          receipt: {
+            seedRevision: seedOf(app.appId),
+            sourceRevision: upstream,
+          },
+        }),
+      ),
+    pollMs: 1,
+  });
+  expect(review?.failed).toHaveLength(1);
+  expect(review?.failed[0]?.reason).toContain("build failed");
+  expect(review?.previews).toHaveLength(standaloneAppSet.length - 1);
+  expect(result.declined).toBe(true);
+  expect(result.installed).toEqual([]);
+  expect(calls).not.toContain("POST /api/installations");
 });
 
 it("uses committed App metadata rather than roster recipes or dirty files", async () => {
@@ -1881,6 +1937,7 @@ it("uses committed App metadata rather than roster recipes or dirty files", asyn
     );
     const entries: string[] = [];
     await installStandaloneAppSet({
+      ...confirmed,
       source: { kind: "checkout", directory, revision },
       url: "https://oyster.test",
       key: "key",

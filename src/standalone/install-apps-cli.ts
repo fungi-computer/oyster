@@ -20,6 +20,7 @@ import {
   tryOyster,
   tryUsage,
 } from "./try-cli.js";
+import { installPreviewNotes } from "../install-preview.js";
 import {
   installReleaseCommand,
   installReleaseUsage,
@@ -35,7 +36,7 @@ import {
 const defaultRepositories = "https://github.com/fungi-computer";
 
 const usage =
-  "Usage: oyster install-apps [--repositories <base URL>] [--ref <ref>] [--from <checkout>] [--concurrency 1-3] [--timings <file>] [--only <app>[,<app>]]";
+  "Usage: oyster install-apps [--repositories <base URL>] [--ref <ref>] [--from <checkout>] [--concurrency 1-3] [--timings <file>] [--only <app>[,<app>]] [--yes]";
 
 const urlSource =
   "OYSTER_URL is the address of your deployed Oyster Worker, such as https://oyster.<your-subdomain>.workers.dev. You set it when you deploy. For a local trial, run `oyster try`; it sets up its Computer and starter Apps.";
@@ -44,7 +45,9 @@ const keySource =
 
 const helpText = `${usage}
 
-Builds the seven starter Apps on your Oyster's own Computer and installs them.
+Builds the seven starter Apps on your Oyster's own Computer, shows what they
+built, what failed and the permissions they ask for, asks you to confirm once,
+then installs them.
 Starter builds need a deployed Oyster host; this command does not create one.
 Deploy first (see the Oyster README), then set:
 
@@ -57,6 +60,7 @@ Options:
   --from <checkout>          install from a Botanical checkout directory
   --concurrency 1-3          Apps to build at once
   --only <app>[,<app>]       install only these Apps, such as --only prints
+  -y, --yes                  confirm the permissions without asking (required without a terminal)
   --timings <file>           write the build timings as JSON
   -h, --help                 show this help
 `;
@@ -127,6 +131,7 @@ export async function installApps(
       concurrency: { type: "string" },
       timings: { type: "string" },
       only: { type: "string" },
+      yes: { type: "boolean", short: "y" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -168,18 +173,44 @@ export async function installApps(
       source = { kind: "checkout", directory, revision: `git:${revision}` };
     }
     const started = performance.now();
-    const { installed, failed } = await install({
+    const { installed, failed, declined } = await install({
       source,
       url,
       key,
       concurrency,
       only,
+      // Once, after every build settles: what built, what failed and why, and
+      // the permissions of what built. Nothing installs before the answer.
+      confirm: async ({ previews, failed }) => {
+        ui.note(
+          "Built",
+          previews.map(({ installationId }) => installationId),
+        );
+        if (failed.length > 0)
+          ui.note(
+            "Failed; these will not be installed",
+            failed.map(
+              ({ installationId, reason }) => `${installationId}: ${reason}`,
+            ),
+          );
+        for (const note of installPreviewNotes(previews))
+          ui.note(note.title, [...note.lines]);
+        if (values.yes === true) return true;
+        const answer = await ui.confirm({
+          message: `Install ${String(previews.length)} built App${previews.length === 1 ? "" : "s"} with these permissions${failed.length > 0 ? ` (${String(failed.length)} failed)` : ""}?`,
+        });
+        return answer === true;
+      },
       // Builds run side by side, so each report is its own line, not a spinner.
       report: (message) => {
         ui.step(message);
       },
     });
     const elapsed = performance.now() - started;
+    if (declined)
+      throw new Error(
+        "Install cancelled; nothing was installed. Run with --yes to confirm without asking.",
+      );
     if (installed.length > 0) ui.note("Build timings", timingTable(installed));
     ui.note("Apps", [
       ...installed.map((app) => `${app.installationId}  installed`),

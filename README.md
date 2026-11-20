@@ -202,9 +202,13 @@ again later, since every deploy replaces the Worker's variables.
 
 The first `install-apps` takes about 15 to 20 minutes, mostly building the seven
 Apps on your Computer, two at a time. It prints a line per step and a timing
-table, ending with `Installed 7 Apps`. Open `$OYSTER_URL/login`, sign in with
-the owner key, and your Oyster opens on the Tourtois desktop. Run `install-apps`
-again to update the Apps; a replaced Release keeps each App's data.
+table, ending with `Installed 7 Apps`. When the builds finish it shows what
+built, what failed and why, and the permissions the Apps ask for, then asks you
+to confirm once; nothing installs before you answer, and `--yes` confirms
+without asking (required without a terminal). Open `$OYSTER_URL/login`, sign in
+with the owner key, and your Oyster opens on the Tourtois desktop. Run
+`install-apps` again to update the Apps; a replaced Release keeps each App's
+data.
 
 Starting without `try`, deploying with an API token, upgrading, tearing down and
 the celld trial are in the [API reference](docs/api/README.md) under "Deploy and

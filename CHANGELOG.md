@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.49.0
+
+### Minor Changes
+
+- Changes since 0.48.0:
+
+  - fix(oyster): report a failed starter preview through the shared failure path
+  - feat(oyster): confirm the starter Apps once after they build
+
 ## 0.48.0
 
 ### Minor Changes

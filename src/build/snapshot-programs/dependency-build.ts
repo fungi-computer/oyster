@@ -198,7 +198,11 @@ function compileTypeScript(compilerSteps: readonly WorkspaceBuildStep[]): void {
     };
     const programOptions: TypeScript.CreateProgramOptions = {
       rootNames: parsed.fileNames.map((path) => contained(path)),
-      options: parsed.options,
+      // The captured packages' own sources keep every diagnostic. Third-party
+      // declaration files are not re-checked here: their errors cannot change
+      // the emit, and checking them roughly doubled the compile of each App's
+      // shared dependency chain (seven Apps compile the same eleven packages).
+      options: { ...parsed.options, skipLibCheck: true },
       host,
     };
     if (parsed.projectReferences !== undefined)

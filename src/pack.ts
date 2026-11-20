@@ -237,6 +237,9 @@ export async function installFromSource(
   }
 }
 
+/** The Release `release.json` names, as read and uploaded. */
+export type UploadedRelease = Schema.Schema.Type<typeof releaseSchema>;
+
 /** Read a built Release directory and upload its artifacts; uploads are idempotent. */
 async function uploadRelease(
   input: Readonly<{
@@ -288,8 +291,44 @@ const releasePreviewSchema = Schema.Struct({
 });
 
 /**
- * Upload one built Release and ask the Oyster what installing it would
- * request, so an owner can confirm several Releases once before any install.
+ * Ask the Oyster what installing a Release it already holds would request,
+ * and whether it would update an existing installation.
+ */
+export async function previewBuiltRelease(
+  input: Readonly<{
+    url: string;
+    key: string;
+    release: UploadedRelease;
+    installationId?: string | undefined;
+    signal?: AbortSignal | undefined;
+  }>,
+) {
+  const init: RequestInit = {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      release: input.release,
+      installationId: input.installationId,
+    }),
+  };
+  if (input.signal !== undefined) init.signal = input.signal;
+  const response = await fetch(
+    new URL("/api/installations/preview", input.url),
+    init,
+  );
+  if (!response.ok)
+    throw new Error(
+      `Install preview failed (${String(response.status)}): ${await response.text()}`,
+    );
+  return Schema.decodeUnknownSync(releasePreviewSchema)(await response.json());
+}
+
+/**
+ * Upload one built Release and preview it, so an owner can confirm several
+ * Releases once before any install.
  */
 export async function previewRelease(
   input: Readonly<{
@@ -301,24 +340,8 @@ export async function previewRelease(
 ) {
   const signal = installationObservationSignal({});
   const release = await uploadRelease({ ...input, signal });
-  const response = await fetch(
-    new URL("/api/installations/preview", input.url),
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ release }),
-      signal,
-    },
-  );
-  if (!response.ok)
-    throw new Error(
-      `Install preview failed (${String(response.status)}): ${await response.text()}`,
-    );
   return {
-    ...Schema.decodeUnknownSync(releasePreviewSchema)(await response.json()),
+    ...(await previewBuiltRelease({ ...input, release, signal })),
     release,
   };
 }
@@ -340,7 +363,7 @@ export async function installRelease(
     key: string;
     installationId?: string;
     /** The Release `previewRelease` already read and uploaded; skips both. */
-    uploaded?: Awaited<ReturnType<typeof uploadRelease>>;
+    uploaded?: UploadedRelease;
     /** Report owner-correlated admission without shortening the completion wait. */
     onAdmitted?: (operation: InstallationOperation) => void;
     /** Runs once with the completed operation, before the response is made. */

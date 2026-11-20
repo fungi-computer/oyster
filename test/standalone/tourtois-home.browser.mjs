@@ -1022,6 +1022,8 @@ try {
         "tsx",
         `${root}src/standalone/install-apps-bin.ts`,
         "install-apps",
+        // No terminal answers the permission question.
+        "--yes",
         "--from",
         repository,
         // The lab compares sequential and parallel builds on one Computer.

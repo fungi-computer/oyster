@@ -185,6 +185,8 @@ try {
       url,
       key,
       report: log,
+      // The owner confirms the whole set once; this proof is that owner.
+      confirm: () => Promise.resolve(true),
     });
     log(
       `step: ${expected.installed} all seven in ${String(Date.now() - started)}ms`,

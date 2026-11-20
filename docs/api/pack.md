@@ -111,6 +111,16 @@ type PackedRelease = Readonly<{
 
 A packed Release on disk.
 
+---
+
+### UploadedRelease
+
+```ts
+type UploadedRelease = Schema.Schema.Type<typeof releaseSchema>;
+```
+
+The Release `release.json` names, as read and uploaded.
+
 ## Variables
 
 ### installationOperationSchema
@@ -317,6 +327,117 @@ retains its original lifetime.
 
 ---
 
+### previewBuiltRelease()
+
+```ts
+function previewBuiltRelease(input): Promise<{
+  name: string;
+  capabilities: readonly (
+    | "computer.list"
+    | "computer.readFile"
+    | "computer.writeFile"
+    | "computer.execute"
+    | "approvals"
+    | "agent.list"
+    | "agent.manage"
+    | "agent.rename"
+    | "agent.avatar"
+    | "agent.instructions"
+    | "agent.toolPolicy"
+    | "agent.read"
+    | "agent.send"
+    | "llm.generation"
+    | "media.generation"
+    | "media.share"
+    | "games:servers"
+    | "git.repository"
+    | "apps.open"
+    | "apps.call"
+    | "app.storage"
+    | "app.events.emit"
+    | "team.workbenchHost"
+    | "marketplace.browse"
+    | "marketplace.purchase"
+    | "workflow.run"
+    | "workflow.publish"
+    | "workflow.arm"
+    | "world"
+    | "channels.read"
+    | "channels.personal.manage"
+  )[];
+  update: {
+    installationId: string;
+    needsApproval: readonly (
+      | "computer.list"
+      | "computer.readFile"
+      | "computer.writeFile"
+      | "computer.execute"
+      | "approvals"
+      | "agent.list"
+      | "agent.manage"
+      | "agent.rename"
+      | "agent.avatar"
+      | "agent.instructions"
+      | "agent.toolPolicy"
+      | "agent.read"
+      | "agent.send"
+      | "llm.generation"
+      | "media.generation"
+      | "media.share"
+      | "games:servers"
+      | "git.repository"
+      | "apps.open"
+      | "apps.call"
+      | "app.storage"
+      | "app.events.emit"
+      | "team.workbenchHost"
+      | "marketplace.browse"
+      | "marketplace.purchase"
+      | "workflow.run"
+      | "workflow.publish"
+      | "workflow.arm"
+      | "world"
+      | "channels.read"
+      | "channels.personal.manage"
+    )[];
+  } | null;
+}>;
+```
+
+Ask the Oyster what installing a Release it already holds would request, and
+whether it would update an existing installation.
+
+#### Parameters
+
+| Parameter | Type                                                                                                                                                           |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`   | `Readonly`\<\{ `url`: `string`; `key`: `string`; `release`: [`UploadedRelease`](#uploadedrelease); `installationId?`: `string`; `signal?`: `AbortSignal`; \}\> |
+
+#### Returns
+
+`Promise`\<\{ `name`: `string`; `capabilities`: readonly ( \| `"computer.list"`
+\| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
+\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`)[]; `update`: \| \{
+`installationId`: `string`; `needsApproval`: readonly ( \| `"computer.list"` \|
+`"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
+`"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
+`"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
+\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
+\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
+`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
+`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
+`"channels.read"` \| `"channels.personal.manage"`)[]; \} \| `null`; \}\>
+
+---
+
 ### previewRelease()
 
 ```ts
@@ -407,8 +528,8 @@ function previewRelease(input): Promise<{
 }>;
 ```
 
-Upload one built Release and ask the Oyster what installing it would request, so
-an owner can confirm several Releases once before any install.
+Upload one built Release and preview it, so an owner can confirm several
+Releases once before any install.
 
 #### Parameters
 

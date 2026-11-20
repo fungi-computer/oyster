@@ -13,7 +13,11 @@ import {
   installationNotActivatedMessage,
   installationNotAppliedMessage,
 } from "../instance-refusal.js";
-import { publishSource, type PackOptions } from "../pack.js";
+import {
+  previewBuiltRelease,
+  publishSource,
+  type PackOptions,
+} from "../pack.js";
 import { appBuildRecipe, readBuildManifest } from "../build/workspace-build.js";
 import { parseSourceRevision } from "@fungi.computer/puffball";
 import { releaseSchema } from "@fungi.computer/puffball/effect";
@@ -261,7 +265,22 @@ export type InstalledStarterApp = Readonly<{
   timings: StarterAppTimings;
 }>;
 
+/** What one built App asks for, as the Oyster reports it before install. */
+export type StarterAppPreview = Readonly<
+  {
+    installationId: string;
+  } & Awaited<ReturnType<typeof previewBuiltRelease>>
+>;
+
+/** Everything the owner confirms once: what built, and what did not and why. */
+export type StarterAppReview = Readonly<{
+  previews: readonly StarterAppPreview[];
+  failed: readonly Readonly<{ installationId: string; reason: string }>[];
+}>;
+
 export type StarterAppSetResult = Readonly<{
+  /** The owner declined the confirmation, so nothing was installed. */
+  declined: boolean;
   installed: readonly InstalledStarterApp[];
   failed: readonly Readonly<{ installationId: string; reason: string }>[];
 }>;
@@ -313,6 +332,13 @@ export async function installStandaloneAppSet(
     report: (message: string) => void;
     /** Builds at once on the Computer, 1 to 3; one by default. */
     concurrency?: number;
+    /** Asked once after every build settles; false installs nothing. */
+    confirm: (review: StarterAppReview) => Promise<boolean>;
+    /** Reads what a built Release requests; the real preview route by default. */
+    preview?: (
+      release: Schema.Schema.Type<typeof releaseSchema>,
+      installationId: string,
+    ) => Promise<Awaited<ReturnType<typeof previewBuiltRelease>>>;
     /** Install only these starter installation ids; every starter by default. */
     only?: readonly string[];
     /** Publishes one App's source; the real installer uses `publishSource`. */
@@ -512,6 +538,24 @@ export async function installStandaloneAppSet(
   }) => {
     fail(app, cause);
   };
+  const previewOnOyster = (
+    release: Schema.Schema.Type<typeof releaseSchema>,
+    installationId: string,
+  ) =>
+    previewBuiltRelease({
+      url: options.url,
+      key: options.key,
+      release,
+      installationId,
+    });
+  type Built = {
+    next: Seeded;
+    build: Schema.Schema.Type<typeof buildSchema> & { release: Schema.Json };
+    release: Schema.Schema.Type<typeof releaseSchema>;
+    buildStarted: number;
+    builtAt: number;
+  };
+  const built = new Map<string, Built>();
   const seededQueue: Seeded[] = [];
   const waiting: ((next: Seeded | undefined) => void)[] = [];
   const seeding = { finished: false };
@@ -596,86 +640,100 @@ export async function installStandaloneAppSet(
         });
         if (release.appId !== next.app.appId)
           throw new Error(`${name} build belongs to another App`);
-        const installStarted = performance.now();
-        const operation = await installOnOyster({
-          url: options.url,
-          key: options.key,
+        built.set(name, {
+          next,
+          build,
           release,
-          installationId: name,
-          signal: AbortSignal.timeout(options.waitMs ?? appBuildWaitMs),
-        });
-        if (operation.state === "unconfirmed")
-          throw new InstallationObservationError(operation.requestId);
-        if (operation.state === "refused")
-          throw new Error(
-            operation.code === "installation_not_applied"
-              ? `${name}: ${installationNotAppliedMessage}`
-              : operation.code === "installation_not_activated"
-                ? `${name}: ${installationNotActivatedMessage}`
-                : `${name} installation refused (${operation.code})`,
-          );
-        const record = operation.installation;
-        if (record === null)
-          throw new Error(
-            `${name} completed installation version is unavailable`,
-          );
-        if (
-          record.appId !== release.appId ||
-          record.release.releaseId !== release.releaseId ||
-          record.release.artifact.artifactDigest !==
-            release.artifact.artifactDigest
-        )
-          throw new Error(`${name} installation does not match its build`);
-        // Only the owner can attest exclusive fresh creation. A replacement or
-        // tombstone remint never replays a default grant.
-        if (operation.creation === "fresh") {
-          if (record.status !== "enabled")
-            throw new Error(`${name} fresh installation is not enabled`);
-          if (next.app.dashboard === true)
-            await approveChosenDashboard(operation, owner);
-        }
-        options.report(
-          `${operation.creation === "replacement" ? "Replaced" : "Installed"} ${name} from its build ${build.jobId}`,
-        );
-        // Report-only UI check: never blocks, but the owner sees it here.
-        const uiCheck = operation.uiCheck;
-        if (uiCheck?.kind === "failed")
-          options.report(
-            `Warning: ${name} is installed, but its UI check failed (${uiCheck.code}${uiCheck.diagnostics === undefined ? "" : `: ${uiCheck.diagnostics.failedPredicate}`}).`,
-          );
-        else if (uiCheck?.kind === "not_checked")
-          options.report(
-            `Warning: ${name} is installed, but its UI was not checked (${uiCheck.code}).`,
-          );
-        const phases =
-          build.detail === null
-            ? undefined
-            : Schema.decodeUnknownOption(computerPhasesSchema)(build.detail);
-        installed.set(name, {
-          installationId: record.installationId,
-          published: next.kind,
-          seedRevision: next.seedRevision,
-          sourceRevision: next.sourceRevision,
-          jobId: build.jobId,
-          installed:
-            operation.creation === "replacement" ? "replaced" : "installed",
-          release: build.release,
-          timings: {
-            fetch: next.fetch,
-            publish: next.publish,
-            queue: buildStarted - next.ready,
-            build: installStarted - buildStarted,
-            install: performance.now() - installStarted,
-            computer:
-              phases === undefined || phases._tag === "None"
-                ? null
-                : phases.value.phasesMs,
-          },
+          buildStarted,
+          builtAt: performance.now(),
         });
       } catch (cause) {
         reportFailure({ app: next.app, cause });
       }
     }
+  };
+  /** Install one built App once the owner has confirmed the whole set. */
+  const installBuilt = async ({
+    next,
+    build,
+    release,
+    buildStarted,
+    builtAt,
+  }: Built) => {
+    const name = next.app.installationId;
+    const installStarted = performance.now();
+    const operation = await installOnOyster({
+      url: options.url,
+      key: options.key,
+      release,
+      installationId: name,
+      signal: AbortSignal.timeout(options.waitMs ?? appBuildWaitMs),
+    });
+    if (operation.state === "unconfirmed")
+      throw new InstallationObservationError(operation.requestId);
+    if (operation.state === "refused")
+      throw new Error(
+        operation.code === "installation_not_applied"
+          ? `${name}: ${installationNotAppliedMessage}`
+          : operation.code === "installation_not_activated"
+            ? `${name}: ${installationNotActivatedMessage}`
+            : `${name} installation refused (${operation.code})`,
+      );
+    const record = operation.installation;
+    if (record === null)
+      throw new Error(`${name} completed installation version is unavailable`);
+    if (
+      record.appId !== release.appId ||
+      record.release.releaseId !== release.releaseId ||
+      record.release.artifact.artifactDigest !== release.artifact.artifactDigest
+    )
+      throw new Error(`${name} installation does not match its build`);
+    // Only the owner can attest exclusive fresh creation. A replacement or
+    // tombstone remint never replays a default grant.
+    if (operation.creation === "fresh") {
+      if (record.status !== "enabled")
+        throw new Error(`${name} fresh installation is not enabled`);
+      if (next.app.dashboard === true)
+        await approveChosenDashboard(operation, owner);
+    }
+    options.report(
+      `${operation.creation === "replacement" ? "Replaced" : "Installed"} ${name} from its build ${build.jobId}`,
+    );
+    // Report-only UI check: never blocks, but the owner sees it here.
+    const uiCheck = operation.uiCheck;
+    if (uiCheck?.kind === "failed")
+      options.report(
+        `Warning: ${name} is installed, but its UI check failed (${uiCheck.code}${uiCheck.diagnostics === undefined ? "" : `: ${uiCheck.diagnostics.failedPredicate}`}).`,
+      );
+    else if (uiCheck?.kind === "not_checked")
+      options.report(
+        `Warning: ${name} is installed, but its UI was not checked (${uiCheck.code}).`,
+      );
+    const phases =
+      build.detail === null
+        ? undefined
+        : Schema.decodeUnknownOption(computerPhasesSchema)(build.detail);
+    installed.set(name, {
+      installationId: record.installationId,
+      published: next.kind,
+      seedRevision: next.seedRevision,
+      sourceRevision: next.sourceRevision,
+      jobId: build.jobId,
+      installed:
+        operation.creation === "replacement" ? "replaced" : "installed",
+      release: build.release,
+      timings: {
+        fetch: next.fetch,
+        publish: next.publish,
+        queue: buildStarted - next.ready,
+        build: builtAt - buildStarted,
+        install: performance.now() - installStarted,
+        computer:
+          phases === undefined || phases._tag === "None"
+            ? null
+            : phases.value.phasesMs,
+      },
+    });
   };
   // Wait for every seed and build to settle before returning the full outcome.
   const settled = await Promise.allSettled([
@@ -684,7 +742,49 @@ export async function installStandaloneAppSet(
   ]);
   for (const outcome of settled)
     if (outcome.status === "rejected") throw outcome.reason;
+  // Every build has settled: ask the Oyster what the built Apps request, then
+  // the owner confirms the whole set once, naming what failed, before any
+  // App is installed.
+  const previews: StarterAppPreview[] = [];
+  for (const app of apps) {
+    const entry = built.get(app.installationId);
+    if (entry === undefined) continue;
+    try {
+      previews.push({
+        installationId: app.installationId,
+        ...(await (options.preview ?? previewOnOyster)(
+          entry.release,
+          app.installationId,
+        )),
+      });
+    } catch (cause) {
+      built.delete(app.installationId);
+      reportFailure({ app, cause });
+    }
+  }
+  const confirmed =
+    previews.length === 0 ||
+    (await options.confirm({
+      previews,
+      failed: apps.flatMap((app) => {
+        const reason = failures.get(app.installationId);
+        return reason === undefined
+          ? []
+          : [{ installationId: app.installationId, reason }];
+      }),
+    }));
+  if (confirmed)
+    for (const app of apps) {
+      const entry = built.get(app.installationId);
+      if (entry === undefined) continue;
+      try {
+        await installBuilt(entry);
+      } catch (cause) {
+        reportFailure({ app, cause });
+      }
+    }
   return {
+    declined: !confirmed,
     installed: apps.flatMap((app) => {
       const result = installed.get(app.installationId);
       return result === undefined ? [] : [result];
