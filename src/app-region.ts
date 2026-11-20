@@ -119,6 +119,12 @@ const connectWindowMs = 60_000;
 const callerKey = (caller: AppMethodCallContext) =>
   JSON.stringify([caller.scope, caller.actor]);
 const utf8Bytes = (data: string) => new TextEncoder().encode(data).byteLength;
+/** A socket's host stamp, decoded once, with its caller key. */
+type Stamp = Readonly<{
+  connection: string;
+  caller: AppMethodCallContext;
+  key: string;
+}>;
 
 /** A close code a server may send back: never 1005, 1006 or 1015. */
 const echoCloseCode = (code: number) =>
@@ -157,12 +163,28 @@ export function createAppRegion<Socket extends AppRegionSocket, Client>(
   const connects = new Map<string, { start: number; count: number }>();
   const regionFull = (reason: string) =>
     Response.json({ error: "region_full", reason }, { status: 429 });
-  const attachment = (socket: Socket) => {
+  // Each socket's decoded host stamp, filled when connect stamps it or, after
+  // a hibernation wake, by the first read of its native attachment. Only the
+  // supervisor writes an attachment, once at admission, so a cached stamp
+  // never goes stale; connect and every reply then cost no parse per socket.
+  const stamps = new WeakMap<Socket, Stamp>();
+  const remember = (
+    socket: Socket,
+    connection: string,
+    caller: AppMethodCallContext,
+  ) => {
+    const stamp = { connection, caller, key: callerKey(caller) };
+    stamps.set(socket, stamp);
+    return stamp;
+  };
+  const attachment = (socket: Socket): Stamp | null => {
+    const known = stamps.get(socket);
+    if (known !== undefined) return known;
     const parsed = attachmentSchema.safeParse(socket.deserializeAttachment());
     if (!parsed.success) return null;
     const caller = appMethodCallerSchema.safeParse(parsed.data.caller);
     return caller.success
-      ? { connection: parsed.data.connection, caller: caller.data }
+      ? remember(socket, parsed.data.connection, caller.data)
       : null;
   };
   const apply = async (raw: AppRegionReply) => {
@@ -220,10 +242,9 @@ export function createAppRegion<Socket extends AppRegionSocket, Client>(
       if (sockets.length >= appRegionLimits.socketsPerInstance)
         return regionFull("Region socket limit reached");
       const key = callerKey(stamped);
-      const held = sockets.filter((socket) => {
-        const stamp = attachment(socket);
-        return stamp !== null && callerKey(stamp.caller) === key;
-      }).length;
+      const held = sockets.filter(
+        (socket) => attachment(socket)?.key === key,
+      ).length;
       if (held >= appRegionLimits.socketsPerCaller)
         return regionFull("Region socket share reached");
       const now = native.now();
@@ -242,6 +263,7 @@ export function createAppRegion<Socket extends AppRegionSocket, Client>(
       const connection = regionIds.connection.generate();
       native.accept(server);
       server.serializeAttachment({ connection, caller: stamped });
+      remember(server, connection, stamped);
       try {
         await apply(
           await deliverConnect({

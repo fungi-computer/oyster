@@ -26,6 +26,7 @@ const inventoryError = z.strictObject({
 const backendList = z.strictObject({
   backends: z.array(computerBackendViewSchema),
 });
+const stopped = z.strictObject({ state: z.literal("sleeping") });
 const attachedBackend = z.strictObject({ backendId: z.string() });
 const detachedBackend = z.strictObject({ detached: z.boolean() });
 
@@ -74,6 +75,34 @@ export function standaloneComputerControl(
       computerStateSchema.parse(
         available(await fleet({ operation: "start", computerId })),
       ),
+    stop: async (computerId) => {
+      let result: unknown;
+      try {
+        result = await fleet({ operation: "stop", computerId });
+      } catch {
+        // The runtime may have stopped before the RPC failed; the caller retries.
+        return { kind: "uncertain" };
+      }
+      if (result === null) return { kind: "denied" };
+      const error = inventoryError.safeParse(result);
+      if (error.success) {
+        switch (error.data.error) {
+          case "busy":
+            return { kind: "busy" };
+          case "owner_required":
+          case "not_owner":
+          case "unknown_computer":
+            return { kind: "denied" };
+          default:
+            return { kind: "uncertain" };
+        }
+      }
+      stopped.parse(result);
+      return { kind: "stopped" };
+    },
+    // Oyster has no delete path: inventory retirement here would leave the
+    // Computer's Workspace and runtime behind, so it refuses plainly.
+    delete: () => Promise.resolve({ kind: "unsupported" }),
     create: async (input) => {
       let result: unknown;
       try {

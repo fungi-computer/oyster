@@ -135,6 +135,22 @@ const fleetDetachment = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("detached"), detached: z.boolean() }),
   z.strictObject({ kind: z.enum(["denied", "uncertain", "invalid"]) }),
 ]);
+const fleetStop = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("stopped") }),
+  z.strictObject({ kind: z.enum(["denied", "busy", "uncertain"]) }),
+]);
+const fleetDelete = z.strictObject({
+  computerId: fleetComputerId.shape.computerId,
+  confirmHandle: z.string().min(1).max(256),
+});
+const fleetDeletion = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("deleted") }),
+  z.strictObject({
+    kind: z.enum(["denied", "mismatch", "unsupported", "uncertain"]),
+  }),
+]);
+/** Directory pages read to find one Computer's name; a Team never has more. */
+const maximumDirectoryPages = 20;
 const fleetCreation = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("created"),
@@ -214,6 +230,48 @@ export function computerControlSpecs(port: ComputerControlPort) {
           context,
         );
         return { ...result, requestId };
+      },
+    },
+    stop: {
+      replay: "unsafe" as const,
+      description:
+        'Stop a Computer now and free its running slot. Running commands end; files are kept and the next start brings it back. Only the signed-in owner may; "busy" means it is starting or finishing an operation, so try again.',
+      input: fleetComputerId,
+      output: fleetStop,
+      /** End the runtime; the Computer and its Workspace stay. */
+      execute: (
+        input: z.output<typeof fleetComputerId>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetStop>> =>
+        port.stop(input.computerId, context),
+    },
+    delete: {
+      replay: "unsafe" as const,
+      description:
+        'Delete a Computer and erase its Workspace, permanently. Pass its exact name as confirmHandle; a different handle deletes nothing. Only the signed-in owner may, never a Team key or an Agent. "uncertain" means retry: a delete cut short finishes on the next attempt.',
+      input: fleetDelete,
+      output: fleetDeletion,
+      /** Match the handle to the Computer's own name before anything is erased. */
+      execute: async (
+        input: z.output<typeof fleetDelete>,
+        context: InvocationContext,
+      ): Promise<z.output<typeof fleetDeletion>> => {
+        let name: string | undefined;
+        for (
+          let page = 0, offset = 0;
+          page < maximumDirectoryPages && name === undefined;
+          page += 1
+        ) {
+          const listed = await port.list({ limit: 100, offset }, context);
+          name = listed.computers.find(
+            (computer) => computer.computerId === input.computerId,
+          )?.name;
+          if (listed.nextOffset === null) break;
+          offset = listed.nextOffset;
+        }
+        if (name === undefined) return { kind: "denied" };
+        if (name !== input.confirmHandle) return { kind: "mismatch" };
+        return port.delete(input.computerId, context);
       },
     },
     backends: {
@@ -984,6 +1042,14 @@ export function oysterMcpCatalogLoad(
                           }),
                           create: Mycelium.operation({
                             ...fleetSpecs.create,
+                            confirm: true,
+                          }),
+                          stop: Mycelium.operation({
+                            ...fleetSpecs.stop,
+                            confirm: true,
+                          }),
+                          delete: Mycelium.operation({
+                            ...fleetSpecs.delete,
                             confirm: true,
                           }),
                           backends: Mycelium.operation(fleetSpecs.backends),

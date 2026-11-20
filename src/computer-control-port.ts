@@ -31,6 +31,23 @@ export type ComputerControlPort = Readonly<{
     computerId: string,
     context: InvocationContext,
   ): Promise<z.output<typeof computerStateSchema>>;
+  /** Stop one Computer now; its files are kept. Only the signed-in owner may. */
+  stop(
+    computerId: string,
+    context: InvocationContext,
+  ): Promise<{ kind: "stopped" } | { kind: "denied" | "busy" | "uncertain" }>;
+  /**
+   * Delete one Computer and erase its Workspace. The caller has already matched
+   * the person's typed handle to the Computer's name. Only the signed-in owner
+   * may; a host with no delete path answers "unsupported". "uncertain" means
+   * retry: a delete cut short finishes on the next attempt.
+   */
+  delete(
+    computerId: string,
+    context: InvocationContext,
+  ): Promise<
+    { kind: "deleted" } | { kind: "denied" | "unsupported" | "uncertain" }
+  >;
   /** Create or replay a durable receipt tied to this request identity. */
   create(
     input: z.output<typeof computerCreateRequestSchema>,

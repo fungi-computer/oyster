@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.49.1
+
+### Patch Changes
+
+- Changes since 0.49.0:
+
+  - perf(oyster): decode each Region socket's stamp once, not on every connect
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer@0.16.3
+  - @fungi.computer/darkroom@0.11.12
+
 ## 0.49.0
 
 ### Minor Changes

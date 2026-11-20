@@ -18,6 +18,8 @@ class FakeSocket {
   readonly sent: string[] = [];
   closed: { code: number; reason: string } | null = null;
   readyState = 1;
+  /** How many times the supervisor decoded this socket's attachment. */
+  reads = 0;
   finish() {
     this.readyState = 3;
   }
@@ -25,6 +27,7 @@ class FakeSocket {
     this.#attachment = JSON.stringify(value);
   }
   deserializeAttachment(): object | null {
+    this.reads += 1;
     // Native attachments are structured clones; JSON models the round trip.
     return this.#attachment === null
       ? null
@@ -186,17 +189,69 @@ describe("App Region supervisor", () => {
   it("closes a socket whose attachment is not a host stamp", async () => {
     const fixture = nativeFixture();
     const app = recorder(() => ({}));
-    const region = createAppRegion(fixture.native, app.deliver);
-    await region.connect(caller("team_one"));
-    const [socket] = fixture.sockets;
-    if (socket === undefined) throw new Error("No socket accepted");
+    // Only an attachment a woken supervisor reads back can be malformed: one
+    // it stamped itself in this lifetime is the value it wrote.
+    const socket = new FakeSocket();
     socket.serializeAttachment({
       connection: "c",
       caller: { scope: "forged" },
     });
-    await region.message(socket, "hi");
+    fixture.native.accept(socket);
+    await createAppRegion(fixture.native, app.deliver).message(socket, "hi");
     expect(socket.closed?.code).toBe(1008);
-    expect(app.events).toHaveLength(1);
+    expect(app.events).toHaveLength(0);
+  });
+
+  it("never re-reads the attachment of a socket it stamped", async () => {
+    const fixture = nativeFixture();
+    const app = recorder((event) =>
+      event.kind === "message"
+        ? {
+            send: fixture.sockets.map((_, index) => ({
+              connection: `unknown_${String(index)}`,
+              data: "x",
+            })),
+          }
+        : {},
+    );
+    const region = createAppRegion(fixture.native, app.deliver);
+    for (let index = 0; index < 20; index += 1)
+      await region.connect(caller("team_one", `member_${String(index)}`));
+    const [first] = fixture.sockets;
+    if (first === undefined) throw new Error("No socket accepted");
+    await region.connect(caller("team_one", "member_late"));
+    await region.message(first, "hi");
+    await region.close(first, 1000, "bye");
+    expect(fixture.sockets.map((socket) => socket.reads)).toEqual(
+      fixture.sockets.map(() => 0),
+    );
+  });
+
+  it("after a hibernation wake reads each attachment once, then never again", async () => {
+    const fixture = nativeFixture();
+    const before = createAppRegion(fixture.native, () => Promise.resolve({}));
+    for (let index = 0; index < 20; index += 1)
+      await before.connect(caller("team_one", `member_${String(index)}`));
+    const held = [...fixture.sockets];
+    const [first] = held;
+    if (first === undefined) throw new Error("No socket accepted");
+    // A new supervisor over the same native sockets, as after hibernation.
+    const app = recorder((event) =>
+      event.kind === "message"
+        ? { send: [{ connection: "elsewhere", data: "x" }] }
+        : {},
+    );
+    const woken = createAppRegion(fixture.native, app.deliver);
+    await woken.connect(caller("team_one", "member_late"));
+    await woken.connect(caller("team_one", "member_later"));
+    await woken.message(first, "hi");
+    await woken.message(first, "again");
+    expect(held.map((socket) => socket.reads)).toEqual(held.map(() => 1));
+    expect(
+      app.events.flatMap((event) =>
+        event.kind === "message" ? [event.data] : [],
+      ),
+    ).toEqual(["hi", "again"]);
   });
 });
 
@@ -244,9 +299,8 @@ describe("App Region bounds", () => {
     const member = (index: number) =>
       caller("team_one", `member_${String(index)}`);
     // Fill the Region as hibernation finds it: sockets already accepted and
-    // stamped. Filling through connect re-parses every held attachment on each
-    // of the 256 connects (about 33k parses: 3.3 s idle, past the 5 s limit
-    // under load); the cap is decided by the one connect below.
+    // stamped, each read once by this supervisor; the cap is decided by the
+    // one connect below.
     for (
       let index = 0;
       index < appRegionLimits.socketsPerInstance;
