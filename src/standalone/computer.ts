@@ -1,5 +1,6 @@
 import { agentWorkspacePath } from "@fungi.computer/computer/files";
 import { PortAccessError } from "@fungi.computer/computer/port-access";
+import type { PortPreviewIssue } from "../port-preview-entry.js";
 import {
   ComputerFileTooLargeError,
   ComputerProcessNotFoundError,
@@ -712,7 +713,8 @@ export class ComputerDO
    */
   async #previewInstallation(selector: PreviewSelector) {
     const owner = await (await standaloneTenancy(this.previewBindings)).owner();
-    if (selector.ownerId !== owner?.actor.memberId) throw new PreviewRefused();
+    if (selector.ownerId !== owner?.actor.memberId)
+      throw new PreviewRefused("owner_required");
     const current = await this.previewBindings.REGISTRY.getByName(
       "registry",
     ).get(selector.installationId);
@@ -724,7 +726,7 @@ export class ComputerDO
         JSON.stringify(selector.selection) ||
       current.release.artifact.artifactDigest !== selector.artifactDigest
     )
-      throw new PreviewRefused();
+      throw new PreviewRefused("app_not_allowed");
     return current;
   }
 
@@ -737,14 +739,14 @@ export class ComputerDO
       false,
     );
     if (!verified.declaration?.capabilities.includes("computer.execute"))
-      throw new PreviewRefused();
+      throw new PreviewRefused("app_not_allowed");
     await this.#previewInstallation(selector);
   }
 
   async #previewOwner() {
     if (this.#preview !== undefined) return this.#preview;
     const origins = await previewOrigins(this.previewBindings);
-    if (origins === null) throw new PreviewRefused();
+    if (origins === null) throw new PreviewRefused("preview_not_configured");
     await this.listPortsAfterAcceptance(() => undefined);
     this.#preview = createStandalonePreview(
       this.state.storage,
@@ -854,7 +856,7 @@ export class ComputerDO
       selectorInput,
     );
     if (authority.provenance.actor !== `owner:${selector.ownerId}`)
-      throw new PreviewRefused();
+      throw new PreviewRefused("app_not_allowed");
     this.#accept(authority, "listPorts");
     await this.#currentPreview(selector);
     const ports = await this.listPortsAfterAcceptance(() => {
@@ -871,14 +873,26 @@ export class ComputerDO
     return Schema.decodeUnknownSync(computerPortsSchema)({ ports: projected });
   }
 
-  async issuePortConnect(ownerId: string, port: number) {
+  async issuePortConnect(
+    ownerId: string,
+    port: number,
+  ): Promise<PortPreviewIssue> {
     const owner = await (await standaloneTenancy(this.previewBindings)).owner();
-    if (owner?.actor.memberId !== ownerId) return null;
+    if (owner?.actor.memberId !== ownerId)
+      return { kind: "refused", reason: "owner_required" };
     try {
-      return await (await this.#previewOwner()).issueOwner(ownerId, port);
+      const issued = await (
+        await this.#previewOwner()
+      ).issueOwner(ownerId, port);
+      return { kind: "issued", previewUrl: issued.previewUrl };
     } catch (cause) {
-      if (cause instanceof PreviewRefused || cause instanceof PortAccessError)
-        return null;
+      if (cause instanceof PreviewRefused)
+        return { kind: "refused", reason: cause.reason };
+      if (
+        cause instanceof PortAccessError &&
+        (cause.reason === "unexposed" || cause.reason === "capacity")
+      )
+        return { kind: "refused", reason: cause.reason };
       throw cause;
     }
   }

@@ -296,7 +296,10 @@ for (const declaration of ["embed-scripts.d.ts", "embed-metafiles.d.ts"])
 // Host recovery is independent of Tourtois and the App boot bundle. Only these
 // three approved illustrations ship; original manga sources remain in review.
 const hostPageBundle = await build({
-  entryPoints: [new URL("../src/page/host-page.ts", import.meta.url).pathname],
+  entryPoints: [
+    new URL("../src/page/host-page.ts", import.meta.url).pathname,
+    new URL("../src/page/port-preview.tsx", import.meta.url).pathname,
+  ],
   outdir: "host-page-build",
   bundle: true,
   format: "esm",
@@ -308,13 +311,18 @@ const hostPageBundle = await build({
   logLevel: "warning",
 });
 const hostPageOutput = hostPageBundle.outputFiles.find((file) =>
-  file.path.endsWith(".js"),
+  file.path.endsWith("/host-page.js"),
+);
+const portPreviewOutput = hostPageBundle.outputFiles.find((file) =>
+  file.path.endsWith("/port-preview.js"),
 );
 const hostPageStyles = hostPageBundle.outputFiles.find((file) =>
   file.path.endsWith(".css"),
 );
-if (!hostPageOutput || !hostPageStyles)
-  throw new Error("Host page bundle must produce script and layout");
+if (!hostPageOutput || !hostPageStyles || !portPreviewOutput)
+  throw new Error(
+    "Host page bundle must produce recovery and preview scripts and layout",
+  );
 const hostAssets = {};
 function addHostAsset(name, bytes, contentType, encoding = "utf8") {
   const hash = createHash("sha256").update(bytes).digest("hex");
@@ -328,6 +336,11 @@ function addHostAsset(name, bytes, contentType, encoding = "utf8") {
 addHostAsset(
   "host-page.js",
   Buffer.from(hostPageOutput.text),
+  "text/javascript; charset=utf-8",
+);
+addHostAsset(
+  "port-preview.js",
+  Buffer.from(portPreviewOutput.text),
   "text/javascript; charset=utf-8",
 );
 addHostAsset(

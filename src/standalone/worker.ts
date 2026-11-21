@@ -226,6 +226,9 @@ const standaloneRoot = (
             role: "owner",
           };
     },
+    // The owner confirms a port preview on the host's own page before the
+    // owner route below issues it.
+    portPreviewEntry: true,
     // Operator source seeding and owner builds share the one owner guard.
     ownerRoutes: (env, scope) =>
       standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope))

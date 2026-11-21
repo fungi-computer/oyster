@@ -12,6 +12,7 @@ import {
 import { homePageFixture } from "./home-page.fixture.mjs";
 import { defineIdFamily } from "@fungi.computer/cairn/id";
 import { standaloneComputerFleetRoutes } from "../dist/standalone/computer-fleet.js";
+import { describeAppError } from "@fungi.computer/agar/errors";
 
 // The page imports this host-owned entry; the Release's own module stays at
 // its UI path, where released Oyster 0.2.0 served it immutable.
@@ -107,6 +108,200 @@ async function shellOrigin(code = shellCode, host = {}) {
   const origin = `http://127.0.0.1:${port}`;
   return { app, state, origin, close: () => server.close() };
 }
+
+/** Exercise the page's real Workbench door from its admitted shell module. */
+async function shellResult(code, { host, configurationStatus } = {}) {
+  const origin = await shellOrigin(
+    `
+    export const mountShell = async (root, { workbench }) => {
+      const result = await (async () => { ${code} })();
+      const output = document.createElement("output");
+      output.id = "shell-result";
+      output.textContent = JSON.stringify(result);
+      root.append(output);
+      return () => output.remove();
+    };
+  `,
+    host,
+  );
+  let browser;
+  try {
+    browser = await launchIsolatedChromium(chromium, portsOf(origin.origin), {
+      headless: true,
+    });
+    const page = await browser.newPage();
+    if (configurationStatus !== undefined)
+      await page.route("**/apps/desktop/", (route) =>
+        route.request().headers().accept === "application/json"
+          ? route.fulfill({
+              status: configurationStatus,
+              body: "private backend diagnostic",
+            })
+          : route.continue(),
+      );
+    await page.goto(`${origin.origin}/apps/desktop/`);
+    return JSON.parse(await page.locator("#shell-result").textContent());
+  } finally {
+    await browser?.close();
+    origin.close();
+  }
+}
+
+const childMountRefusal = (releaseId = "rel_desktop") => `
+  try {
+    await workbench.mount(root, {
+      windowId: "child", appId: "app_desktop", releaseId: ${JSON.stringify(releaseId)},
+      surfaceId: "installation:desktop", href: "/apps/desktop/", openRequest: null,
+    }, {}, new AbortController().signal);
+    throw new Error("Expected child preparation to refuse");
+  } catch (cause) {
+    return { name: cause.name, message: cause.message, code: cause.code, retryable: cause.retryable };
+  }
+`;
+
+for (const { status, description } of [
+  {
+    status: 503,
+    description: {
+      title: "Couldn't load the App",
+      message:
+        "The App's configuration could not be loaded. Try opening it again.",
+      retryable: true,
+      action: "retry",
+    },
+  },
+  {
+    status: 404,
+    description: {
+      title: "Couldn't load the App",
+      message:
+        "The App's configuration could not be loaded. Try opening it again.",
+      retryable: false,
+    },
+  },
+]) {
+  test(
+    `an App configuration fetch failure names the failed request: HTTP ${status}`,
+    { timeout: 30_000 },
+    async () => {
+      const failure = await shellResult(childMountRefusal(), {
+        configurationStatus: status,
+      });
+      assert.equal(failure.code, "APP_CONFIGURATION_FAILED");
+      assert.equal(
+        failure.message,
+        `The App configuration request failed (HTTP ${status}).`,
+      );
+      assert.deepEqual(describeAppError(failure), description);
+    },
+  );
+}
+
+for (const status of [401, 403]) {
+  test(
+    `an App configuration permission refusal stays a permission cause: HTTP ${status}`,
+    { timeout: 30_000 },
+    async () => {
+      const failure = await shellResult(childMountRefusal(), {
+        configurationStatus: status,
+      });
+      assert.equal(failure.code, "CAPABILITY_DENIED");
+      assert.deepEqual(describeAppError(failure), {
+        title: "Access needed",
+        message: "This App needs permission to do that.",
+        retryable: false,
+        action: "grant",
+      });
+    },
+  );
+}
+
+test(
+  "a changed App selection keeps its reconnect cause",
+  { timeout: 30_000 },
+  async () => {
+    const failure = await shellResult(childMountRefusal("rel_old"));
+    assert.equal(failure.code, "SELECTION_CHANGED");
+    assert.deepEqual(describeAppError(failure), {
+      title: "Selection changed",
+      message:
+        "The selection changed during this request. Reopen the App to continue.",
+      retryable: false,
+      action: "reconnect",
+    });
+  },
+);
+
+test(
+  "the 25th desktop observation names the 24-watch limit and closing one permits another",
+  { timeout: 30_000 },
+  async () => {
+    const result = await shellResult(
+      `
+    const request = { surfaceId: "installation:desktop", viewId: "notes" };
+    const watches = [];
+    try {
+      for (let i = 0; i < 24; i++)
+        watches.push(await workbench.watchGillChanges(request, async () => {}));
+      let failure;
+      try {
+        await workbench.watchGillChanges(request, async () => {});
+        throw new Error("Expected the observation limit to refuse");
+      } catch (cause) {
+        failure = { name: cause.name, message: cause.message, code: cause.code, retryable: cause.retryable };
+      }
+      await watches.pop().close();
+      watches.push(await workbench.watchGillChanges(request, async () => {}));
+      return { accepted: watches.length, failure };
+    } finally {
+      await Promise.all(watches.map(watch => watch.close()));
+    }
+  `,
+      {
+        host: {
+          rootDirectory: async () => ({
+            apps: [
+              {
+                address: { kind: "installation", installationId: "desktop" },
+                installationId: "desktop",
+                surfaceId: "installation:desktop",
+                appId: "app_desktop",
+                releaseId: "rel_desktop",
+                authorityVersion: 1,
+                enforcement: null,
+                handlers: [],
+                roles: [],
+                declaredCapabilities: [],
+                commands: [],
+                gills: [
+                  {
+                    id: "notes",
+                    title: "Notes",
+                    view: "rows",
+                    source: "listNotes",
+                    desktop: { sizes: ["M"] },
+                  },
+                ],
+                availability: "available",
+                surface: { stableRoute: "/apps/desktop/" },
+                surfacePath: "/apps/desktop/",
+              },
+            ],
+            roles: {},
+          }),
+        },
+      },
+    );
+    assert.equal(result.accepted, 24);
+    assert.equal(result.failure.code, "DESKTOP_OBSERVATION_LIMIT_REACHED");
+    assert.deepEqual(describeAppError(result.failure), {
+      title: "Desktop observation limit reached",
+      message:
+        "This desktop already has 24 active observations. Close one before adding another.",
+      retryable: false,
+    });
+  },
+);
 
 test(
   "the real Oyster shell offers the owner's admitted fleet rather than only its selected Computer",

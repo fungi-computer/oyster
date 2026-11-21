@@ -86,7 +86,7 @@ function capturedConnections(
       files: {
         port: ports.files,
         pathInstructions:
-          'Start with files.list({path: "."}) to discover the working folder. Use relative file paths from that listing, such as "AGENTS.md"; a leading slash names the filesystem root, not the working folder. Read an instructions file only when listed.',
+          'Start with files.list({path: "."}) to discover the working folder. Use relative file paths from that listing, such as "AGENTS.md"; a leading slash names the filesystem root, not the working folder. For AGENTS.md, the listing is the existence check: read it only when listed; otherwise continue without a read.',
       },
       computer: ports.computer,
     };

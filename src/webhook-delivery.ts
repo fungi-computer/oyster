@@ -2,7 +2,7 @@ import { webhookHeaders } from "./git.js";
 
 /** HTTP refusals and transport failures both remain eligible for owner retries. */
 export async function attemptWebhook(
-  target: Readonly<{ url: string; secret: string }>,
+  target: Readonly<{ url: string; secret: string; previousSecret?: string }>,
   delivery: Readonly<{ id: string; type: string; body: string }>,
 ): Promise<
   | Readonly<{ kind: "response"; status: number }>
@@ -17,6 +17,7 @@ export async function attemptWebhook(
         delivery.type,
         Math.floor(Date.now() / 1000),
         delivery.body,
+        target.previousSecret,
       ),
       body: delivery.body,
       signal: AbortSignal.timeout(10_000),

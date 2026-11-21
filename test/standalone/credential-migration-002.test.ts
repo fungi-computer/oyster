@@ -321,6 +321,8 @@ it("migration 002 seals a seeded plaintext subscription; deliveries still sign w
     "sealed_secret",
     "types",
     "created_at",
+    "previous_sealed_secret",
+    "previous_expires_at",
   ]);
   const created = await webhooks.subscribe({
     installationId: "notes",

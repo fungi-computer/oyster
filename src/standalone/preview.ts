@@ -1,15 +1,21 @@
 import * as Schema from "effect/Schema";
 import * as z from "zod";
-import {
-  ComputerPortAccess,
-  PortAccessError,
-} from "@fungi.computer/computer/port-access";
+import { ComputerPortAccess } from "@fungi.computer/computer/port-access";
 import { selectionSchema } from "../index.js";
 import { sha256DigestSchema } from "@fungi.computer/puffball/effect";
 import { computerPortInputSchema } from "@fungi.computer/computer-contract";
-import { owner, publicRoute, routes } from "../authorization.js";
-import { html } from "hono/html";
+import { owner, routes } from "../authorization.js";
 import type { OysterEnv } from "../host.js";
+import { sameOriginRequest } from "../request-origin.js";
+import {
+  parsePortPreviewPort,
+  portPreviewIssueSchema,
+  portPreviewRefusalMessage,
+  portPreviewRefusalStatus,
+  type PortPreviewIssue,
+  type PortPreviewIssueRefusal,
+  type PortPreviewRefusal,
+} from "../port-preview-entry.js";
 
 export const previewSelectorSchema = Schema.Struct({
   ownerId: Schema.NonEmptyString,
@@ -87,7 +93,11 @@ export async function previewOrigins(
   };
 }
 
-export class PreviewRefused extends Error {}
+export class PreviewRefused extends Error {
+  constructor(readonly reason: PortPreviewIssueRefusal) {
+    super(`Port preview ${reason}`);
+  }
+}
 
 // The retained flat hostname uses the Computer's non-secret identity. Fleet
 // IDs have a computer_ prefix; configured standalone IDs can be simple labels.
@@ -98,9 +108,9 @@ function previewUrl(
   port: number,
 ): URL {
   if (!hostnameComputer.safeParse(computerId).success)
-    throw new PreviewRefused();
+    throw new PreviewRefused("invalid_computer_address");
   const label = `${computerId.replace("computer_", "computer-")}-${String(port)}`;
-  if (label.length > 63) throw new PreviewRefused();
+  if (label.length > 63) throw new PreviewRefused("invalid_computer_address");
   const result = new URL(origins.preview);
   result.hostname = `${label}.${result.hostname}`;
   return result;
@@ -231,7 +241,11 @@ export async function standalonePreviewRequest(
   return forward(computerId, port.data.port, request);
 }
 
-/** Establish a top-level same-site document before the owner's Strict-cookie POST. */
+/**
+ * Issue a private port preview from the owner's own click on the host's
+ * confirm page (`OysterHost.portPreviewEntry`), never from a submit no person
+ * made.
+ */
 export function standalonePortEntryRoutes(
   ports: Readonly<{
     ownsComputer: (computerId: string) => Promise<boolean>;
@@ -239,65 +253,39 @@ export function standalonePortEntryRoutes(
       computerId: string,
       ownerId: string,
       port: number,
-    ) => Promise<{ previewUrl: string } | null>;
+    ) => Promise<PortPreviewIssue>;
   }>,
 ) {
   const path = "/computers/:computerId/ports/:port";
-  return routes<OysterEnv>()
-    .get(
-      path,
-      publicRoute(
-        "a preview entry document; only the owner-admitted POST issues a token",
-      ),
-      (context) => {
-        context.header("Cache-Control", "no-store");
-        context.header("Referrer-Policy", "no-referrer");
-        context.header("Cross-Origin-Opener-Policy", "same-origin");
-        // Chromium applies form-action to the POST redirect as well. The fixed
-        // same-origin form must be able to finish on the HTTPS preview site.
-        context.header(
-          "Content-Security-Policy",
-          "default-src 'none'; script-src 'unsafe-inline'; form-action https:; frame-ancestors 'none'; base-uri 'none'",
+  return routes<OysterEnv>().post(
+    path,
+    owner("direct"),
+    async (context, { principal }) => {
+      context.header("Cache-Control", "no-store");
+      const refuse = (reason: PortPreviewRefusal) =>
+        context.json(
+          { error: reason, message: portPreviewRefusalMessage(reason) },
+          portPreviewRefusalStatus[reason],
         );
-        return context.html(
-          html`<!doctype html><title>Open preview</title>
-            <main>
-              <form method="post" action="${context.req.path}">
-                <button>Open preview</button>
-              </form>
-              <script>
-                document.forms[0].requestSubmit();
-              </script>
-            </main>`,
-        );
-      },
-    )
-    .post(path, owner("direct"), async (context, { principal }) => {
+      // Activation alone does not prove origin: a clicked sibling-site form
+      // can carry both user activation and the owner's Strict cookie.
+      if (!sameOriginRequest(context.req.raw))
+        return refuse("same_origin_required");
+      // Require a user-activated navigation, never an automatic entry submit.
+      if (context.req.header("Sec-Fetch-User") !== "?1")
+        return refuse("confirmation_required");
       const computerId = context.req.param("computerId");
       const portParam = context.req.param("port");
-      const port = computerPortInputSchema.safeParse({
-        port: Number(portParam),
-      });
-      if (
-        !/^[1-9][0-9]{0,4}$/u.test(portParam) ||
-        !port.success ||
-        !(await ports.ownsComputer(computerId))
-      )
-        return context.body(null, 404);
-      try {
-        const issued = await ports.issue(
-          computerId,
-          principal.actor.memberId,
-          port.data.port,
-        );
-        if (issued === null) return context.body(null, 404);
-        context.header("Cache-Control", "no-store");
-        context.header("Referrer-Policy", "no-referrer");
-        return context.redirect(issued.previewUrl, 302);
-      } catch (cause) {
-        if (cause instanceof PreviewRefused || cause instanceof PortAccessError)
-          return context.body(null, 404);
-        throw cause;
-      }
-    });
+      const port = parsePortPreviewPort(portParam);
+      if (port === undefined) return refuse("invalid_port");
+      if (!(await ports.ownsComputer(computerId)))
+        return refuse("computer_not_found");
+      const issued = portPreviewIssueSchema.parse(
+        await ports.issue(computerId, principal.actor.memberId, port),
+      );
+      if (issued.kind === "refused") return refuse(issued.reason);
+      context.header("Referrer-Policy", "no-referrer");
+      return context.redirect(issued.previewUrl, 302);
+    },
+  );
 }

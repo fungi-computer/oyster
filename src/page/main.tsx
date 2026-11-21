@@ -104,7 +104,17 @@ async function configuration(href: string): Promise<OysterAppConfig> {
     cache: "no-store",
     redirect: "error",
   });
-  if (!response.ok) throw unavailable("that App");
+  if (!response.ok)
+    throw new AppError(
+      `The App configuration request failed (HTTP ${String(response.status)}).`,
+      {
+        code:
+          response.status === 401 || response.status === 403
+            ? "CAPABILITY_DENIED"
+            : "APP_CONFIGURATION_FAILED",
+        retryable: response.status >= 500,
+      },
+    );
   return S.decodeUnknownSync(oysterAppConfigSchema)(await response.json());
 }
 function resolveLaunch(
@@ -147,7 +157,10 @@ async function currentChild(launch: WorkbenchResolvedChild["launch"]) {
     computerTargetUrl(address.pathname, computerTarget),
   );
   if (!childMatchesLaunch(launch, address.pathname, config, computerTarget))
-    throw unavailable("that changed App selection");
+    throw new AppError("The App selection changed during this request", {
+      code: "SELECTION_CHANGED",
+      retryable: false,
+    });
   return { ...config, computerTarget };
 }
 
@@ -281,7 +294,10 @@ async function mountShell(config: OysterAppConfig): Promise<() => void> {
       if (request.options !== undefined || request.after !== undefined)
         throw unavailable("those observation selectors");
       if (gillWatches.size >= 24)
-        throw unavailable("more desktop observations");
+        throw new AppError("The desktop observation limit of 24 was reached", {
+          code: "DESKTOP_OBSERVATION_LIMIT_REACHED",
+          retryable: false,
+        });
       const stop = observeDesktopGill(
         onChanged,
         () =>

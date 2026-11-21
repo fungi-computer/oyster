@@ -449,20 +449,26 @@ function webhookHeaders(
   type,
   timestamp,
   body,
+  previousSecret?,
 ): Promise<Record<string, string>>;
 ```
 
 Headers for one signed delivery: Standard Webhooks plus `X-Hub-Signature-256`.
+While a rotated-out secret is still honoured, `previousSecret` adds its
+signature after the current one, space-separated as Standard Webhooks allows, so
+a receiver holding either secret verifies the delivery. `X-Hub-Signature-256`
+uses only the current secret and switches at rotation.
 
 #### Parameters
 
-| Parameter   | Type     |
-| ----------- | -------- |
-| `secret`    | `string` |
-| `id`        | `string` |
-| `type`      | `string` |
-| `timestamp` | `number` |
-| `body`      | `string` |
+| Parameter         | Type     |
+| ----------------- | -------- |
+| `secret`          | `string` |
+| `id`              | `string` |
+| `type`            | `string` |
+| `timestamp`       | `number` |
+| `body`            | `string` |
+| `previousSecret?` | `string` |
 
 #### Returns
 

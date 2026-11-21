@@ -150,6 +150,8 @@ const tenants = new StandaloneTenants({
 const secrets = new Map();
 let exposed = true;
 let forwarded = 0;
+let issuedTickets = 0;
+let lastEntrySubmission;
 class BrowserComputer extends ComputerDO {
   portPreviewAfterAcceptance(port, request, accept) {
     if (!exposed) return Promise.resolve(new Response(null, { status: 404 }));
@@ -239,11 +241,23 @@ const server = createServer(
       };
       if (incoming.method === "POST") options.body = Buffer.concat(chunks);
       const request = new Request(url, options);
+      if (
+        incoming.method === "POST" &&
+        url.pathname === "/computers/workspace/ports/3000"
+      )
+        lastEntrySubmission = {
+          origin: headers.get("origin"),
+          fetchSite: headers.get("sec-fetch-site"),
+          fetchUser: headers.get("sec-fetch-user"),
+          hasCookie: headers.has("cookie"),
+        };
       calls.push({
         host: url.hostname,
         path: url.pathname.replace(/\/([a-z2-7]{20})\//u, "/[ticket]/"),
         cookie: headers.has("cookie"),
         bearer: headers.has("authorization"),
+        ownerReferrer:
+          headers.get("referer")?.startsWith(`${canonicalOrigin}/`) === true,
       });
       let response;
       if (
@@ -251,6 +265,11 @@ const server = createServer(
         url.hostname.endsWith(`.${previewDomain}`)
       )
         response = await worker.fetch(request, env, {});
+      else if (url.hostname === "sibling.shiit.app")
+        response = new Response(
+          `<form method="post" action="${canonicalOrigin}/computers/workspace/ports/3000"><button>Read a report</button></form>`,
+          { headers: { "Content-Type": "text/html" } },
+        );
       else response = await app.fetch(request);
       outgoing.writeHead(response.status, {
         ...Object.fromEntries(response.headers),
@@ -337,9 +356,14 @@ const pageBundle = await bundle({
 const app = createOyster({
   tenantId: "default",
   pageScript: pageBundle.outputFiles[0].text,
+  portPreviewEntry: true,
   ownerRoutes: standalonePortEntryRoutes({
     ownsComputer: async (id) => id === "workspace",
-    issue: (_id, ownerId, port) => native.issuePortConnect(ownerId, port),
+    issue: async (_id, ownerId, port) => {
+      const result = await native.issuePortConnect(ownerId, port);
+      if (result.kind === "issued") issuedTickets++;
+      return result;
+    },
   }),
   auth: ownerKeyAuth(ownerKey, owner.actor.memberId, memoryOwnerSessions()),
   computerId: "workspace",
@@ -396,12 +420,28 @@ const browser = await launchIsolatedChromium(
   chromium,
   portsOf(`https://127.0.0.1:${address.port}`),
   {
+    trustCertificates: [certificate.pathname],
     args: [
-      `--host-resolver-rules=MAP oyster.shiit.app:443 127.0.0.1:${address.port},MAP *.${previewDomain}:443 127.0.0.1:${address.port},MAP ${previewDomain}:443 127.0.0.1:${address.port}`,
+      `--host-resolver-rules=MAP oyster.shiit.app:443 127.0.0.1:${address.port},MAP sibling.shiit.app:443 127.0.0.1:${address.port},MAP *.${previewDomain}:443 127.0.0.1:${address.port},MAP ${previewDomain}:443 127.0.0.1:${address.port}`,
       "--no-proxy-server",
     ],
   },
 );
+// A background popup can have a mounted dialog before Chromium paints it.
+// Capture the same foreground, font-ready surface that the owner sees.
+async function capture(page, path) {
+  await page.bringToFront();
+  await page.evaluate(async () => {
+    await globalThis.document.fonts.ready;
+    await new Promise((resolve) =>
+      globalThis.requestAnimationFrame(() =>
+        globalThis.requestAnimationFrame(resolve),
+      ),
+    );
+  });
+  await page.screenshot({ path, animations: "disabled" });
+}
+
 // A fresh page avoids races with Chromium's internal error-page navigation
 // after an empty refusal. It retains the browser context's real cookie rules.
 async function responseStatus(page, url) {
@@ -423,8 +463,8 @@ async function responseStatus(page, url) {
 
 try {
   for (const { width, height, colorScheme } of [
-    { width: 1440, height: 900, colorScheme: "light" },
-    { width: 1440, height: 900, colorScheme: "dark" },
+    { width: 1280, height: 900, colorScheme: "light" },
+    { width: 1280, height: 900, colorScheme: "dark" },
     { width: 390, height: 844, colorScheme: "light" },
     { width: 390, height: 844, colorScheme: "dark" },
   ]) {
@@ -432,6 +472,8 @@ try {
       ignoreHTTPSErrors: true,
       viewport: { width, height },
       colorScheme,
+      // Host pages draw their art at once, as in the host page proof.
+      reducedMotion: "reduce",
     });
     const page = await context.newPage();
     await page.goto(`${canonicalOrigin}/login`);
@@ -468,9 +510,10 @@ try {
       exact: true,
     });
     await button.waitFor();
-    await page.screenshot({
-      path: new URL(`before-${width}-${colorScheme}.png`, work).pathname,
-    });
+    await capture(
+      page,
+      new URL(`before-${width}-${colorScheme}.png`, work).pathname,
+    );
     let connectUrl;
     const recordConnect = (request) => {
       const url = new URL(request.url());
@@ -478,14 +521,138 @@ try {
         connectUrl = url.href;
     };
     context.on("request", recordConnect);
+    const issuedBefore = issuedTickets;
     const popupPromise = page.waitForEvent("popup", { timeout: 3000 });
     await button.click();
     const popup = await popupPromise;
+    await popup.bringToFront();
+    // The owner's styled confirm page opens first; nothing is issued yet.
+    await popup
+      .getByRole("heading", { name: "Open this preview?", exact: true })
+      .waitFor();
+    await popup.getByRole("dialog", { name: "Open this preview?" }).waitFor();
+    const dialog = popup.getByRole("dialog", { name: "Open this preview?" });
+    await dialog.getByText("workspace", { exact: true }).waitFor();
+    await dialog.getByText("3000", { exact: true }).waitFor();
+    const factHeights = await dialog
+      .locator("[data-preview-fact]")
+      .evaluateAll((facts) =>
+        facts.map((fact) => fact.getBoundingClientRect().height),
+      );
+    assert.ok(factHeights.every((height) => height <= 32));
+    assert.equal(Boolean(connectUrl), false);
+    assert.equal(issuedTickets, issuedBefore);
+    await popup.evaluate(() => globalThis.document.fonts.ready);
+    await capture(
+      popup,
+      new URL(`confirm-${width}-${colorScheme}.png`, work).pathname,
+    );
+    // The entry this replaced submitted itself. Serve that same document
+    // at the entry path: its script submit carries no user activation, so
+    // the owner route refuses it even with the owner's cookie.
+    const entryUrl = `${canonicalOrigin}/computers/workspace/ports/3000`;
+    const autoSubmit = await context.newPage();
+    await autoSubmit.route(entryUrl, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({
+            contentType: "text/html",
+            body: `<form method="post" action="/computers/workspace/ports/3000"><button>Open preview</button></form><script>document.forms[0].requestSubmit()</script>`,
+          })
+        : route.continue(),
+    );
+    const scripted = autoSubmit.waitForResponse(
+      (response) =>
+        response.url() === entryUrl && response.request().method() === "POST",
+    );
+    await autoSubmit.goto(entryUrl);
+    const refused = await scripted;
+    assert.equal(refused.status(), 403);
+    assert.equal(
+      (await refused.request().allHeaders())["sec-fetch-user"],
+      undefined,
+    );
+    await autoSubmit.close();
+    assert.equal(Boolean(connectUrl), false);
+    assert.equal(issuedTickets, issuedBefore);
+    // A clicked same-site sibling form carries activation AND the Strict
+    // cookie. It still cannot skip the owner's own confirmation page.
+    const sibling = await context.newPage();
+    await sibling.goto("https://sibling.shiit.app/");
+    const siblingPost = sibling.waitForResponse(
+      (response) =>
+        response.url() === entryUrl && response.request().method() === "POST",
+    );
+    await sibling.getByRole("button", { name: "Read a report" }).click();
+    const siblingResponse = await siblingPost;
+    assert.deepEqual(lastEntrySubmission, {
+      origin: "https://sibling.shiit.app",
+      fetchSite: "same-site",
+      fetchUser: "?1",
+      hasCookie: true,
+    });
+    assert.equal(siblingResponse.status(), 403);
+    assert.equal(issuedTickets, issuedBefore);
+    assert.equal(Boolean(connectUrl), false);
+    await sibling.close();
+    // A port can be unexposed after its confirmation opens. Preserve the
+    // Computer's real refusal and show it in a toast, with the dialog intact.
+    await native.unexposePort({ port: 3000 });
+    await popup.bringToFront();
+    const failedPost = popup.waitForResponse(
+      (response) =>
+        response.url() === entryUrl && response.request().method() === "POST",
+    );
+    await dialog
+      .getByRole("button", { name: "Open preview", exact: true })
+      .click();
+    const failedResponse = await failedPost;
+    await popup.getByRole("dialog", { name: "Open this preview?" }).waitFor();
+    const refusal = await popup
+      .locator("[data-port-preview-entry]")
+      .getAttribute("data-refusal");
+    assert.deepEqual(lastEntrySubmission, {
+      origin: canonicalOrigin,
+      fetchSite: "same-origin",
+      fetchUser: "?1",
+      hasCookie: true,
+    });
+    assert.equal(
+      failedResponse.status(),
+      404,
+      JSON.stringify({ ...lastEntrySubmission, refusal }),
+    );
+    await popup
+      .locator("[data-sonner-toast]")
+      .getByText(
+        "This port is no longer exposed. Expose it in Shed, then try again.",
+        { exact: true },
+      )
+      .waitFor();
+    await popup.getByRole("dialog", { name: "Open this preview?" }).waitFor();
+    await capture(
+      popup,
+      new URL(`error-${width}-${colorScheme}.png`, work).pathname,
+    );
+    assert.equal(issuedTickets, issuedBefore);
+    await native.exposePort({ port: 3000 });
+    await popup
+      .getByRole("button", { name: "Open preview", exact: true })
+      .click();
     await popup
       .getByRole("heading", { name: "Private preview", exact: true })
       .waitFor();
     context.off("request", recordConnect);
     assert.ok(connectUrl);
+    assert.equal(issuedTickets, issuedBefore + 1);
+    assert.equal(
+      calls.some(
+        (call) =>
+          (call.host === previewDomain ||
+            call.host.endsWith(`.${previewDomain}`)) &&
+          call.ownerReferrer,
+      ),
+      false,
+    );
     const previewUrl = popup.url();
     assert.equal(new URL(previewUrl).searchParams.has("token"), false);
     assert.equal(await popup.evaluate(() => globalThis.opener === null), true);
@@ -493,9 +660,10 @@ try {
       await popup.locator("body").getAttribute("data-script-executed"),
       "yes",
     );
-    await popup.screenshot({
-      path: new URL(`popup-${width}-${colorScheme}.png`, work).pathname,
-    });
+    await capture(
+      popup,
+      new URL(`popup-${width}-${colorScheme}.png`, work).pathname,
+    );
     assert.equal(
       await frame.locator('iframe[title="Preview · port 3000"]').count(),
       0,
@@ -605,9 +773,10 @@ try {
     database.exec(
       "INSERT INTO computer_exposed_ports (port, process_id) VALUES (3000,NULL)",
     );
-    await page.screenshot({
-      path: new URL(`after-${width}-${colorScheme}.png`, work).pathname,
-    });
+    await capture(
+      page,
+      new URL(`after-${width}-${colorScheme}.png`, work).pathname,
+    );
     await context.close();
   }
   await writeFile(

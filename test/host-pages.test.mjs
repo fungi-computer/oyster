@@ -313,3 +313,67 @@ test("permissions documents show identity and a safe exit before scripts load; J
     "viewing or leaving consent grants no authority",
   );
 });
+
+test("a port preview opens only from the owner's click on a styled confirm page", async () => {
+  const host = await computerHost(null, null);
+  const path = "/computers/workspace/ports/5173";
+  assert.equal(
+    (await createOyster(host).request(path, { headers: documentHeaders }))
+      .status,
+    404,
+  );
+  const response = await createOyster({
+    ...host,
+    portPreviewEntry: true,
+  }).request(path, { headers: documentHeaders });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.equal(response.headers.get("Referrer-Policy"), "same-origin");
+  assert.equal(
+    response.headers.get("Cross-Origin-Opener-Policy"),
+    "same-origin",
+  );
+  const policy = response.headers.get("Content-Security-Policy") ?? "";
+  // Only the host's own same-origin illustration module may run.
+  assert.match(policy, /script-src 'self';/);
+  assert.match(policy, /default-src 'none'/);
+  assert.match(policy, /frame-ancestors 'none'/);
+  const body = await response.text();
+  assert.match(body, /Open this preview\?/);
+  assert.match(body, /port-preview\.js/);
+  // The owner checks the real target: the port and Computer from the route.
+  assert.match(
+    body,
+    /An App asked to open port 5173 on Computer workspace, signed in as you\./,
+  );
+  assert.match(body, /rel="stylesheet"/);
+  assert.match(
+    body,
+    /method="post" action="\/computers\/workspace\/ports\/5173"/,
+  );
+  assert.match(body, /type="submit"[^>]*>Open preview</);
+  for (const invalid of [
+    "/computers/workspace/ports/0",
+    "/computers/workspace/ports/05173",
+    "/computers/workspace/ports/70000",
+  ])
+    assert.equal(
+      (
+        await createOyster({ ...host, portPreviewEntry: true }).request(
+          invalid,
+          { headers: documentHeaders },
+        )
+      ).status,
+      404,
+      invalid,
+    );
+  const escaped = await createOyster({
+    ...host,
+    portPreviewEntry: true,
+  }).request("/computers/a%3Cb/ports/5173", { headers: documentHeaders });
+  assert.equal(escaped.status, 200);
+  assert.match(await escaped.text(), /a&lt;b/);
+  // Nothing on the page submits the form for the owner: no inline script runs.
+  for (const script of body.match(/<script[^>]*>/g) ?? [])
+    assert.match(script, /src="[^"]+"/);
+});

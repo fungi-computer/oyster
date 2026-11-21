@@ -146,7 +146,9 @@ describe("the built-in skill bundle", () => {
     expect(text).toMatch(
       /Never settle it yourself by saying you keep your name/u,
     );
-    expect(text).toMatch(/several in one `files\.patch` of Add File blocks/u);
+    expect(text).toMatch(
+      /several in one direct `apply_patch` tool call with Add File blocks/u,
+    );
     // One media attempt for the whole setup; failures cannot create a retry card.
     expect(text).toContain(
       "at most ONE sample attempt across images and videos",

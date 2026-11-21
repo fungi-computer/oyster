@@ -2587,8 +2587,14 @@ test("the Computer owner issues port previews to the live canonical owner member
       .get().n,
     0,
   );
-  assert.ok(await computer.issuePortConnect(owner.actor.memberId, 8099));
-  assert.equal(await computer.issuePortConnect("not-owner", 8099), null);
+  assert.equal(
+    (await computer.issuePortConnect(owner.actor.memberId, 8099)).kind,
+    "issued",
+  );
+  assert.deepEqual(await computer.issuePortConnect("not-owner", 8099), {
+    kind: "refused",
+    reason: "owner_required",
+  });
   // The configured sign-in label and any other member id are refused typed.
   const refused = {
     kind: "refused",
@@ -2626,6 +2632,14 @@ test("the Computer owner issues port previews to the live canonical owner member
       message: refused.message,
     });
   }
+  await computer.unexposePort({ port: 8099 });
+  assert.deepEqual(
+    await computer.issuePortConnect(owner.actor.memberId, 8099),
+    {
+      kind: "refused",
+      reason: "unexposed",
+    },
+  );
 });
 
 test("standalone preview and processStart reject missing operations and forged selectors before native effects", async (t) => {

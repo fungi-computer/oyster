@@ -551,7 +551,7 @@ const directOwnerPaths = [
 ];
 
 /** A host composed with every Oyster-owned table the standalone root serves. */
-async function composedHostOptions() {
+async function composedHostOptions(env = {}) {
   const unused = () => assert.fail("the law test never calls an adapter");
   const agents = new Proxy({}, { get: () => unused });
   const files = new Proxy({}, { get: () => unused });
@@ -570,9 +570,9 @@ async function composedHostOptions() {
   // The standalone root's own owner table, through the same functions the
   // Worker composes (`standalone/worker.ts`, `oysterGitWorkerHost`).
   const ownerRoutes = oysterGitOwnerRoutes(
-    {},
+    env,
     scope,
-    standaloneOwnerRoutes({}, scope, unused),
+    standaloneOwnerRoutes(env, scope, unused),
     agents,
   );
   // Who signs in comes from the fixture header: the owner, a member, or no one.
@@ -587,6 +587,11 @@ async function composedHostOptions() {
               actor: { kind: "member", memberId: "guest" },
               role: "member",
             },
+          };
+        case "team-key":
+          return {
+            kind: "admitted",
+            principal: { actor: { kind: "team-key", keyId: "key_probe" } },
           };
         case "anonymous":
           return { kind: "refused", status: 401 };
@@ -698,6 +703,84 @@ test("the real host refuses App-mediated requests to direct owner custody", asyn
   }
 });
 
+test("the direct owner can rotate and queue a failed webhook only once", async () => {
+  const calls = [];
+  let queued = false;
+  const secret = "webhook-route-test-canary";
+  const options = await composedHostOptions({
+    WEBHOOKS: {
+      getByName: () => ({
+        rotateSecret: async (id) => {
+          calls.push(id);
+          return { secret };
+        },
+        redeliver: async (id) => {
+          calls.push(id);
+          if (queued) return false;
+          queued = true;
+          return true;
+        },
+      }),
+    },
+  });
+  const app = oysterRouteTable(options).serve();
+  const rotate = await app.request(
+    "https://oyster.test/api/webhooks/whsub_probe/rotate",
+    { method: "POST" },
+  );
+  assert.equal(rotate.status, 200);
+  assert.equal((await rotate.json()).secret === secret, true);
+  const path =
+    "https://oyster.test/api/webhooks/deliveries/whsub_probe.event/redeliver";
+  assert.equal((await app.request(path, { method: "POST" })).status, 202);
+  const duplicate = await app.request(path, { method: "POST" });
+  assert.equal(duplicate.status, 404);
+  assert.equal(JSON.stringify(await duplicate.json()).includes(secret), false);
+  assert.deepEqual(calls, [
+    "whsub_probe",
+    "whsub_probe.event",
+    "whsub_probe.event",
+  ]);
+});
+
+test("the direct owner receives HTTP 409 for a raced webhook rotation", async () => {
+  const options = await composedHostOptions({
+    WEBHOOKS: {
+      getByName: () => ({
+        rotateSecret: async () => ({ error: "conflict" }),
+      }),
+    },
+  });
+  const response = await oysterRouteTable(options)
+    .serve()
+    .request("https://oyster.test/api/webhooks/whsub_probe/rotate", {
+      method: "POST",
+    });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "conflict" });
+});
+
+test("a webhook secret rotation or redelivery is the owner's alone: never an App or a Team key", async () => {
+  const app = (await composedHost()).serve();
+  for (const path of [
+    "/api/webhooks/whsub_probe/rotate",
+    "/api/webhooks/deliveries/whsub_probe.event/redeliver",
+  ]) {
+    const mediated = await app.request(`https://oyster.test${path}`, {
+      method: "POST",
+      headers: { "X-Oyster-Installation": "context-probe" },
+    });
+    assert.equal(mediated.status, 403, `App-mediated ${path}`);
+    assert.deepEqual(await mediated.json(), { error: "Owner direct only" });
+    const key = await app.request(`https://oyster.test${path}`, {
+      method: "POST",
+      headers: { "x-who": "team-key" },
+    });
+    assert.equal(key.status, 403, `Team key ${path}`);
+    assert.deepEqual(await key.json(), { error: "Owner only" });
+  }
+});
+
 test("every host /api route's owner reach is classified", async () => {
   // A new owner route fails here until someone chooses its reach: "direct"
   // for custody that never rides an App, "direct-or-app" otherwise.
@@ -716,6 +799,8 @@ test("every host /api route's owner reach is classified", async () => {
     "POST /api/webhooks direct",
     "GET /api/webhooks direct",
     "GET /api/webhooks/:id/deliveries direct",
+    "POST /api/webhooks/:id/rotate direct",
+    "POST /api/webhooks/deliveries/:id/redeliver direct",
     "DELETE /api/webhooks/:id direct",
     "GET|POST /api/apps/:appId/source.git/:suffix{info/refs|git-upload-pack|git-receive-pack} direct-or-app",
     "PUT /api/apps/:appId/source direct-or-app",

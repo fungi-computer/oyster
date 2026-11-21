@@ -49,7 +49,7 @@ async function migrateTable(
   if (!identifier.test(step.table)) throw new Error("Invalid table name");
   if (!step.plaintext(columnsOf(store, step.table))) return;
   const rows = Schema.decodeUnknownSync(Schema.Array(rowSchema))(
-    store.sql.exec(`SELECT * FROM ${step.table}`).toArray(),
+    store.sql.exec(`SELECT * FROM ${step.table} ORDER BY rowid`).toArray(),
   );
   // No keyring: plaintext rows stay closed to every reader until one exists.
   if (rows.length !== 0 && sealer === undefined)
@@ -63,6 +63,13 @@ async function migrateTable(
   store.transactionSync(() => {
     // A concurrent attempt already finished; its rows are the current ones.
     if (!step.plaintext(columnsOf(store, step.table))) return;
+    // Sealing yields to other owner requests. Never copy a stale snapshot over
+    // a removal or update; leave the current table intact for the next retry.
+    const current = Schema.decodeUnknownSync(Schema.Array(rowSchema))(
+      store.sql.exec(`SELECT * FROM ${step.table} ORDER BY rowid`).toArray(),
+    );
+    if (JSON.stringify(current) !== JSON.stringify(rows))
+      throw new CredentialError("unavailable");
     store.sql.exec(`ALTER TABLE ${step.table} RENAME TO ${legacy}`);
     step.ensure(store.sql);
     for (const values of sealed) {

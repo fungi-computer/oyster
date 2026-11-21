@@ -520,6 +520,7 @@ type OysterHost = Readonly<{
   mcp?: OysterMcp;
   git?: OysterGitHost;
   ownerRoutes?: Routes<OysterEnv>;
+  portPreviewEntry?: boolean;
   capabilities?: readonly OysterCapability[];
   workbench?: Readonly<{
      directory: Promise<Readonly<{

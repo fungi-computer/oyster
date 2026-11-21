@@ -1,5 +1,37 @@
 # @fungi.computer/oyster
 
+## 0.57.1
+
+### Patch Changes
+
+- Changes since 0.57.0:
+
+  - fix(oyster): report webhook rotation conflicts distinctly
+  - fix(oyster): preserve page refusal causes instead of missing support
+  - fix(setup): use native file patches for starter files
+  - fix(oyster): preserve removals during credential migration
+  - fix(oyster): migrate stored webhooks before secret rotation
+  - fix(oyster): preserve native confirmation provenance and refusal typing
+  - fix(oyster): confirm port previews in Caps and preserve refusals
+  - fix(oyster): name the port and computer on the preview confirm page
+  - fix(oyster): confirm a port preview on the owner's page before it opens
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.28.0
+  - @fungi.computer/caps@0.13.0
+  - @fungi.computer/ear-tag@0.2.0
+  - @fungi.computer/parakeet@0.17.3
+  - @fungi.computer/braid@0.6.11
+  - @fungi.computer/darkroom@0.11.19
+  - @fungi.computer/nacre@0.9.4
+  - @fungi.computer/shiitake@0.22.5
+  - @fungi.computer/workflows-wire@0.7.12
+  - @fungi.computer/shiitake-extensions@0.13.1
+  - @fungi.computer/zookeeper@0.0.64
+
 ## 0.57.0
 
 ### Minor Changes

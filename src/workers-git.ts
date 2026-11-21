@@ -720,6 +720,8 @@ const RETRY_DELAYS_MS = [10_000, 60_000, 300_000, 1_800_000, 7_200_000];
 const HELD_RECHECK_MS = 60_000;
 /** A held delivery fails after this long, so held rows cannot pile up forever. */
 const HOLD_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+/** How long a rotated-out signing secret still signs, beside the new one. */
+const ROTATION_OVERLAP_MS = 24 * 60 * 60 * 1000;
 /**
  * A keyring fault is the host's configuration, not the receiver's: the
  * delivery waits for it without counting attempts, so none is lost.
@@ -763,7 +765,8 @@ const columnNames = Schema.Array(Schema.Struct({ name: Schema.String }));
 function ensureSubscriptions(sql: SqlStore["sql"]) {
   sql.exec(`CREATE TABLE IF NOT EXISTS oyster_subscriptions (
     id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, url TEXT NOT NULL, sealed_secret TEXT NOT NULL,
-    types TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT`);
+    types TEXT NOT NULL, created_at INTEGER NOT NULL, previous_sealed_secret TEXT,
+    previous_expires_at INTEGER) STRICT`);
 }
 
 const legacySubscription = Schema.Struct({
@@ -823,6 +826,11 @@ async function openSigningSecret(
   return { kind: "unopened" };
 }
 
+/** A new Standard Webhooks signing secret: `whsec_` and 24 random bytes. */
+function newSigningSecret(): string {
+  return `whsec_${btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24))))}`;
+}
+
 function toSubscription(row: unknown): WebhookSubscription {
   const decoded = Schema.decodeUnknownSync(subscriptionRow)(row);
   return {
@@ -850,6 +858,19 @@ export class OysterWebhooks<
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ensureSubscriptions(ctx.storage.sql);
+    // An older Oyster's subscriptions have no rotation columns; they read as
+    // never rotated and keep their one secret.
+    const subscriptionColumns = Schema.decodeUnknownSync(columnNames)(
+      ctx.storage.sql.exec("PRAGMA table_info(oyster_subscriptions)").toArray(),
+    ).map(({ name }) => name);
+    for (const [column, type] of [
+      ["previous_sealed_secret", "TEXT"],
+      ["previous_expires_at", "INTEGER"],
+    ] as const)
+      if (!subscriptionColumns.includes(column))
+        ctx.storage.sql.exec(
+          `ALTER TABLE oyster_subscriptions ADD COLUMN ${column} ${type}`,
+        );
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS oyster_deliveries (
         id TEXT PRIMARY KEY, subscription TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL,
@@ -930,9 +951,7 @@ export class OysterWebhooks<
     types: readonly string[];
     secret?: string | undefined;
   }): Promise<SubscriptionCreated | SubscriptionRefused> {
-    const secret =
-      input.secret ??
-      `whsec_${btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24))))}`;
+    const secret = input.secret ?? newSigningSecret();
     const subscription: WebhookSubscription = {
       id: webhookIds.subscription.generate(),
       installationId: input.installationId,
@@ -962,6 +981,79 @@ export class OysterWebhooks<
       subscription.createdAt,
     );
     return { subscription, secret };
+  }
+  /**
+   * Replace a subscription's signing secret and return the new one once. The
+   * secret it replaces keeps signing beside it for 24 hours, so a receiver
+   * can switch without dropping a delivery; a second rotation in that window
+   * retires the older one at once. `null` when there is no such subscription;
+   * a concurrent change while sealing returns `conflict`.
+   */
+  async rotateSecret(
+    id: string,
+  ): Promise<
+    | Readonly<{ secret: string }>
+    | Readonly<{ error: "unavailable" | "conflict" }>
+    | null
+  > {
+    try {
+      const { sealer, ready } = this.secrets();
+      // A restored pre-002 store must be sealed before its first rotation reads it.
+      await ready();
+      this.#forgetExpiredSecret(id);
+      const current = this.ctx.storage.sql
+        .exec<{ sealed_secret: string }>(
+          "SELECT sealed_secret FROM oyster_subscriptions WHERE id = ?",
+          id,
+        )
+        .toArray()[0];
+      if (current === undefined) return null;
+      if (sealer === undefined) throw new CredentialError("unavailable");
+      const secret = newSigningSecret();
+      const sealed = await sealer.seal(subscriptionContext(id), secret);
+      const rotated = this.ctx.storage.sql.exec(
+        "UPDATE oyster_subscriptions SET sealed_secret = ?, previous_sealed_secret = ?, previous_expires_at = ? WHERE id = ? AND sealed_secret = ?",
+        sealed,
+        current.sealed_secret,
+        Date.now() + ROTATION_OVERLAP_MS,
+        id,
+        current.sealed_secret,
+      ).rowsWritten;
+      // Removed or rotated by another call while this one sealed.
+      return rotated === 0 ? { error: "conflict" } : { secret };
+    } catch (cause) {
+      if (cause instanceof CredentialError && cause.code === "unavailable")
+        return { error: "unavailable" };
+      throw cause;
+    }
+  }
+
+  /**
+   * Drop a rotated-out secret whose overlap has ended. Checked when a
+   * delivery signs or the secret rotates, so no timer is needed.
+   */
+  #forgetExpiredSecret(id: string): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE oyster_subscriptions SET previous_sealed_secret = NULL, previous_expires_at = NULL WHERE id = ? AND previous_expires_at <= ?",
+      id,
+      Date.now(),
+    );
+  }
+  /**
+   * Queue a delivery that ran out of retries again, from its first attempt.
+   * Only a `failed` delivery is redelivered; `false` for any other.
+   */
+  async redeliver(deliveryId: string): Promise<boolean> {
+    const now = Date.now();
+    const reset =
+      this.ctx.storage.sql.exec(
+        "UPDATE oyster_deliveries SET state = 'pending', attempts = 0, next_at = ?, last_status = NULL, held_reason = NULL, held_since = NULL, updated_at = ? WHERE id = ? AND state = 'failed'",
+        now,
+        now,
+        deliveryId,
+      ).rowsWritten > 0;
+    if (reset) await this.wakeBy(now);
+    return reset;
   }
   /** Every subscription. */
   subscriptions(): WebhookSubscription[] {
@@ -1070,9 +1162,15 @@ export class OysterWebhooks<
       .toArray();
     await Promise.all(
       due.map(async (delivery) => {
+        this.#forgetExpiredSecret(delivery.subscription);
         const target = this.ctx.storage.sql
-          .exec<{ url: string; sealed_secret: string }>(
-            "SELECT url, sealed_secret FROM oyster_subscriptions WHERE id = ?",
+          .exec<{
+            url: string;
+            sealed_secret: string;
+            previous_sealed_secret: string | null;
+            previous_expires_at: number | null;
+          }>(
+            "SELECT url, sealed_secret, previous_sealed_secret, previous_expires_at FROM oyster_subscriptions WHERE id = ?",
             delivery.subscription,
           )
           .toArray()[0];
@@ -1099,8 +1197,25 @@ export class OysterWebhooks<
         }
         let status: number | null = null;
         if (target !== undefined && secret?.kind === "open") {
+          // A rotated-out secret signs too until its overlap ends; one that
+          // no longer opens is dropped rather than failing the delivery.
+          const previous =
+            target.previous_sealed_secret !== null &&
+            (target.previous_expires_at ?? 0) > now
+              ? await openSigningSecret(
+                  sealer,
+                  delivery.subscription,
+                  target.previous_sealed_secret,
+                )
+              : undefined;
           const attempt = await attemptWebhook(
-            { url: target.url, secret: secret.secret },
+            previous?.kind === "open"
+              ? {
+                  url: target.url,
+                  secret: secret.secret,
+                  previousSecret: previous.secret,
+                }
+              : { url: target.url, secret: secret.secret },
             delivery,
           );
           status = attempt.kind === "response" ? attempt.status : null;
@@ -1394,6 +1509,31 @@ export function gitAdminRoutes(
       ),
     ),
   );
+  routes.post("/api/webhooks/:id/rotate", owner, async (context) => {
+    const rotated = await env.WEBHOOKS.getByName(
+      scope.durableName("webhooks"),
+    ).rotateSecret(context.req.param("id"));
+    if (rotated === null)
+      return Response.json({ error: "Not found" }, { status: 404 });
+    return "error" in rotated
+      ? Response.json(rotated, {
+          status: rotated.error === "conflict" ? 409 : 503,
+        })
+      : Response.json(rotated);
+  });
+  routes.post(
+    "/api/webhooks/deliveries/:id/redeliver",
+    owner,
+    async (context) =>
+      (await env.WEBHOOKS.getByName(scope.durableName("webhooks")).redeliver(
+        context.req.param("id"),
+      ))
+        ? new Response(null, { status: 202 })
+        : Response.json(
+            { error: "No failed delivery with that id" },
+            { status: 404 },
+          ),
+  );
   routes.delete("/api/webhooks/:id", owner, async (context) =>
     (await env.WEBHOOKS.getByName(scope.durableName("webhooks")).unsubscribe(
       context.req.param("id"),
@@ -1498,6 +1638,8 @@ export type OysterGitWorkerOptions<Env extends OysterGitWorkerEnv> = Readonly<{
   ) => Promise<Extract<GitWriter, { kind: "actor" }> | null>;
   /** Further owner-only routes this host serves, after the owner guard. */
   ownerRoutes?: (env: Env, scope: TenantScope) => Routes<OysterEnv>;
+  /** Serve the owner's port preview confirm page; see `OysterHost.portPreviewEntry`. */
+  portPreviewEntry?: boolean;
 }>;
 
 /** A tenant's whole Git host: the App server, `host.git` and the owner routes. */
@@ -1964,6 +2106,8 @@ export async function oysterGitWorkerHost<Env extends OysterGitWorkerEnv>(
   };
   if (options.pageScript !== undefined)
     host = { ...host, pageScript: options.pageScript };
+  if (options.portPreviewEntry === true)
+    host = { ...host, portPreviewEntry: true };
   if (options.workflows !== undefined)
     host = { ...host, workflows: options.workflows(env, host) };
   if (options.computerControl !== undefined)

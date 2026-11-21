@@ -4,6 +4,12 @@ import type {
 } from "./approval-home.js";
 export type { OysterApprovalResult };
 import type { ZodType } from "zod";
+import {
+  parsePortPreviewPort,
+  portPreviewReferrerPolicy,
+  portPreviewRefusalEntry,
+  type PortPreviewEntry,
+} from "./port-preview-entry.js";
 import { hostGateFacts, releaseCache } from "./internal/host-gate.js";
 import type { WorkflowControl } from "./workflows.js";
 import type { ComputerControlPort } from "./computer-control-port.js";
@@ -499,6 +505,12 @@ export type OysterHost = Readonly<{
   /** Further routes the host adds (keys, webhooks, builds); each declares
    * its own requirement and receives the admitted principal from it. */
   ownerRoutes?: Routes<OysterEnv>;
+  /**
+   * Serve the owner's confirm page for private port previews at
+   * `/computers/:computerId/ports/:port`. Only the owner's own click on it
+   * posts to the owner route that issues the preview; nothing submits it.
+   */
+  portPreviewEntry?: boolean;
   /** Adapters granted only when the Release declares them and admission passes. */
   capabilities?: readonly OysterCapability[];
   /**
@@ -1045,6 +1057,23 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       ...options,
     });
   };
+  const previewHeaders = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": portPreviewReferrerPolicy,
+    "Cross-Origin-Opener-Policy": "same-origin",
+    // Chromium applies form-action to the POST redirect too.
+    "Content-Security-Policy":
+      "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src data:; form-action 'self' https:; frame-ancestors 'none'; base-uri 'none'",
+  };
+  const previewPage = async (entry: PortPreviewEntry, status = 200) => {
+    const response = await page("open-preview", {
+      previewEntry: entry,
+      status,
+    });
+    for (const [name, value] of Object.entries(previewHeaders))
+      response.headers.set(name, value);
+    return response;
+  };
   table.get(
     "/_oyster/host-assets/*",
     publicRoute("content-addressed host illustrations and layout"),
@@ -1056,6 +1085,26 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       usedLink: context.req.query("link") === "used",
     }),
   );
+  if (host.portPreviewEntry === true)
+    table.get(
+      "/computers/:computerId/ports/:port",
+      publicRoute(
+        "the owner's preview confirm page; only their own click posts to the owner route",
+      ),
+      async (context) => {
+        // Only route text is shown: this public page reads nothing about the
+        // Computer, so a visitor learns nothing from it.
+        const computerId = context.req.param("computerId");
+        const portParam = context.req.param("port");
+        const port = parsePortPreviewPort(portParam);
+        if (port === undefined) return context.body(null, 404);
+        return previewPage({
+          action: context.req.path,
+          port,
+          computerId,
+        });
+      },
+    );
   table.get(
     "/login/key-help",
     publicRoute("owner key recovery instructions, without a reset"),
@@ -2761,11 +2810,17 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
   // Present errors only at the host's document boundary. App assets, transports
   // and API responses retain their status, headers and machine-readable body.
   const appEntry = match("/apps/:installationId/", { decode: false });
+  const previewEntryPath = match<{ computerId: string; port: string }>(
+    "/computers/:computerId/ports/:port",
+    { decode: false },
+  );
   const documentResponse = async (
     request: Pick<Request, "url" | "method" | "headers">,
     response: Response,
   ) => {
     const path = new URL(request.url).pathname;
+    const previewTarget =
+      host.portPreviewEntry === true ? previewEntryPath(path) : false;
     if (capabilityRoutes.some((route) => route.matches(path))) return response;
     const document =
       parseAccept(request.headers.get("Accept") ?? "").find(
@@ -2785,8 +2840,17 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
           ].some(
             (prefix) => path === prefix || path.startsWith(`${prefix}/`),
           ))) ||
-        (request.method === "POST" && path === "/login"));
+        (request.method === "POST" &&
+          (path === "/login" || Boolean(previewTarget))));
     if (!document || response.status < 400) return response;
+    const previewEntry =
+      request.method === "POST" && previewTarget
+        ? await portPreviewRefusalEntry(response, {
+            action: path,
+            computerId: previewTarget.params.computerId,
+            port: previewTarget.params.port,
+          })
+        : undefined;
     const state =
       path === "/login" && [400, 401].includes(response.status)
         ? "login-invalid"
@@ -2797,18 +2861,25 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
             : "not-found";
     let rendered: Response;
     try {
-      rendered = await page(state, { status: response.status });
+      rendered = previewEntry
+        ? await previewPage(previewEntry, response.status)
+        : await page(state, { status: response.status });
     } catch (cause) {
       if (!(cause instanceof PageAssetsLoadError)) throw cause;
       console.error(
         "Host page assets unavailable; serving recovery document",
         cause,
       );
-      rendered = await renderHostPage({
-        state,
-        title,
-        status: response.status,
-      });
+      rendered = await renderHostPage(
+        previewEntry
+          ? {
+              state: "open-preview",
+              title,
+              status: response.status,
+              previewEntry,
+            }
+          : { state, title, status: response.status },
+      );
     }
     // Keep timing, robots and retry metadata from the original refusal.
     response.headers.forEach((value, name) => {
@@ -2824,6 +2895,9 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       )
         rendered.headers.set(name, value);
     });
+    if (previewEntry)
+      for (const [name, value] of Object.entries(previewHeaders))
+        rendered.headers.set(name, value);
     return rendered;
   };
   return {

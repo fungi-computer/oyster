@@ -359,6 +359,15 @@ flowchart LR
   Instance's `onGitPush` when the Release declares `receives: ["git.push"]`. The
   App emits typed events through `env.EVENTS`, which Oyster delivers as signed
   Standard Webhooks and as Workflow triggers on hosts with Workflows.
+  `POST /api/webhooks/:id/rotate` returns a new signing secret once; for 24
+  hours `webhook-signature` carries both signatures, so a Standard Webhooks
+  receiver can switch without a gap. The legacy `x-hub-signature-256` header
+  switches to the new secret immediately at rotation. Concurrent rotations
+  return HTTP 409 for the losing request. A delivery that ran out of retries is
+  `failed`, and `POST /api/webhooks/deliveries/:id/redeliver` queues it again
+  with the same delivery ID. Repeated requests while it is pending or delivered
+  do not queue another delivery. Upgrades retain existing subscriptions and
+  queued deliveries.
 
 An App's own `GIT` binding (`await env.GIT.cloneUrl(repo)`, create, fork, log,
 read and merge) uses `admitted.binding(onBehalfOf)`. Its writes skip the App's

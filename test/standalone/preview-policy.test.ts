@@ -41,6 +41,7 @@ async function fixture(
   if (origins === null)
     throw new Error("Fixture preview configuration rejected");
   const seen: Request[] = [];
+  let issueCount = 0;
   let owner = "owner";
   const preview = createStandalonePreview(storage, computerId, origins, {
     accept: (ownerId) => {
@@ -75,7 +76,11 @@ async function fixture(
     serveHost(
       standalonePortEntryRoutes({
         ownsComputer,
-        issue: (_id, ownerId, port) => preview.issueOwner(ownerId, port),
+        issue: async (_id, ownerId, port) => {
+          issueCount++;
+          const issued = await preview.issueOwner(ownerId, port);
+          return { kind: "issued", previewUrl: issued.previewUrl };
+        },
       }),
       () =>
         Promise.resolve(
@@ -94,7 +99,15 @@ async function fixture(
   const setOwner = (next: string) => {
     owner = next;
   };
-  return { storage, preview, fetch, seen, entry, setOwner };
+  return {
+    storage,
+    preview,
+    fetch,
+    seen,
+    entry,
+    setOwner,
+    issueCount: () => issueCount,
+  };
 }
 function session(response: Response) {
   return response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -180,19 +193,34 @@ describe("Oyster private port previews", () => {
   it("admits the owner through entry, single-use exchange and a clean URL; serves active assets without credentials", async () => {
     const f = await fixture();
     const entryUrl = `${env.OYSTER_ORIGIN}/computers/workspace/ports/5173`;
-    const document = await f.entry(false).request(entryUrl);
-    expect(document.status).toBe(200);
-    expect(document.headers.get("Cross-Origin-Opener-Policy")).toBe(
-      "same-origin",
-    );
-    expect(await document.text()).toContain('method="post"');
-    expect(document.headers.get("Content-Security-Policy")).toContain(
-      "frame-ancestors 'none'",
-    );
+    const clicked = { "Sec-Fetch-User": "?1", Origin: env.OYSTER_ORIGIN };
     expect(
-      (await f.entry(false).request(entryUrl, { method: "POST" })).status,
+      (
+        await f
+          .entry(false)
+          .request(entryUrl, { method: "POST", headers: clicked })
+      ).status,
     ).toBe(401);
-    const entry = await f.entry(true).request(entryUrl, { method: "POST" });
+    // An automatic submission without a user gesture carries no activation.
+    expect(
+      (
+        await f.entry(true).request(entryUrl, {
+          method: "POST",
+          headers: { Origin: env.OYSTER_ORIGIN },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await f.entry(true).request(entryUrl, {
+          method: "POST",
+          headers: { "Sec-Fetch-User": "?0", Origin: env.OYSTER_ORIGIN },
+        })
+      ).status,
+    ).toBe(403);
+    const entry = await f
+      .entry(true)
+      .request(entryUrl, { method: "POST", headers: clicked });
     expect(entry.status).toBe(302);
     const connect = z.string().parse(entry.headers.get("location"));
     const exchanged = await f.fetch(new Request(connect));
@@ -223,9 +251,28 @@ describe("Oyster private port previews", () => {
           .entry(true)
           .request(`${env.OYSTER_ORIGIN}/computers/unknown/ports/5173`, {
             method: "POST",
+            headers: clicked,
           })
       ).status,
     ).toBe(404);
+  });
+  it("refuses activated same-site submissions before issuing a preview", async () => {
+    const f = await fixture();
+    const response = await f
+      .entry(true)
+      .request(`${env.OYSTER_ORIGIN}/computers/workspace/ports/5173`, {
+        method: "POST",
+        headers: {
+          "Sec-Fetch-User": "?1",
+          "Sec-Fetch-Site": "same-site",
+          Origin: "https://sibling.example.com",
+        },
+      });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: "same_origin_required",
+    });
+    expect(f.issueCount()).toBe(0);
   });
   it("forwards admitted writes and revokes access on unexpose", async () => {
     const f = await fixture();

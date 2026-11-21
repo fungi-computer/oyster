@@ -353,6 +353,55 @@ Subscribe `url` to an installation's events; returns the secret once.
 [`WebhookSubscription`](#webhooksubscription); `secret`: `string`; \}\> \|
 `Readonly`\<\{ `error`: `"unavailable"`; \}\>\>
 
+##### rotateSecret()
+
+```ts
+rotateSecret(id): Promise<
+  | Readonly<{
+  secret: string;
+}>
+  | Readonly<{
+  error: "unavailable" | "conflict";
+}>
+| null>;
+```
+
+Replace a subscription's signing secret and return the new one once. The secret
+it replaces keeps signing beside it for 24 hours, so a receiver can switch
+without dropping a delivery; a second rotation in that window retires the older
+one at once. `null` when there is no such subscription; a concurrent change
+while sealing returns `conflict`.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `id`      | `string` |
+
+###### Returns
+
+`Promise`\< \| `Readonly`\<\{ `secret`: `string`; \}\> \| `Readonly`\<\{
+`error`: `"unavailable"` \| `"conflict"`; \}\> \| `null`\>
+
+##### redeliver()
+
+```ts
+redeliver(deliveryId): Promise<boolean>;
+```
+
+Queue a delivery that ran out of retries again, from its first attempt. Only a
+`failed` delivery is redelivered; `false` for any other.
+
+###### Parameters
+
+| Parameter    | Type     |
+| ------------ | -------- |
+| `deliveryId` | `string` |
+
+###### Returns
+
+`Promise`\<`boolean`\>
+
 ##### subscriptions()
 
 ```ts
@@ -1714,6 +1763,7 @@ type OysterGitWorkerOptions<Env> = Readonly<{
     }
   > | null>;
   ownerRoutes?: (env, scope) => Routes<OysterEnv>;
+  portPreviewEntry?: boolean;
 }>;
 ```
 

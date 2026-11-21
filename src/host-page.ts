@@ -18,6 +18,11 @@ import {
   type AppPermissionsViewData,
 } from "./apps/permissions.js";
 import { permissionCatalog } from "./apps/catalog.js";
+import {
+  portPreviewReferrerPolicy,
+  portPreviewRefusalMessage,
+  type PortPreviewEntry,
+} from "./port-preview-entry.js";
 
 const docs = "https://docs.fungi.computer";
 
@@ -31,6 +36,7 @@ export type HostPageState =
   | "login-invalid"
   | "key-help"
   | "signing-in"
+  | "open-preview"
   | "not-found"
   | "server-error"
   | "access-denied"
@@ -72,6 +78,11 @@ const copy = {
     "Opening your Oyster…",
     "One-time sign-in",
     "This private link signs you in on this computer. It works once. Continue to your Oyster below if it does not open automatically.",
+  ],
+  "open-preview": [
+    "Open this preview?",
+    "Private port preview",
+    "An App asked to open a port on your Computer, signed in as you. Nothing opens until you choose Open preview.",
   ],
   "not-found": [
     "Nothing growing here.",
@@ -144,6 +155,12 @@ const abilities = {
     "Continue below if it does not.",
     "Use your saved key if needed.",
   ],
+  "open-preview": [
+    "You choose what opens",
+    "Check this is the preview you expected.",
+    "Choose Open preview to continue.",
+    "Close this tab if you did not ask for it.",
+  ],
   "not-found": [
     "Find an available page",
     "Return to your Oyster.",
@@ -190,6 +207,8 @@ export type HostPageOptions = Readonly<{
   returning?: boolean;
   /** Login only: the visitor arrived through a one-time link that was already used. */
   usedLink?: boolean;
+  /** Open preview only: the port and Computer it opens, and where the owner's own click posts. */
+  previewEntry?: PortPreviewEntry;
   /** Only the single-use helper passes a key, in a POST field, never a URL. */
   signIn?: Readonly<{ action: string; key: string }>;
   permissions?: Readonly<{
@@ -405,6 +424,36 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
         ),
       ),
     );
+  } else if (state === "open-preview" && options.previewEntry) {
+    content.push(
+      h(
+        "div",
+        {
+          "data-port-preview-entry": true,
+          "data-action": options.previewEntry.action,
+          "data-port": options.previewEntry.port,
+          "data-computer-id": options.previewEntry.computerId,
+          "data-refusal": options.previewEntry.refusal,
+        },
+        h(
+          "form",
+          { method: "post", action: options.previewEntry.action },
+          h(
+            "div",
+            { className: "actions" },
+            h(Button, { type: "submit" }, "Open preview"),
+            link("Back to your Oyster", url("/"), true),
+          ),
+        ),
+        options.previewEntry.refusal === undefined
+          ? null
+          : h(
+              "noscript",
+              null,
+              portPreviewRefusalMessage(options.previewEntry.refusal),
+            ),
+      ),
+    );
   } else if (state === "key-help") {
     content.push(
       h(
@@ -532,6 +581,7 @@ function illustration(
     "login-invalid",
     "key-help",
     "signing-in",
+    "open-preview",
     "access-denied",
   ].includes(state);
   const art = keyArt
@@ -590,7 +640,13 @@ function illustration(
 /** One server-rendered Caps composition, usable without styles, art or JS. */
 export async function hostPage(options: HostPageOptions): Promise<Response> {
   const { state, title = "Oyster" } = options;
-  const [baseHeading, eyebrow, description] = copy[state];
+  const referrerPolicy =
+    state === "open-preview" ? portPreviewReferrerPolicy : "no-referrer";
+  const [baseHeading, eyebrow, baseDescription] = copy[state];
+  const description =
+    state === "open-preview" && options.previewEntry
+      ? `An App asked to open port ${String(options.previewEntry.port)} on Computer ${options.previewEntry.computerId}, signed in as you. Nothing opens until you choose Open preview.`
+      : baseDescription;
   const heading =
     state === "preview"
       ? (options.preview?.appName ?? "Opening preview…")
@@ -612,6 +668,7 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
     return asset ? url(asset.path) : undefined;
   };
   const { content, actions } = pageContent(options, url);
+  const script = state === "open-preview" ? "port-preview.js" : "host-page.js";
   const body = renderToStaticMarkup(
     h(
       "html",
@@ -624,7 +681,7 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
           name: "viewport",
           content: "width=device-width,initial-scale=1",
         }),
-        h("meta", { name: "referrer", content: "no-referrer" }),
+        h("meta", { name: "referrer", content: referrerPolicy }),
         h("title", null, `${heading} · ${title}`),
         h("link", {
           rel: "icon",
@@ -693,17 +750,17 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
             h(
               "p",
               { className: "helper" },
-              state === "preview"
-                ? null
-                : state === "login" || state === "login-invalid"
-                  ? "Your key is sent only to this Oyster."
-                  : state === "not-found"
-                    ? null
-                    : h(
-                        "a",
-                        { href: `${docs}/agents/index.md` },
-                        "Hand your LLM the setup guide →",
-                      ),
+              state === "login" || state === "login-invalid"
+                ? "Your key is sent only to this Oyster."
+                : state === "not-found" ||
+                    state === "open-preview" ||
+                    state === "preview"
+                  ? null
+                  : h(
+                      "a",
+                      { href: `${docs}/agents/index.md` },
+                      "Hand your LLM the setup guide →",
+                    ),
             ),
           ),
         ),
@@ -712,8 +769,8 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
           { className: "page-footer" },
           h("span", null, "Oyster · A home for your Apps"),
         ),
-        state !== "preview" && assetUrl("host-page.js")
-          ? h("script", { type: "module", src: assetUrl("host-page.js") })
+        state !== "preview" && assetUrl(script)
+          ? h("script", { type: "module", src: assetUrl(script) })
           : null,
         options.preview?.preparing
           ? h("script", {
@@ -746,7 +803,7 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-      "Referrer-Policy": "no-referrer",
+      "Referrer-Policy": referrerPolicy,
       "X-Robots-Tag": "noindex, nofollow",
       Vary: "Accept",
     },

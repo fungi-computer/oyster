@@ -90,20 +90,32 @@ export async function signStandardWebhook(
   return `v1,${btoa(String.fromCharCode(...signature))}`;
 }
 
-/** Headers for one signed delivery: Standard Webhooks plus `X-Hub-Signature-256`. */
+/**
+ * Headers for one signed delivery: Standard Webhooks plus `X-Hub-Signature-256`.
+ * While a rotated-out secret is still honoured, `previousSecret` adds its
+ * signature after the current one, space-separated as Standard Webhooks
+ * allows, so a receiver holding either secret verifies the delivery.
+ * `X-Hub-Signature-256` uses only the current secret and switches at rotation.
+ */
 export async function webhookHeaders(
   secret: string,
   id: string,
   type: string,
   timestamp: number,
   body: string,
+  previousSecret?: string,
 ): Promise<Record<string, string>> {
+  const signatures = [await signStandardWebhook(secret, id, timestamp, body)];
+  if (previousSecret !== undefined)
+    signatures.push(
+      await signStandardWebhook(previousSecret, id, timestamp, body),
+    );
   return {
     "content-type": "application/json",
     "user-agent": "Oyster-Webhooks/1",
     "webhook-id": id,
     "webhook-timestamp": String(timestamp),
-    "webhook-signature": await signStandardWebhook(secret, id, timestamp, body),
+    "webhook-signature": signatures.join(" "),
     // The headers receivers built for git hosts check.
     "x-hub-signature-256": `sha256=${hex(await hmac(encoder.encode(secret), body))}`,
     "x-github-delivery": id,
