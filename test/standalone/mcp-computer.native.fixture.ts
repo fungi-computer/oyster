@@ -92,6 +92,7 @@ const proofAgents = (): OysterAgents => ({
   vault: notInProof,
   approveAppToolPolicy: notInProof,
   extensionAttachments: notInProof,
+  extensionChoices: notInProof,
   attachExtension: notInProof,
   detachExtension: notInProof,
   connections: notInProof,

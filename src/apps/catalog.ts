@@ -100,6 +100,13 @@ export const permissionCatalog = {
     "createAgents",
     "install",
   ),
+  "agent.extensions": entry(
+    "agents",
+    "Attach Apps to Agents",
+    "choose which of your installed Apps add their prompt and tools to an Agent's runs.",
+    "createAgents",
+    "install",
+  ),
   "agent.stop": entry(
     "agents",
     "Stop Agents",

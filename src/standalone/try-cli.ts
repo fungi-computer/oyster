@@ -44,7 +44,14 @@ import {
   createCredentialSealer,
   type CredentialKeyring,
 } from "@fungi.computer/veil/credential-store";
-import { basename, dirname, delimiter, join, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  delimiter,
+  isAbsolute,
+  join,
+  resolve,
+} from "node:path";
 import process from "node:process";
 import {
   isDeepStrictEqual,
@@ -322,8 +329,54 @@ async function ownManifest(): Promise<OwnManifest> {
   );
 }
 
-function projectManifest(own: OwnManifest, spec: string | undefined): string {
-  const dependencies = {
+/** Packages a proof installs from local tarballs: name to an npm `file:` spec. */
+type TrialOverrides = Readonly<Record<string, string>>;
+
+const overrideMapSchema = z.record(
+  z.string().regex(/^@fungi\.computer\/[a-z0-9-]+$/u),
+  z
+    .string()
+    .refine(
+      (path) => isAbsolute(path) && path.endsWith(".tgz"),
+      "an absolute .tgz path",
+    ),
+);
+
+/**
+ * The nightly proof's tarballs of this tree's workspace packages, named by a
+ * JSON map in `OYSTER_TRY_OVERRIDES`. Without them npm would pair this build
+ * with the published siblings of the same version, whose contents lag the
+ * tree between releases. Internal: not a user-facing option.
+ */
+async function trialOverrides(): Promise<TrialOverrides | undefined> {
+  const path = process.env.OYSTER_TRY_OVERRIDES;
+  if (path === undefined || path === "") return undefined;
+  const map = overrideMapSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  for (const tarball of Object.values(map))
+    if (!(await exists(tarball)))
+      throw new Error(`Override tarball ${tarball} does not exist`);
+  return Object.fromEntries(
+    Object.entries(map).map(([name, tarball]) => [name, `file:${tarball}`]),
+  );
+}
+
+/** The staged trial project's package.json. */
+type TrialProjectManifest = {
+  name: string;
+  private: true;
+  type: "module";
+  allowScripts: Readonly<Record<string, boolean>>;
+  scripts: { start: string };
+  dependencies: Readonly<Record<string, string>>;
+  overrides?: TrialOverrides;
+};
+
+function projectManifest(
+  own: OwnManifest,
+  spec: string | undefined,
+  overrides: TrialOverrides | undefined,
+): string {
+  const named = {
     "@fungi.computer/oyster": spec ?? own.version,
     "@fungi.computer/computer":
       own.dependencies["@fungi.computer/computer"] ?? "latest",
@@ -334,29 +387,32 @@ function projectManifest(own: OwnManifest, spec: string | undefined): string {
     pnpm: localBuildPnpmVersion,
     wrangler: own.peerDependencies.wrangler ?? "^4.127.1",
   };
-  return (
-    JSON.stringify(
-      {
-        name: "my-oyster",
-        private: true,
-        type: "module",
-        // npm 11.19 and newer skip dependency install scripts unless approved.
-        allowScripts: {
-          "@google/genai": false,
-          "@mongodb-js/zstd": false,
-          esbuild: true,
-          exifreader: false,
-          "node-liblzma": false,
-          protobufjs: false,
-          workerd: true,
-        },
-        scripts: { start: "npx @fungi.computer/oyster try" },
-        dependencies,
-      },
-      null,
-      2,
-    ) + "\n"
+  // npm refuses an override that disagrees with a direct dependency's spec.
+  const dependencies = Object.fromEntries(
+    Object.entries(named).map(([name, version]) => [
+      name,
+      overrides?.[name] ?? version,
+    ]),
   );
+  const manifest: TrialProjectManifest = {
+    name: "my-oyster",
+    private: true,
+    type: "module",
+    // npm 11.19 and newer skip dependency install scripts unless approved.
+    allowScripts: {
+      "@google/genai": false,
+      "@mongodb-js/zstd": false,
+      esbuild: true,
+      exifreader: false,
+      "node-liblzma": false,
+      protobufjs: false,
+      workerd: true,
+    },
+    scripts: { start: "npx @fungi.computer/oyster try" },
+    dependencies,
+  };
+  if (overrides !== undefined) manifest.overrides = overrides;
+  return JSON.stringify(manifest, null, 2) + "\n";
 }
 
 // pnpm 11 refuses dependency build scripts it was not told about.
@@ -385,6 +441,7 @@ async function refreshProject(
   manager: Manager,
   signal: AbortSignal,
 ): Promise<void> {
+  const overrides = await trialOverrides();
   const examples = join(import.meta.dirname, "../../examples/standalone");
   const files = new Map<string, string>([
     ["worker.ts", await readFile(join(examples, "worker.ts"), "utf8")],
@@ -392,9 +449,17 @@ async function refreshProject(
       "wrangler.jsonc",
       await readFile(join(examples, "wrangler.jsonc"), "utf8"),
     ],
-    ["package.json", projectManifest(own, spec)],
+    ["package.json", projectManifest(own, spec, overrides)],
   ]);
-  if (manager === "pnpm") files.set("pnpm-workspace.yaml", pnpmWorkspace);
+  // pnpm reads its overrides from the workspace file, not package.json; a JSON
+  // flow mapping is valid YAML.
+  if (manager === "pnpm")
+    files.set(
+      "pnpm-workspace.yaml",
+      overrides === undefined
+        ? pnpmWorkspace
+        : `${pnpmWorkspace}overrides: ${JSON.stringify(overrides)}\n`,
+    );
   for (const [name, content] of files) {
     signal.throwIfAborted();
     const path = join(directory, name);

@@ -12,6 +12,13 @@ const forwarded = [];
 let approvalWrites = 0;
 let renameWrites = 0;
 let instructionWrites = 0;
+// Installation ids the stand-in host knows as Agent extensions, and which of
+// them are attached to agent_1.
+const extensionNames = new Map([
+  ["notes", "Notes"],
+  ["garden", "Garden"],
+]);
+const attachedExtensions = new Set();
 const instructionsOf = new Map();
 const noHome = "agent_nohome";
 let avatarWrites = 0;
@@ -107,6 +114,34 @@ const adapter = {
       limit: 32_000,
     };
   },
+  extensionChoices: async (agentId) => {
+    if (!agents.some((agent) => agent.agentId === agentId)) return null;
+    const named = (id) => ({
+      installationId: id,
+      name: extensionNames.get(id),
+    });
+    return {
+      agentId,
+      attached: [...attachedExtensions].map(named),
+      available: [...extensionNames.keys()]
+        .filter((id) => !attachedExtensions.has(id))
+        .map(named),
+    };
+  },
+  attachExtension: async (agentId, installationId, principal) => {
+    if (principal.role !== "owner") return { error: "not_granted" };
+    if (!agents.some((agent) => agent.agentId === agentId))
+      return { error: "not_found" };
+    if (!extensionNames.has(installationId)) return { error: "not_extension" };
+    attachedExtensions.add(installationId);
+    return { installationId, attachedBy: principal.actor.memberId };
+  },
+  detachExtension: async (agentId, installationId, principal) => {
+    if (principal.role !== "owner") return { error: "not_granted" };
+    if (!agents.some((agent) => agent.agentId === agentId))
+      return { error: "not_found" };
+    return attachedExtensions.delete(installationId) ? "detached" : "absent";
+  },
   policyStatus: async (agentId) => {
     if (!agents.some((agent) => agent.agentId === agentId)) return null;
     return { status: approvedPolicy.status, revision: approvedPolicy.revision };
@@ -194,6 +229,7 @@ const declared = [
   "agent.avatar",
   "agent.instructions",
   "agent.toolPolicy",
+  "agent.extensions",
   "agent.read",
   "agent.send",
 ];
@@ -459,6 +495,50 @@ assert.equal(
   (await call("/agent-instructions/agent_1", {}, "key")).status,
   403,
   "a key cannot read an Agent's AGENTS.md",
+);
+const putExtension = (installationId, method = "PUT", who = "owner") =>
+  call(`/agent-extensions/agent_1/${installationId}`, { method }, who);
+assert.deepEqual(await (await call("/agent-extensions/agent_1")).json(), {
+  agentId: "agent_1",
+  attached: [],
+  available: [
+    { installationId: "notes", name: "Notes" },
+    { installationId: "garden", name: "Garden" },
+  ],
+});
+assert.equal((await call("/agent-extensions/agent_9")).status, 404);
+assert.equal(
+  (await call("/agent-extensions/agent_1", {}, "key")).status,
+  403,
+  "a key cannot read what an Agent has attached",
+);
+assert.equal((await putExtension("notes", "PUT", "key")).status, 403);
+assert.equal(attachedExtensions.size, 0, "a non-owner never attaches");
+// A domain refusal is data with its closed cause, so the App can say why.
+assert.deepEqual(await (await putExtension("missing")).json(), {
+  error: "not_extension",
+});
+assert.deepEqual(
+  await (
+    await call("/agent-extensions/agent_9/notes", { method: "PUT" })
+  ).json(),
+  { error: "not_found" },
+);
+assert.equal(attachedExtensions.size, 0);
+assert.deepEqual(await (await putExtension("notes")).json(), {
+  agentId: "agent_1",
+  attached: [{ installationId: "notes", name: "Notes" }],
+  available: [{ installationId: "garden", name: "Garden" }],
+});
+assert.deepEqual(
+  (await (await putExtension("notes", "DELETE")).json()).attached,
+  [],
+  "detaching returns the list after",
+);
+assert.deepEqual(
+  (await (await putExtension("notes", "DELETE")).json()).attached,
+  [],
+  "detaching what is not attached changes nothing",
 );
 assert.deepEqual(
   (await (await call("/agents")).json()).find(

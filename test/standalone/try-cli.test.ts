@@ -310,6 +310,93 @@ describe("oyster try", () => {
     }
   });
 
+  it("installs the workspace tarballs a proof names through npm overrides", async () => {
+    const directory = join(root, "overridden");
+    const tarballs = join(root, "tarballs");
+    mkdirSync(tarballs);
+    for (const name of ["oyster.tgz", "computer.tgz", "agar.tgz"])
+      writeFileSync(join(tarballs, name), "");
+    const map = join(tarballs, "overrides.json");
+    writeFileSync(
+      map,
+      JSON.stringify({
+        "@fungi.computer/oyster": join(tarballs, "oyster.tgz"),
+        "@fungi.computer/computer": join(tarballs, "computer.tgz"),
+        "@fungi.computer/agar": join(tarballs, "agar.tgz"),
+      }),
+    );
+    vi.stubEnv("OYSTER_TRY_OVERRIDES", map);
+    await runTry([directory, "--no-open"], effects().fake, plain().ui);
+    const manifest = z
+      .object({
+        dependencies: z.record(z.string(), z.string()),
+        overrides: z.record(z.string(), z.string()),
+      })
+      .parse(
+        JSON.parse(await readFile(join(directory, "package.json"), "utf8")),
+      );
+    const spec = (name: string) => `file:${join(tarballs, name)}`;
+    expect(manifest.overrides).toEqual({
+      "@fungi.computer/oyster": spec("oyster.tgz"),
+      "@fungi.computer/computer": spec("computer.tgz"),
+      "@fungi.computer/agar": spec("agar.tgz"),
+    });
+    // npm refuses an override that disagrees with a direct dependency.
+    expect(manifest.dependencies["@fungi.computer/oyster"]).toBe(
+      spec("oyster.tgz"),
+    );
+    expect(manifest.dependencies["@fungi.computer/computer"]).toBe(
+      spec("computer.tgz"),
+    );
+  });
+
+  it("gives a pnpm trial the same tarballs through its workspace overrides", async () => {
+    const directory = join(root, "pnpm-overridden");
+    const tarballs = join(root, "pnpm-tarballs");
+    mkdirSync(tarballs);
+    const map = join(tarballs, "overrides.json");
+    const agar = join(tarballs, "agar.tgz");
+    writeFileSync(agar, "");
+    writeFileSync(map, JSON.stringify({ "@fungi.computer/agar": agar }));
+    vi.stubEnv("OYSTER_TRY_OVERRIDES", map);
+    vi.stubEnv("npm_config_user_agent", "pnpm/11.1.0 npm/? node/v24.20.0");
+    await runTry([directory, "--no-open"], effects().fake, plain().ui);
+    const workspace = await readFile(
+      join(directory, "pnpm-workspace.yaml"),
+      "utf8",
+    );
+    expect(workspace).toContain("allowBuilds:");
+    expect(workspace.trimEnd().split("\n").at(-1)).toBe(
+      `overrides: ${JSON.stringify({ "@fungi.computer/agar": `file:${agar}` })}`,
+    );
+  });
+
+  it("refuses a tarball map naming a missing tarball or a non-tarball", async () => {
+    const tarballs = join(root, "bad-tarballs");
+    mkdirSync(tarballs);
+    const map = join(tarballs, "overrides.json");
+    const missing = join(tarballs, "agar.tgz");
+    writeFileSync(map, JSON.stringify({ "@fungi.computer/agar": missing }));
+    vi.stubEnv("OYSTER_TRY_OVERRIDES", map);
+    await expect(
+      runTry([join(root, "missing"), "--no-open"], effects().fake, plain().ui),
+    ).rejects.toThrow(`Override tarball ${missing} does not exist`);
+    const notTarball = join(tarballs, "agar.json");
+    writeFileSync(notTarball, "{}");
+    writeFileSync(map, JSON.stringify({ "@fungi.computer/agar": notTarball }));
+    await expect(
+      runTry([join(root, "json"), "--no-open"], effects().fake, plain().ui),
+    ).rejects.toThrow("an absolute .tgz path");
+  });
+
+  it("writes no overrides without a proof's tarball map", async () => {
+    const directory = join(root, "plain");
+    await runTry([directory, "--no-open"], effects().fake, plain().ui);
+    expect(
+      JSON.parse(await readFile(join(directory, "package.json"), "utf8")),
+    ).not.toHaveProperty("overrides");
+  });
+
   it("scaffolds once, then restarts the same Oyster with the same key", async () => {
     const directory = join(root, "my-oyster");
     const first = effects();

@@ -1,8 +1,9 @@
 // Real starter Apps, owner consent, repository save, Git commit and Issues.
-// OYSTER_TRY_PACKAGE may name a published version; otherwise pack this build.
+// OYSTER_TRY_PACKAGE may name a published version; otherwise pack this build
+// and every workspace package it depends on, so the trial runs this tree.
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import process from "node:process";
@@ -20,11 +21,41 @@ const work = await mkdtemp(join(artifacts, "try-"));
 execFileSync("git", ["init", "--quiet", work]);
 const published = process.env.OYSTER_TRY_PACKAGE;
 let spec = published;
+let overrides;
 if (!spec) {
-  execFileSync("pnpm", ["pack", "--pack-destination", work], { stdio: "pipe" });
-  const tarball = (await readdir(work)).find((name) => name.endsWith(".tgz"));
-  assert.ok(tarball, "packing produced an Oyster tarball");
-  spec = join(work, tarball);
+  // npm would otherwise pair this build with the published siblings of the
+  // same version, whose contents lag the tree between releases.
+  const tarballs = join(work, "tarballs");
+  await mkdir(tarballs);
+  const closure = JSON.parse(
+    execFileSync(
+      "pnpm",
+      [
+        "--filter-prod",
+        "@fungi.computer/oyster...",
+        "ls",
+        "--depth",
+        "-1",
+        "--json",
+      ],
+      { encoding: "utf8" },
+    ),
+  ).filter((workspace) => workspace.private !== true);
+  const map = {};
+  for (const { name, path } of closure) {
+    const packed = JSON.parse(
+      execFileSync("pnpm", ["pack", "--pack-destination", tarballs, "--json"], {
+        cwd: path,
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(packed.name, name, `pnpm packed ${name}`);
+    map[name] = packed.filename;
+  }
+  spec = map["@fungi.computer/oyster"];
+  assert.ok(spec, "packing produced an Oyster tarball");
+  overrides = join(tarballs, "overrides.json");
+  await writeFile(overrides, JSON.stringify(map));
 }
 const probe = createServer();
 await new Promise((done) => probe.listen(0, "127.0.0.1", done));
@@ -46,7 +77,15 @@ const child = spawn(
     "--no-open",
     ...(published ? [] : ["--package", spec]),
   ],
-  { cwd: work, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+  {
+    cwd: work,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    env:
+      overrides === undefined
+        ? process.env
+        : { ...process.env, OYSTER_TRY_OVERRIDES: overrides },
+  },
 );
 const stopGroup = (signal) => {
   try {

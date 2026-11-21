@@ -10,6 +10,33 @@
 
 ## Type Aliases
 
+### OysterAgentExtension
+
+```ts
+type OysterAgentExtension = Readonly<{
+  installationId: string;
+  name: string;
+}>;
+```
+
+One installed App that can add its prompt and tools to an Agent's runs.
+
+---
+
+### OysterAgentExtensionChoices
+
+```ts
+type OysterAgentExtensionChoices = Readonly<{
+  agentId: string;
+  attached: readonly OysterAgentExtension[];
+  available: readonly OysterAgentExtension[];
+}>;
+```
+
+An Agent's hosted extensions as the owner chooses them.
+
+---
+
 ### OysterAgentInstructions
 
 ```ts
@@ -349,6 +376,13 @@ type OysterAgents = Readonly<{
      | readonly Readonly<{
      installationId: string;
    }>[]
+    | null>;
+  extensionChoices: Promise<
+     | Readonly<{
+     agentId: string;
+     attached: readonly OysterAgentExtension[];
+     available: readonly OysterAgentExtension[];
+   }>
     | null>;
   attachExtension: Promise<
      | Readonly<{

@@ -72,6 +72,7 @@ export type {
 } from "./standalone/agent-model-choice.js";
 import {
   agentAvatar,
+  agentExtensions,
   agentInstructions,
   agentList,
   agentManage,
@@ -85,6 +86,19 @@ import type {
   MemberInboxItem,
   MemberInboxSession,
 } from "@fungi.computer/puffball/inbox";
+
+/** One installed App that can add its prompt and tools to an Agent's runs. */
+export type OysterAgentExtension = Readonly<{
+  installationId: string;
+  name: string;
+}>;
+
+/** An Agent's hosted extensions as the owner chooses them. */
+export type OysterAgentExtensionChoices = Readonly<{
+  agentId: string;
+  attached: readonly OysterAgentExtension[];
+  available: readonly OysterAgentExtension[];
+}>;
 
 /** An Agent's AGENTS.md on its Home Computer, with the byte limit the host enforces. */
 export type OysterAgentInstructions = Readonly<{
@@ -351,6 +365,14 @@ export type OysterAgents = Readonly<{
   extensionAttachments(
     agentId: string,
   ): Promise<readonly Readonly<{ installationId: string }>[] | null>;
+  /**
+   * What the owner sees when choosing an Agent's hosted extensions: those
+   * attached now (a lapsed attachment is not among them) and the enabled
+   * installations that could be attached. `null` for no such Agent.
+   */
+  extensionChoices(
+    agentId: string,
+  ): Promise<OysterAgentExtensionChoices | null>;
   /** Attach an enabled installation whose Release is an Agent extension. */
   attachExtension(
     agentId: string,
@@ -544,6 +566,29 @@ export function agentCapabilities(
     },
     {
       ...shared,
+      id: "agent.extensions",
+      permission: "agent.extensions",
+      version: agentExtensions.version,
+      methods: {
+        list: {
+          kind: "json",
+          method: "GET",
+          path: "agent-extensions/:agentId",
+        },
+        attach: {
+          kind: "json",
+          method: "PUT",
+          path: "agent-extensions/:agentId/:installationId",
+        },
+        detach: {
+          kind: "json",
+          method: "DELETE",
+          path: "agent-extensions/:agentId/:installationId",
+        },
+      },
+    },
+    {
+      ...shared,
       id: "agent.read",
       permission: "agent.read",
       version: agentSessionRead.version,
@@ -665,10 +710,12 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .put(
         "/agent-names/:agentId",
         owner("direct-or-app"),
-        async (context, { principal }) => {
+        async (context, { principal, delegatesAgent }) => {
           const agentId = context.req.param("agentId");
           if (!agentIdPattern.test(agentId))
             return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
           const body = Schema.decodeUnknownOption(renameSchema)(
             await context.req.json(),
           );
@@ -691,10 +738,12 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .put(
         "/agent-avatars/:agentId",
         owner("direct-or-app"),
-        async (context, { principal }) => {
+        async (context, { principal, delegatesAgent }) => {
           const agentId = context.req.param("agentId");
           if (!agentIdPattern.test(agentId))
             return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
           const body = avatarInputSchema.safeParse(await context.req.json());
           if (!body.success) return refusal(400, "Choose a valid avatar");
           const result = await agents.setAvatar(
@@ -713,10 +762,12 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .get(
         "/agent-instructions/:agentId",
         owner("direct-or-app"),
-        async (context, { principal }) => {
+        async (context, { principal, delegatesAgent }) => {
           const agentId = context.req.param("agentId");
           if (!agentIdPattern.test(agentId))
             return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
           const result = await agents.readInstructions(agentId, principal);
           if ("error" in result)
             return refusal(
@@ -729,10 +780,12 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .put(
         "/agent-instructions/:agentId",
         owner("direct-or-app"),
-        async (context, { principal }) => {
+        async (context, { principal, delegatesAgent }) => {
           const agentId = context.req.param("agentId");
           if (!agentIdPattern.test(agentId))
             return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
           const body = instructionsInputSchema.safeParse(
             await context.req.json(),
           );
@@ -757,6 +810,78 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
         },
       )
       .get(
+        "/agent-extensions/:agentId",
+        owner("direct-or-app"),
+        async (context, { delegatesAgent }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
+          const choices = await agents.extensionChoices(agentId);
+          return choices === null
+            ? refusal(404, "No such agent")
+            : Response.json(choices);
+        },
+      )
+      // A domain refusal answers 200 with its closed cause, so the App can say
+      // why; a transport failure is the only thing that fails the request.
+      .put(
+        "/agent-extensions/:agentId/:installationId",
+        owner("direct-or-app"),
+        async (context, { principal, delegatesAgent }) => {
+          const agentId = context.req.param("agentId");
+          const installationId = installationIdSchema.safeParse(
+            context.req.param("installationId"),
+          );
+          if (!agentIdPattern.test(agentId) || !installationId.success)
+            return Response.json({ error: "not_found" });
+          // The App's grant selects which Agents it may change; the refusal
+          // keeps this route's shape, a closed cause the App can word.
+          if (!delegatesAgent(agentId))
+            return Response.json({ error: "not_granted" }, { status: 403 });
+          const result = await agents.attachExtension(
+            agentId,
+            installationId.data,
+            principal,
+          );
+          if ("error" in result) return Response.json(result);
+          return Response.json(
+            (await agents.extensionChoices(agentId)) ?? {
+              error: "not_found",
+            },
+          );
+        },
+      )
+      .delete(
+        "/agent-extensions/:agentId/:installationId",
+        owner("direct-or-app"),
+        async (context, { principal, delegatesAgent }) => {
+          const agentId = context.req.param("agentId");
+          const installationId = installationIdSchema.safeParse(
+            context.req.param("installationId"),
+          );
+          if (!agentIdPattern.test(agentId) || !installationId.success)
+            return Response.json({ error: "not_found" });
+          // The App's grant selects which Agents it may change; the refusal
+          // keeps this route's shape, a closed cause the App can word.
+          if (!delegatesAgent(agentId))
+            return Response.json({ error: "not_granted" }, { status: 403 });
+          const result = await agents.detachExtension(
+            agentId,
+            installationId.data,
+            principal,
+          );
+          if (result !== "detached" && result !== "absent")
+            return Response.json(result);
+          return Response.json(
+            (await agents.extensionChoices(agentId)) ?? {
+              error: "not_found",
+            },
+          );
+        },
+      )
+      .get(
         "/agent-policies/:agentId",
         agent(),
         async (_context, { agentId }) => {
@@ -771,14 +896,20 @@ function createAgentRoutes(agents: OysterAgents): Routes<CapabilityEnv> {
       .put(
         "/agent-policies/:agentId",
         owner("direct-or-app"),
-        async (context, { principal }) =>
-          approvePolicy(
+        async (context, { principal, delegatesAgent }) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          if (!delegatesAgent(agentId))
+            return refusal(403, "Agent access denied");
+          return approvePolicy(
             agents,
             principal,
             "owner-direct",
-            context.req.param("agentId"),
+            agentId,
             await context.req.text(),
-          ),
+          );
+        },
       )
       .all("/agents/:agentId/*", agent(), async (context, { agentId }) => {
         if (!agentIdPattern.test(agentId)) return refusal(404, "No such agent");

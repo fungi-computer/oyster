@@ -108,6 +108,7 @@ it("opens a fresh Agent's new Session from a desk window that carries its Comput
     vault: notInTest,
     approveAppToolPolicy: notInTest,
     extensionAttachments: notInTest,
+    extensionChoices: notInTest,
     attachExtension: notInTest,
     detachExtension: notInTest,
     connections: notInTest,

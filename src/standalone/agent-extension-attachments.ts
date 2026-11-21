@@ -80,3 +80,43 @@ export function createAgentExtensionAttachments(
     },
   };
 }
+
+/** One enabled, running extension installation the owner could attach. */
+export type AgentExtensionCandidate = Readonly<{
+  installationId: string;
+  instanceId: string;
+  name: string;
+}>;
+
+/**
+ * What the owner chooses from: the candidates already attached, and the rest.
+ * An attachment pins its installation's Instance, so a candidate under a new
+ * Instance (the installation was replaced) is not attached, and an attachment
+ * with no candidate (removed, disabled or no longer an extension) is dropped.
+ */
+export function extensionChoices(
+  agentId: string,
+  candidates: readonly AgentExtensionCandidate[],
+  attachments: readonly Readonly<{
+    installationId: string;
+    instanceId: string;
+  }>[],
+) {
+  const isAttached = (candidate: AgentExtensionCandidate) =>
+    attachments.some(
+      (row) =>
+        row.installationId === candidate.installationId &&
+        row.instanceId === candidate.instanceId,
+    );
+  const named = ({ installationId, name }: AgentExtensionCandidate) => ({
+    installationId,
+    name,
+  });
+  return {
+    agentId,
+    attached: candidates.filter(isAttached).map(named),
+    available: candidates
+      .filter((candidate) => !isAttached(candidate))
+      .map(named),
+  };
+}

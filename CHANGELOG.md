@@ -1,5 +1,69 @@
 # @fungi.computer/oyster
 
+## 0.55.0
+
+### Minor Changes
+
+- Changes since 0.54.0:
+
+  - fix(oyster): setup lists Home before reading it and carries on past a failed
+    build
+  - fix(oyster): refuse a trial override map with a missing or non-tarball path
+  - fix(oyster): run the nightly first-issue proof on this tree's packages
+  - fix(oyster): refuse renames and tool-policy approvals outside an App's Agent
+    grant
+  - fix(oyster): setup names the Agent from its instructions and points Prints
+    at its methods
+  - fix(oyster): setup never asks the name again once it is settled
+  - fix(oyster): setup asks the name only as a card and never asks yes or no
+    before placing
+  - fix(oyster): setup limits cards not questions, allows type-it options, never
+    asks the person's name
+  - fix(oyster): setup applies a picked name first, passes required params, and
+    counts three questions
+  - fix(oyster): setup offers a general widget when none clearly matches
+  - fix(oyster): hold avatar, instructions and extension routes to the App's
+    Agent ceiling
+  - feat(oyster): serve the agent.extensions capability from the standalone
+    Agent directory
+  - fix(oyster): setup fills in the Team's only Computer for a widget
+  - fix(oyster): word setup's sample line, name option and checklist plainly
+  - fix(oyster): setup asks for a name at most once, even if step 5 repeats
+  - fix(oyster): setup waits for the name pick before the dashboard
+  - fix(oyster): setup places dashboard widgets through the approval card
+  - fix(oyster): list the real widgets on setup's dashboard card
+  - fix(oyster): keep setup's offers through a blocked step and after the tap
+  - fix(oyster): make setup's name and dashboard offers a required checklist
+  - fix(shiitake): tell the model never to offer a type-it option
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.26.0
+  - @fungi.computer/caps@0.12.8
+  - @fungi.computer/computer@0.18.1
+  - @fungi.computer/forage@0.5.0
+  - @fungi.computer/nacre@0.9.0
+  - @fungi.computer/parakeet@0.16.12
+  - @fungi.computer/puffball@0.14.0
+  - @fungi.computer/shiitake-extensions@0.12.8
+  - @fungi.computer/braid@0.6.7
+  - @fungi.computer/darkroom@0.11.15
+  - @fungi.computer/shiitake@0.22.1
+  - @fungi.computer/workflows-wire@0.7.7
+  - @fungi.computer/knapsack@0.4.25
+  - @fungi.computer/mycelium@0.4.10
+  - @fungi.computer/veil@0.11.7
+  - @fungi.computer/zookeeper@0.0.60
+  - @fungi.computer/computer-contract@0.6.1
+
 ## 0.54.0
 
 ### Minor Changes

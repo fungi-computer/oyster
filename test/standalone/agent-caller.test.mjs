@@ -3929,6 +3929,9 @@ async function hostedExtensionAgent(
         selectedComputer: async () => env.OYSTER_COMPUTER_ID,
         computerName: async () => null,
         list: async () => rows,
+        directory: async () => ({
+          apps: [{ installationId: "greeter", displayName: "Greeter" }],
+        }),
         get: async (installationId) =>
           rows.find((row) => row.installationId === installationId) ?? null,
       }),
@@ -4180,6 +4183,16 @@ test("standalone: a refused or failing extension is a marker, and a refused call
 test("standalone: only an enabled extension installation can be attached", async (t) => {
   const fixture = await hostedExtensionAgent(t, { attach: false });
   assert.equal(await fixture.agent.extensionInstallation("unknown"), null);
+});
+
+test("standalone: the owner's choices name the enabled extension installations an Agent could attach", async (t) => {
+  const fixture = await hostedExtensionAgent(t, { attach: false });
+  const [greeter, ...others] = await fixture.agent.extensionCandidates();
+  assert.deepEqual(others, [], "only the extension installation is offered");
+  assert.equal(greeter?.installationId, "greeter");
+  // The name is the one the workbench shows the owner for that installation.
+  assert.equal(greeter?.name, "Greeter");
+  assert.match(String(greeter?.instanceId), /^instance_/u);
 });
 
 test("the Agent tool host derives the same App catalog as the MCP host for Computer and Media Apps", async (t) => {

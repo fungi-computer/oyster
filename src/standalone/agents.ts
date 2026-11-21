@@ -203,6 +203,7 @@ import { isAgentExtensionApi } from "@fungi.computer/agar/backend-definition";
 import { agentStoreKeeping } from "./agent-store.js";
 import {
   createAgentExtensionAttachments,
+  extensionChoices,
   type AgentExtensionAttachments,
 } from "./agent-extension-attachments.js";
 import {
@@ -1740,6 +1741,45 @@ export abstract class StandaloneAgentBase<
     return surface !== null && isAgentExtensionApi(surface.api)
       ? { installationId, instanceId: installation.instanceId }
       : null;
+  }
+
+  /**
+   * Every enabled, running installation that is an Agent extension, with the
+   * name the owner sees for it (the installation's id when the host names none).
+   * The owner's choices are drawn from these; each pins an attachment.
+   */
+  async extensionCandidates(): Promise<
+    readonly Readonly<{
+      installationId: string;
+      instanceId: string;
+      name: string;
+    }>[]
+  > {
+    const host = await this.appHost();
+    if (host === null) return [];
+    const { appSurfaceCache } = await import("../mcp.js");
+    this.#appSurfaces ??= appSurfaceCache(host);
+    const names = new Map(
+      (await host.workbench?.directory())?.apps.map((app) => [
+        app.installationId,
+        app.displayName,
+      ]),
+    );
+    const found = [];
+    for (const installation of await host.installations.list()) {
+      if (installation.status !== "enabled" || installation.instanceId === null)
+        continue;
+      const surface = await this.#appSurfaces(installation.release);
+      if (surface !== null && isAgentExtensionApi(surface.api))
+        found.push({
+          installationId: installation.installationId,
+          instanceId: installation.instanceId,
+          name:
+            names.get(installation.installationId) ??
+            installation.installationId,
+        });
+    }
+    return found;
   }
 
   /** The instance directory that owns this Agent's sealed model keys. */
@@ -4344,6 +4384,24 @@ export function standaloneAgents(
           scope?.tenantId ?? defaultTenant,
         )
       ).map(({ installationId }) => ({ installationId }));
+    },
+    extensionChoices: async (agentId) => {
+      if (!(await directory().has(agentId))) return null;
+      const agent = env.AGENTS.getByName(agentId);
+      const pinned = await agent.policyDirectory();
+      if (
+        pinned?.directoryName !== directoryName ||
+        pinned.tenantId !== (scope?.tenantId ?? defaultTenant)
+      )
+        return null;
+      return extensionChoices(
+        agentId,
+        await agent.extensionCandidates(),
+        await directory().extensionAttachmentsFor(
+          agentId,
+          scope?.tenantId ?? defaultTenant,
+        ),
+      );
     },
     attachExtension: async (agentId, installationId, principal) => {
       if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };

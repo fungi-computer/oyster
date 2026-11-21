@@ -344,6 +344,7 @@ function previewBuiltRelease(input): Promise<{
     | "agent.avatar"
     | "agent.instructions"
     | "agent.toolPolicy"
+    | "agent.extensions"
     | "agent.stop"
     | "agent.read"
     | "agent.send"
@@ -380,6 +381,7 @@ function previewBuiltRelease(input): Promise<{
       | "agent.avatar"
       | "agent.instructions"
       | "agent.toolPolicy"
+      | "agent.extensions"
       | "agent.stop"
       | "agent.read"
       | "agent.send"
@@ -421,23 +423,24 @@ whether it would update an existing installation.
 \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.extensions"` \| `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"media.share"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
+`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.extensions"` \|
 `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
 `"media.generation"` \| `"media.share"` \| `"games:servers"` \|
 `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
 `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
 `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
 `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
-`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
-`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
-`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
-`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.stop"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; \} \| `null`; \}\>
+`"channels.personal.manage"`)[]; \} \| `null`; \}\>
 
 ---
 
@@ -458,6 +461,7 @@ function previewRelease(input): Promise<{
     | "agent.avatar"
     | "agent.instructions"
     | "agent.toolPolicy"
+    | "agent.extensions"
     | "agent.stop"
     | "agent.read"
     | "agent.send"
@@ -494,6 +498,7 @@ function previewRelease(input): Promise<{
       | "agent.avatar"
       | "agent.instructions"
       | "agent.toolPolicy"
+      | "agent.extensions"
       | "agent.stop"
       | "agent.read"
       | "agent.send"
@@ -548,27 +553,28 @@ Releases once before any install.
 \| `"computer.readFile"` \| `"computer.writeFile"` \| `"computer.execute"` \|
 `"approvals"` \| `"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \|
 `"agent.avatar"` \| `"agent.instructions"` \| `"agent.toolPolicy"` \|
+`"agent.extensions"` \| `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \|
+`"llm.generation"` \| `"media.generation"` \| `"media.share"` \|
+`"games:servers"` \| `"git.repository"` \| `"apps.open"` \| `"apps.call"` \|
+`"app.storage"` \| `"app.events.emit"` \| `"team.workbenchHost"` \|
+`"marketplace.browse"` \| `"marketplace.purchase"` \| `"workflow.run"` \|
+`"workflow.publish"` \| `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
+`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
+`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
+`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
+`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
+`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.extensions"` \|
 `"agent.stop"` \| `"agent.read"` \| `"agent.send"` \| `"llm.generation"` \|
 `"media.generation"` \| `"media.share"` \| `"games:servers"` \|
 `"git.repository"` \| `"apps.open"` \| `"apps.call"` \| `"app.storage"` \|
 `"app.events.emit"` \| `"team.workbenchHost"` \| `"marketplace.browse"` \|
 `"marketplace.purchase"` \| `"workflow.run"` \| `"workflow.publish"` \|
 `"workflow.arm"` \| `"world"` \| `"channels.read"` \|
-`"channels.personal.manage"`)[]; `update`: \| \{ `installationId`: `string`;
-`needsApproval`: readonly ( \| `"computer.list"` \| `"computer.readFile"` \|
-`"computer.writeFile"` \| `"computer.execute"` \| `"approvals"` \|
-`"agent.list"` \| `"agent.manage"` \| `"agent.rename"` \| `"agent.avatar"` \|
-`"agent.instructions"` \| `"agent.toolPolicy"` \| `"agent.stop"` \|
-`"agent.read"` \| `"agent.send"` \| `"llm.generation"` \| `"media.generation"`
-\| `"media.share"` \| `"games:servers"` \| `"git.repository"` \| `"apps.open"`
-\| `"apps.call"` \| `"app.storage"` \| `"app.events.emit"` \|
-`"team.workbenchHost"` \| `"marketplace.browse"` \| `"marketplace.purchase"` \|
-`"workflow.run"` \| `"workflow.publish"` \| `"workflow.arm"` \| `"world"` \|
-`"channels.read"` \| `"channels.personal.manage"`)[]; \} \| `null`; `release`:
-\{ `releaseId`: `ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`:
-`ArtifactRef`; `artifactDigest`: `Sha256Digest`; `provenance`: \{
-`sourceRevision`: `SourceRevision`; `sourceTreeDigest`: `Sha256Digest`;
-`buildRecipeDigest`: `Sha256Digest`; \}; \}; \}; \}\>
+`"channels.personal.manage"`)[]; \} \| `null`; `release`: \{ `releaseId`:
+`ReleaseId`; `appId`: `AppId`; `artifact`: \{ `artifactRef`: `ArtifactRef`;
+`artifactDigest`: `Sha256Digest`; `provenance`: \{ `sourceRevision`:
+`SourceRevision`; `sourceTreeDigest`: `Sha256Digest`; `buildRecipeDigest`:
+`Sha256Digest`; \}; \}; \}; \}\>
 
 ---
 
