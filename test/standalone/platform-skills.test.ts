@@ -139,6 +139,19 @@ describe("the built-in skill bundle", () => {
     expect(text).toMatch(
       /never ask it again, not even after an empty or interrupted turn/u,
     );
+    // Decisions are cards, a name is never settled silently, and several files are one approval.
+    expect(text).toMatch(
+      /Every decision is a `question\.ask` card, including "Do it\?"\. Never end a turn asking the person to reply with options in text/u,
+    );
+    expect(text).toMatch(
+      /Never settle it yourself by saying you keep your name/u,
+    );
+    expect(text).toMatch(/several in one `files\.patch` of Add File blocks/u);
+    // A non-retryable failure is tried once more at most, differently; files never go through heredocs.
+    expect(text).toMatch(
+      /says it is not retryable, such as a generation, try at most once more with clearly different input/u,
+    );
+    expect(text).toMatch(/never shell heredocs inside `execute`/u);
     // Home's AGENTS.md is listed before it is read, so a fresh Computer shows no red error.
     expect(text).toMatch(
       /First list your Computer's top folder, never read `AGENTS\.md` blind/u,
@@ -209,11 +222,12 @@ describe("the built-in skill bundle", () => {
     expect(dashboard).not.toMatch(/If none match, skip the offer/u);
     // A Computer parameter is filled in, not a reason to skip, when the choice is clear.
     expect(dashboard).toMatch(
-      /parameter is a Computer and the Team has exactly one, use it/u,
+      /parameter is a Computer and the Team has exactly one, use the id/u,
     );
     expect(dashboard).toMatch(
-      /zero Computers, or more than one with no obvious pick/u,
+      /Skip a widget whose required Computer you cannot fill because the Team has none, or more than one/u,
     );
+    expect(dashboard).toMatch(/the id from your\s+instructions/u);
     expect(dashboard).toMatch(/If `env.TOURTOIS` is missing or a call fails/u);
     expect(finish.indexOf("Add to your dashboard")).toBeLessThan(
       finish.indexOf("Delete the"),

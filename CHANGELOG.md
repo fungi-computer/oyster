@@ -1,5 +1,43 @@
 # @fungi.computer/oyster
 
+## 0.56.0
+
+### Minor Changes
+
+- Changes since 0.55.0:
+
+  - fix(oyster): setup tries a failed generation once more at most and writes
+    files without heredocs
+  - fix(oyster): setup decides by card, never settles the name silently, writes
+    files in one patch
+  - feat(agar): approval cards read a method's own short label
+  - fix(oyster): skip a widget whose Computer the Team does not settle
+  - fix(oyster): regenerate the skill bundle for the Computer id line
+  - feat(hub): tell the Agent its Computers' ids
+  - fix(hub): list Computer names as data and pass the id in the dashboard step
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.27.0
+  - @fungi.computer/parakeet@0.17.0
+  - @fungi.computer/puffball@0.15.0
+  - @fungi.computer/braid@0.6.8
+  - @fungi.computer/darkroom@0.11.16
+  - @fungi.computer/nacre@0.9.1
+  - @fungi.computer/shiitake@0.22.2
+  - @fungi.computer/workflows-wire@0.7.8
+  - @fungi.computer/forage@0.5.1
+  - @fungi.computer/mycelium@0.4.11
+  - @fungi.computer/shiitake-extensions@0.12.9
+  - @fungi.computer/zookeeper@0.0.61
+  - @fungi.computer/knapsack@0.4.26
+  - @fungi.computer/veil@0.11.8
+  - @fungi.computer/computer@0.18.2
+  - @fungi.computer/computer-contract@0.6.2
+
 ## 0.55.0
 
 ### Minor Changes
