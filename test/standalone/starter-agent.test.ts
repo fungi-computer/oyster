@@ -454,7 +454,8 @@ describe("starter Agent laws", () => {
     expect(seeded).toContain("## First conversation");
     expect(seeded).toContain('skill.load({name: "setup-fungi"})');
     expect(seeded).toContain("delete this section");
-    expect(seeded).toContain("computer://home/AGENTS.md and load");
+    expect(seeded).toContain("AGENTS.md and load");
+    expect(seeded).not.toContain("computer://");
     // The Agent keeps its own instructions current, and never saves secrets.
     expect(seeded).toContain("## About my person");
     expect(seeded).toContain("## Keeping this file up to date");

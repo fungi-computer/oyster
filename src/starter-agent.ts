@@ -30,8 +30,8 @@ export async function seedStarterHome(
 const starterHomeInstructions = `# Shiitake's instructions
 
 These are my standing instructions. They live on my Computer at
-computer://home/AGENTS.md and load at the start of every conversation. My
-person and I both edit this file.
+AGENTS.md and load at the start of every conversation. Read or patch
+it with that plain path. My person and I both edit this file.
 
 ## First conversation
 My person is new to Fungi. In our first conversation, load the \`setup-fungi\`

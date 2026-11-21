@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.53.2
+
+### Patch Changes
+
+- Changes since 0.53.1:
+
+  - fix(oyster): starter instructions name a path the file tools take
+
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.12.6
+
 ## 0.53.1
 
 ### Patch Changes
