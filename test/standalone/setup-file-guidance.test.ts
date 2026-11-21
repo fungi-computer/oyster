@@ -76,4 +76,23 @@ describe("run 6 developer file-writing guidance", () => {
     ]);
     expect(received).toEqual([run6Developer.patch]);
   });
+
+  it("keeps file writing on apply_patch, even after a failed patch, and never on a shell", () => {
+    expect(text).toContain(
+      "Files are only ever written with `apply_patch`: never `cat >`, `printf >`, `tee`, `echo >` or a heredoc",
+    );
+    expect(text).toContain(
+      "If `apply_patch` fails, read its error, fix the patch",
+    );
+    expect(text).toContain("end with `*** End Patch` on its own last line");
+  });
+
+  it("tells the Agent to describe only operations it found, so no guessed path errors before the first card", () => {
+    expect(text).toContain(
+      "describe only operation paths that `forage.search` or `forage.list` returned",
+    );
+    expect(text.indexOf("describe only operation paths")).toBeLessThan(
+      text.indexOf("First list Home's working folder"),
+    );
+  });
 });

@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.57.2
+
+### Patch Changes
+
+- Changes since 0.57.1:
+
+  - fix(oyster): regenerate the setup skill bundle
+  - fix(oyster): keep setup file writes on apply_patch and name a failed patch's
+    last line
+
+- Updated dependencies
+  - @fungi.computer/computer@0.18.5
+
 ## 0.57.1
 
 ### Patch Changes

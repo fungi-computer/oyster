@@ -26,6 +26,10 @@ On resume, continue at the first unfinished step. A name answer goes straight to
 step 5's rename/Keep handling, before file discovery or goal calls. The
 discovery and arming below happen once, at the start of setup.
 
+Inside `execute`, describe only operation paths that `forage.search` or
+`forage.list` returned; a guessed path such as `files` fails as an error row
+before the first card. `computers.<Name>.files.list` is the Computer's path.
+
 First list Home's working folder with its `list` tool (`{path: "."}`), or your
 attached Computer's `files.list({path: "."})`. Read `AGENTS.md` only if that
 listing contains it, using `path: "AGENTS.md"`. Use that same relative path for
@@ -99,8 +103,13 @@ offer is pending.
    Add File blocks and Home-relative paths. Send the patch as tool data, keeping
    HTML, JavaScript backticks and `${...}` out of JavaScript source strings.
    This is a direct tool call, outside `execute`; never shell heredocs inside
-   `execute`. If this tool is unavailable, say file writing is blocked and
-   continue to the offers in step 5.
+   `execute`. Files are only ever written with `apply_patch`: never `cat >`,
+   `printf >`, `tee`, `echo >` or a heredoc (`<<'EOF'`) through `execute`,
+   `bash` or `exec`, not even as a fallback. If `apply_patch` fails, read its
+   error, fix the patch (it must start with `*** Begin Patch`, give every file
+   line a leading `+`, and end with `*** End Patch` on its own last line) and
+   call `apply_patch` again. If this tool is unavailable, say file writing is
+   blocked and continue to the offers in step 5.
 
    - Instructions. List the working folder again with `files.list({path: "."})`.
      When `AGENTS.md` is listed, read and edit `path: "AGENTS.md"` in place;
