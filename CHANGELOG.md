@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.53.1
+
+### Patch Changes
+
+- Changes since 0.53.0:
+
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+  - @fungi.computer/caps@0.12.6
+  - @fungi.computer/parakeet@0.16.10
+
 ## 0.53.0
 
 ### Minor Changes

@@ -3,6 +3,7 @@ import {
   nativeWorkflowRoot,
   nativeAppClient,
   until,
+  loadScaledMs,
 } from "./workflow-native.fixture.mjs";
 import { committedAppRecipe } from "./committed-app-recipe.fixture.mjs";
 import process from "node:process";
@@ -392,7 +393,7 @@ async function testHeroBInEditor(workflowId) {
       await page.getByRole("button", { name: "Use it", exact: true }).click();
       assert.deepEqual(await (await answered).json(), { result: "accepted" });
       await expect(page.locator(".wf-test-line")).toContainText("done", {
-        timeout: 30_000,
+        timeout: loadScaledMs(30_000),
       });
       await page.screenshot({
         path: `${evidence}/test-step-done.png`,
@@ -1771,7 +1772,12 @@ try {
     const { chromium } = await import("playwright");
     reviewBrowser = await launchIsolatedChromium(chromium, portsOf(origin));
   }
-  const { expect: expectUi } = await import("playwright/test");
+  const { expect: playwrightExpect } = await import("playwright/test");
+  // Waits are wall time on a shared host: raise the 5 s default to 15 s and stretch each
+  // explicit limit below with host load.
+  const expectUi = playwrightExpect.configure({
+    timeout: loadScaledMs(15_000),
+  });
   const uiPage = await reviewBrowser.newPage({
     viewport: { width: 390, height: 844 },
   });
@@ -1898,7 +1904,7 @@ try {
       }
       // Trellis opens on its Workflows table; the runs are one scope away.
       await expectUi(workflowsFrame.locator("main.wf-home")).toBeVisible({
-        timeout: 30_000,
+        timeout: loadScaledMs(30_000),
       });
       const scope = workflowsPane.locator('[data-caps-window-crumb="scope"]');
       await expectUi(scope).toHaveCount(0);
@@ -1927,7 +1933,9 @@ try {
         .getByRole("button", { name: "Use template", exact: true })
         .click();
       try {
-        await expectUi(publishOffered()).toBeVisible({ timeout: 15_000 });
+        await expectUi(publishOffered()).toBeVisible({
+          timeout: loadScaledMs(15_000),
+        });
       } catch (cause) {
         const evidence =
           process.env.WORKFLOW_UI_EVIDENCE ??
@@ -1952,7 +1960,7 @@ try {
       await chooseTool("Triggers");
       await expectUi(
         workflowsFrame.locator('[data-trigger-id="opened"]'),
-      ).toBeVisible({ timeout: 15_000 });
+      ).toBeVisible({ timeout: loadScaledMs(15_000) });
       await workflowsFrame
         .getByLabel("Report to chat")
         // The editor stays mounted, hidden, beside the other tools.
@@ -1964,7 +1972,7 @@ try {
         workflowsFrame
           .locator('[data-trigger-id="opened"]')
           .getByText("On", { exact: true }),
-      ).toBeVisible({ timeout: 15_000 });
+      ).toBeVisible({ timeout: loadScaledMs(15_000) });
       // A real Bonsai Change (fork + push + open), never a bare push: the
       // template's own triggers fire on Change lifecycle events, not git.push.
       await call("bonsai", "repos.create", { name: "checks" });
@@ -2071,7 +2079,9 @@ try {
       const eventRow = workflowsFrame
         .locator(`[data-run-id="${eventRun.runId}"]`)
         .first();
-      await expectUi(eventRow).toContainText("Event", { timeout: 15_000 });
+      await expectUi(eventRow).toContainText("Event", {
+        timeout: loadScaledMs(15_000),
+      });
       await eventRow.getByRole("button").click();
       await expectUi(
         workflowsFrame.locator(`.wf-run-view[data-run-id="${eventRun.runId}"]`),
@@ -2086,7 +2096,7 @@ try {
         .locator(`[data-run-id="${scheduleRun.runId}"]`)
         .first();
       await expectUi(scheduleRow).toContainText("Schedule", {
-        timeout: 15_000,
+        timeout: loadScaledMs(15_000),
       });
       await scheduleRow.getByRole("button").click();
       await expectUi(
@@ -2102,7 +2112,7 @@ try {
       await paneCommand("Fork");
       await expectUi(
         workflowsFrame.getByText("Fork a published workflow"),
-      ).toBeVisible({ timeout: 15_000 });
+      ).toBeVisible({ timeout: loadScaledMs(15_000) });
       await workflowsFrame.getByLabel("New workflow ID").fill("ui-report-fork");
       await workflowsFrame
         .getByRole("button", { name: "Fork as draft", exact: true })
@@ -2110,7 +2120,9 @@ try {
       await workflowsFrame
         .getByRole("button", { name: "Open draft", exact: true })
         .click();
-      await expectUi(publishOffered()).toBeVisible({ timeout: 15_000 });
+      await expectUi(publishOffered()).toBeVisible({
+        timeout: loadScaledMs(15_000),
+      });
       await publishAndAwaitRun();
       await workflowsPane.locator('[data-caps-window-crumb="version"]').click();
       const publishedVersion = uiPage.getByRole("menuitem", { name: /^v1 / });
@@ -2132,7 +2144,9 @@ try {
         workflowsFrame
           .getByRole("tablist", { name: "Workflow tools" })
           .getByRole("tab", { name: "Runs", exact: true }),
-      ).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+      ).toHaveAttribute("aria-selected", "true", {
+        timeout: loadScaledMs(15_000),
+      });
       const manualRunId = await workflowsFrame
         .locator(".wf-run-view")
         .getAttribute("data-run-id");

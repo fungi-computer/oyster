@@ -30,9 +30,27 @@ import {
   proofContainerDockerfile,
 } from "../../../../tooling/proof-containers/proof-janitor.mjs";
 import { waitForNativeRoot } from "../native-root-readiness.fixture.mjs";
+import { scaledBudgetMs } from "../../../../tooling/repository/scripts/proof-budget.mjs";
+
+const scaledReadings = new Map();
+/**
+ * A proof's request or wait limit, stretched by host load up to four times.
+ * The Worker, its container and other lanes' proofs share the host's cores;
+ * when they are starved a request is slow, not stalled. Readings are reused
+ * for five seconds because one proof makes hundreds of calls.
+ */
+export function loadScaledMs(baseMs, host) {
+  if (host !== undefined) return scaledBudgetMs(baseMs, host);
+  const reading = scaledReadings.get(baseMs);
+  if (reading !== undefined && Date.now() - reading.at < 5_000)
+    return reading.value;
+  const value = scaledBudgetMs(baseMs);
+  scaledReadings.set(baseMs, { at: Date.now(), value });
+  return value;
+}
 
 export async function until(read, accepts, label, milliseconds = 60_000) {
-  const deadline = Date.now() + milliseconds;
+  const deadline = Date.now() + loadScaledMs(milliseconds);
   for (;;) {
     const value = await read();
     if (accepts(value)) return value;
@@ -268,7 +286,7 @@ export function nativeAppClient(
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify(input),
-        signal: globalThis.AbortSignal.timeout(30_000),
+        signal: globalThis.AbortSignal.timeout(loadScaledMs(30_000)),
       },
     );
     const text = await response.text();
