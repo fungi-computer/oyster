@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.56.1
+
+### Patch Changes
+
+- Changes since 0.56.0:
+
+  - Updated starter Apps for the Trellis release.
+  - Updated starter Apps for the Workflows-wire release.
+
+- Updated dependencies
+  - @fungi.computer/workflows-wire@0.7.9
+
 ## 0.56.0
 
 ### Minor Changes

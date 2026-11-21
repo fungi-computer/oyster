@@ -1,6 +1,6 @@
 {
   "name": "@fungi.computer/oyster",
-  "version": "0.56.0",
+  "version": "0.56.1",
   "author": "Levi <levi@technomancy.dev>",
   "description": "Oyster by Fungi: open-source Apps for people and AI agents. Try with one command or run on your own Cloudflare account.",
   "homepage": "https://docs.fungi.computer/oyster",
@@ -412,7 +412,7 @@
     "@fungi.computer/veil": "0.11.8",
     "@fungi.computer/watchdog": "0.1.5",
     "@fungi.computer/whistle": "0.3.0",
-    "@fungi.computer/workflows-wire": "0.7.8",
+    "@fungi.computer/workflows-wire": "0.7.9",
     "@fungi.computer/zookeeper": "0.0.61",
     "@jellybrick/dbus-next": "0.11.4",
     "@modelcontextprotocol/server": "2.0.0",
