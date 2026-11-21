@@ -45,6 +45,7 @@ import {
   type Routes,
 } from "./authorization.js";
 import type { AppToolPolicy } from "./apps/tools.js";
+import { installationIdSchema } from "./apps/installation.js";
 import * as Schema from "effect/Schema";
 import { agentNameSchema } from "@fungi.computer/agar/agents";
 import { z } from "zod";
@@ -341,6 +342,31 @@ export type OysterAgents = Readonly<{
     | AppToolPolicy
     | PendingAgentPolicy
     | Readonly<{ error: "not_found" | "revision_conflict" | "not_granted" }>
+  >;
+  /**
+   * The installations the owner attached to this Agent as hosted
+   * extensions, or `null` for no such Agent. An Agent's App-tool approval
+   * alone never asks an extension.
+   */
+  extensionAttachments(
+    agentId: string,
+  ): Promise<readonly Readonly<{ installationId: string }>[] | null>;
+  /** Attach an enabled installation whose Release is an Agent extension. */
+  attachExtension(
+    agentId: string,
+    installationId: string,
+    principal: TenantPrincipal,
+  ): Promise<
+    | Readonly<{ installationId: string; attachedBy: string }>
+    | Readonly<{ error: "not_found" | "not_granted" | "not_extension" }>
+  >;
+  /** Detach a hosted extension; detaching only removes authority. */
+  detachExtension(
+    agentId: string,
+    installationId: string,
+    principal: TenantPrincipal,
+  ): Promise<
+    "detached" | "absent" | Readonly<{ error: "not_found" | "not_granted" }>
   >;
   /**
    * Whether a model and an image provider are connected, so an App can say so
@@ -978,6 +1004,68 @@ export function agentApprovalRoutes(agents: OysterAgents): Routes<OysterEnv> {
                 choice.error,
               )
             : Response.json(choice);
+        },
+      )
+      .get(
+        "/api/agent-extensions/:agentId",
+        owner("direct"),
+        async (context) => {
+          const agentId = context.req.param("agentId");
+          if (!agentIdPattern.test(agentId))
+            return refusal(404, "No such agent");
+          const attachments = await agents.extensionAttachments(agentId);
+          return attachments === null
+            ? refusal(404, "No such agent")
+            : Response.json({ attachments });
+        },
+      )
+      .put(
+        "/api/agent-extensions/:agentId/:installationId",
+        owner("direct"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          const installationId = installationIdSchema.safeParse(
+            context.req.param("installationId"),
+          );
+          if (!agentIdPattern.test(agentId) || !installationId.success)
+            return refusal(404, "No such agent or installation");
+          const result = await agents.attachExtension(
+            agentId,
+            installationId.data,
+            principal,
+          );
+          if (!("error" in result)) return Response.json(result);
+          return refusal(
+            result.error === "not_found"
+              ? 404
+              : result.error === "not_granted"
+                ? 403
+                : 409,
+            result.error,
+          );
+        },
+      )
+      .delete(
+        "/api/agent-extensions/:agentId/:installationId",
+        owner("direct"),
+        async (context, { principal }) => {
+          const agentId = context.req.param("agentId");
+          const installationId = installationIdSchema.safeParse(
+            context.req.param("installationId"),
+          );
+          if (!agentIdPattern.test(agentId) || !installationId.success)
+            return refusal(404, "No such agent or installation");
+          const result = await agents.detachExtension(
+            agentId,
+            installationId.data,
+            principal,
+          );
+          if (result === "detached" || result === "absent")
+            return Response.json({ result });
+          return refusal(
+            result.error === "not_found" ? 404 : 403,
+            result.error,
+          );
         },
       )
       .get("/api/agent-policies/:agentId", owner("direct"), async (context) => {

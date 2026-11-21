@@ -216,6 +216,19 @@ no policy exists). A stale revision returns 409, an unknown Agent 404 and
 malformed input 400. The stored approval pins the owner's `membershipVersion`,
 so demotion, removal or suspension requires new approval.
 
+**Hosted extensions.** An App whose backend declares the Agent extension methods
+(`agentExtensionPrompt`, `agentExtensionTools`, `agentExtensionCall`) can add
+prompt sections and tools to an Agent's runs. Those methods are never listed as
+App tools. The Agent's App-tool approval alone attaches nothing:
+`PUT /api/agent-extensions/:agentId/:installationId` attaches one enabled
+extension installation (409 `not_extension` when its current Release is not
+one), `DELETE` the same path detaches it, and
+`GET /api/agent-extensions/:agentId` lists the attachments. The Agent's approval
+level still applies: `read` gives the extension's prompt sections, `write` also
+its tools. An attachment lapses when the installation is removed or replaced, or
+when the attaching owner's membership changes. A visitor Session whose website
+or Discord binding is not active asks no extension.
+
 **Remote MCP servers.** Connect a Streamable HTTP MCP server once, then choose
 which Agents use it; each sees its granted tools as `env.mcp.<name>.<tool>()`.
 `GET /api/connections` returns the connections, their grants, the Agents and the

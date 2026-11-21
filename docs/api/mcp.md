@@ -260,6 +260,51 @@ verification is not cached.
 
 `Promise`\<[`ReleaseSurface`](#releasesurface) \| `null`\>
 
+---
+
+### AppSnapshotHost
+
+```ts
+type AppSnapshotHost = Pick<
+  OysterHost,
+  | "tenantId"
+  | "installations"
+  | "instances"
+  | "artifacts"
+  | "guestLimits"
+  | "backgroundOriginKey"
+  | "computerId"
+  | "capabilities"
+  | "appToolPolicy"
+  | "keys"
+  | "approvals"
+>;
+```
+
+The host parts the App door and its snapshot read.
+
+---
+
+### OysterExtensionCall
+
+```ts
+type OysterExtensionCall = (name, input, signal?) => Promise<OysterJson>;
+```
+
+One host-side call of a hosted extension's wire method.
+
+#### Parameters
+
+| Parameter | Type                               |
+| --------- | ---------------------------------- |
+| `name`    | `string`                           |
+| `input`   | [`OysterJson`](host.md#oysterjson) |
+| `signal?` | `AbortSignal`                      |
+
+#### Returns
+
+`Promise`\<[`OysterJson`](host.md#oysterjson)\>
+
 ## Variables
 
 ### appApprovalInstructions
@@ -389,6 +434,41 @@ capabilities stay fixed.
 #### Returns
 
 [`AppSurfaceCache`](#appsurfacecache)
+
+---
+
+### oysterExtensionDoor()
+
+```ts
+function oysterExtensionDoor(
+  host,
+  surfaces,
+  principal,
+  access,
+  installation,
+  sessionId,
+): Promise<OysterExtensionCall | null>;
+```
+
+The host-side door for an attached hosted extension: its wire methods go through
+the same App door as App tools (staleness, fresh policy, `admits`, the Instance
+call), and never appear as a model-facing operation. Null when the
+installation's current Release is not an Agent extension.
+
+#### Parameters
+
+| Parameter      | Type                                           |
+| -------------- | ---------------------------------------------- |
+| `host`         | [`AppSnapshotHost`](#appsnapshothost)          |
+| `surfaces`     | [`AppSurfaceCache`](#appsurfacecache)          |
+| `principal`    | [`TenantPrincipal`](tenant.md#tenantprincipal) |
+| `access`       | [`OysterCallerAccess`](#oystercalleraccess)    |
+| `installation` | [`Installation`](apps.md#installation)         |
+| `sessionId`    | `string` \| `null`                             |
+
+#### Returns
+
+`Promise`\<[`OysterExtensionCall`](#oysterextensioncall) \| `null`\>
 
 ---
 

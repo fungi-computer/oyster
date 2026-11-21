@@ -10,6 +10,10 @@ import {
 import { causeClass } from "./cause-class.js";
 import { deriveDeclaredOperations } from "./apps/operations.js";
 import { appToolPolicySchema, type AppToolPolicy } from "./apps/tools.js";
+import {
+  isAgentExtensionApi,
+  isAgentExtensionWireMethod,
+} from "@fungi.computer/agar/backend-definition";
 import { emptyAppDeclaration } from "@fungi.computer/puffball/app";
 import type { DeclaredOperations, Installation } from "./apps/installation.js";
 import {
@@ -432,8 +436,10 @@ export function appSurfaceCache(
         host.capabilities ?? [],
       ),
       methods: Object.fromEntries(
+        // Hidden methods and the Agent extension protocol are never tools.
         Object.entries(release.api.methods).filter(
-          ([, method]) => method.hidden !== true,
+          ([name, method]) =>
+            method.hidden !== true && !isAgentExtensionWireMethod(name),
         ),
       ),
     };
@@ -449,6 +455,205 @@ export function appSurfaceCache(
       surfaces.set(key, entry);
     }
     return entry;
+  };
+}
+
+/** The host parts the App door and its snapshot read. */
+export type AppSnapshotHost = Pick<
+  OysterHost,
+  | "tenantId"
+  | "installations"
+  | "instances"
+  | "artifacts"
+  | "guestLimits"
+  | "backgroundOriginKey"
+  | "computerId"
+  | "capabilities"
+  | "appToolPolicy"
+  | "keys"
+  | "approvals"
+>;
+
+/** Everything one installation's App door needs, captured once per catalog acquisition. */
+type AppMethodDoor = Readonly<{
+  host: AppSnapshotHost;
+  installation: Installation;
+  surface: ReleaseSurface;
+  principal: TenantPrincipal;
+  captured: AppToolPolicy | null;
+  caller: ReturnType<typeof invocationCallerContext>;
+  limits: ReturnType<typeof guestLimits>;
+  sessionId: string | null;
+}>;
+
+/**
+ * The one App door every operation of an installation shares (ordinary
+ * methods, a tool family's dynamic tools, and a hosted extension's wire
+ * methods): the same staleness check, the same owner-approved policy check,
+ * the same `admits` gate and the same Instance call.
+ */
+const callAdmittedAppMethod = async (
+  door: AppMethodDoor,
+  name: string,
+  effect: "read" | "write" | "external",
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<OysterJson> => {
+  const {
+    host,
+    installation,
+    surface: { release, api, declaredOperations },
+    principal,
+    captured,
+    caller,
+    limits,
+    sessionId,
+  } = door;
+  const { actor } = principal;
+  const instanceId = installation.instanceId;
+  if (instanceId === null) throw new AppMethodRefused("stale_authority");
+  const declaration = release.declaration ?? emptyAppDeclaration;
+  signal?.throwIfAborted();
+  const currentInstallation = await host.installations.get(
+    installation.installationId,
+  );
+  signal?.throwIfAborted();
+  if (
+    currentInstallation?.status !== "enabled" ||
+    currentInstallation.instanceId !== instanceId ||
+    currentInstallation.authority.authorityVersion !==
+      installation.authority.authorityVersion ||
+    currentInstallation.release.releaseId !== installation.release.releaseId ||
+    currentInstallation.release.artifact.artifactDigest !==
+      installation.release.artifact.artifactDigest
+  )
+    throw new AppMethodRefused("stale_authority");
+  if (actor.kind === "agent" || actor.kind === "team-key") {
+    const fresh = Schema.decodeUnknownOption(appToolPolicySchema, {
+      onExcessProperty: "error",
+    })(await freshAccessFor(host, actor, installation.installationId));
+    const capturedParsed = Schema.decodeUnknownOption(appToolPolicySchema, {
+      onExcessProperty: "error",
+    })(captured);
+    // A call never pre-approved in the first place (no captured
+    // policy) is `not_approved`; one that WAS approved but whose
+    // authority has since changed or vanished entirely -- a key
+    // revoked or expired after capture, say -- is `stale_authority`,
+    // just like the other authority drift below. Only the absence
+    // of a captured policy gets the former code.
+    if (capturedParsed._tag === "None")
+      throw new AppMethodRefused("not_approved");
+    if (
+      fresh._tag === "None" ||
+      fresh.value.revision !== capturedParsed.value.revision ||
+      fresh.value.grantedBy !== capturedParsed.value.grantedBy ||
+      fresh.value.level !== capturedParsed.value.level
+    )
+      throw new AppMethodRefused("stale_authority");
+  }
+  signal?.throwIfAborted();
+  const json = Schema.decodeUnknownSync(Schema.Json)(input);
+  const decision = admits(
+    {
+      installation: {
+        status: installation.status,
+        instanceId: installation.instanceId,
+        authority: installation.authority,
+        artifactDigest: installation.release.artifact.artifactDigest,
+      },
+      declaration,
+      declaredOperations,
+      api,
+      principal: {
+        actor,
+        role: "role" in principal ? principal.role : null,
+      },
+      access:
+        captured === null
+          ? null
+          : {
+              level: captured.level,
+              revision: captured.revision,
+              grantedBy: captured.grantedBy,
+              bindingName: appBindingName(installation.installationId),
+            },
+    },
+    { kind: "method", name, input: json, via: "mcp" },
+  );
+  if (decision.kind === "refused") throw new AppMethodRefused(decision.code);
+  const result = await host.instances.get(instanceId, limits).call(
+    await admittedMethodCallerFacts(
+      host,
+      installation,
+      release,
+      caller,
+      decision.grants,
+      { name, effect },
+      [],
+      sessionId ?? undefined,
+      actor.kind === "agent" && captured !== null
+        ? {
+            policyRevision: captured.revision,
+            grantorMemberId: captured.grantedBy,
+          }
+        : undefined,
+    ),
+    api,
+    name,
+    json,
+  );
+  if (!result.ok) throw new AppMethodRefused(result.code);
+  if (result.value.kind === "refused")
+    throw new AppMethodRefused(result.value.code, result.value.message);
+  return result.value.value;
+};
+
+/** One host-side call of a hosted extension's wire method. */
+export type OysterExtensionCall = (
+  name: string,
+  input: OysterJson,
+  signal?: AbortSignal,
+) => Promise<OysterJson>;
+
+/**
+ * The host-side door for an attached hosted extension: its wire methods go
+ * through the same App door as App tools (staleness, fresh policy, `admits`,
+ * the Instance call), and never appear as a model-facing operation. Null when
+ * the installation's current Release is not an Agent extension.
+ */
+export async function oysterExtensionDoor(
+  host: AppSnapshotHost,
+  surfaces: AppSurfaceCache,
+  principal: TenantPrincipal,
+  access: OysterCallerAccess,
+  installation: Installation,
+  sessionId: string | null,
+): Promise<OysterExtensionCall | null> {
+  if (installation.status !== "enabled" || installation.instanceId === null)
+    return null;
+  const surface = await surfaces(installation.release);
+  if (surface === null || !isAgentExtensionApi(surface.api)) return null;
+  const door: AppMethodDoor = {
+    host,
+    installation,
+    surface,
+    principal,
+    captured: capturedAccessFor(access, installation.installationId),
+    caller: invocationCallerContext(
+      principal,
+      host.computerId ?? null,
+      host.tenantId,
+    ),
+    limits: guestLimits(host.guestLimits),
+    sessionId,
+  };
+  return (name, input, signal) => {
+    const method = isAgentExtensionWireMethod(name)
+      ? surface.api.methods[name]
+      : undefined;
+    if (method === undefined)
+      return Promise.reject(new AppMethodRefused("not_declared"));
+    return callAdmittedAppMethod(door, name, method.effect, input, signal);
   };
 }
 
@@ -510,9 +715,7 @@ export async function oysterAppSnapshot(
     if (access?.kind === "key" && captured === null) continue;
     const surface = await surfaces(installation.release);
     if (surface === null) continue;
-    const { release, api, declaredOperations, methods } = surface;
-    const instanceId = installation.instanceId;
-    const declaration = release.declaration ?? emptyAppDeclaration;
+    const { release, api, methods } = surface;
     const id = `oyster-app:${installation.installationId}`;
     // A member/owner, or an Agent/key with no captured access, defaults to
     // "write" here exactly as every module always did before: the deeper gate
@@ -525,108 +728,22 @@ export async function oysterAppSnapshot(
     // check, the same owner-approved policy check, the same `admits` gate and
     // the same Instance call. A tool family tool is sugar over this same
     // admitted call to its declared `call` method; it gets no separate check.
-    const callAppMethod = async (
+    const door: AppMethodDoor = {
+      host,
+      installation,
+      surface,
+      principal,
+      captured,
+      caller,
+      limits,
+      sessionId,
+    };
+    const callAppMethod = (
       name: string,
       effect: "read" | "write" | "external",
-      input: unknown,
+      input: MyceliumJsonValue,
       signal?: AbortSignal,
-    ): Promise<OysterJson> => {
-      signal?.throwIfAborted();
-      const currentInstallation = await host.installations.get(
-        installation.installationId,
-      );
-      signal?.throwIfAborted();
-      if (
-        currentInstallation?.status !== "enabled" ||
-        currentInstallation.instanceId !== instanceId ||
-        currentInstallation.authority.authorityVersion !==
-          installation.authority.authorityVersion ||
-        currentInstallation.release.releaseId !==
-          installation.release.releaseId ||
-        currentInstallation.release.artifact.artifactDigest !==
-          installation.release.artifact.artifactDigest
-      )
-        throw new AppMethodRefused("stale_authority");
-      if (actor.kind === "agent" || actor.kind === "team-key") {
-        const fresh = Schema.decodeUnknownOption(appToolPolicySchema, {
-          onExcessProperty: "error",
-        })(await freshAccessFor(host, actor, installation.installationId));
-        const capturedParsed = Schema.decodeUnknownOption(appToolPolicySchema, {
-          onExcessProperty: "error",
-        })(captured);
-        // A call never pre-approved in the first place (no captured
-        // policy) is `not_approved`; one that WAS approved but whose
-        // authority has since changed or vanished entirely -- a key
-        // revoked or expired after capture, say -- is `stale_authority`,
-        // just like the other authority drift below. Only the absence
-        // of a captured policy gets the former code.
-        if (capturedParsed._tag === "None")
-          throw new AppMethodRefused("not_approved");
-        if (
-          fresh._tag === "None" ||
-          fresh.value.revision !== capturedParsed.value.revision ||
-          fresh.value.grantedBy !== capturedParsed.value.grantedBy ||
-          fresh.value.level !== capturedParsed.value.level
-        )
-          throw new AppMethodRefused("stale_authority");
-      }
-      signal?.throwIfAborted();
-      const json = Schema.decodeUnknownSync(Schema.Json)(input);
-      const decision = admits(
-        {
-          installation: {
-            status: installation.status,
-            instanceId: installation.instanceId,
-            authority: installation.authority,
-            artifactDigest: installation.release.artifact.artifactDigest,
-          },
-          declaration,
-          declaredOperations,
-          api,
-          principal: {
-            actor,
-            role: "role" in principal ? principal.role : null,
-          },
-          access:
-            captured === null
-              ? null
-              : {
-                  level: captured.level,
-                  revision: captured.revision,
-                  grantedBy: captured.grantedBy,
-                  bindingName: appBindingName(installation.installationId),
-                },
-        },
-        { kind: "method", name, input: json, via: "mcp" },
-      );
-      if (decision.kind === "refused")
-        throw new AppMethodRefused(decision.code);
-      const result = await host.instances.get(instanceId, limits).call(
-        await admittedMethodCallerFacts(
-          host,
-          installation,
-          release,
-          caller,
-          decision.grants,
-          { name, effect },
-          [],
-          sessionId ?? undefined,
-          actor.kind === "agent" && captured !== null
-            ? {
-                policyRevision: captured.revision,
-                grantorMemberId: captured.grantedBy,
-              }
-            : undefined,
-        ),
-        api,
-        name,
-        json,
-      );
-      if (!result.ok) throw new AppMethodRefused(result.code);
-      if (result.value.kind === "refused")
-        throw new AppMethodRefused(result.value.code, result.value.message);
-      return result.value.value;
-    };
+    ) => callAdmittedAppMethod(door, name, effect, input, signal);
     const operationEffects: Record<string, "read" | "write" | "external"> = {};
     effects[id] = operationEffects;
     let familyFacts: OysterJson | null = null;

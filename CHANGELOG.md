@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.54.0
+
+### Minor Changes
+
+- Changes since 0.53.2:
+
+  - feat(oyster): compose attached hosted extensions on a standalone Agent
+  - feat(oyster): let the owner attach hosted extensions to an Agent
+  - fix(oyster): keep Agent extension wire methods out of App tools
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.12.7
+  - @fungi.computer/computer@0.18.0
+  - @fungi.computer/shiitake@0.22.0
+  - @fungi.computer/parakeet@0.16.11
+  - @fungi.computer/shiitake-extensions@0.12.7
+  - @fungi.computer/zookeeper@0.0.59
+
 ## 0.53.2
 
 ### Patch Changes

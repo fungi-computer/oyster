@@ -827,6 +827,94 @@ test("owner and key tool listings omit hidden declared methods", async () => {
   }
 });
 
+test("Agent extension wire methods stay out of every App tool listing", async () => {
+  const wire = {
+    agentExtensionPrompt: { effect: "read" },
+    agentExtensionTools: { effect: "read" },
+    agentExtensionCall: { effect: "write" },
+  };
+  const extensionRoot = await put(
+    json({
+      format: "fungi-app-v1",
+      backend: {
+        ...backend,
+        version: backend.digest,
+        byteLength: 1,
+        mediaType: "application/vnd.fungi.app-backend+json",
+      },
+      declaration: {
+        capabilities: [],
+        handlers: [],
+        roles: [],
+        api: {
+          methods: {
+            readNote: {
+              description: "Read the note",
+              input: { type: "object" },
+              output: schema,
+              effect: "read",
+              requires: [],
+            },
+            ...Object.fromEntries(
+              Object.entries(wire).map(([name, { effect }]) => [
+                name,
+                {
+                  description: "Extension protocol",
+                  input: { type: "object" },
+                  output: { type: "object" },
+                  effect,
+                  requires: [],
+                },
+              ]),
+            ),
+          },
+        },
+      },
+    }),
+  );
+  const extensionRelease = {
+    ...release,
+    releaseId: "rel_notes_extension",
+    artifact: {
+      ...release.artifact,
+      artifactRef: extensionRoot.artifactRef,
+      artifactDigest: extensionRoot.digest,
+    },
+  };
+  const extension = { ...installation("notes"), release: extensionRelease };
+  const extensionHost = {
+    ...host,
+    installations: installationStore({
+      list: () => Promise.resolve([extension]),
+      get: async (id) => (id === "notes" ? extension : null),
+    }),
+  };
+  for (const principal of [
+    { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+    { actor: { kind: "team-key", keyId: "agent-key" } },
+  ]) {
+    const { catalog } = await run(
+      principal,
+      () => Promise.resolve(null),
+      null,
+      {
+        source: await oysterAppMethods(
+          approvalHost({ ...extensionHost, appToolPolicy: async () => null }),
+          principal,
+          accessFor(principal, null),
+          appSurfaceCache(extensionHost),
+        ),
+      },
+    );
+    assert.ok(catalog.describe({ path: "NOTES.readNote" }));
+    for (const name of Object.keys(wire))
+      assert.throws(
+        () => catalog.describe({ path: `NOTES.${name}` }),
+        /Unknown target/u,
+      );
+  }
+});
+
 test("the owner reaches discoverable App methods as env.<APP>", async () => {
   calls.length = 0;
   const { results, catalog } = await run(

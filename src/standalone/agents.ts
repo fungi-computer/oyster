@@ -194,7 +194,17 @@ import {
   type StandaloneComputerEnv,
 } from "./computer.js";
 import { shiitakeEngine, type AgentEngine } from "./agent-engine.js";
+import {
+  hostedAgentExtensionsGrant,
+  hostedAppExtensions,
+  type HostedAppAttachment,
+} from "@fungi.computer/shiitake/hosted";
+import { isAgentExtensionApi } from "@fungi.computer/agar/backend-definition";
 import { agentStoreKeeping } from "./agent-store.js";
+import {
+  createAgentExtensionAttachments,
+  type AgentExtensionAttachments,
+} from "./agent-extension-attachments.js";
 import {
   CredentialError,
   type CredentialStorage,
@@ -307,7 +317,7 @@ import {
   type AgentGrant,
   type FleetMessage,
 } from "@fungi.computer/shiitake/fleet";
-import type { AppSurfaceCache } from "../mcp.js";
+import type { AppSurfaceCache, OysterExtensionCall } from "../mcp.js";
 import {
   appToolPolicySchema,
   type AppToolPolicy,
@@ -366,6 +376,9 @@ const logRedactedFailure = (label: string, cause: unknown): void => {
     console.error(label, text);
   });
 };
+
+/** Wall budget for one hosted-extension prompt or tools call, as on the Hub. */
+const hostedExtensionBudgetMs = 3000;
 
 /** The starter's Home attachment: one fixed id, so a replayed create attaches once. */
 const starterHomeAttachment = "starter-home:v1";
@@ -1708,6 +1721,27 @@ export abstract class StandaloneAgentBase<
       : null;
   }
 
+  /**
+   * The installation an owner may attach as this Agent's hosted extension:
+   * enabled, running, and its current Release declares the whole method
+   * family. Its Instance pins the attachment.
+   */
+  async extensionInstallation(
+    installationId: string,
+  ): Promise<Readonly<{ installationId: string; instanceId: string }> | null> {
+    const host = await this.appHost();
+    if (host === null) return null;
+    const installation = await host.installations.get(installationId);
+    if (installation?.status !== "enabled" || installation.instanceId === null)
+      return null;
+    const { appSurfaceCache } = await import("../mcp.js");
+    this.#appSurfaces ??= appSurfaceCache(host);
+    const surface = await this.#appSurfaces(installation.release);
+    return surface !== null && isAgentExtensionApi(surface.api)
+      ? { installationId, instanceId: installation.instanceId }
+      : null;
+  }
+
   /** The instance directory that owns this Agent's sealed model keys. */
   private async keyDirectory() {
     const pin = await this.policyDirectory();
@@ -2100,6 +2134,98 @@ export abstract class StandaloneAgentBase<
   }
 
   /**
+   * The hosted extensions the owner attached to this Agent, under the shared
+   * composer. Both consents are required: the owner's attachment and the
+   * Agent's current App-tool approval, whose level also decides whether the
+   * extension's tools reach the run. A denied visitor Session asks nothing.
+   * Every guest call goes through the same App door as App tools.
+   */
+  private async hostedExtensions(principal: {
+    readonly actor: Extract<HostActor, { kind: "agent" }>;
+  }) {
+    const {
+      oysterExtensionDoor,
+      appSurfaceCache,
+      appBindingName,
+      AppMethodRefused,
+    } = await import("../mcp.js");
+    return hostedAppExtensions<
+      HostedAppAttachment & Readonly<{ call: OysterExtensionCall }>
+    >({
+      guestBudgetMs: hostedExtensionBudgetMs,
+      attachments: async (sessionId) => {
+        if ((await this.channelRun(sessionId)).kind === "denied") return null;
+        const pin = await this.policyDirectory();
+        const host = await this.appHost();
+        if (pin === null || host === null) return null;
+        const policy = (await host.appToolPolicy?.(principal.actor)) ?? null;
+        if (policy === null) return null;
+        const attached = await this.env.AGENT_DIRECTORY.getByName(
+          pin.directoryName,
+        ).extensionAttachmentsFor(this.agentName(), pin.tenantId);
+        this.#appSurfaces ??= appSurfaceCache(host);
+        const surfaces = this.#appSurfaces;
+        const current = await Promise.all(
+          attached.map(async ({ installationId, instanceId }) => {
+            const installation = await host.installations.get(installationId);
+            if (installation?.instanceId !== instanceId) return [];
+            const call = await oysterExtensionDoor(
+              host,
+              surfaces,
+              principal,
+              { kind: "agent", policy },
+              installation,
+              sessionId,
+            );
+            if (call === null) return [];
+            return [
+              {
+                bindingName: appBindingName(installationId),
+                installationId,
+                level: policy.level,
+                cacheKey: JSON.stringify([
+                  installationId,
+                  instanceId,
+                  installation.release.releaseId,
+                  installation.release.artifact.artifactDigest,
+                  installation.authority.authorityVersion,
+                  policy.revision,
+                ]),
+                call,
+              },
+            ];
+          }),
+        );
+        return current.flat();
+      },
+      call: async (attachment, method, input, deadlineAt) => {
+        try {
+          return {
+            kind: "ok",
+            value: await attachment.call(
+              method,
+              input,
+              deadlineAt === null
+                ? undefined
+                : AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())),
+            ),
+          };
+        } catch (cause) {
+          if (cause instanceof AppMethodRefused)
+            return { kind: "refused", reason: cause.code };
+          throw cause;
+        }
+      },
+      report: (report) => {
+        logRedactedFailure(
+          `hosted extension ${report.kind}`,
+          report.kind === "tools_skipped" ? report.outcome : report.cause,
+        );
+      },
+    });
+  }
+
+  /**
    * A full override must retain channelSource and channelInstructions:
    * dropping them removes a suspended website's run refusal and turn capture,
    * and it must run discordReplyWork or an evicted Discord run never answers.
@@ -2292,8 +2418,9 @@ export abstract class StandaloneAgentBase<
                 })),
             },
           }),
+          await this.hostedExtensions(principal),
         ],
-        grants: [...extensions.grants, homeGrant],
+        grants: [...extensions.grants, homeGrant, hostedAgentExtensionsGrant],
       },
       ...keeping,
       admission: {
@@ -2753,6 +2880,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
   private readonly computerNames = new Map<string, string>();
   private readonly directory: ReturnType<typeof createAgentDirectory>;
   private readonly avatars: AgentAvatarStore;
+  private readonly extensionAttachments: AgentExtensionAttachments;
   private composedTenancy: Promise<StandaloneTenancy> | undefined;
   private machineEnrollmentOwner:
     ReturnType<typeof createStandaloneMachineEnrollment> | undefined;
@@ -2929,6 +3057,9 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     ctx.storage.sql.exec("DROP TABLE IF EXISTS agent_instructions");
     this.directory = createAgentDirectory(ctx.storage.sql);
     this.avatars = createAgentAvatarStore(ctx.storage.sql);
+    this.extensionAttachments = createAgentExtensionAttachments(
+      ctx.storage.sql,
+    );
     this.computers = createAgentComputers({
       sql: ctx.storage.sql,
       transactionSync: (body) => ctx.storage.transactionSync(body),
@@ -3793,6 +3924,93 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     });
   }
 
+  /**
+   * Attach one hosted extension to an Agent. Only a current owner attaches;
+   * the row records that owner and membership version, and the Instance the
+   * caller found for an enabled extension installation.
+   */
+  async attachExtension(
+    agentId: string,
+    target: Readonly<{ installationId: string; instanceId: string }>,
+    principal: TenantPrincipal,
+    tenantId: TenantId,
+  ): Promise<
+    | Readonly<{ installationId: string; attachedBy: string }>
+    | Readonly<{ error: "not_found" | "not_granted" }>
+  > {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    if (!this.has(agentId)) return { error: "not_found" };
+    const member = await this.currentMember(
+      tenantId,
+      oysterPrincipalId(principal),
+    );
+    if (
+      member === null ||
+      !oysterPrincipalIsOwner(member) ||
+      !Schema.is(approverVersionSchema)(member.membershipVersion) ||
+      oysterPrincipalId(member) !== oysterPrincipalId(principal)
+    )
+      return { error: "not_granted" };
+    const attachedBy = oysterPrincipalId(member);
+    const membershipVersion = member.membershipVersion;
+    this.ctx.storage.transactionSync(() => {
+      this.extensionAttachments.attach(agentId, {
+        ...target,
+        attachedBy,
+        membershipVersion,
+      });
+      this.bump();
+    });
+    return { installationId: target.installationId, attachedBy };
+  }
+
+  /** Detach one hosted extension; detaching only ever removes authority. */
+  detachExtension(
+    agentId: string,
+    installationId: string,
+    principal: TenantPrincipal,
+  ): "detached" | "absent" | Readonly<{ error: "not_found" | "not_granted" }> {
+    if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+    if (!this.has(agentId)) return { error: "not_found" };
+    return this.ctx.storage.transactionSync(() => {
+      if (!this.extensionAttachments.detach(agentId, installationId))
+        return "absent";
+      this.bump();
+      return "detached";
+    });
+  }
+
+  /** The Agent's attachments whose grantor is still the same current owner. */
+  async extensionAttachmentsFor(
+    agentId: string,
+    tenantId: TenantId = defaultTenant,
+  ): Promise<
+    readonly Readonly<{ installationId: string; instanceId: string }>[]
+  > {
+    if (!this.has(agentId)) return [];
+    const current = new Map<string, number | null>();
+    const attached = [];
+    for (const row of this.extensionAttachments.list(agentId)) {
+      if (!current.has(row.attachedBy)) {
+        const member = await this.currentMember(tenantId, row.attachedBy);
+        current.set(
+          row.attachedBy,
+          member !== null &&
+            oysterPrincipalIsOwner(member) &&
+            oysterPrincipalId(member) === row.attachedBy
+            ? member.membershipVersion
+            : null,
+        );
+      }
+      if (current.get(row.attachedBy) === row.membershipVersion)
+        attached.push({
+          installationId: row.installationId,
+          instanceId: row.instanceId,
+        });
+    }
+    return attached;
+  }
+
   visit(agentId: string, sessionId: string): void {
     this.ctx.storage.sql.exec(
       "INSERT INTO visits(agent_id, session_id, visited_at) VALUES(?,?,?) ON CONFLICT(agent_id, session_id) DO UPDATE SET visited_at=excluded.visited_at",
@@ -4118,6 +4336,36 @@ export function standaloneAgents(
         scope?.tenantId ?? defaultTenant,
       );
     },
+    extensionAttachments: async (agentId) => {
+      if (!(await directory().has(agentId))) return null;
+      return (
+        await directory().extensionAttachmentsFor(
+          agentId,
+          scope?.tenantId ?? defaultTenant,
+        )
+      ).map(({ installationId }) => ({ installationId }));
+    },
+    attachExtension: async (agentId, installationId, principal) => {
+      if (!oysterPrincipalIsOwner(principal)) return { error: "not_granted" };
+      if (!(await directory().has(agentId))) return { error: "not_found" };
+      const agent = env.AGENTS.getByName(agentId);
+      const pinned = await agent.policyDirectory();
+      if (
+        pinned?.directoryName !== directoryName ||
+        pinned.tenantId !== (scope?.tenantId ?? defaultTenant)
+      )
+        return { error: "not_found" };
+      const target = await agent.extensionInstallation(installationId);
+      if (target === null) return { error: "not_extension" };
+      return directory().attachExtension(
+        agentId,
+        target,
+        principal,
+        scope?.tenantId ?? defaultTenant,
+      );
+    },
+    detachExtension: (agentId, installationId, principal) =>
+      directory().detachExtension(agentId, installationId, principal),
     connections: () => directory().connections(),
     addConnection: (input) => directory().addConnection(input),
     grantConnection: (connectionId, agentId, access) =>

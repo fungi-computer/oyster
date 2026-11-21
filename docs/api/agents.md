@@ -345,6 +345,25 @@ type OysterAgents = Readonly<{
      | Readonly<{
      error: "not_found" | "revision_conflict" | "not_granted";
   }>>;
+  extensionAttachments: Promise<
+     | readonly Readonly<{
+     installationId: string;
+   }>[]
+    | null>;
+  attachExtension: Promise<
+     | Readonly<{
+     installationId: string;
+     attachedBy: string;
+   }>
+     | Readonly<{
+     error: "not_found" | "not_granted" | "not_extension";
+  }>>;
+  detachExtension: Promise<
+     | "absent"
+     | "detached"
+     | Readonly<{
+     error: "not_found" | "not_granted";
+  }>>;
   setup: Promise<Readonly<{
      models: "ready" | "missing";
      media: "ready" | "missing";

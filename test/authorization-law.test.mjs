@@ -541,6 +541,7 @@ const directOwnerPaths = [
   /^\/api\/installations\/:installationId\/(?:grants|status)$/u,
   /^\/api\/agent-models\//u,
   /^\/api\/agent-policies\//u,
+  /^\/api\/agent-extensions\//u,
   /^\/api\/connections(?:\/|$)/u,
   /^\/api\/vault(?:\/|$)/u,
 ];
@@ -760,6 +761,9 @@ test("every host /api route's owner reach is classified", async () => {
     "GET /api/agent-models direct",
     "GET /api/agent-models/:agentId direct",
     "PUT /api/agent-models/:agentId direct",
+    "GET /api/agent-extensions/:agentId direct",
+    "PUT /api/agent-extensions/:agentId/:installationId direct",
+    "DELETE /api/agent-extensions/:agentId/:installationId direct",
     "GET /api/agent-policies/:agentId direct",
     "PUT /api/agent-policies/:agentId direct",
     "GET /api/connections direct",
