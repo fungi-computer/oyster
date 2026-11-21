@@ -206,18 +206,36 @@ export async function readBootUi(
   store: ArtifactStore,
   release: Release,
 ): Promise<BootUi | null> {
+  return (await readPreviewUi(store, release)).ui;
+}
+
+/** The same verified UI plus its declared name, without widening the boot lease. */
+export async function readPreviewUi(
+  store: ArtifactStore,
+  release: Release,
+): Promise<Readonly<{ ui: BootUi | null; appName: string }>> {
   const verified = await verifyRelease(
     store,
     release,
     defaultAssetPolicy,
     false,
   );
-  if (verified.ui === null) return null;
+  return {
+    ui: verifiedBootUi(verified, release),
+    appName: verified.declaration?.displayName ?? "App",
+  };
+}
+
+function verifiedBootUi(
+  verified: Awaited<ReturnType<typeof verifyRelease>>,
+  release: Release,
+): BootUi | null {
   const identity: BootUi["identity"] = {
     appId: release.appId,
     releaseId: release.releaseId,
     surfaceId: "host-boot",
   };
+  if (verified.ui === null) return null;
   if (verified.ui.kind === "html") {
     return {
       identity,

@@ -1,6 +1,10 @@
 // Browser profile: the DOM-facing and Node-only Oyster entries, with every
 // shared declaration checked strictly (skipLibCheck false).
-import { ownerKeyAuth, ownerKeyCookieName } from "@fungi.computer/oyster/auth";
+import {
+  ownerKeyAuth,
+  ownerKeyCookieName,
+  type OwnerSessions,
+} from "@fungi.computer/oyster/auth";
 import {
   installationSchema,
   applyInstallationCommand,
@@ -37,9 +41,15 @@ export const bindingApproval: typeof approvedBindingGrants =
   approvedBindingGrants;
 
 export const ownerCookie: "oyster_session" = ownerKeyCookieName;
+const strangerSessions: OwnerSessions = {
+  open: () => Promise.resolve(),
+  owner: () => Promise.resolve(null),
+  revoke: () => Promise.resolve(),
+};
 export const canonicalOwnerSignIn = ownerKeyAuth(
   "stranger-owner-key-1234567890",
   "stored-member",
+  strangerSessions,
 );
 
 import {

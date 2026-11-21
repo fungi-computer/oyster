@@ -1,3 +1,5 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { loadavg } from "node:os";
 import { labComputer } from "./lab-computer.fixture.mjs";
 import {
   nativeWorkflowRoot,
@@ -11,7 +13,7 @@ import { log } from "node:console";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { URL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -91,11 +93,20 @@ const gitEnvironment = {
 // The Git step proof runs Git natively: a supplied lab VM, otherwise the
 // local Computer platform container on this box.
 const labVm = await labComputer({ required: false });
+// Stream into a private, unique file as well as the existing failure snapshot:
+// an external proof time bound may stop the process before its catch runs.
+await mkdir(`${root}.botanical/workflow-reviews`, {
+  recursive: true,
+  mode: 0o700,
+});
+const workerLog = `${root}.botanical/workflow-reviews/host-${Date.now()}-${process.pid}.log`;
+log(JSON.stringify({ proof: "workflow-host-trace-file", path: workerLog }));
 const nativeHost = await nativeWorkflowRoot({
   root,
   prefix: "workflows-native-",
   main: "workflows-root.fixture.ts",
   artifactBucket: "workflow-proof-app-artifacts",
+  workerLog,
   computer: labVm ?? "platform-container",
   ai: true,
 });
@@ -486,7 +497,14 @@ async function readAgentSession(agentId, sessionId) {
 }
 const stepFailures = [];
 let allStepsAttempted = false;
+let scheduleTiming;
 async function step(name, body) {
+  const timing =
+    name === "agent-schedule-delivery"
+      ? monitorEventLoopDelay({ resolution: 20 })
+      : null;
+  timing?.enable();
+  const started = Date.now();
   try {
     await body();
     log(
@@ -505,6 +523,18 @@ async function step(name, body) {
         status: "failed",
       }),
     );
+  } finally {
+    timing?.disable();
+    if (timing) {
+      scheduleTiming = {
+        proof: "workflow-client-timing",
+        step: name,
+        elapsedMs: Date.now() - started,
+        eventLoopMaxMs: timing.max / 1e6,
+        load1: loadavg()[0],
+      };
+      log(JSON.stringify(scheduleTiming));
+    }
   }
 }
 const status = (runId) => call("trellis", "runStatus", { runId });
@@ -2217,10 +2247,13 @@ try {
   // One log per failed run: a rerun must not overwrite the Worker's request
   // timings and console output from the failure being diagnosed.
   const failedAt = new Date().toISOString().replaceAll(":", "-");
+  const diagnostic = `${root}.botanical/workflow-reviews/native-${runtime}-${failedAt}.log`;
   await nativeHost.recordFailure({
-    diagnostic: `${root}.botanical/workflow-reviews/native-${runtime}-${failedAt}.log`,
+    diagnostic,
     description: "Native Workflow proof failed",
   });
+  if (scheduleTiming)
+    await appendFile(diagnostic, `\n${JSON.stringify(scheduleTiming)}\n`);
   throw cause;
 } finally {
   if (reviewBrowser) await reviewBrowser.close();

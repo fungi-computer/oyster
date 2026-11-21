@@ -1,3 +1,6 @@
+import type { AppIdentity } from "@fungi.computer/agar";
+import { renderPreviewChrome } from "./host-page-lazy.js";
+import type { PreviewNotice } from "./host-page.js";
 import { z } from "zod";
 import type { BootUi } from "./boot-gate.js";
 import { bootHostScript } from "#boot-host-script";
@@ -16,16 +19,25 @@ export function bootAssetUrl(
 }
 
 /** The trusted zero-grant parent and opaque candidate frame used by both hosts. */
-export function bootParentDocument(
-  identity: BootUi["identity"],
+export async function bootParentDocument(
+  identity: AppIdentity,
   entry: string,
-  bridge = "./bridge.js",
-): string {
-  const config = JSON.stringify({ identity, entry }).replaceAll("<", "\\u003c");
-  return `<!doctype html><html><body>
-<iframe id="candidate" sandbox="allow-scripts" style="width:100vw;height:100vh;border:0"></iframe>
+  options: Readonly<{
+    bridge: string;
+    sandbox: string;
+    notice: PreviewNotice | null;
+  }>,
+): Promise<string> {
+  const config = JSON.stringify({
+    identity,
+    entry,
+    expiresAt: options.notice?.expiresAt,
+  }).replaceAll("<", "\\u003c");
+  return `<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>App preview</title><body class="${options.notice === null ? "" : "preview-frame"}" style="margin:0;display:flex;flex-direction:column;height:100vh">
+${options.notice === null ? "" : await renderPreviewChrome(options.notice)}
+<iframe id="candidate" title="Candidate UI" sandbox="${options.sandbox}" style="width:100%;flex:1;min-height:0;border:0"></iframe>
 <script id="boot-config" type="application/json">${config}</script>
-<script type="module" src="${bridge}"></script></body></html>`;
+<script type="module" src="${options.bridge}"></script></body></html>`;
 }
 
 /** CSP for the zero-grant candidate; all network-capable destinations remain denied. */

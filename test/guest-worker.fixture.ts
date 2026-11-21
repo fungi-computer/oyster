@@ -1,5 +1,6 @@
 import {
   oysterWorkerHost,
+  registryOwnerSessions,
   createOysterMcpOwner,
   OysterInstance as RuntimeInstance,
   OysterRegistry as RuntimeRegistry,
@@ -50,6 +51,10 @@ export class OysterRegistry extends RuntimeRegistry {
         actor: async () => {
           const principal = await ownerKeyAuth(
             this.env.OYSTER_OWNER_KEY,
+            "owner",
+            registryOwnerSessions(() =>
+              this.env.REGISTRY.getByName("registry"),
+            ),
           ).resolve({
             kind: "member",
             memberId: "owner",
@@ -135,7 +140,12 @@ const keysPort = (
 const proofHostFor = (env: ProofEnv, scope: TenantScope): OysterHost => ({
   ...oysterWorkerHost(
     env,
-    ownerOrKeyAuth(env.OYSTER_OWNER_KEY, "owner", () => keysOf(env, scope)),
+    ownerOrKeyAuth(
+      env.OYSTER_OWNER_KEY,
+      "owner",
+      registryOwnerSessions(() => env.REGISTRY.getByName("registry")),
+      () => keysOf(env, scope),
+    ),
     { scope, guestLimits: { cpuMs: 250, subRequests: 10 } },
   ),
   keys: keysPort(env, scope),
@@ -152,7 +162,12 @@ export default {
     let app = apps.get(env);
     if (app === undefined) {
       const keys = () => keysOf(env, fixedScope);
-      const auth = ownerOrKeyAuth(env.OYSTER_OWNER_KEY, "owner", keys);
+      const auth = ownerOrKeyAuth(
+        env.OYSTER_OWNER_KEY,
+        "owner",
+        registryOwnerSessions(() => env.REGISTRY.getByName("registry")),
+        keys,
+      );
       const ownerRoutes = routes<OysterEnv>();
       ownerRoutes.get("/api/proof-approvals", owner("direct-or-app"), () =>
         env.REGISTRY.getByName("registry").fetch(

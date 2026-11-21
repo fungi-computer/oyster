@@ -8,6 +8,36 @@
 
 # auth
 
+## Type Aliases
+
+### OwnerSessions
+
+```ts
+type OwnerSessions = Readonly<{
+  open: Promise<void>;
+  owner: Promise<string | null>;
+  revoke: Promise<void>;
+}>;
+```
+
+The server side of owner browser sessions. The cookie carries a random session
+id; the store keeps only its digest, the owner it signs in, and an expiry.
+Logging out revokes the row, so a copied cookie stops working.
+
+---
+
+### OwnerSessionSql
+
+```ts
+type OwnerSessionSql = Readonly<{
+  exec: {
+    toArray: readonly object[];
+  };
+}>;
+```
+
+The synchronous SQL a Durable Object or SQLite host gives the store.
+
 ## Variables
 
 ### ownerKeyCookieName
@@ -39,23 +69,60 @@ const lastUsedGranularityMs: number;
 How stale a key's last-used time may be: calls inside this window do not
 re-stamp it.
 
+---
+
+### ownerSessionLifetimeMs
+
+```ts
+const ownerSessionLifetimeMs: number;
+```
+
+How long one browser sign-in lasts, absolutely: no sliding renewal.
+
 ## Functions
+
+### ownerKeyCredential()
+
+```ts
+function ownerKeyCredential(
+  ownerKey,
+  request,
+): Promise<"owner" | "refused" | "absent">;
+```
+
+Whether `request` carries the owner key itself, as a Bearer token or a Git
+Basic-auth password. `absent` means it carries neither.
+
+#### Parameters
+
+| Parameter  | Type      |
+| ---------- | --------- |
+| `ownerKey` | `string`  |
+| `request`  | `Request` |
+
+#### Returns
+
+`Promise`\<`"owner"` \| `"refused"` \| `"absent"`\>
+
+---
 
 ### ownerKeyAuth()
 
 ```ts
-function ownerKeyAuth(ownerKey, ownerId?): OysterAuth;
+function ownerKeyAuth(ownerKey, ownerId, sessions): OysterAuth;
 ```
 
-Single-owner sign-in: a bearer token, a Git Basic-auth password, or a session
-cookie holding the owner key's digest. The key is never stored in the browser.
+Single-owner sign-in: a bearer token, a Git Basic-auth password, or a browser
+session. A session is a random id in the cookie; `sessions` keeps its digest,
+owner and expiry, and logging out revokes it.
 
 #### Parameters
 
-| Parameter  | Type     | Default value |
-| ---------- | -------- | ------------- |
-| `ownerKey` | `string` | `undefined`   |
-| `ownerId`  | `string` | `"owner"`     |
+| Parameter  | Type                              |
+| ---------- | --------------------------------- |
+| `ownerKey` | `string`                          |
+| `ownerId`  | `string`                          |
+| `sessions` | [`OwnerSessions`](#ownersessions) |
 
 #### Returns
 
@@ -66,7 +133,7 @@ cookie holding the owner key's digest. The key is never stored in the browser.
 ### ownerOrKeyAuth()
 
 ```ts
-function ownerOrKeyAuth(ownerKey, ownerId, keys): OysterAuth;
+function ownerOrKeyAuth(ownerKey, ownerId, sessions, keys): OysterAuth;
 ```
 
 The owner key, or a named key admitted as its canonical Team-key actor.
@@ -77,8 +144,29 @@ The owner key, or a named key admitted as its canonical Team-key actor.
 | ---------- | ----------------------------------------------------------------------------------- |
 | `ownerKey` | `string`                                                                            |
 | `ownerId`  | `string`                                                                            |
+| `sessions` | [`OwnerSessions`](#ownersessions)                                                   |
 | `keys`     | () => `Pick`\<[`OysterKeyStore`](keys.md#oysterkeystore), `"verify"` \| `"touch"`\> |
 
 #### Returns
 
 [`OysterAuth`](host.md#oysterauth)
+
+---
+
+### ownerSessionStore()
+
+```ts
+function ownerSessionStore(sql): OwnerSessions;
+```
+
+Owner sessions over one store's SQL.
+
+#### Parameters
+
+| Parameter | Type                                  |
+| --------- | ------------------------------------- |
+| `sql`     | [`OwnerSessionSql`](#ownersessionsql) |
+
+#### Returns
+
+[`OwnerSessions`](#ownersessions)

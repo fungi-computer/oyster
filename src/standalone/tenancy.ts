@@ -18,6 +18,7 @@ import { ownerKey } from "../tenancy/owner-key.js";
 import { loopbackAliasLocation } from "../tenancy/registry-record.js";
 import { hosts } from "../tenancy/resolve.js";
 import { ownerOrKeyAuth } from "../auth.js";
+import { registryOwnerSessions } from "../workers.js";
 import type { OysterGitWorkerEnv } from "../workers-git.js";
 import { HTTPException } from "hono/http-exception";
 import {
@@ -137,7 +138,11 @@ export class StandaloneTenants extends TenancyRegistryDO {
 /** The same trusted bindings are used by HTTP, MCP and cold root readers. */
 export type StandaloneTenancyEnv = Pick<
   OysterGitWorkerEnv,
-  "OYSTER_ORIGIN" | "OYSTER_OWNER_NAME" | "OYSTER_OWNER_KEY" | "KEYS"
+  | "OYSTER_ORIGIN"
+  | "OYSTER_OWNER_NAME"
+  | "OYSTER_OWNER_KEY"
+  | "KEYS"
+  | "REGISTRY"
 > &
   Readonly<{
     TENANTS: DurableObjectNamespace<StandaloneTenants>;
@@ -233,6 +238,7 @@ type Admitted = Readonly<{
   tenancy: ReadonlyTenancy<"origin">;
   owner: StandaloneOwner | null;
   login(request: Request): Promise<Response>;
+  logout(request: Request): Promise<Response>;
 }>;
 
 async function composeTenancy(
@@ -302,8 +308,12 @@ async function composeTenancy(
   const admitted = (admission: TenantAdmission): Admitted => {
     const view = admittedRegistry(admission);
     const owner = ownerOf(admission);
+    const sessions = registryOwnerSessions(() =>
+      env.REGISTRY.getByName(scope.durableName("registry")),
+    );
     const ownerAuth = ownerKey({
       registry: view,
+      sessions: () => sessions,
       keys: {
         get: () =>
           Promise.resolve(
@@ -370,6 +380,7 @@ async function composeTenancy(
             const auth = ownerOrKeyAuth(
               env.OYSTER_OWNER_KEY,
               owner.actor.memberId,
+              sessions,
               keys,
             );
             const admission = await auth.authenticate(request);
@@ -389,6 +400,10 @@ async function composeTenancy(
       login: async (request) =>
         routes === undefined
           ? new Response("Sign-in is not available", { status: 404 })
+          : await routes.fetch(request),
+      logout: async (request) =>
+        routes === undefined
+          ? new Response("Sign-out is not available", { status: 404 })
           : await routes.fetch(request),
     };
   };
@@ -475,6 +490,9 @@ async function composeTenancy(
           },
           login: async (incoming) =>
             (await (await forRequest(incoming))?.login(incoming)) ??
+            new Response("Not found", { status: 404 }),
+          logout: async (incoming) =>
+            (await (await forRequest(incoming))?.logout(incoming)) ??
             new Response("Not found", { status: 404 }),
         },
       };

@@ -3,6 +3,7 @@
 // Durable Object class (no fake stub reimplementing its methods) -- a real
 // node:sqlite database stands in for the DO's own SQLite.
 /* global Request, setTimeout */
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
@@ -213,8 +214,11 @@ test("a revoked key is refused 401 on its very next authenticated request", asyn
   });
   assert.equal(issued.status, 201);
   const { plaintext } = await issued.json();
-  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", () =>
-    keys.getByName(scope.durableName("keys")),
+  const auth = ownerOrKeyAuth(
+    ownerKeySecret,
+    "owner",
+    memoryOwnerSessions(),
+    () => keys.getByName(scope.durableName("keys")),
   );
   const request = () =>
     new Request("https://oyster.example/apps/notes/", {
@@ -256,7 +260,12 @@ test("an admitted call stamps the key's last-used time; a refused one does not",
     assert.equal(listed.kind, "ok");
     return listed.value.find((key) => key.keyId === "porcini").lastUsedAt;
   };
-  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", () => store);
+  const auth = ownerOrKeyAuth(
+    ownerKeySecret,
+    "owner",
+    memoryOwnerSessions(),
+    () => store,
+  );
   const call = (secret) =>
     auth.authenticate(
       new Request("https://oyster.example/apps/notes/", {
@@ -322,8 +331,11 @@ test("an expired key is refused 401 on its very next authenticated request", asy
   });
   assert.equal(issued.status, 201);
   const { plaintext } = await issued.json();
-  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", () =>
-    keys.getByName(scope.durableName("keys")),
+  const auth = ownerOrKeyAuth(
+    ownerKeySecret,
+    "owner",
+    memoryOwnerSessions(),
+    () => keys.getByName(scope.durableName("keys")),
   );
   const request = () =>
     new Request("https://oyster.example/apps/notes/", {
@@ -367,7 +379,12 @@ test("a key limited to one Computer stays on it after the owner switches Compute
   const spare = await issue("composer", { kind: "selected", ids: ["spare"] });
   const every = await issue("everywhere", { kind: "all" });
   const store = () => keys.getByName(scope.durableName("keys"));
-  const auth = ownerOrKeyAuth(ownerKeySecret, "owner", store);
+  const auth = ownerOrKeyAuth(
+    ownerKeySecret,
+    "owner",
+    memoryOwnerSessions(),
+    store,
+  );
   const keysLive = (keyId) => store().live(keyId);
   // The owner's fleet: the canonical owner holds these three Computers.
   const owned = new Set(["main", "spare", "other"]);

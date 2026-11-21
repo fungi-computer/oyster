@@ -25,3 +25,21 @@ export async function serveHostPageAsset(path: string): Promise<Response> {
   );
   return serve(path);
 }
+
+export async function renderPreviewStyles(): Promise<string> {
+  const render = await loadLazily(
+    () => import("./host-page.js").then((module) => module.previewStyles),
+    renderer,
+  );
+  return render();
+}
+
+export async function renderPreviewChrome(
+  notice: import("./host-page.js").PreviewNotice,
+): Promise<string> {
+  const render = await loadLazily(
+    () => import("./host-page.js").then((module) => module.previewChrome),
+    renderer,
+  );
+  return render(notice);
+}

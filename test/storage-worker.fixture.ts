@@ -8,6 +8,7 @@ import { createOyster, type OysterHost } from "@fungi.computer/oyster/host";
 import {
   ownerKeyAuth,
   oysterWorkerHost,
+  registryOwnerSessions,
   type OysterWorkerEnv,
 } from "@fungi.computer/oyster/workers";
 export {
@@ -56,7 +57,11 @@ type StorageFixtureEnv = Omit<OysterWorkerEnv, "AGENT_DIRECTORY"> & {
 // Only authentication is substituted: the fixed non-owner exercises the real method/frame/storage route.
 export default {
   async fetch(request: Request, env: StorageFixtureEnv) {
-    const owner = ownerKeyAuth(env.OYSTER_OWNER_KEY);
+    const owner = ownerKeyAuth(
+      env.OYSTER_OWNER_KEY,
+      "owner",
+      registryOwnerSessions(() => env.REGISTRY.getByName("registry")),
+    );
     if (new URL(request.url).pathname === "/__storage_fixture/agents") {
       const admitted = await owner.authenticate(request);
       if (admitted.kind !== "admitted")

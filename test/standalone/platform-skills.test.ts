@@ -147,14 +147,40 @@ describe("the built-in skill bundle", () => {
       /Never settle it yourself by saying you keep your name/u,
     );
     expect(text).toMatch(/several in one `files\.patch` of Add File blocks/u);
-    // A non-retryable failure is tried once more at most, differently; files never go through heredocs.
-    expect(text).toMatch(
-      /says it is not retryable, such as a generation, try at most once more with clearly different input/u,
+    // One media attempt for the whole setup; failures cannot create a retry card.
+    expect(text).toContain(
+      "at most ONE sample attempt across images and videos",
+    );
+    expect(text).toContain(
+      "Never retry, switch models, or try the other medium",
+    );
+    expect(text).toContain(
+      "A failed, denied or expired generation spends that attempt",
+    );
+    expect(text).toContain(
+      "shows it is cheap and the approved plan includes it",
     );
     expect(text).toMatch(/never shell heredocs inside `execute`/u);
+    expect(text).toContain(
+      "Put the entire name question and its options inside that card",
+    );
+    expect(text).toContain("return await env.question.ask");
+    expect(text).toContain("Keep the two calls together");
     // Home's AGENTS.md is listed before it is read, so a fresh Computer shows no red error.
-    expect(text).toMatch(
-      /First list your Computer's top folder, never read `AGENTS\.md` blind/u,
+    const start = text.slice(
+      text.indexOf("## Start and resume"),
+      text.indexOf("## Rules"),
+    );
+    expect(start).toContain("before file discovery or goal calls");
+    expect(start.indexOf("rename/Keep handling")).toBeLessThan(
+      start.indexOf("First list"),
+    );
+    expect(start).toContain('files.list({path: "."})');
+    expect(start).toContain('using `path: "AGENTS.md"`');
+    expect(start).toContain("only when no goal is current");
+    expect(start).toContain("env.goal.create_goal");
+    expect(start).toContain(
+      "keep it active while any required offer is pending",
     );
     // A failed build never ends setup, and `unknown` is not yet a failure.
     expect(text).toMatch(/never ends setup: say what failed in one line/u);
@@ -169,6 +195,17 @@ describe("the built-in skill bundle", () => {
       /no method lets you choose it, so do not search for one/u,
     );
     expect(finish).toContain('Offer "Add to your dashboard" (required)');
+    expect(finish).toContain("or a rename already succeeded");
+    expect(finish).toContain(
+      "wait on that same card instead of issuing a replacement",
+    );
+    expect(finish).toContain(
+      "save the settled name (including Keep) in setup progress",
+    );
+    expect(text).toContain("immediately enter step 5 in this turn");
+    expect(finish).toContain(
+      "Its absence never skips the name card or widget approval",
+    );
   });
 
   it("offers dashboard widgets only for what was set up, places one through the approval card, and never the hidden Apps", () => {
@@ -289,8 +326,12 @@ describe("the built-in skill bundle", () => {
       bullet.startsWith("When the `setup.finish` tool is absent"),
     );
     expect(absent).toHaveLength(1);
-    expect(absent[0]).toMatch(/stop\s+after\s+the\s+two-line\s+summary/u);
-    expect(absent[0]).toMatch(/call\s+nothing/u);
+    expect(absent[0]).toContain(
+      "finish after the offers and cleanup above are complete",
+    );
+    expect(absent[0]).toContain(
+      "Its absence never skips the name card or widget approval",
+    );
     const unconditional = bullets.filter(
       (bullet) => !bullet.startsWith("When the `setup.finish` tool"),
     );

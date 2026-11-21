@@ -11,6 +11,7 @@ import {
   CardTitle,
   CardContent,
 } from "@fungi.computer/caps/components/card";
+import { loadPageAssets } from "./page-assets.js";
 import { fungiFaviconHref } from "@fungi.computer/sigils/favicon";
 import {
   permissionScreen,
@@ -22,6 +23,7 @@ const docs = "https://docs.fungi.computer";
 
 /** Human-facing states only. API refusals keep their original wire format. */
 export type HostPageState =
+  | "preview"
   | "permissions"
   | "root"
   | "empty"
@@ -35,6 +37,7 @@ export type HostPageState =
   | "desktop-missing";
 
 const copy = {
+  preview: ["Preview", "Oyster · Preview", "Opening preview…"],
   permissions: [
     "Choose what this App can do.",
     "Oyster · App permissions",
@@ -93,6 +96,12 @@ const copy = {
 } satisfies Record<HostPageState, readonly [string, string, string]>;
 
 const abilities = {
+  preview: [
+    "Preview a change",
+    "Open the page.",
+    "Check the change.",
+    "Merge in Bonsai when ready.",
+  ],
   permissions: [
     "You choose the access",
     "Check the App and Release below.",
@@ -163,6 +172,8 @@ const abilities = {
 
 export type HostPageOptions = Readonly<{
   state: HostPageState;
+  preview?: Readonly<{ appName?: string; action: string; preparing: boolean }>;
+  inlineStyles?: string;
   title?: string;
   status?: number;
   stylesheets?: readonly string[];
@@ -226,6 +237,23 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
   const { state, signIn } = options;
   const content: ReactNode[] = [];
   const actions: ReactNode[] = [];
+  if (state === "preview" && options.preview) {
+    content.push(
+      h(
+        "form",
+        { method: "post", action: options.preview.action },
+        options.preview.preparing
+          ? h("input", { type: "hidden", name: "intent", value: "prepare" })
+          : null,
+        h(
+          Button,
+          { type: "submit", size: "sm" },
+          options.preview.preparing ? "Continue" : "Open preview",
+        ),
+      ),
+    );
+    return { content, actions };
+  }
   if (state === "permissions" && options.permissions) {
     const { config } = options.permissions;
     const screen = permissionScreen({
@@ -456,6 +484,12 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
     actions.push(
       link("Read the quickstart", `${docs}/oyster-quickstart`),
       link("Install an App", `${docs}/agents/build-an-app.md`, true),
+      // Ends this browser's session on the server, then returns to sign-in.
+      h(
+        "form",
+        { method: "post", action: url("/logout") },
+        h(Button, { type: "submit", variant: "outline" }, "Sign out"),
+      ),
     );
   } else {
     if (state === "server-error")
@@ -558,9 +592,11 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
   const { state, title = "Oyster" } = options;
   const [baseHeading, eyebrow, description] = copy[state];
   const heading =
-    state === "login" && options.returning === true
-      ? "Welcome back."
-      : baseHeading;
+    state === "preview"
+      ? (options.preview?.appName ?? "Opening preview…")
+      : state === "login" && options.returning === true
+        ? "Welcome back."
+        : baseHeading;
   const url = (path: string) =>
     options.oysterUrl ? new URL(path, options.oysterUrl).href : path;
   // A failed decorative module must still leave the form and recovery readable.
@@ -598,13 +634,18 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
         ...(options.stylesheets ?? []).map((href) =>
           h("link", { key: href, rel: "stylesheet", href: url(href) }),
         ),
-        assetUrl("layout.css")
+        options.inlineStyles
+          ? h("style", {
+              dangerouslySetInnerHTML: { __html: options.inlineStyles },
+            })
+          : null,
+        !options.inlineStyles && assetUrl("layout.css")
           ? h("link", { rel: "stylesheet", href: assetUrl("layout.css") })
           : null,
       ),
       h(
         "body",
-        null,
+        { className: state === "preview" ? "preview-entry" : undefined },
         h(
           "header",
           { className: "page-header" },
@@ -624,13 +665,27 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
         h(
           "main",
           { className: "stage" },
-          h("div", { className: "card-holder" }, illustration(state, assetUrl)),
+          state === "preview"
+            ? null
+            : h(
+                "div",
+                { className: "card-holder" },
+                illustration(state, assetUrl),
+              ),
           h(
             "section",
             { className: "copy", "aria-labelledby": "page-heading" },
             h("p", { className: "eyebrow" }, eyebrow),
             h("h1", { className: "heading", id: "page-heading" }, heading),
-            h("p", { className: "description" }, description),
+            h(
+              "p",
+              { className: "description" },
+              state === "preview"
+                ? options.preview?.appName
+                  ? `Preview this change to ${options.preview.appName} before you merge it.`
+                  : "Opening preview…"
+                : description,
+            ),
             ...content,
             actions.length
               ? h("div", { className: "actions" }, ...actions)
@@ -638,15 +693,17 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
             h(
               "p",
               { className: "helper" },
-              state === "login" || state === "login-invalid"
-                ? "Your key is sent only to this Oyster."
-                : state === "not-found"
-                  ? null
-                  : h(
-                      "a",
-                      { href: `${docs}/agents/index.md` },
-                      "Hand your LLM the setup guide →",
-                    ),
+              state === "preview"
+                ? null
+                : state === "login" || state === "login-invalid"
+                  ? "Your key is sent only to this Oyster."
+                  : state === "not-found"
+                    ? null
+                    : h(
+                        "a",
+                        { href: `${docs}/agents/index.md` },
+                        "Hand your LLM the setup guide →",
+                      ),
             ),
           ),
         ),
@@ -655,8 +712,15 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
           { className: "page-footer" },
           h("span", null, "Oyster · A home for your Apps"),
         ),
-        assetUrl("host-page.js")
+        state !== "preview" && assetUrl("host-page.js")
           ? h("script", { type: "module", src: assetUrl("host-page.js") })
+          : null,
+        options.preview?.preparing
+          ? h("script", {
+              dangerouslySetInnerHTML: {
+                __html: "document.forms[0].requestSubmit()",
+              },
+            })
           : null,
         options.permissions
           ? h("script", {
@@ -687,4 +751,84 @@ export async function hostPage(options: HostPageOptions): Promise<Response> {
       Vary: "Accept",
     },
   });
+}
+
+/** Maintained Caps and Oyster page tokens, embedded for the private preview. */
+export async function previewStyles(): Promise<string> {
+  const [assets, sources] = await Promise.all([pageAssets(), loadPageAssets()]);
+  const layout = assets["layout.css"];
+  if (layout === undefined) throw new Error("Oyster page styles unavailable");
+  return sources.shellStyles + sources.loginFontStyles + layout.source;
+}
+
+export type PreviewNotice = Readonly<{
+  appName: string;
+  revision: string;
+  status: string;
+  explanation: string;
+  expiresAt: number;
+  entry: string;
+}>;
+
+/** Trusted preview chrome; the candidate cannot supply HTML or host authority. */
+export async function previewChrome(notice: PreviewNotice): Promise<string> {
+  return (
+    `<style>${await previewStyles()}</style>` +
+    renderToStaticMarkup(
+      h(
+        "header",
+        { className: "preview-bar", "data-preview-bar": "" },
+        h("span", null, "Preview"),
+        h("span", { "aria-hidden": true }, "·"),
+        h(
+          "span",
+          { className: "preview-app", title: notice.appName },
+          notice.appName,
+        ),
+        h("span", { className: "preview-build" }, `build ${notice.revision}`),
+        h("span", { "aria-hidden": true }, "·"),
+        h("span", { id: "preview-state" }, notice.status),
+        h(
+          "details",
+          { className: "preview-details" },
+          h(
+            Button,
+            { asChild: true, size: "xs", variant: "ghost" },
+            h("summary", null, "Details"),
+          ),
+          h(
+            Card,
+            { className: "preview-explanation" },
+            h(
+              CardContent,
+              null,
+              h("p", null, notice.explanation),
+              h(
+                "p",
+                null,
+                "This preview only shows the page. It cannot use your files or run commands.",
+              ),
+              h(
+                "p",
+                null,
+                "Merge in Bonsai to build and install the change. Reload this page to open the preview again.",
+              ),
+            ),
+          ),
+        ),
+      ),
+    ) +
+    renderToStaticMarkup(
+      h(
+        "section",
+        { id: "preview-expired", hidden: true, role: "status" },
+        h("p", null, "This preview expired. Reload to open it again."),
+        h(
+          Button,
+          { asChild: true, size: "sm" },
+          h("a", { href: notice.entry }, "Reload"),
+        ),
+      ),
+    )
+  );
 }

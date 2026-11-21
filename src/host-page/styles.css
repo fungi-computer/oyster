@@ -216,3 +216,113 @@ code {
     gap: 14px;
   }
 }
+
+/* Private previews use the same Oyster type, palette and Caps controls. */
+.preview-entry .page-header,
+.preview-entry .page-footer {
+  height: 32px;
+  padding: 0 16px;
+  gap: 8px;
+}
+.preview-entry .brand {
+  font-size: 18px;
+  line-height: 24px;
+}
+.preview-entry .brand small {
+  display: none;
+}
+.preview-entry .page-nav {
+  font-size: 12px;
+  gap: 12px;
+}
+.preview-entry .stage {
+  display: flex;
+  max-width: 640px;
+  min-height: calc(100svh - 64px);
+  padding: 24px;
+  justify-content: center;
+}
+.preview-entry .copy {
+  width: 100%;
+}
+.preview-entry .heading {
+  font-size: 32px;
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}
+.preview-entry .description {
+  font-size: 16px;
+  margin-bottom: 20px;
+}
+.preview-entry .helper:empty {
+  display: none;
+}
+.preview-entry .caps-button {
+  height: 32px;
+  min-height: 0;
+  max-height: 32px;
+}
+body.preview-frame {
+  height: 100svh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-bar {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--color-base-300);
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  font: 12px/16px var(--font-sans);
+  white-space: nowrap;
+}
+.preview-bar > * {
+  flex-shrink: 0;
+}
+.preview-bar .preview-app {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-build {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.preview-details {
+  margin-left: auto;
+}
+.preview-details > summary {
+  height: 24px;
+  min-height: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.preview-details > summary::-webkit-details-marker {
+  display: none;
+}
+.preview-explanation {
+  position: absolute;
+  z-index: 2;
+  top: 36px;
+  right: 8px;
+  width: min(360px, calc(100vw - 16px));
+  white-space: normal;
+  font: 13px/1.5 var(--font-sans);
+  background: var(--color-base-100);
+}
+.preview-explanation p {
+  margin: 8px 0;
+}
+#preview-expired:not([hidden]) {
+  padding: 24px;
+  font: 14px/1.5 var(--font-sans);
+}

@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import { approvedInstallation } from "../dist/testing/index.js";
 import {
   createAppBuild,
@@ -1206,9 +1207,14 @@ test("each request admits its tenant once; a removed tenant refuses the next req
 
 test("named-key auth resolves only the exact configured member owner", async () => {
   const ownerId = "member-owner";
-  const auth = ownerOrKeyAuth("owner-key-fixture-1234567890", ownerId, () => {
-    throw new Error("resolution must not inspect bearer keys");
-  });
+  const auth = ownerOrKeyAuth(
+    "owner-key-fixture-1234567890",
+    ownerId,
+    memoryOwnerSessions(),
+    () => {
+      throw new Error("resolution must not inspect bearer keys");
+    },
+  );
   assert.deepEqual(await auth.resolve({ kind: "member", memberId: ownerId }), {
     actor: { kind: "member", memberId: ownerId },
     role: "owner",

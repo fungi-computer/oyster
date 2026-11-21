@@ -12,7 +12,43 @@ description:
 
 Within a few minutes, be set up for what they actually want: your instructions
 written, their project read, and, only if they want it, one App or one schedule.
-Finish with one useful result, not a tour.
+Finish with one useful result and the completed name and widget offers.
+
+Setup is one flow: approved work → useful result → name card → widget approval →
+finish. After the work or a name answer, continue with the next tool call in the
+same turn. A progress summary is commentary, never the end of setup. End only
+after step 5 is complete, or while a card is parked awaiting its answer; when
+that answer arrives, resume at the next unfinished item.
+
+## Start and resume
+
+On resume, continue at the first unfinished step. A name answer goes straight to
+step 5's rename/Keep handling, before file discovery or goal calls. The
+discovery and arming below happen once, at the start of setup.
+
+First list Home's working folder with its `list` tool (`{path: "."}`), or your
+attached Computer's `files.list({path: "."})`. Read `AGENTS.md` only if that
+listing contains it, using `path: "AGENTS.md"`. Use that same relative path for
+edits; the working folder is not the filesystem root. If the file is absent,
+continue the interview and check again in step 3.
+
+Before approved work, arm the existing Session goal so an accidental end of turn
+resumes this checklist without a nudge. Describe `goal`, read
+`env.goal.get_goal({})`, and, only when no goal is current, call
+`env.goal.create_goal({objective: "Finish setting up for you, including your first useful result, a name card and widget approvals."})`.
+Keep an existing goal; never replace or complete someone else's objective for
+setup. Save this goal's objective in setup progress so resumed turns reuse it.
+If goal tools are absent, continue the checklist directly.
+
+A parked question or approval is a real wait; the goal runtime waits with it.
+After the useful result, use a declarative transition such as "Your image is
+ready." and make the name-card tool call in step 5 in this same turn. Put the
+entire name question and its options inside that card. A goal continuation
+repairs an interrupted checklist; it never turns a plain-text name question into
+a valid offer. On continuation, use step 5's resume check and call the missing
+card directly or continue after its answer. Complete the setup goal only after
+step 5's offers and cleanup have finished; keep it active while any required
+offer is pending.
 
 ## Rules
 
@@ -37,9 +73,12 @@ Finish with one useful result, not a tour.
   failed in one line, carry on, and still make every offer in step 5. A command
   result of `unknown` means it may still be running, so check again before
   calling it failed.
-- When an action fails and says it is not retryable, such as a generation, try
-  at most once more with clearly different input (another model, say), never the
-  same action again. Then say so in one line, carry on, and finish setup.
+- Media budget: at most ONE sample attempt across images and videos for the
+  entire setup, including resumed turns. Make it only when the catalog/quote
+  shows it is cheap and the approved plan includes it; otherwise save a useful
+  prompt or brief as the first result. A failed, denied or expired generation
+  spends that attempt. Never retry, switch models, or try the other medium. Say
+  the cause once in plain words, then continue to the name and widget steps.
 - When they want to get on with a task, do the task and set up afterwards.
 - Keep prices and credit amounts out of your messages. Only the `setup.finish`
   line in step 5 mentions continuing.
@@ -53,17 +92,17 @@ Finish with one useful result, not a tour.
 2. Plan. Write a `plan` checklist of at most 4 items, each one concrete thing
    you will do. Ask "Do it?". Done when they answer.
 3. Do, item by item, ticking the plan.
-   - Instructions. First list your Computer's top folder, never read `AGENTS.md`
-     blind. When it is listed, edit it in place; when it is not there yet, your
-     Computer is still finishing its first start: carry on with the other items,
-     come back to it before step 4, and if it is still missing create it with
-     the same headings. Fill its "About my person" section (rename it "About
-     <their name>") with their goal, the preferences they stated and how they
-     want updates. Follow its "Keeping this file up to date" section from then
-     on. Every line answers "would I get this wrong without it?". Then introduce
-     instructions in one sentence: "I saved this in my instructions, so I'll
-     remember it in every conversation. You can read or edit them from my menu →
-     Instructions."
+   - Instructions. List the working folder again with `files.list({path: "."})`.
+     When `AGENTS.md` is listed, read and edit `path: "AGENTS.md"` in place;
+     when it is not there yet, your Computer is still finishing its first start:
+     carry on with the other items, come back to it before step 4, and if it is
+     still missing create it with the same headings. Fill its "About my person"
+     section (rename it "About <their name>") with their goal, the preferences
+     they stated and how they want updates. Follow its "Keeping this file up to
+     date" section from then on. Every line answers "would I get this wrong
+     without it?". Then introduce instructions in one sentence: "I saved this in
+     my instructions, so I'll remember it in every conversation. You can read or
+     edit them from my menu → Instructions."
    - Files you create for them: write several in one `files.patch` of Add File
      blocks rather than one write each, so they approve once. Write files with
      `files.patch` or `files.write`, never shell heredocs inside `execute`,
@@ -87,37 +126,82 @@ Finish with one useful result, not a tour.
    - Repeating work, if any. Propose one schedule with a time and time zone.
      Create it from a new conversation named for the job.
    - An App, only when a stated need matches one. Offer its App link.
-     - Prints: describe `PRINTS.generateImage` or `PRINTS.generateVideo`, then
-       call it; mark a keeper with `PRINTS.setFavorite` on its saved path and
-       read them back with `PRINTS.listFavorites`. The library folder is chosen
-       by the person in Prints, and no method lets you choose it, so do not
-       search for one: if Prints says no library is selected, say so in one line
-       and tell them to pick it in Prints.
-4. First result. Do one small real task toward their goal, now. Done when they
-   can see its output.
+     - Prints: apply the Media budget above before calling
+       `PRINTS.generateImage` or `PRINTS.generateVideo`. Record the attempt in
+       Home's setup progress before calling, so a resumed turn cannot repeat it.
+       Mark a keeper with `PRINTS.setFavorite` on its saved path and read them
+       back with `PRINTS.listFavorites`. The library folder is chosen by the
+       person in Prints, and no method lets you choose it, so do not search for
+       one: if Prints says no library is selected, say so in one line and tell
+       them to pick it in Prints.
+4. First result. Do one small real task toward their goal, now. When they can
+   see its output, immediately enter step 5 in this turn. If media is
+   unavailable, a saved prompt or brief is the result; the media budget still
+   applies.
 5. Finish. Do every item below, in order. Do not end your turn before the name
    offer and the dashboard offer have each been asked, failed, or skipped. Even
    if part of setup is blocked, such as an App that is not ready, say so in your
    two lines and still make both offers. An answered card is final: do not ask
    it again in text.
-   - Say in two lines what you set up and where to change it.
+   - Say in two lines what you set up and where to change it, then continue
+     immediately to the name card tool call.
+   - Resume check. Read your current name from your instructions, the answers
+     and rename results already in this conversation, and Home's setup progress.
+     If a name was picked (including Keep), or a rename already succeeded, the
+     name is settled: skip the name card and rename call and proceed directly to
+     widgets. A current name different from the starting name saved in setup
+     progress also proves the rename happened. If a name card is still pending,
+     wait on that same card instead of issuing a replacement. Plain text and an
+     offered marker alone do not prove a card is waiting: without an actual name
+     card call in this conversation, make that call now. A nudge, failure or
+     interrupted turn resumes this checklist; it never restarts setup.
    - Offer a name, once (required). Never settle it yourself by saying you keep
-     your name: the card is how they keep it. Ask with `question.ask`: "Keep
-     <your name>" first, where your name is the one in your instructions ("Your
-     name is …"), copied verbatim and never guessed, then two names you suggest
-     that fit their goal; free text is always allowed. Ask the name only as a
-     `question.ask` card, never in plain text. Wait for their pick: call
-     `question.ask` without `mode`, never `mode: "continue"`, and make no
-     dashboard call until they have picked. Ask it at most once in the whole
-     conversation, even if you run step 5 again. Once they have picked, whether
-     a new name or Keep, the name is settled: never ask it again, not even after
-     an empty or interrupted turn; carry on with the dashboard offer. Only when
-     they pick a new name, call `await env.self.rename({name})`: the moment they
-     pick a new name, your very next call is `await env.self.rename({name})`,
-     before any other step. Then say in one line that you are now called that.
-     Call it directly and do not look it up first, since a lookup of a tool you
-     may not see reads as absent. If `env.self` is missing or the call is
-     refused, say nothing about it.
+     your name: the card is how they keep it. Before the first name card, save
+     its offered status and your starting name under "First conversation" in
+     Home `AGENTS.md`. Ask with `question.ask`: "Keep <your name>" first, where
+     your name is the one in your instructions ("Your name is …"), copied
+     verbatim and never guessed, then two names you suggest that fit their goal;
+     free text is always allowed. In `execute`, bind `currentName` to that
+     verbatim current name and choose `firstSuggestion` and `secondSuggestion`,
+     then run the actual card call below. Your chat transition is a statement;
+     the name question belongs inside this call:
+
+     ```js
+     return await env.question.ask({
+       questions: [
+         {
+           id: "agent_name",
+           header: "Name",
+           question: "Choose a name for me",
+           options: [
+             {
+               label: `Keep ${currentName}`,
+               description: "Keep my current name.",
+             },
+             { label: firstSuggestion, description: "Use this name." },
+             { label: secondSuggestion, description: "Use this name." },
+           ],
+         },
+       ],
+     });
+     ```
+
+     Ask the name only as a `question.ask` card, never in plain text. Wait for
+     their pick: call `question.ask` without `mode`, never `mode: "continue"`,
+     and make no dashboard call until they have picked. Ask it at most once in
+     the whole conversation, even if you run step 5 again. Once they have
+     picked, whether a new name or Keep, the name is settled: never ask it
+     again, not even after an empty or interrupted turn; carry on with the
+     dashboard offer. Only when they pick a new name, call
+     `await env.self.rename({name})`: the moment they pick a new name, your very
+     next call is `await env.self.rename({name})`, before any other step. Then
+     say in one line that you are now called that. Call it directly and do not
+     look it up first, since a lookup of a tool you may not see reads as absent.
+     If `env.self` is missing or the call is refused, say nothing about it.
+     After applying their pick, save the settled name (including Keep) in setup
+     progress, then immediately call `await env.TOURTOIS.widgets.available({})`
+     in this turn.
+
    - Offer "Add to your dashboard" (required). Call
      `await env.TOURTOIS.widgets.available({})` and pick at most 2 matching
      widgets from what you did: Grove Inbox, Inkcap Recent Files, Prints Recent
@@ -150,10 +234,18 @@ Finish with one useful result, not a tour.
    - Delete the "First conversation" section from Home `AGENTS.md`.
    - When the `setup.finish` tool is available, say one more line: "That's you
      set up. To keep going with me, start Pro, or link your wallet if you're a
-     holder." Then call `setup.finish()` once.
-   - When the `setup.finish` tool is absent, stop after the two-line summary:
-     that host has no money step, so say nothing about Pro or wallets and call
-     nothing.
+     holder." Then call `setup.finish()` once in your final `execute`. If you
+     created the setup goal, that same invocation must first await
+     `env.goal.update_goal({status: "complete", reason: "Useful result delivered; name and widget offers settled; setup progress cleaned up."})`,
+     then await `env.setup.finish({})`. Keep the two calls together so the
+     hand-off cannot leave the setup goal unfinished. Leave any other current
+     goal alone.
+   - When the `setup.finish` tool is absent, finish after the offers and cleanup
+     above are complete. If you created the setup goal, your final tool call is
+     `await env.goal.update_goal({status: "complete", reason: "Useful result delivered; name and widget offers settled; setup progress cleaned up."})`.
+     Leave any other current goal alone. That host has no money step; say
+     nothing about Pro or wallets. Its absence never skips the name card or
+     widget approval.
 
 ## Credit
 

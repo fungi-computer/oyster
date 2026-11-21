@@ -3,6 +3,7 @@
 // A route cannot be registered without a requirement (only that module
 // builds a Hono), a served host answers only its declared table, and what a
 // key reaches is decided in that one module.
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
@@ -1114,6 +1115,7 @@ test("a channel party is never a principal: the key gate refuses a visitor's own
       // Any owner credential of the minimum length; a visitor's never matches.
       "o".repeat(32),
       "owner",
+      memoryOwnerSessions(),
       () => ({
         // The key store holds no visitor credential, so it knows none.
         verify: async (secret) => {

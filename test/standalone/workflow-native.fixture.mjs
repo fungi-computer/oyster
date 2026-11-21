@@ -593,6 +593,7 @@ export async function nativeWorkflowRoot({
   prefix,
   main,
   artifactBucket,
+  workerLog,
   computer,
   computerInstances = 1,
   ai = false,
@@ -614,6 +615,7 @@ export async function nativeWorkflowRoot({
     ...computerOptions,
     variables: { ...computerOptions.variables, ...variables },
     oysterOrigin: tenantOrigin,
+    workerLog,
   });
   return {
     ...host,

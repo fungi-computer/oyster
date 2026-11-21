@@ -1,3 +1,4 @@
+import { createWorkflowHostTrace } from "./workflow-host-trace.fixture.js";
 import { StandaloneInstance as NativeInstance } from "../../src/standalone/worker.js";
 import { OysterRegistry as NativeRegistry } from "../../src/standalone/worker.js";
 import type { StandaloneRegistryGit } from "../../src/standalone/registry.js";
@@ -5,6 +6,10 @@ import { createArtifactsRestNamespace } from "@fungi.computer/burrow";
 import { z } from "zod";
 import standalone from "../../src/standalone/worker.js";
 import { StandaloneWorkflowRuns as NativeWorkflowRuns } from "../../src/standalone/worker.js";
+
+const trace = createWorkflowHostTrace((event) => {
+  console.log(JSON.stringify(event));
+});
 
 // Production root admission and bindings remain unchanged. The external Git
 // provider is local for both App bindings and the public smart-HTTP door.
@@ -42,6 +47,16 @@ export class StandaloneInstance extends NativeInstance {
     },
   ) {
     super(ctx, localGit(env));
+  }
+  override call(...args: Parameters<NativeInstance["call"]>) {
+    return args[2] === "listRuns"
+      ? trace("app-list-runs", () => super.call(...args))
+      : super.call(...args);
+  }
+  override bindingCall(...args: Parameters<NativeInstance["bindingCall"]>) {
+    return args[1] === "runs"
+      ? trace("runs-binding", () => super.bindingCall(...args))
+      : super.bindingCall(...args);
   }
 }
 // The provider's Cloudflare-shaped remote host (`workflow-git.fixture.mjs`).
@@ -150,6 +165,12 @@ export class StandaloneWorkflowRuns extends NativeWorkflowRuns {
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), offset_ms INTEGER NOT NULL
     ) STRICT`);
   }
+  override runs(...args: Parameters<NativeWorkflowRuns["runs"]>) {
+    return trace("workflow-runs", () => super.runs(...args));
+  }
+  override alarm(): Promise<void> {
+    return trace("workflow-alarm", () => super.alarm());
+  }
   private offset(): number {
     const [row] = proofClockRows.parse(
       this.ctx.storage.sql
@@ -167,7 +188,15 @@ export class StandaloneWorkflowRuns extends NativeWorkflowRuns {
           "INSERT INTO proof_schedule_clock(singleton,offset_ms) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET offset_ms=excluded.offset_ms",
           skip,
         );
-      return due - this.offset();
+      const nativeDueAt = due - this.offset();
+      console.log(
+        JSON.stringify({
+          proof: "workflow-alarm-target",
+          at: Date.now(),
+          nativeDueAt,
+        }),
+      );
+      return nativeDueAt;
     },
   };
 }
@@ -190,6 +219,10 @@ export default {
       adapted = localGit(env);
       rootEnvironments.set(env, adapted);
     }
-    return standalone.fetch(request, adapted, context);
+    const selected = adapted;
+    const dispatch = () => standalone.fetch(request, selected, context);
+    return new URL(request.url).pathname === "/apps/trellis/methods/listRuns"
+      ? trace("list-runs-request", dispatch)
+      : dispatch();
   },
 };

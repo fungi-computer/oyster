@@ -1,4 +1,4 @@
-import { ownerKeyAuth } from "../auth.js";
+import { ownerKeyCredential } from "../auth.js";
 import { OysterArchivingError } from "./old-worker-readonly.js";
 
 const path = "/__upgrade/registry-sql";
@@ -22,13 +22,7 @@ export async function oldRegistrySqlRequest(
     return archivingResponse();
   if (request.headers.get("Authorization")?.startsWith("Bearer ") !== true)
     return new Response(null, { status: 401, headers: noStore });
-  const result = await ownerKeyAuth(ownerKey).authenticate(request);
-  if (
-    result.kind !== "admitted" ||
-    result.principal.actor.kind !== "member" ||
-    !("role" in result.principal) ||
-    result.principal.role !== "owner"
-  )
+  if ((await ownerKeyCredential(ownerKey, request)) !== "owner")
     return new Response(null, { status: 401, headers: noStore });
   return exportRegistry();
 }

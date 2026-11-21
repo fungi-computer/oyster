@@ -90,6 +90,7 @@ import {
 } from "@fungi.computer/gills";
 import { causeClass, failureDiagnostic } from "./cause-class.js";
 import { ownerKeyAuth } from "./auth.js";
+import { ownerSessionStore, type OwnerSessions } from "./owner-sessions.js";
 import type {
   AppGitPushFact,
   GitBinding,
@@ -300,6 +301,25 @@ export class OysterRegistry<
   /** The plain root has the same single owner-key host as OysterInstance. */
   protected hostFor(scope: TenantScope): Promise<OysterHost> {
     return Promise.resolve(ownerKeyRootHost(this.env, { scope }));
+  }
+
+  #ownerSessions: OwnerSessions | undefined;
+  /** This tenant's owner browser sessions; only the Worker's owner sign-in calls these. */
+  private ownerSessions(): OwnerSessions {
+    this.#ownerSessions ??= ownerSessionStore(this.ctx.storage.sql);
+    return this.#ownerSessions;
+  }
+  /** Open an owner browser session from its digest; see `OwnerSessions.open`. */
+  openOwnerSession(owner: string, digest: string, now: number) {
+    return this.ownerSessions().open(owner, digest, now);
+  }
+  /** The owner a live session signs in, or null. */
+  ownerSessionOwner(digest: string, now: number) {
+    return this.ownerSessions().owner(digest, now);
+  }
+  /** Revoke one owner browser session. */
+  revokeOwnerSession(digest: string) {
+    return this.ownerSessions().revoke(digest);
   }
 
   /** Trusted host RPC; an operation input cannot select actor, namespace or tenant. */
@@ -2517,7 +2537,37 @@ function ownerKeyRootHost(
       scope?: TenantScope;
     }>,
 ): OysterHost {
-  return oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY), options);
+  const scope = options.scope ?? tenantScope(defaultTenant, env.OYSTER_ORIGIN);
+  return oysterWorkerHost(
+    env,
+    ownerKeyAuth(
+      env.OYSTER_OWNER_KEY,
+      "owner",
+      registryOwnerSessions(() =>
+        env.REGISTRY.getByName(scope.durableName("registry")),
+      ),
+    ),
+    options,
+  );
+}
+
+/** A tenant registry's owner sessions as the `OwnerSessions` port. */
+export function registryOwnerSessions(
+  registry: () => Pick<
+    OysterRegistry,
+    "openOwnerSession" | "ownerSessionOwner" | "revokeOwnerSession"
+  >,
+): OwnerSessions {
+  return {
+    open: async (owner, digest, now) => {
+      await registry().openOwnerSession(owner, digest, now);
+    },
+    owner: async (digest, now) =>
+      await registry().ownerSessionOwner(digest, now),
+    revoke: async (digest) => {
+      await registry().revokeOwnerSession(digest);
+    },
+  };
 }
 
 /** The non-git standalone root's MCP owner. */

@@ -12,6 +12,8 @@ import {
 } from "../workers-git.js";
 import { defaultTenant, tenantScope, type TenantScope } from "../tenant.js";
 import { oysterPrincipalIsOwner } from "../authorization.js";
+import { r2ArtifactStore } from "../workers.js";
+import { standaloneCandidatePreview } from "./candidate-preview.js";
 import { standaloneComputerControl } from "./computer-control.js";
 import { standalonePermissionResources } from "./permission-resources.js";
 import {
@@ -42,6 +44,7 @@ import {
 } from "./workflows.js";
 import {
   standaloneTenancyForRequest,
+  standaloneTenancy,
   StandaloneSeedConfigurationChanged,
   type StandaloneTenancyEnv,
 } from "./tenancy.js";
@@ -225,13 +228,23 @@ const standaloneRoot = (
     },
     // Operator source seeding and owner builds share the one owner guard.
     ownerRoutes: (env, scope) =>
-      standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope)).include(
-        standalonePortEntryRoutes({
-          ownsComputer: (id) => tenantRegistry(env, scope).ownsComputer(id),
-          issue: (id, ownerId, port) =>
-            env.COMPUTER.getByName(id).issuePortConnect(ownerId, port),
-        }),
-      ),
+      standaloneOwnerRoutes(env, scope, () => root.hostFor(env, scope))
+        .include(
+          standaloneCandidatePreview({
+            scope,
+            secret: env.OYSTER_OWNER_KEY,
+            owner: async () => (await standaloneTenancy(env)).owner(),
+            readBuild: (jobId) => tenantRegistry(env, scope).readBuild(jobId),
+            artifacts: r2ArtifactStore(env.RELEASES),
+          }).routes,
+        )
+        .include(
+          standalonePortEntryRoutes({
+            ownsComputer: (id) => tenantRegistry(env, scope).ownsComputer(id),
+            issue: (id, ownerId, port) =>
+              env.COMPUTER.getByName(id).issuePortConnect(ownerId, port),
+          }),
+        ),
   });
   return root;
 };

@@ -70,7 +70,12 @@ export default {
     if (path.startsWith("/api/websites"))
       return serveHost(
         standaloneWebsiteRoutes(standaloneWebsiteControl(env, () => directory)),
-        ownerKeyAuth(env.OWNER_KEY).authenticate,
+        // This fixture signs in by Bearer only; no browser session is ever live.
+        ownerKeyAuth(env.OWNER_KEY, "owner", {
+          open: () => Promise.resolve(),
+          owner: () => Promise.resolve(null),
+          revoke: () => Promise.resolve(),
+        }).authenticate,
         { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
       ).fetch(request, env, context);
     return website.fetch(request, env, context);

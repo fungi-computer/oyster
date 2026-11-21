@@ -123,6 +123,7 @@ import {
   oysterWorkerHost,
   r2FileSource,
   r2ArtifactStore,
+  registryOwnerSessions,
   type OysterBindingContext,
   type OysterBindingRow,
   type OysterBindingTable,
@@ -1592,8 +1593,13 @@ export function ownerOrKeyTenancy(env: OysterGitWorkerEnv): OysterTenancy {
   const scope = tenantScope(defaultTenant, env.OYSTER_ORIGIN);
   return implicitTenancy(
     scope.origin,
-    ownerOrKeyAuth(env.OYSTER_OWNER_KEY, env.OYSTER_OWNER_NAME ?? "owner", () =>
-      env.KEYS.getByName(scope.durableName("keys")),
+    ownerOrKeyAuth(
+      env.OYSTER_OWNER_KEY,
+      env.OYSTER_OWNER_NAME ?? "owner",
+      registryOwnerSessions(() =>
+        env.REGISTRY.getByName(scope.durableName("registry")),
+      ),
+      () => env.KEYS.getByName(scope.durableName("keys")),
     ),
   );
 }
@@ -2040,6 +2046,18 @@ function pinnedTenantAuth(
       return (
         current.auth.login?.(incoming) ??
         new Response("Sign-in is not available", { status: 404 })
+      );
+    },
+    logout: async (incoming) => {
+      const current = await admitted(incoming);
+      if (
+        current?.scope.tenantId !== scope.tenantId ||
+        current.scope.origin !== scope.origin
+      )
+        return new Response("Not found", { status: 404 });
+      return (
+        current.auth.logout?.(incoming) ??
+        new Response("Sign-out is not available", { status: 404 })
       );
     },
   };

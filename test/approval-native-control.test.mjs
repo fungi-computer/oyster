@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -55,7 +56,7 @@ for (const early of [false, true])
           RELEASES: {},
           REGISTRY: { getByName: () => registry },
         },
-        ownerKeyAuth(key),
+        ownerKeyAuth(key, "owner", memoryOwnerSessions()),
       );
       home = new OysterApprovalHome({
         owner: fromNodeSqlite(database),
@@ -134,7 +135,7 @@ test("native Oyster HTTP controls persist owner policy through the real registry
     RELEASES: {},
     REGISTRY: { getByName: () => registry },
   };
-  let liveAuth = ownerKeyAuth(key);
+  let liveAuth = ownerKeyAuth(key, "owner", memoryOwnerSessions());
   class CurrentRegistry extends OysterRegistry {
     hostFor(scope) {
       return Promise.resolve(oysterWorkerHost(env, liveAuth, { scope }));
@@ -144,7 +145,10 @@ test("native Oyster HTTP controls persist owner policy through the real registry
     { id: { name: "registry" }, storage: fromNodeSqlite(database) },
     env,
   );
-  const native = oysterWorkerHost(env, ownerKeyAuth(key));
+  const native = oysterWorkerHost(
+    env,
+    ownerKeyAuth(key, "owner", memoryOwnerSessions()),
+  );
   const base = await computerHost(
     { actor: { kind: "member", memberId: "owner" }, role: "owner" },
     null,
@@ -231,7 +235,7 @@ test("native Oyster HTTP controls persist owner policy through the real registry
     /Approval home cannot change tenant/,
     "a registry restart must not permit rebinding persisted consent to another origin",
   );
-  liveAuth = ownerKeyAuth(key, "replacement-owner");
+  liveAuth = ownerKeyAuth(key, "replacement-owner", memoryOwnerSessions());
   // The page host still admits the old owner. The durable home must resolve the
   // current owner independently, rather than trust that earlier admission.
   assert.deepEqual(
@@ -287,7 +291,10 @@ test("a cold native Registry withdraws an approved call instead of dispatching i
     scope: tenantScope(defaultTenant, env.OYSTER_ORIGIN),
     current: () =>
       Promise.resolve(
-        oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+        oysterWorkerHost(
+          env,
+          ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+        ),
       ),
     commit: (write) => write(),
   });
@@ -368,7 +375,10 @@ test("a retried Oyster request after a member approval never claims or answers i
     scope: tenantScope(defaultTenant, env.OYSTER_ORIGIN),
     current: () =>
       Promise.resolve(
-        oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+        oysterWorkerHost(
+          env,
+          ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+        ),
       ),
     commit: (write) => write(),
   });

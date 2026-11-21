@@ -10,13 +10,44 @@ import {
 
 const { Request, URLSearchParams, btoa, console } = globalThis;
 
+/** An in-memory OwnerSessions port, with its rows visible to the test. */
+function memorySessions() {
+  const rows = new Map();
+  return {
+    rows,
+    open: async (owner, digest, now) => {
+      rows.set(digest, { owner, expiresAt: now + 2_592_000_000 });
+    },
+    owner: async (digest, now) => {
+      const row = rows.get(digest);
+      return row === undefined || row.expiresAt <= now ? null : row.owner;
+    },
+    revoke: async (digest) => {
+      rows.delete(digest);
+    },
+  };
+}
+
+async function signIn(auth, url = `${origin}/login`) {
+  const response = await auth.login(
+    new Request(url, { method: "POST", body: new URLSearchParams({ key }) }),
+  );
+  const header = response.headers
+    .getSetCookie()
+    .find((value) => value.startsWith(`${ownerKeyCookieName}=`));
+  return { response, header, cookie: header?.split(";")[0] };
+}
+
 const key = "fixture-owner-key-1234567890"; //gitleaks:allow
 const ownerId = "canonical-stored-owner";
 const origin = "https://owner.example.test";
 
 test("neutral owner auth preserves explicit owner identity and bearer refusals", async () => {
-  assert.throws(() => ownerKeyAuth("short", ownerId), /at least 24/);
-  const auth = ownerKeyAuth(key, ownerId);
+  assert.throws(
+    () => ownerKeyAuth("short", ownerId, memorySessions()),
+    /at least 24/,
+  );
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   assert.deepEqual(
     await auth.authenticate(
       new Request(origin, { headers: { Authorization: `Bearer ${key}` } }),
@@ -44,7 +75,7 @@ test("neutral owner auth preserves explicit owner identity and bearer refusals",
 });
 
 test("Git's Basic password admits the owner without consulting issued keys", async () => {
-  const auth = ownerOrKeyAuth(key, ownerId, () => {
+  const auth = ownerOrKeyAuth(key, ownerId, memorySessions(), () => {
     throw new Error("The owner key must not reach the issued-key store");
   });
   for (const username of ["oyster", "git"]) {
@@ -66,7 +97,7 @@ test("Git's Basic password admits the owner without consulting issued keys", asy
 });
 
 test("Basic auth refuses malformed credentials and a wrong owner password", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   for (const authorization of [
     "Basic %%%",
     `Basic ${btoa("oyster")}`,
@@ -84,7 +115,7 @@ test("Basic auth refuses malformed credentials and a wrong owner password", asyn
 });
 
 test("the session cookie drops Secure on loopback HTTP only", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   assert.ok(auth.login);
   // The session cookie and the returning marker follow one Secure rule.
   const cookie = async (url) =>
@@ -115,43 +146,152 @@ test("the session cookie drops Secure on loopback HTTP only", async () => {
       assert.match(header, /HttpOnly; Secure; SameSite=Strict/u, url);
 });
 
-test("neutral login keeps the digest cookie attributes and rotates with the key", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
-  assert.ok(auth.login);
-  const response = await auth.login(
-    new Request(`${origin}/login`, {
-      method: "POST",
-      body: new URLSearchParams({ key }),
-    }),
-  );
-  assert.equal(response.status, 303);
-  assert.equal(response.headers.get("Location"), "/");
-  const header = response.headers.get("Set-Cookie");
-  assert.ok(header);
+test("sign-in opens a random server-side session that expires", async () => {
+  const sessions = memorySessions();
+  const auth = ownerKeyAuth(key, ownerId, sessions);
+  const first = await signIn(auth);
+  assert.equal(first.response.status, 303);
+  assert.equal(first.response.headers.get("Location"), "/");
   assert.equal(ownerKeyCookieName, "oyster_session");
-  assert.match(header, /^oyster_session=sha256:[a-f0-9]{64};/);
-  assert.match(header, /HttpOnly; Secure; SameSite=Strict; Max-Age=2592000/);
-  assert.equal(header.includes(key), false);
-  const request = new Request(origin, {
-    headers: { Cookie: header.split(";")[0] },
-  });
+  assert.match(first.header, /^oyster_session=[A-Za-z0-9_-]{43};/u);
+  assert.match(
+    first.header,
+    /Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000$/u,
+  );
+  assert.equal(first.header.includes(key), false);
+  // Each sign-in is its own session, and the store never holds the cookie.
+  const second = await signIn(auth);
+  assert.notEqual(first.cookie, second.cookie);
+  assert.equal(sessions.rows.size, 2);
+  for (const digest of sessions.rows.keys())
+    assert.equal(
+      [first.cookie, second.cookie].some((cookie) => cookie.endsWith(digest)),
+      false,
+    );
+  const [row] = sessions.rows.values();
+  assert.equal(row.owner, ownerId);
+  assert.ok(Math.abs(row.expiresAt - (Date.now() + 2_592_000_000)) < 60_000);
+  const request = new Request(origin, { headers: { Cookie: first.cookie } });
   assert.deepEqual(await auth.authenticate(request), {
     kind: "admitted",
     principal: { actor: { kind: "member", memberId: ownerId }, role: "owner" },
   });
+  // Past its expiry the server refuses the cookie, whatever the browser keeps.
+  for (const stored of sessions.rows.values()) stored.expiresAt = Date.now();
+  assert.deepEqual(await auth.authenticate(request), {
+    kind: "refused",
+    status: 401,
+  });
+});
+
+test("a session signs in only its own owner", async () => {
+  const sessions = memorySessions();
+  const { cookie } = await signIn(ownerKeyAuth(key, ownerId, sessions));
+  const other = ownerKeyAuth(key, "a-different-owner", sessions);
   assert.deepEqual(
-    await ownerKeyAuth(`${key}x`, ownerId).authenticate(request),
-    {
-      kind: "refused",
-      status: 401,
-    },
+    await other.authenticate(
+      new Request(origin, { headers: { Cookie: cookie } }),
+    ),
+    { kind: "refused", status: 401 },
   );
 });
 
-test("the owner cookie is read with the cookie grammar, keeping existing sessions", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
-  // The value every existing session holds: the digest login has always set.
-  const session = `sha256:${createHash("sha256").update(`oyster:${key}`).digest("hex")}`;
+test("rotating the owner key ends every session", async () => {
+  const sessions = memorySessions();
+  const { cookie } = await signIn(ownerKeyAuth(key, ownerId, sessions));
+  const rotated = ownerKeyAuth(`${key}-rotated`, ownerId, sessions);
+  assert.deepEqual(
+    await rotated.authenticate(
+      new Request(origin, { headers: { Cookie: cookie } }),
+    ),
+    { kind: "refused", status: 401 },
+  );
+});
+
+test("logout revokes the session and clears the cookie", async () => {
+  const sessions = memorySessions();
+  const auth = ownerKeyAuth(key, ownerId, sessions);
+  const { cookie } = await signIn(auth);
+  const kept = await signIn(auth);
+  assert.ok(auth.logout);
+  // A cross-site or Origin-less POST cannot sign the owner out.
+  for (const headers of [
+    { Cookie: cookie },
+    { Cookie: cookie, Origin: "https://attacker.example" },
+    { Cookie: cookie, Origin: origin, "Sec-Fetch-Site": "cross-site" },
+  ]) {
+    const refused = await auth.logout(
+      new Request(`${origin}/logout`, { method: "POST", headers }),
+    );
+    assert.equal(refused.status, 403);
+    assert.equal(refused.headers.get("Set-Cookie"), null);
+  }
+  assert.equal(
+    (
+      await auth.authenticate(
+        new Request(origin, { headers: { Cookie: cookie } }),
+      )
+    ).kind,
+    "admitted",
+  );
+  const response = await auth.logout(
+    new Request(`${origin}/logout`, {
+      method: "POST",
+      headers: { Cookie: cookie, Origin: origin },
+    }),
+  );
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("Location"), "/login");
+  assert.match(
+    response.headers.get("Set-Cookie"),
+    /^oyster_session=; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=0$/u,
+  );
+  // A copy of the revoked cookie no longer signs in; other browsers stay.
+  assert.deepEqual(
+    await auth.authenticate(
+      new Request(origin, { headers: { Cookie: cookie } }),
+    ),
+    { kind: "refused", status: 401 },
+  );
+  assert.equal(
+    (
+      await auth.authenticate(
+        new Request(origin, { headers: { Cookie: kept.cookie } }),
+      )
+    ).kind,
+    "admitted",
+  );
+  // Logging out without a session still clears the cookie.
+  const bare = await auth.logout(
+    new Request(`${origin}/logout`, {
+      method: "POST",
+      headers: { Origin: origin },
+    }),
+  );
+  assert.equal(bare.status, 303);
+});
+
+test("the old key-digest cookie fails closed", async () => {
+  const digest = `sha256:${createHash("sha256").update(`oyster:${key}`).digest("hex")}`;
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
+  assert.deepEqual(
+    await auth.authenticate(
+      new Request(origin, {
+        headers: { Cookie: `${ownerKeyCookieName}=${digest}` },
+      }),
+    ),
+    { kind: "refused", status: 401 },
+  );
+});
+
+test("the owner cookie is read with the cookie grammar", async () => {
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
+  const session = (await signIn(auth)).cookie.slice(
+    `${ownerKeyCookieName}=`.length,
+  );
+  const other = (
+    await signIn(ownerKeyAuth(key, ownerId, memorySessions()))
+  ).cookie.slice(`${ownerKeyCookieName}=`.length);
   const admitted = {
     kind: "admitted",
     principal: { actor: { kind: "member", memberId: ownerId }, role: "owner" },
@@ -162,16 +302,10 @@ test("the owner cookie is read with the cookie grammar, keeping existing session
     [`oyster_returning=1; theme=a=b=c; oyster_session=${session}`, admitted],
     [`oyster_session="${session}"`, admitted],
     [`  other=1 ;  oyster_session = ${session}  `, admitted],
-    [
-      `oyster_session=${session}; oyster_session=sha256:${"0".repeat(64)}`,
-      admitted,
-    ],
-    [
-      `oyster_session=sha256:${"0".repeat(64)}; oyster_session=${session}`,
-      refused,
-    ],
+    [`oyster_session=${session}; oyster_session=${other}`, admitted],
+    [`oyster_session=${other}; oyster_session=${session}`, refused],
     [`xoyster_session=${session}; oyster_session_old=${session}`, refused],
-    [`oyster_session=sha256:${"0".repeat(64)}`, refused],
+    [`oyster_session=${other}`, refused],
     ["oyster_returning=1", refused],
     ["", refused],
   ];
@@ -188,7 +322,7 @@ test("the owner cookie is read with the cookie grammar, keeping existing session
 });
 
 test("neutral login refuses wrong and missing key input", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   assert.ok(auth.login);
   for (const form of [{ key: "wrong" }, {}]) {
     const response = await auth.login(
@@ -203,7 +337,7 @@ test("neutral login refuses wrong and missing key input", async () => {
 });
 
 test("neutral login refuses a body that is not a form with 400", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   assert.ok(auth.login);
   for (const init of [
     {
@@ -222,7 +356,7 @@ test("neutral login refuses a body that is not a form with 400", async () => {
 });
 
 test("background resolution uses the configured owner identity without bearer material or actor promotion", async () => {
-  const auth = ownerKeyAuth(key, ownerId);
+  const auth = ownerKeyAuth(key, ownerId, memorySessions());
   assert.deepEqual(await auth.resolve({ kind: "member", memberId: ownerId }), {
     actor: { kind: "member", memberId: ownerId },
     role: "owner",
@@ -239,7 +373,7 @@ test("background resolution uses the configured owner identity without bearer ma
   ]) {
     assert.equal(await auth.resolve(actor), null);
   }
-  const replaced = ownerKeyAuth(key, "current-owner");
+  const replaced = ownerKeyAuth(key, "current-owner", memorySessions());
   assert.equal(
     await replaced.resolve({ kind: "member", memberId: ownerId }),
     null,
@@ -267,7 +401,10 @@ test("ownerOrKeyAuth admits a verified key only when its own owner matches, neve
     touched.push(keyId);
     return { kind: "ok", value: undefined };
   };
-  const auth = ownerOrKeyAuth(key, ownerId, () => ({ verify, touch }));
+  const auth = ownerOrKeyAuth(key, ownerId, memorySessions(), () => ({
+    verify,
+    touch,
+  }));
   // The presented secret verifies to a real key, but that key's own stored
   // owner is not this host's configured owner: never admitted, the same as
   // an unrecognized secret.
@@ -281,10 +418,15 @@ test("ownerOrKeyAuth admits a verified key only when its own owner matches, neve
   );
   // The same secret, once its stored owner matches, admits as that key.
   assert.deepEqual(touched, []);
-  const matching = ownerOrKeyAuth(key, "a-different-owner", () => ({
-    verify,
-    touch,
-  }));
+  const matching = ownerOrKeyAuth(
+    key,
+    "a-different-owner",
+    memorySessions(),
+    () => ({
+      verify,
+      touch,
+    }),
+  );
   assert.deepEqual(
     await matching.authenticate(
       new Request(origin, {
@@ -319,7 +461,7 @@ test("last use is stamped at most once per window and a failed stamp never fails
       return { kind: "error", error: { code: "denied" } };
     return { kind: "ok", value: undefined };
   };
-  const auth = ownerOrKeyAuth(key, "owner", () => ({
+  const auth = ownerOrKeyAuth(key, "owner", memorySessions(), () => ({
     verify,
     touch,
   }));

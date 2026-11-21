@@ -1,3 +1,4 @@
+import { memoryRegistrySessions } from "../memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
@@ -554,6 +555,7 @@ test("cold seed refuses suspended or deleting authority without repairing it", a
 });
 
 test("HTTP and root readers share the stored canonical owner and live membership version", async () => {
+  const sessionRegistry = memoryRegistrySessions();
   const probe = fixture();
   const expectedFailures = [];
   const credential = "standalone-test-owner-key-24-characters"; //gitleaks:allow
@@ -571,6 +573,7 @@ test("HTTP and root readers share the stored canonical owner and live membership
         return probe.owner;
       },
     },
+    REGISTRY: { getByName: () => sessionRegistry },
     KEYS: {
       getByName: () => ({
         live: async (keyId) =>
@@ -634,6 +637,25 @@ test("HTTP and root readers share the stored canonical owner and live membership
       }),
     );
     assert.equal(login.status, 303);
+    const sessionCookie = login.headers
+      .getSetCookie()
+      .find((value) => value.startsWith("oyster_session="));
+    assert.ok(sessionCookie, "owner sign-in sets a browser session");
+    const signedIn = new globalThis.Request(`${input.origin}/api/apps`, {
+      headers: { Cookie: sessionCookie.split(";")[0] },
+    });
+    assert.equal((await selected.auth.authenticate(signedIn)).kind, "admitted");
+    const logout = await selected.auth.logout(
+      new globalThis.Request(`${input.origin}/logout`, {
+        method: "POST",
+        headers: {
+          Cookie: sessionCookie.split(";")[0],
+          Origin: input.origin,
+        },
+      }),
+    );
+    assert.equal(logout.status, 303);
+    assert.equal((await selected.auth.authenticate(signedIn)).kind, "refused");
     const namedKey = new globalThis.Request(`${input.origin}/api/apps`, {
       headers: { Authorization: "Bearer named-key-fixture" },
     });

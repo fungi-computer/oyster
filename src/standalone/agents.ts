@@ -3868,6 +3868,7 @@ export class AgentDirectory extends DurableObject<StandaloneAgentEnv> {
     let configured: StandaloneTenancyEnv = {
       TENANTS: this.env.TENANTS,
       KEYS: this.env.KEYS,
+      REGISTRY: this.env.REGISTRY,
       OYSTER_ORIGIN: this.env.OYSTER_ORIGIN,
       OYSTER_OWNER_KEY: this.env.OYSTER_OWNER_KEY,
     };

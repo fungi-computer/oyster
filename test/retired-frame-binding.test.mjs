@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
@@ -229,9 +230,13 @@ test(
     };
     const scope = tenantScope(defaultTenant, env.OYSTER_ORIGIN);
     const Executor = installationWorkerEntrypoint((bindings, scope) =>
-      oysterWorkerHost(bindings, ownerKeyAuth(bindings.OYSTER_OWNER_KEY), {
-        scope,
-      }),
+      oysterWorkerHost(
+        bindings,
+        ownerKeyAuth(bindings.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+        {
+          scope,
+        },
+      ),
     );
     registry = new OysterRegistry(
       {
@@ -244,7 +249,10 @@ test(
       env,
     );
     const app = createOyster(
-      oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+      oysterWorkerHost(
+        env,
+        ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+      ),
     );
     const json = (body) => ({
       method: "POST",

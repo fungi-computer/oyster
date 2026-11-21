@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "../memory-owner-sessions.mjs";
 import { seededAvatar } from "@fungi.computer/sprite/avatar";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
@@ -3419,7 +3420,7 @@ test("the standalone directory retains replay, oldest-first names and visits acr
 test("HTTP credentials and forged agent claims never authenticate an internal agent", async () => {
   const ownerKey = "owner-fixture-secret-24-characters"; //gitleaks:allow
   const key = "agent-key-fixture";
-  const auth = ownerOrKeyAuth(ownerKey, "owner", () => ({
+  const auth = ownerOrKeyAuth(ownerKey, "owner", memoryOwnerSessions(), () => ({
     verify: async (value) =>
       value === key
         ? {
@@ -3463,14 +3464,21 @@ test("HTTP credentials and forged agent claims never authenticate an internal ag
     );
     assert.deepEqual(result, { kind: "admitted", principal });
   }
-  const cookie = await sha256(
-    new globalThis.TextEncoder().encode(`oyster:${ownerKey}`),
+  const signedIn = await auth.login(
+    new globalThis.Request("https://oyster.test/login", {
+      method: "POST",
+      body: new globalThis.URLSearchParams({ key: ownerKey }),
+    }),
   );
+  const cookie = signedIn.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("oyster_session="))
+    .split(";")[0];
   assert.deepEqual(
     await auth.authenticate(
       request({
         ...forged,
-        Cookie: `oyster_session=${cookie}; principal=agent`,
+        Cookie: `${cookie}; principal=agent`,
       }),
     ),
     {

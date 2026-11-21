@@ -1,5 +1,51 @@
 # @fungi.computer/oyster
 
+## 0.57.0
+
+### Minor Changes
+
+- Changes since 0.56.2:
+
+  - fix(agar): distinguish unsupported host features from permission denials
+  - fix(oyster): remove stray separator before preview build
+  - fix(agents): reject plain-text setup questions despite automatic recovery
+  - fix(oyster): keep preview landing to one primary action
+  - fix(oyster): style preview entry and compact its notice
+  - fix(agents): resume setup offers and discover instruction paths
+  - fix(oyster): keep manual preview freshness explicit
+  - feat(oyster): add private UI-only build previews
+  - fix(agents): finish setup without repeated decisions
+  - fix(oyster): refuse a cross-site sign-out
+  - fix(oyster): sign the owner in with a revocable server-side session
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.27.2
+  - @fungi.computer/caps@0.12.9
+  - @fungi.computer/computer-contract@0.6.4
+  - @fungi.computer/computer@0.18.4
+  - @fungi.computer/darkroom@0.11.18
+  - @fungi.computer/forage@0.5.2
+  - @fungi.computer/parakeet@0.17.2
+  - @fungi.computer/shiitake-extensions@0.13.0
+  - @fungi.computer/shiitake@0.22.4
+  - @fungi.computer/braid@0.6.10
+  - @fungi.computer/nacre@0.9.3
+  - @fungi.computer/workflows-wire@0.7.11
+  - @fungi.computer/knapsack@0.4.27
+  - @fungi.computer/mycelium@0.4.12
+  - @fungi.computer/veil@0.11.9
+  - @fungi.computer/zookeeper@0.0.63
+
 ## 0.56.2
 
 ### Patch Changes

@@ -1,4 +1,5 @@
 import * as Result from "effect/Result";
+import { memoryOwnerSessions } from "../owner-sessions.fixture.js";
 import {
   applyInstallationCommand,
   deriveDeclaredOperations,
@@ -704,6 +705,7 @@ it.each([
         auth: ownerKeyAuth(
           "workflow-fixture-owner-secret-123456789",
           "arming-owner",
+          memoryOwnerSessions(),
         ),
         bootUi: unexpected,
         computerId: "storyboard-computer",

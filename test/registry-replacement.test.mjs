@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import {
@@ -228,7 +229,10 @@ function fixture(t, artifacts, guest, failedConstructions = 0, backendFor) {
     return reply;
   };
   const app = createOyster(
-    oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+    oysterWorkerHost(
+      env,
+      ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+    ),
   );
   const read = async (operation) => {
     const response = await app.request(
@@ -403,7 +407,10 @@ test("Registry idle retention shares the consumed alarm with approvals and prese
     scope: tenantScope(defaultTenant, env.OYSTER_ORIGIN),
     current: () =>
       Promise.resolve(
-        oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+        oysterWorkerHost(
+          env,
+          ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+        ),
       ),
     commit: (write) => write(),
   });
@@ -822,7 +829,10 @@ test("owner grant approval refreshes the backend Instance before the next method
     context: async () => ({ accepted: true }),
   });
   const app = createOyster(
-    oysterWorkerHost(env, ownerKeyAuth(env.OYSTER_OWNER_KEY)),
+    oysterWorkerHost(
+      env,
+      ownerKeyAuth(env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+    ),
   );
   const headers = {
     Authorization: `Bearer ${env.OYSTER_OWNER_KEY}`,
@@ -2466,7 +2476,10 @@ test("delegated install authority cannot borrow a member owner role, and App-sta
   const source = await computerHost(owner, null);
   const previous = await source.installations.get("context-probe");
   const f = fixture(t, source.artifacts);
-  const host = oysterWorkerHost(f.env, ownerKeyAuth(f.env.OYSTER_OWNER_KEY));
+  const host = oysterWorkerHost(
+    f.env,
+    ownerKeyAuth(f.env.OYSTER_OWNER_KEY, "owner", memoryOwnerSessions()),
+  );
   const headers = {
     Authorization: "Bearer " + f.env.OYSTER_OWNER_KEY,
     "Content-Type": "application/json",

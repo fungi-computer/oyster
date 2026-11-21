@@ -128,6 +128,67 @@ DurableObject<Env>.constructor
 
 #### Methods
 
+##### openOwnerSession()
+
+```ts
+openOwnerSession(
+   owner,
+   digest,
+   now
+): Promise<void>;
+```
+
+Open an owner browser session from its digest; see `OwnerSessions.open`.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `owner`   | `string` |
+| `digest`  | `string` |
+| `now`     | `number` |
+
+###### Returns
+
+`Promise`\<`void`\>
+
+##### ownerSessionOwner()
+
+```ts
+ownerSessionOwner(digest, now): Promise<string | null>;
+```
+
+The owner a live session signs in, or null.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `digest`  | `string` |
+| `now`     | `number` |
+
+###### Returns
+
+`Promise`\<`string` \| `null`\>
+
+##### revokeOwnerSession()
+
+```ts
+revokeOwnerSession(digest): Promise<void>;
+```
+
+Revoke one owner browser session.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `digest`  | `string` |
+
+###### Returns
+
+`Promise`\<`void`\>
+
 ##### approvalSubmit()
 
 ```ts
@@ -3439,6 +3500,26 @@ Instances, and boot-check service.
 #### Returns
 
 [`OysterHost`](host.md#oysterhost)
+
+---
+
+### registryOwnerSessions()
+
+```ts
+function registryOwnerSessions(registry): OwnerSessions;
+```
+
+A tenant registry's owner sessions as the `OwnerSessions` port.
+
+#### Parameters
+
+| Parameter  | Type                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `registry` | () => `Pick`\<[`OysterRegistry`](#oysterregistry), `"openOwnerSession"` \| `"ownerSessionOwner"` \| `"revokeOwnerSession"`\> |
+
+#### Returns
+
+[`OwnerSessions`](auth.md#ownersessions)
 
 ---
 

@@ -5,6 +5,7 @@ import { createOyster, type OysterHost } from "@fungi.computer/oyster/host";
 import {
   ownerKeyAuth,
   oysterWorkerHost,
+  registryOwnerSessions,
   OysterRegistry as Registry,
   type OysterWorkerEnv,
 } from "@fungi.computer/oyster/workers";
@@ -93,7 +94,11 @@ export default {
     }
     const host = oysterWorkerHost(
       env,
-      ownerKeyAuth(env.OYSTER_OWNER_KEY),
+      ownerKeyAuth(
+        env.OYSTER_OWNER_KEY,
+        "owner",
+        registryOwnerSessions(() => env.REGISTRY.getByName("registry")),
+      ),
       options,
     );
     const installations: OysterHost["installations"] = {

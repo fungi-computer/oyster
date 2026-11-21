@@ -124,13 +124,20 @@ export async function serveBootCapability(
   const parentPath = `${root.pathname}index.html`;
   const bridgePath = `${root.pathname}bridge.js`;
   if (url.pathname === parentPath) {
-    return new Response(bootParentDocument(checkedLease.identity, entry), {
-      status: 200,
-      headers: {
-        ...parentSecurityHeaders(candidateBase.href),
-        "content-type": "text/html; charset=utf-8",
+    return new Response(
+      await bootParentDocument(checkedLease.identity, entry, {
+        bridge: "./bridge.js",
+        sandbox: "allow-scripts",
+        notice: null,
+      }),
+      {
+        status: 200,
+        headers: {
+          ...parentSecurityHeaders(candidateBase.href),
+          "content-type": "text/html; charset=utf-8",
+        },
       },
-    });
+    );
   }
   if (url.pathname === bridgePath) {
     return new Response(bootHostScript, {

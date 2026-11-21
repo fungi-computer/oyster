@@ -11,12 +11,31 @@ async function bootHost(): Promise<void> {
   if (element === null) throw new Error("Host boot configuration unavailable");
   const config = bootUiSchema
     .pick({ identity: true })
-    .extend({ entry: z.url() })
+    .extend({
+      identity: bootUiSchema.shape.identity.extend({
+        surfaceId: z.string().min(1).max(256),
+      }),
+      entry: z.url(),
+      expiresAt: z.number().optional(),
+    })
     .parse(JSON.parse(element.textContent));
   const frame = document.getElementById("candidate");
   if (!(frame instanceof HTMLIFrameElement) || frame.contentWindow === null)
     throw new Error("Host candidate frame unavailable");
-  const denied = () => Promise.reject(new Error("No grants during host boot"));
+  if (config.expiresAt !== undefined) {
+    window.setTimeout(
+      () => {
+        frame.hidden = true;
+        document.querySelector(".preview-details")?.removeAttribute("open");
+        const expired = document.getElementById("preview-expired");
+        if (expired !== null) expired.hidden = false;
+        const state = document.getElementById("preview-state");
+        if (state !== null) state.textContent = "expired";
+      },
+      Math.max(0, config.expiresAt - Date.now()),
+    );
+  }
+  const denied = () => Promise.reject(new Error("No grants in this preview"));
   const connection = connectAppHost({
     appWindow: frame.contentWindow,
     expectedAppOrigin: "null",

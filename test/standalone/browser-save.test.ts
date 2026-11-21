@@ -4,9 +4,10 @@ import {
   type ComputerGrant,
 } from "@fungi.computer/computer/fleet";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AgentComputerConnection,
-  AgentComputerSnapshot,
+import {
+  readAgentComputerConnections,
+  type AgentComputerConnection,
+  type AgentComputerSnapshot,
 } from "../../src/agent-computer-source.js";
 import { standaloneBrowserSave } from "../../src/standalone/agent-computers.js";
 
@@ -112,4 +113,29 @@ describe("standalone browser save to a Computer", () => {
     ).rejects.toBeInstanceOf(FleetGrantRefused);
     expect(write).not.toHaveBeenCalled();
   });
+});
+
+it("publishes working-folder discovery guidance on captured Computer file tools", () => {
+  const unused = () =>
+    Promise.reject(new Error("Discovery must not call the Computer"));
+  const connections = readAgentComputerConnections({
+    read: () => snapshot,
+    connect: () => ({
+      files: {
+        read: unused,
+        list: unused,
+        glob: unused,
+        grep: unused,
+        replace: unused,
+      },
+      computer: { getCapabilities: unused, call: unused },
+    }),
+  });
+  expect(connections).toHaveLength(1);
+  expect(connections[0]?.files.pathInstructions).toContain(
+    'files.list({path: "."})',
+  );
+  expect(connections[0]?.files.pathInstructions).toContain(
+    'such as "AGENTS.md"',
+  );
 });

@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createOyster } from "../dist/host.js";
@@ -48,7 +49,10 @@ test("capability APIs and transport children preserve their refusals even when a
 
 test("a browser gets the accessible wrong-key form; machine login keeps its original refusal", async () => {
   const host = await computerHost(null, null);
-  const app = createOyster({ ...host, auth: ownerKeyAuth(key) });
+  const app = createOyster({
+    ...host,
+    auth: ownerKeyAuth(key, "owner", memoryOwnerSessions()),
+  });
   for (const headers of [{}, documentHeaders]) {
     const response = await app.request("/login", {
       method: "POST",
@@ -102,7 +106,10 @@ test("a browser gets the accessible wrong-key form; machine login keeps its orig
 
 test("the sign-in page welcomes a first visit, welcomes a returning browser back, and explains a used link", async () => {
   const host = await computerHost(null, null);
-  const app = createOyster({ ...host, auth: ownerKeyAuth(key) });
+  const app = createOyster({
+    ...host,
+    auth: ownerKeyAuth(key, "owner", memoryOwnerSessions()),
+  });
   const first = await (
     await app.request("/login", { headers: documentHeaders })
   ).text();

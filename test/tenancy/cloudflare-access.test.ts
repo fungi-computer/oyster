@@ -5,6 +5,7 @@ import {
   type JSONWebKeySet,
   type JWTPayload,
 } from "jose";
+import { memoryOwnerSessions } from "../owner-sessions.fixture.js";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   cloudflareAccess,
@@ -113,6 +114,7 @@ async function fixture(keys?: () => Promise<JSONWebKeySet>) {
   if (tenant === null) throw new Error("fixture tenant missing");
   const owner = ownerKey({
     registry,
+    sessions: () => memoryOwnerSessions(),
     keys: {
       get: () => Promise.resolve({ key: ownerSecret, memberId: ownerMember }),
     },

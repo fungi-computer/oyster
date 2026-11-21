@@ -10,6 +10,7 @@
 // ("Route an authenticated client request", shiitake/src/cloudflare.ts:915),
 // so every authorization decision on this path is Oyster's.
 /* global Response, TextEncoder, console, process */
+import { memoryOwnerSessions } from "../memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
@@ -247,7 +248,12 @@ const keyStub = new OysterKeys(
   {},
 );
 const keysNamespace = { getByName: () => keyStub };
-const auth = ownerOrKeyAuth(ownerKey, ownerId, () => keyStub);
+const auth = ownerOrKeyAuth(
+  ownerKey,
+  ownerId,
+  memoryOwnerSessions(),
+  () => keyStub,
+);
 const scope = tenantScope(defaultTenant, origin);
 
 const host = {

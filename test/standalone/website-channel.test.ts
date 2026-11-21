@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { memoryOwnerSessions } from "../owner-sessions.fixture.js";
 import { fromNodeSqlite } from "@fungi.computer/watchdog/node-sqlite";
 import { fauxModelSource } from "@fungi.computer/shiitake/testing";
 import type { CloudflareShiitakeOptions } from "@fungi.computer/shiitake/cloudflare";
@@ -496,7 +497,7 @@ describe("the owner's website controls", () => {
   const served = (calls: string[]) =>
     serveHost(
       standaloneWebsiteRoutes(control(calls)),
-      ownerOrKeyAuth(ownerKey, "owner", () => ({
+      ownerOrKeyAuth(ownerKey, "owner", memoryOwnerSessions(), () => ({
         verify: () =>
           Promise.resolve({ kind: "error", error: { code: "denied" } }),
         touch: () => Promise.resolve({ kind: "ok", value: undefined }),

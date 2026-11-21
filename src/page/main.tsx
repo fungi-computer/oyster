@@ -65,7 +65,7 @@ const launchSchema = S.Struct({
 });
 const unavailable = (action: string) =>
   new AppError(`This Oyster does not offer ${action}`, {
-    code: "CAPABILITY_DENIED",
+    code: "HOST_UNSUPPORTED",
     retryable: false,
   });
 async function json(path: string) {

@@ -2,7 +2,11 @@
 // against the runtime types Wrangler generates for the documented Worker
 // config. Shared declarations are not re-checked here (skipLibCheck); the
 // browser profile checks them strictly.
-import { ownerKeyAuth, ownerKeyCookieName } from "@fungi.computer/oyster/auth";
+import {
+  ownerKeyAuth,
+  ownerKeyCookieName,
+  type OwnerSessions,
+} from "@fungi.computer/oyster/auth";
 import {
   installationSchema,
   approvedGrantSchema,
@@ -41,9 +45,15 @@ export const bindingApproval: typeof approvedBindingGrants =
   approvedBindingGrants;
 
 export const ownerCookie: "oyster_session" = ownerKeyCookieName;
+const strangerSessions: OwnerSessions = {
+  open: () => Promise.resolve(),
+  owner: () => Promise.resolve(null),
+  revoke: () => Promise.resolve(),
+};
 export const canonicalOwnerSignIn = ownerKeyAuth(
   "stranger-owner-key-1234567890",
   "stored-member",
+  strangerSessions,
 );
 
 import * as Effect from "effect/Effect";
@@ -300,6 +310,7 @@ declare const capturedScope: TenantScope;
   const ownerAdapter: AuthAdapter = ownerKey({
     registry,
     keys: { get: (id) => Promise.resolve(records.get(id) ?? null) },
+    sessions: () => strangerSessions,
   });
   const issuerAdapter: AuthAdapter = auth0({
     domain: "identity.example.test",

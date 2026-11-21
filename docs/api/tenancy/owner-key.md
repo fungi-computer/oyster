@@ -34,6 +34,7 @@ type OwnerKeyOptions = Readonly<{
       memberId: string;
     }> | null>;
   }>;
+  sessions: OwnerSessions;
   login?: Readonly<{
     resolveTenant: ReadonlyTenancy["resolve"];
   }>;

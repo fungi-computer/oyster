@@ -1,3 +1,4 @@
+import { memoryOwnerSessions } from "../memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -340,7 +341,7 @@ const app = createOyster({
     ownsComputer: async (id) => id === "workspace",
     issue: (_id, ownerId, port) => native.issuePortConnect(ownerId, port),
   }),
-  auth: ownerKeyAuth(ownerKey, owner.actor.memberId),
+  auth: ownerKeyAuth(ownerKey, owner.actor.memberId, memoryOwnerSessions()),
   computerId: "workspace",
   artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
   installations: {

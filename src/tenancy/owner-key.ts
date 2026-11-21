@@ -1,4 +1,5 @@
 import { ownerKeyAuth, ownerKeyCookieName } from "../auth.js";
+import type { OwnerSessions } from "../owner-sessions.js";
 import type { TenantId } from "../tenant.js";
 import { Hono } from "hono";
 import { parse } from "hono/utils/cookie";
@@ -25,7 +26,9 @@ export type OwnerKeyOptions = Readonly<{
     /** Current verification material, or null when no owner key is configured. */
     get(tenantId: TenantId): Promise<OwnerKeyRecord | null>;
   }>;
-  /** Optional relative POST /login route, explicitly mounted by the host. */
+  /** Host-owned owner browser sessions for one tenant; the cookie names one of these. */
+  sessions(tenantId: TenantId): OwnerSessions;
+  /** Optional relative POST /login and POST /logout routes, explicitly mounted by the host. */
   login?: Readonly<{
     /** Resolve the tenant through the kit, not from form/body data. */
     resolveTenant: ReadonlyTenancy["resolve"];
@@ -50,15 +53,41 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
       if (tenant === null) return context.json({ error: "not_found" }, 404);
       const record = await options.keys.get(tenant.id);
       if (record === null) return context.json({ error: "unauthorized" }, 401);
-      const helper = ownerKeyAuth(record.key, record.memberId);
+      // The session is stored only once the signed-in member is still the
+      // tenant's owner, so a refused sign-in leaves no session behind.
+      const sessions = options.sessions(tenant.id);
+      const opened: Parameters<typeof sessions.open>[] = [];
+      const helper = ownerKeyAuth(record.key, record.memberId, {
+        ...sessions,
+        open: (...session) => {
+          opened.push(session);
+          return Promise.resolve();
+        },
+      });
       if (helper.login === undefined)
         throw new Error("Oyster owner authentication has no login handler");
       const response = await helper.login(context.req.raw);
       if (response.status !== 303) return response;
       if (!(await currentOwner(tenant, record.memberId)))
         return context.json({ error: "forbidden" }, 403);
+      for (const session of opened) await sessions.open(...session);
       response.headers.set("Cache-Control", "no-store");
       return response;
+    });
+  if (login !== undefined)
+    routes.post("/logout", async (context) => {
+      const tenant = await login.resolveTenant(context.req.raw);
+      if (tenant === null) return context.json({ error: "not_found" }, 404);
+      const record = await options.keys.get(tenant.id);
+      if (record === null) return context.json({ error: "unauthorized" }, 401);
+      const helper = ownerKeyAuth(
+        record.key,
+        record.memberId,
+        options.sessions(tenant.id),
+      );
+      if (helper.logout === undefined)
+        throw new Error("Oyster owner authentication has no logout handler");
+      return await helper.logout(context.req.raw);
     });
   const adapter: AuthAdapter = {
     id: "owner-key",
@@ -78,6 +107,7 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
       const result = await ownerKeyAuth(
         record.key,
         record.memberId,
+        options.sessions(tenant.id),
       ).authenticate(request);
       if (result.kind === "refused")
         return recognizedCookie

@@ -1,6 +1,7 @@
 // Oyster is owner-only. A request with no credential reaches only sign-in,
 // robots.txt and digest-pinned shell assets; every other door refuses it.
 /* global Request */
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMcp, createMcpCatalog } from "@fungi.computer/mycelium/mcp";
@@ -15,7 +16,7 @@ const origin = "https://oyster.test";
 
 async function oyster() {
   const fixture = await computerHost(null, null);
-  const auth = ownerOrKeyAuth(ownerKey, "owner", () => ({
+  const auth = ownerOrKeyAuth(ownerKey, "owner", memoryOwnerSessions(), () => ({
     verify: async () => ({ kind: "not_found" }),
   }));
   const gitExchanges = [];

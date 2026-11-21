@@ -106,6 +106,15 @@ export function standaloneBuildRoutes(
       ? Response.json({ error: "Not found" }, { status: 404 })
       : Response.json({
           ...build,
+          // This is only the owner entry. It mints no content grant here;
+          // the entry verifies UI availability after same-origin owner admission.
+          previewUrl:
+            build.status === "succeeded" && build.release !== null
+              ? new URL(
+                  `/builds/${encodeURIComponent(build.jobId)}/preview`,
+                  context.req.url,
+                ).href
+              : null,
           release:
             build.release === null
               ? null

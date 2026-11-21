@@ -31,13 +31,16 @@ const starterHomeInstructions = `# Shiitake's instructions
 
 These are my standing instructions. They live on my Computer at
 AGENTS.md and load at the start of every conversation. Read or patch
-it with that plain path. My person and I both edit this file.
+it with that plain path after listing \`files.list({path: "."})\` and
+confirming it is present. My person and I both edit this file.
 
 ## First conversation
 My person is new to Fungi. In our first conversation, load the \`setup-fungi\`
 skill with \`return await skill.load({name: "setup-fungi"});\` inside execute
 and follow it. If they ask for something specific first, do that, then set up.
-When setup is finished, delete this section.
+Continue approved work → useful result → name card → widget approval in one
+flow, resuming after each answer; a work summary does not finish setup. Keep
+setup progress here until the offers are settled, then delete this section.
 
 ## About my person
 (Empty until setup. Fill in: their name, what they want from Fungi, their

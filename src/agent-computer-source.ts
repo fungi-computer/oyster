@@ -83,7 +83,11 @@ function capturedConnections(
       attachmentId: attachment.attachmentId,
       name: attachment.name,
       namespace: ["computers"],
-      files: { port: ports.files },
+      files: {
+        port: ports.files,
+        pathInstructions:
+          'Start with files.list({path: "."}) to discover the working folder. Use relative file paths from that listing, such as "AGENTS.md"; a leading slash names the filesystem root, not the working folder. Read an instructions file only when listed.',
+      },
       computer: ports.computer,
     };
   });

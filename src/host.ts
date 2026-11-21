@@ -237,6 +237,8 @@ export type OysterAuth = Readonly<{
   authenticate: (request: Request) => Promise<OysterAuthResult>;
   /** Handle the browser sign-in form post; returns the response to send. */
   login?: (request: Request) => Promise<Response>;
+  /** End this browser's session on the server and clear its cookie. */
+  logout?: (request: Request) => Promise<Response>;
 }>;
 
 /** A serializable registry commit result, including across native DO RPC. */
@@ -1066,6 +1068,14 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       host.auth.login === undefined
         ? refusal(404, "Sign-in is not available")
         : host.auth.login(context.req.raw),
+  );
+  table.post(
+    "/logout",
+    door("the host's own sign-out revokes the presented session"),
+    (context) =>
+      host.auth.logout === undefined
+        ? refusal(404, "Sign-out is not available")
+        : host.auth.logout(context.req.raw),
   );
 
   if (host.mcp !== undefined) {

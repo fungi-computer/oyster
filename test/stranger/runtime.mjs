@@ -33,6 +33,12 @@ assert.equal(ownerKeyCookieName, "oyster_session");
 const ownerAuth = ownerKeyAuth(
   "stranger-owner-key-1234567890",
   "stored-member",
+  // This consumer signs in by Bearer only; it opens no browser session.
+  {
+    open: () => Promise.resolve(),
+    owner: () => Promise.resolve(null),
+    revoke: () => Promise.resolve(),
+  },
 );
 assert.deepEqual(
   await ownerAuth.authenticate(

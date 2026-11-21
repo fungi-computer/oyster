@@ -1,4 +1,5 @@
 /* global Request, Headers, URL, URLSearchParams, fetch, document, getComputedStyle, innerWidth */
+import { memoryOwnerSessions } from "./memory-owner-sessions.mjs";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -52,7 +53,10 @@ test(
       null,
       { displayName: "Hello" },
     );
-    const authHost = { ...ownerHost, auth: ownerKeyAuth(key) };
+    const authHost = {
+      ...ownerHost,
+      auth: ownerKeyAuth(key, "owner", memoryOwnerSessions()),
+    };
     const restrictedHost = await computerHost(
       { actor: { kind: "team-key", keyId: "ungranted" } },
       null,

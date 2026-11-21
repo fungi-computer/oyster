@@ -1,4 +1,5 @@
 import { admittedBackgroundOrigins } from "../src/internal/background-origins.js";
+import { memoryOwnerSessions } from "./owner-sessions.fixture.js";
 import { deriveDeclaredOperations } from "../src/apps/operations.js";
 import { invocationCallerContext } from "../src/invocation.js";
 import { afterEach, expect, it } from "vitest";
@@ -1061,7 +1062,7 @@ it("only the owner cookie opens a browser page; a named-key session cookie admit
   const app = createOyster({
     ...f.host,
     keys,
-    auth: ownerOrKeyAuth(ownerKey, "owner", () => keys),
+    auth: ownerOrKeyAuth(ownerKey, "owner", memoryOwnerSessions(), () => keys),
   });
   const keySession = { Cookie: "oyster_key_session=opaque-browser-session" };
   expect(
@@ -1081,7 +1082,7 @@ it("only the owner cookie opens a browser page; a named-key session cookie admit
   const ownerValue = parse(login.headers.get("Set-Cookie") ?? "")[
     ownerKeyCookieName
   ];
-  expect(ownerValue).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  expect(ownerValue).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   if (ownerValue === undefined) throw new Error("Expected the owner cookie");
   const ownerBrowser = { Cookie: `${ownerKeyCookieName}=${ownerValue}` };
   expect(
