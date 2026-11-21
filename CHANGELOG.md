@@ -1,5 +1,30 @@
 # @fungi.computer/oyster
 
+## 0.56.2
+
+### Patch Changes
+
+- Changes since 0.56.1:
+
+  - fix(oyster): require direct owners for computer attachment
+  - fix(oyster): admit only the direct owner to Computer commands and fleet
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.27.1
+  - @fungi.computer/computer-contract@0.6.3
+  - @fungi.computer/computer@0.18.3
+  - @fungi.computer/parakeet@0.17.1
+  - @fungi.computer/braid@0.6.9
+  - @fungi.computer/darkroom@0.11.17
+  - @fungi.computer/nacre@0.9.2
+  - @fungi.computer/shiitake@0.22.3
+  - @fungi.computer/workflows-wire@0.7.10
+  - @fungi.computer/shiitake-extensions@0.12.10
+  - @fungi.computer/zookeeper@0.0.62
+
 ## 0.56.1
 
 ### Patch Changes

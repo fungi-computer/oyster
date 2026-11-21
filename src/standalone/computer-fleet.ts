@@ -191,7 +191,9 @@ export function standaloneComputerFleetRoutes(
   registryFor: () => DurableObjectStub<StandaloneRegistry>,
 ): Routes<OysterEnv> {
   const routes = routeTable<OysterEnv>();
-  const owner = ownerRoute("direct-or-app");
+  // Fleet controls are the owner's own (Tourtois calls them directly); an
+  // App's bridge request, which names its installation, is refused.
+  const owner = ownerRoute("direct");
   routes.onError((error, context) => {
     if (error instanceof z.ZodError || error instanceof SyntaxError)
       return context.json({ error: "invalid_input" }, 400);

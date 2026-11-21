@@ -482,6 +482,18 @@ test("multiple Computers create list and start retain identities across standalo
       requestId: "B",
     });
     assert.notEqual(a.computerId, b.computerId);
+    // Fleet controls are the owner's own: through an App's bridge, which
+    // names the installation, they refuse.
+    for (const [path, init] of [
+      ["/api/computers", {}],
+      [`/api/computers/${a.computerId}/stop`, { method: "POST" }],
+    ]) {
+      const refused = await routes.request(path, {
+        ...init,
+        headers: { "X-Oyster-Installation": "notes" },
+      });
+      assert.equal(refused.status, 403);
+    }
     const internetPath = (computerId) =>
       `/api/computers/${computerId}/internet-access`;
     const setInternetAccess = (computerId, enabled) =>

@@ -64,15 +64,18 @@ await test("an Agent's attached Computers are independent, explicit and revocabl
     await nativeAppClient(host.origin, host.auth, { key: host.key }).approve(
       "grove",
     );
-    const headers = {
+    const directHeaders = {
       ...host.auth,
       "Content-Type": "application/json",
+    };
+    const headers = {
+      ...directHeaders,
       "X-Oyster-Installation": "grove",
     };
-    const owner = async (path, body) => {
+    const owner = async (path, body, requestHeaders = headers) => {
       const response = await fetch(`${host.origin}${path}`, {
         method: body === undefined ? "GET" : "POST",
-        headers,
+        headers: requestHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
       });
@@ -83,25 +86,28 @@ await test("an Agent's attached Computers are independent, explicit and revocabl
       );
       return response.json();
     };
+    // Computer creation and attachment control belong to the owner directly;
+    // Grove's installation header is only for its App-mediated transport.
+    const directOwner = (path, body) => owner(path, body, directHeaders);
+    const createComputer = (name) =>
+      directOwner("/api/computers", { name, requestId: `create-${name}` });
     const { agentId } = await owner("/agents", {
       name: "Pair",
       requestId: "pair-agent",
     });
     const computers = {};
     for (const name of ["Amber", "Birch"])
-      computers[name] = (
-        await owner("/api/computers", { name, requestId: `create-${name}` })
-      ).computerId;
+      computers[name] = (await createComputer(name)).computerId;
     let sequence = 0;
     const attach = (name, attachmentId) =>
-      owner(`/api/agents/${agentId}/computers/attach`, {
+      directOwner(`/api/agents/${agentId}/computers/attach`, {
         agentId,
         attachmentId,
         computerId: computers[name],
         requestId: `attach-${attachmentId}-${(sequence += 1)}`,
       });
     const detach = (name, attachmentId) =>
-      owner(`/api/agents/${agentId}/computers/detach`, {
+      directOwner(`/api/agents/${agentId}/computers/detach`, {
         agentId,
         attachmentId,
         computerId: computers[name],
@@ -225,7 +231,9 @@ return {before, read, found, ran};`;
         // Reattaching the old identity is a new admission: its version moves
         // past every captured one, so held authority cannot follow it.
         const before = (
-          await owner(`/api/agents/${agentId}/computers/read`, { agentId })
+          await directOwner(`/api/agents/${agentId}/computers/read`, {
+            agentId,
+          })
         ).attachments.find((row) => row.computerId === computers.Amber);
         const revived = (await attach("Birch", "att-birch")).attachments.find(
           (row) => row.computerId === computers.Birch,

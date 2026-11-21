@@ -49,7 +49,9 @@ export function standaloneComputerApiRoutes(
     table.on(
       [methods[operation.method]],
       `/api/computers/:computerId${operation.path}`,
-      owner("direct-or-app"),
+      // The owner's own commands, files and ports: an App's bridge request
+      // (which names its installation) is refused.
+      owner("direct"),
       async (context, { principal }) => {
         context.header("Cache-Control", "no-store");
         // The owner cookie is the only credential, so the request must prove

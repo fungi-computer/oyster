@@ -228,6 +228,19 @@ test("root directory is owner-only and contains no synthetic Hub administration"
   assert.equal(
     (
       await app.request("/api/workbench/directory", {
+        headers: { Authorization: "owner", "X-Oyster-Installation": "desktop" },
+      })
+    ).status,
+    403,
+  );
+  assert.deepEqual(
+    calls,
+    [],
+    "an App-mediated owner never reads the directory",
+  );
+  assert.equal(
+    (
+      await app.request("/api/workbench/directory", {
         headers: { Authorization: "key" },
       })
     ).status,

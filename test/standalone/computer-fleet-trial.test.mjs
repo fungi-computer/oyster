@@ -24,6 +24,8 @@ const { OysterRegistry } = await import("../../src/standalone/worker.ts");
 const { standaloneComputerFleetRoutes } =
   await import("../../src/standalone/computer-fleet.ts");
 const { serveHost } = await import("../../src/authorization.ts");
+const { standaloneAgentComputerRoutes } =
+  await import("../../src/standalone/agent-computers.ts");
 hooks.deregister();
 
 // A local trial runs its folder as the Computer "workspace". The fleet never
@@ -269,4 +271,67 @@ test("every view of the configured Computer agrees on one identity", async () =>
   assert.deepEqual(chosen.computers, [
     { computerId: "workspace", name: "workspace" },
   ]);
+});
+
+test("Agent Computer attachments refuse App-mediated owners before reaching the directory", async () => {
+  const commands = [];
+  const control = async (...command) => {
+    commands.push(command);
+    return { kind: "refused", error: "not_found" };
+  };
+  const app = serveHost(
+    standaloneAgentComputerRoutes({
+      attach: control,
+      detach: control,
+      read: control,
+    }),
+    () =>
+      Promise.resolve({
+        kind: "admitted",
+        principal: {
+          actor: { kind: "member", memberId: "owner" },
+          role: "owner",
+        },
+      }),
+    { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
+  );
+  for (const operation of ["attach", "detach", "read"]) {
+    const body =
+      operation === "read"
+        ? { agentId: "agent_a" }
+        : {
+            agentId: "agent_a",
+            computerId: "computer_a",
+            attachmentId: "home",
+            requestId: "request_a",
+          };
+    const response = await app.request(
+      `https://oyster.test/api/agents/agent_a/computers/${operation}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Oyster-Installation": "notes",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    assert.equal(response.status, 403, operation);
+  }
+  assert.deepEqual(commands, [], "no Agent or Computer directory command ran");
+  const direct = await app.request(
+    "https://oyster.test/api/agents/agent_a/computers/attach",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentId: "agent_a",
+        computerId: "computer_a",
+        attachmentId: "home",
+        requestId: "request_a",
+      }),
+    },
+  );
+  assert.equal(direct.status, 404);
+  assert.equal(commands.length, 1, "the direct owner reaches the directory");
 });

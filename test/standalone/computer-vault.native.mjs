@@ -91,15 +91,18 @@ await test("Vault references: only bound sites get the key; the Agent never sees
     await nativeAppClient(host.origin, host.auth, { key: host.key }).approve(
       "grove",
     );
-    const headers = {
+    const directHeaders = {
       ...host.auth,
       "Content-Type": "application/json",
+    };
+    const headers = {
+      ...directHeaders,
       "X-Oyster-Installation": "grove",
     };
-    const post = async (path, body) => {
+    const post = async (path, body, requestHeaders = headers) => {
       const response = await fetch(`${host.origin}${path}`, {
         method: body === undefined ? "GET" : "POST",
-        headers,
+        headers: requestHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
       });
@@ -110,17 +113,20 @@ await test("Vault references: only bound sites get the key; the Agent never sees
       );
       return response.json();
     };
+    // Computer creation and attachment control belong to the owner directly;
+    // Grove's installation header is only for its App-mediated transport.
+    const directOwner = (path, body) => post(path, body, directHeaders);
+    const createComputer = (name) =>
+      directOwner("/api/computers", { name, requestId: `create-${name}` });
     const { agentId } = await post("/agents", {
       name: "Vault",
       requestId: "vault-agent",
     });
     const computers = {};
     for (const name of ["Amber", "Birch"])
-      computers[name] = (
-        await post("/api/computers", { name, requestId: `create-${name}` })
-      ).computerId;
+      computers[name] = (await createComputer(name)).computerId;
     for (const name of ["Amber", "Birch"])
-      await post(`/api/agents/${agentId}/computers/attach`, {
+      await directOwner(`/api/agents/${agentId}/computers/attach`, {
         agentId,
         attachmentId: `att-${name}`,
         computerId: computers[name],

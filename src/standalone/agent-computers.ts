@@ -213,7 +213,7 @@ export function standaloneAgentComputerRoutes(
   const routes = routeTable<OysterEnv>();
   routes.post(
     "/api/agents/:agentId/computers/:operation",
-    owner("direct-or-app"),
+    owner("direct"),
     async (context, { principal }) => {
       context.header("Cache-Control", "no-store");
       const operation = context.req.param("operation");

@@ -91,7 +91,13 @@ it("awaits cancellation of an actual first-commit hook and resumes without chang
     const program = join(directory, "commit-hook.mjs");
     await writeFile(
       program,
-      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(entered)}, String(process.pid)); setInterval(() => {}, 1000);`,
+      // Publish readiness only after the PID is complete. Creating the marker
+      // before writing it lets the reader mistake an empty file for PID 0.
+      `import { renameSync, writeFileSync } from "node:fs";
+const entered = ${JSON.stringify(entered)};
+writeFileSync(entered + ".pending", String(process.pid));
+renameSync(entered + ".pending", entered);
+setInterval(() => {}, 1000);`,
     );
     await writeFile(
       hook,
@@ -112,6 +118,7 @@ it("awaits cancellation of an actual first-commit hook and resumes without chang
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     const pid = Number(await readFile(entered, "utf8"));
+    expect(pid).toBeGreaterThan(0);
     controller.abort();
     expect(await running).toMatchObject({ name: "AbortError" });
     expect(() => process.kill(pid, 0)).toThrow();

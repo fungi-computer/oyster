@@ -145,6 +145,34 @@ describe("Computer REST admission and contract", () => {
     ).toBe(principal === null ? 401 : 403);
     expect(f.admissions).toEqual([]);
   });
+  it("refuses the owner through an App, on exec and every other operation", async () => {
+    // An App's page reaches host routes through its bridge, which names the
+    // installation. Exec, files and ports are the owner's own, never an App's.
+    const f = fixture();
+    const cases = [
+      ["POST", "/exec", { command: "x", requestId: mintComputerRequestId() }],
+      ["GET", "/files?path=%2Fworkspace%2Fa", undefined],
+      ["PUT", "/files", { path: "/workspace/a", content: "a" }],
+      ["DELETE", "/files?path=%2Fworkspace%2Fa", undefined],
+      ["POST", "/ports", { port: 8080 }],
+    ] as const;
+    for (const [method, path, input] of cases) {
+      const options = requestOptions(method, input);
+      const response = await f.api.request(
+        `https://oyster.test/api/computers/a${path}`,
+        {
+          ...options,
+          headers: {
+            ...Object.fromEntries(new Headers(options.headers)),
+            "X-Oyster-Installation": "notes",
+          },
+        },
+      );
+      expect(response.status).toBe(403);
+    }
+    expect(f.admissions).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
   const wholeCases = [
     ["GET", "/files?path=%2Fworkspace%2Fa", undefined],
     ["PUT", "/files", { path: "/workspace/a", content: "a" }],

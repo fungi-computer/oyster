@@ -1312,24 +1312,20 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
 
   if (host.ownerRoutes !== undefined) table.include(host.ownerRoutes);
 
-  table.get(
-    "/api/workbench/directory",
-    owner("direct-or-app"),
-    async (context) => {
-      if (host.workbench === undefined) return refusal(404, "Not found");
-      startTime(context, "registry");
-      let directory = await host.workbench.directory();
-      endTime(context, "registry");
-      if (host.computerId !== undefined)
-        directory = {
-          ...directory,
-          computer: { computerId: host.computerId, name: host.computerId },
-        };
-      return Response.json(directory, {
-        headers: { "Cache-Control": "no-store" },
-      });
-    },
-  );
+  table.get("/api/workbench/directory", owner("direct"), async (context) => {
+    if (host.workbench === undefined) return refusal(404, "Not found");
+    startTime(context, "registry");
+    let directory = await host.workbench.directory();
+    endTime(context, "registry");
+    if (host.computerId !== undefined)
+      directory = {
+        ...directory,
+        computer: { computerId: host.computerId, name: host.computerId },
+      };
+    return Response.json(directory, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  });
   // One shared stream for every storage key a page watches, so a page with
   // many open Apps stays under an HTTP/1.1 host's six-connection limit.
   table.get(
