@@ -1,5 +1,25 @@
 # @fungi.computer/oyster
 
+## 0.57.7
+
+### Patch Changes
+
+- Changes since 0.57.6:
+
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Agar release.
+
+- Updated dependencies
+  - @fungi.computer/agar@0.28.2
+  - @fungi.computer/braid@0.6.13
+  - @fungi.computer/darkroom@0.11.21
+  - @fungi.computer/nacre@0.9.6
+  - @fungi.computer/parakeet@0.17.7
+  - @fungi.computer/shiitake@0.22.8
+  - @fungi.computer/workflows-wire@0.7.14
+  - @fungi.computer/shiitake-extensions@0.13.4
+  - @fungi.computer/zookeeper@0.0.67
+
 ## 0.57.6
 
 ### Patch Changes
