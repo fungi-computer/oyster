@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { Cli } from "@fungi.computer/lantern";
 import type {
@@ -187,5 +189,31 @@ it("--yes with one failed App installs the rest and exits 1", async () => {
   } finally {
     process.exitCode = originalCode;
     vi.unstubAllEnvs();
+  }
+});
+
+it("records a checkout with uncommitted edits as a commit no release tag has", async () => {
+  const { checkoutRevision } =
+    await import("../../src/standalone/install-apps-cli.js");
+  const root = mkdtempSync(join(tmpdir(), "checkout-revision-"));
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    git("init", "--quiet");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    git("add", "a.txt");
+    git("commit", "--quiet", "-m", "tagged");
+    const tagged = git("rev-parse", "HEAD");
+    expect(checkoutRevision(root)).toBe(tagged);
+    writeFileSync(join(root, "a.txt"), "edited\n");
+    const edited = checkoutRevision(root);
+    expect(edited).toMatch(/^[a-f0-9]{40}$/u);
+    expect(edited).not.toBe(tagged);
+    expect(git("show", `${edited}:a.txt`)).toBe("edited");
+    expect(git("status", "--porcelain")).toBe("M a.txt");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

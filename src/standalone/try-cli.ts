@@ -66,6 +66,7 @@ import {
   desktopApp,
   installLocalStarter,
   localDesktopState,
+  savedStarterIsOlder,
   localStarterInstalled,
   type DesktopReadiness,
   localModelSetup,
@@ -274,6 +275,8 @@ export type TryEffects = Readonly<{
     url: string;
     key: string;
     signal: AbortSignal;
+    /** Say something once that does not stop the install. */
+    warn: (message: string) => void;
   }) => Promise<DesktopReadiness>;
   /** Build and install one more starter App; resolves once it is installed. */
   installStarter: (
@@ -283,6 +286,7 @@ export type TryEffects = Readonly<{
       key: string;
       packageStoreDirectory: string;
       signal: AbortSignal;
+      warn: (message: string) => void;
     },
   ) => Promise<"installed" | "already-installed">;
   /** Tell the Oyster which starter Apps are not ready yet. */
@@ -1064,30 +1068,48 @@ function isTryCancellation(cause: unknown, signal: AbortSignal): boolean {
   );
 }
 
+/** What `oyster try` asks of the starter Apps saved on a trial's Oyster. */
+export type StarterInstalls = Readonly<{
+  desktopState: typeof localDesktopState;
+  installed: typeof localStarterInstalled;
+  isOlder: typeof savedStarterIsOlder;
+  install: typeof installLocalStarter;
+}>;
+const localStarterInstalls: StarterInstalls = {
+  desktopState: localDesktopState,
+  installed: localStarterInstalled,
+  isOlder: savedStarterIsOlder,
+  install: installLocalStarter,
+};
+
 /** The real trial effects; `keychain` holds the wrapping keys (the OS keychain by default). */
 export const tryEffects = (
   keychain: TrialKeychain = osKeychain,
+  starters: StarterInstalls = localStarterInstalls,
 ): TryEffects => ({
   installDependencies: installTryDependencies,
   startServer: (input) => startWrangler(input, keychain),
   installHello: installHelloApp,
   installDesktop: async ({ directory, ...input }) => {
     process.env.PATH = `${join(directory, "node_modules", ".bin")}${delimiter}${process.env.PATH ?? ""}`;
-    const saved = await localDesktopState(input);
-    if (saved !== "missing") return saved;
-    await installLocalStarter(desktopApp, input);
-    const installed = await localDesktopState(input);
+    const saved = await starters.desktopState(input);
+    // A desktop saved by an older Oyster is replaced by this Oyster's own.
+    if (saved !== "missing" && !(await starters.isOlder(desktopApp, input)))
+      return saved;
+    await starters.install(desktopApp, input);
+    const installed = await starters.desktopState(input);
     return installed === "missing" ? "unavailable" : installed;
   },
   installStarter: async (app, input) => {
     if (
-      await localStarterInstalled({
+      (await starters.installed({
         ...input,
         installationId: app.installationId,
-      })
+      })) &&
+      !(await starters.isOlder(app, input))
     )
       return "already-installed";
-    await installLocalStarter(app, input);
+    await starters.install(app, input);
     return "installed";
   },
   reportStarters: (input, installing) =>
@@ -1325,6 +1347,9 @@ export async function tryOyster(
       }
     });
     const packageStoreDirectory = join(directory, ".oyster", "package-store");
+    const checkWarning = (message: string) => {
+      ui.warn(message, "Run it again once you are online to check.");
+    };
     const desktop = await setupTask(
       fresh
         ? "Installing Hello and building Tourtois"
@@ -1340,6 +1365,7 @@ export async function tryOyster(
           url,
           key,
           signal: AbortSignal.any([signal, preparation.signal]),
+          warn: checkWarning,
         };
         void watchedExit.then(() => {
           preparation.abort();
@@ -1479,7 +1505,13 @@ export async function tryOyster(
     const stopped = () => trialSignal.aborted;
     // What the desktop shows for each starter App that is not ready yet.
     const pending = new Map<string, InstallingApp>();
-    const trial = { url, key, packageStoreDirectory, signal: trialSignal };
+    const trial = {
+      url,
+      key,
+      packageStoreDirectory,
+      signal: trialSignal,
+      warn: checkWarning,
+    };
     let publishing = Promise.resolve();
     const publish = () => {
       const installing = [...pending.values()];

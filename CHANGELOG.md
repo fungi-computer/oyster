@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.57.6
+
+### Patch Changes
+
+- Changes since 0.57.5:
+
+  - fix(oyster): keep the saved starter when its release tags cannot be listed
+  - fix(oyster): oyster try replaces a starter App an older Oyster saved
+
 ## 0.57.5
 
 ### Patch Changes

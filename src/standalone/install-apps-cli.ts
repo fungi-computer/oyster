@@ -65,6 +65,18 @@ Options:
   -h, --help                 show this help
 `;
 
+/**
+ * The commit a checkout installs from. A checkout with uncommitted edits is
+ * the owner's own, so it is recorded as a commit holding those edits (made
+ * with `git stash create`, which leaves the stash and the tree alone), never
+ * as the release tag's commit it started from.
+ */
+export function checkoutRevision(directory: string): string {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
+  return git("stash", "create") || git("rev-parse", "HEAD");
+}
+
 function missingVariableMessage(
   url: string | undefined,
   key: string | undefined,
@@ -166,11 +178,11 @@ export async function installApps(
       };
     else {
       const directory = resolve(values.from);
-      const revision = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: directory,
-        encoding: "utf8",
-      }).trim();
-      source = { kind: "checkout", directory, revision: `git:${revision}` };
+      source = {
+        kind: "checkout",
+        directory,
+        revision: `git:${checkoutRevision(directory)}`,
+      };
     }
     const started = performance.now();
     const { installed, failed, declined } = await install({

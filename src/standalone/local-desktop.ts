@@ -120,6 +120,104 @@ export async function localStarterInstalled(
     .some((row) => row.installationId === input.installationId);
 }
 
+/** The commit each `v<version>` tag of one starter repository points at. */
+export function starterTagCommits(
+  listing: string,
+): ReadonlyMap<string, string> {
+  const commits = new Map<string, string>();
+  for (const line of listing.split("\n")) {
+    const [commit, ref] = line.split("\t");
+    const match = /^refs\/tags\/(v[^^]+)(\^\{\})?$/u.exec(ref ?? "");
+    // An annotated tag lists its own object first and its commit as `^{}`.
+    if (
+      commit &&
+      match?.[1] &&
+      (match[2] !== undefined || !commits.has(match[1]))
+    )
+      commits.set(match[1], commit);
+  }
+  return commits;
+}
+
+/**
+ * Whether a saved starter is an untouched release from an older Oyster: built
+ * from another `v<version>` tag's commit, not this Oyster's. A revision that
+ * is in no tag is the owner's own edit, and stays theirs.
+ */
+export function isOlderStarterRelease(
+  sourceRevision: string,
+  tag: string,
+  commits: ReadonlyMap<string, string>,
+): boolean {
+  const current = commits.get(tag);
+  if (current === undefined || sourceRevision === `git:${current}`)
+    return false;
+  return [...commits.values()].some(
+    (commit) => sourceRevision === `git:${commit}`,
+  );
+}
+
+/** How long the release tags may take to list before the saved App is kept. */
+const tagCheckTimeoutMilliseconds = 10_000;
+
+/**
+ * Whether this machine's saved copy of a starter App was released by an older
+ * Oyster than this one, so it would run against a host it was not built for.
+ * When the release tags cannot be listed (offline, GitHub down, too slow) the
+ * saved App is kept and `warn` says why, once. Read-only.
+ */
+export async function savedStarterIsOlder(
+  app: StarterApp,
+  input: Readonly<{
+    url: string;
+    key: string;
+    signal?: AbortSignal;
+    warn: (message: string) => void;
+  }>,
+  repository: string = repositoryUrl(app),
+  timeoutMilliseconds: number = tagCheckTimeoutMilliseconds,
+): Promise<boolean> {
+  const signal = input.signal ?? new AbortController().signal;
+  const response = await fetch(new URL("/api/installations", input.url), {
+    headers: { Authorization: `Bearer ${input.key}` },
+    signal,
+  });
+  if (!response.ok)
+    throw new Error(
+      `Installation read failed (HTTP ${String(response.status)}).`,
+    );
+  const saved = installationRowsSchema
+    .parse(await response.json())
+    .find((row) => row.installationId === app.installationId);
+  if (saved?.status !== "enabled") return false;
+  const timeout = AbortSignal.timeout(timeoutMilliseconds);
+  let listing: string;
+  try {
+    listing = await git(
+      tmpdir(),
+      ["ls-remote", "--tags", repository, "refs/tags/v*"],
+      AbortSignal.any([signal, timeout]),
+    );
+  } catch (cause) {
+    // A stop of the trial is not a failed check.
+    signal.throwIfAborted();
+    const reason = timeout.aborted
+      ? `timed out after ${String(timeoutMilliseconds / 1000)}s`
+      : cause instanceof Error
+        ? cause.message.replaceAll(/\s+/gu, " ").trim()
+        : String(cause);
+    input.warn(
+      `Couldn't check for a newer ${app.displayName}: ${reason}; keeping the saved one.`,
+    );
+    return false;
+  }
+  return isOlderStarterRelease(
+    saved.release.artifact.provenance.sourceRevision,
+    await starterReleaseTag(),
+    starterTagCommits(listing),
+  );
+}
+
 /** The host-owned entry decides whether the saved desktop may run. Read-only. */
 export async function localDesktopState(
   input: Readonly<{ url: string; key: string; signal?: AbortSignal }>,
