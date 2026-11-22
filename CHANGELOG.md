@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.57.10
+
+### Patch Changes
+
+- Changes since 0.57.9:
+
+  - fix(oyster): list owner sessions and candidate preview in the stranger pack
+    manifest
+
 ## 0.57.9
 
 ### Patch Changes

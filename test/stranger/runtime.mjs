@@ -30,15 +30,16 @@ import {
 } from "@fungi.computer/oyster/computer";
 
 assert.equal(ownerKeyCookieName, "oyster_session");
+// This consumer signs in by Bearer only; it opens no browser session.
+const bearerOnlySessions = {
+  open: () => Promise.resolve(),
+  owner: () => Promise.resolve(null),
+  revoke: () => Promise.resolve(),
+};
 const ownerAuth = ownerKeyAuth(
   "stranger-owner-key-1234567890",
   "stored-member",
-  // This consumer signs in by Bearer only; it opens no browser session.
-  {
-    open: () => Promise.resolve(),
-    owner: () => Promise.resolve(null),
-    revoke: () => Promise.resolve(),
-  },
+  bearerOnlySessions,
 );
 assert.deepEqual(
   await ownerAuth.authenticate(
@@ -439,6 +440,7 @@ assert.throws(() =>
   const ownerSecret = "packed-owner-secret-at-least-24-characters";
   const ownerAdapter = ownerKey({
     registry,
+    sessions: () => bearerOnlySessions,
     keys: {
       get: () =>
         Promise.resolve({ key: ownerSecret, memberId: tenant.owners[0] }),
