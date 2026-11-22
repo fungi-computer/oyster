@@ -275,8 +275,8 @@ export type TryEffects = Readonly<{
     url: string;
     key: string;
     signal: AbortSignal;
-    /** Say something once that does not stop the install. */
-    warn: (message: string) => void;
+    /** Report an App kept because its newer release could not be checked. */
+    warn: (check: { app: string; reason: string }) => void;
   }) => Promise<DesktopReadiness>;
   /** Build and install one more starter App; resolves once it is installed. */
   installStarter: (
@@ -286,7 +286,7 @@ export type TryEffects = Readonly<{
       key: string;
       packageStoreDirectory: string;
       signal: AbortSignal;
-      warn: (message: string) => void;
+      warn: (check: { app: string; reason: string }) => void;
     },
   ) => Promise<"installed" | "already-installed">;
   /** Tell the Oyster which starter Apps are not ready yet. */
@@ -1347,8 +1347,21 @@ export async function tryOyster(
       }
     });
     const packageStoreDirectory = join(directory, ".oyster", "package-store");
-    const checkWarning = (message: string) => {
-      ui.warn(message, "Run it again once you are online to check.");
+    // Offline, every saved App fails the same check for the same cause: say it
+    // once, naming the Apps kept, after the last check has run.
+    const unchecked = new Map<string, Set<string>>();
+    const checkWarning = ({ app, reason }: { app: string; reason: string }) => {
+      const apps = unchecked.get(reason) ?? new Set<string>();
+      apps.add(app);
+      unchecked.set(reason, apps);
+    };
+    const reportUnchecked = () => {
+      for (const [reason, apps] of unchecked)
+        ui.warn(
+          `Couldn't check for newer Apps (${[...apps].join(", ")}): ${reason}; keeping the saved ones.`,
+          "Run it again once you are online to check.",
+        );
+      unchecked.clear();
     };
     const desktop = await setupTask(
       fresh
@@ -1609,6 +1622,7 @@ export async function tryOyster(
           ]);
           for (const result of installs)
             if (result.status === "rejected") throw result.reason;
+          reportUnchecked();
           // Then answer the desktop's retry asks until the trial stops.
           while (!stopped()) {
             const waited = await sleep(retryPollMs, undefined, {
@@ -1628,7 +1642,7 @@ export async function tryOyster(
             }
           }
         })()
-      : Promise.resolve();
+      : Promise.resolve().then(reportUnchecked);
     let stopListener: ReturnType<typeof addAbortListener> | undefined;
     try {
       const requested = new Promise<void>((done) => {

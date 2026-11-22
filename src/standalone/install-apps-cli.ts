@@ -96,7 +96,7 @@ export function checkoutRevision(directory: string): string {
     if (existsSync(realIndex)) copyFileSync(realIndex, index);
     const env = { GIT_INDEX_FILE: index };
     if (!existsSync(index)) git(env, "read-tree", "HEAD");
-    git(env, "add", "--update");
+    git(env, "add", "--all");
     const tree = git(env, "write-tree");
     if (tree === git({}, "rev-parse", "HEAD^{tree}")) return head;
     return git(

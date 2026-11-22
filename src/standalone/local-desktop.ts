@@ -164,7 +164,7 @@ const tagCheckTimeoutMilliseconds = 10_000;
  * Whether this machine's saved copy of a starter App was released by an older
  * Oyster than this one, so it would run against a host it was not built for.
  * When the release tags cannot be listed (offline, GitHub down, too slow) the
- * saved App is kept and `warn` says why, once. Read-only.
+ * saved App is kept and `warn` names the App and why, once. Read-only.
  */
 export async function savedStarterIsOlder(
   app: StarterApp,
@@ -172,7 +172,7 @@ export async function savedStarterIsOlder(
     url: string;
     key: string;
     signal?: AbortSignal;
-    warn: (message: string) => void;
+    warn: (check: { app: string; reason: string }) => void;
   }>,
   repository: string = repositoryUrl(app),
   timeoutMilliseconds: number = tagCheckTimeoutMilliseconds,
@@ -206,9 +206,7 @@ export async function savedStarterIsOlder(
       : cause instanceof Error
         ? cause.message.replaceAll(/\s+/gu, " ").trim()
         : String(cause);
-    input.warn(
-      `Couldn't check for a newer ${app.displayName}: ${reason}; keeping the saved one.`,
-    );
+    input.warn({ app: app.displayName, reason });
     return false;
   }
   return isOlderStarterRelease(

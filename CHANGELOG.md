@@ -1,5 +1,14 @@
 # @fungi.computer/oyster
 
+## 0.57.9
+
+### Patch Changes
+
+- Changes since 0.57.8:
+
+  - fix(oyster): try keeps an App whose only edit is a new file, and warns once
+    offline
+
 ## 0.57.8
 
 ### Patch Changes

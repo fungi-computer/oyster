@@ -17,7 +17,7 @@ import { approvedInstallation } from "../../src/testing/installation.js";
 import { declaration, release } from "../apps-fixture.js";
 
 const input = { url: "http://127.0.0.1:8787", key: "test-owner" };
-const warned = vi.fn<(message: string) => void>();
+const warned = vi.fn<(check: { app: string; reason: string }) => void>();
 const checking = { ...input, warn: warned };
 const installed = () =>
   approvedInstallation({
@@ -206,9 +206,8 @@ it("keeps the saved App and says why when the release tags cannot be listed", as
     false,
   );
   expect(warned).toHaveBeenCalledTimes(1);
-  expect(warned.mock.calls[0]?.[0]).toMatch(
-    /^Couldn't check for a newer Tourtois: .+; keeping the saved one\.$/u,
-  );
+  expect(warned.mock.calls[0]?.[0]).toMatchObject({ app: "Tourtois" });
+  expect(warned.mock.calls[0]?.[0].reason).not.toBe("");
 });
 
 it("keeps the saved App and names the timeout when the tags are too slow", async () => {
@@ -230,9 +229,10 @@ it("keeps the saved App and names the timeout when the tags are too slow", async
         1000,
       ),
     ).toBe(false);
-    expect(warned).toHaveBeenCalledWith(
-      "Couldn't check for a newer Tourtois: timed out after 1s; keeping the saved one.",
-    );
+    expect(warned).toHaveBeenCalledWith({
+      app: "Tourtois",
+      reason: "timed out after 1s",
+    });
   } finally {
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => silent.close(resolve));

@@ -652,6 +652,36 @@ describe("oyster try", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it("says once that offline checks kept every saved App", async () => {
+    const output = plain();
+    let stopTrial = () => undefined;
+    const fixture = effects({
+      signInLink: vi.fn(() =>
+        Promise.resolve({
+          url: "http://127.0.0.1:1/once",
+          close: vi.fn(() => Promise.resolve()),
+        }),
+      ),
+      installDesktop: (input) => {
+        input.warn({ app: "Tourtois", reason: "offline" });
+        return Promise.resolve("ready" as const);
+      },
+      installStarter: (app, input) => {
+        input.warn({ app: app.displayName, reason: "offline" });
+        if (app.installationId === "shed") setTimeout(stopTrial, 100);
+        return Promise.resolve("installed" as const);
+      },
+    });
+    stopTrial = () => {
+      fixture.controller.abort();
+    };
+    await runTry([join(root, "offline"), "--no-open"], fixture.fake, output.ui);
+    const text = output.text();
+    expect(text.match(/Couldn't check for newer Apps/gu)).toHaveLength(1);
+    expect(text).toContain("(Tourtois, Grove, ");
+    expect(text).toContain(": offline; keeping the saved ones.");
+  });
+
   it("builds the other starter Apps after the desktop, one line each, and keeps going past a failure", async () => {
     const output = plain();
     const installed: string[] = [];

@@ -222,3 +222,32 @@ it("records a checkout with uncommitted edits as a commit no release tag has", a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it("records a checkout whose only change is a new untracked file", async () => {
+  const { checkoutRevision } =
+    await import("../../src/standalone/install-apps-cli.js");
+  const root = mkdtempSync(join(tmpdir(), "checkout-revision-"));
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    git("init", "--quiet");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, ".gitignore"), "ignored.txt\n");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "tagged");
+    const tagged = git("rev-parse", "HEAD");
+    expect(checkoutRevision(root)).toBe(tagged);
+    writeFileSync(join(root, "ignored.txt"), "ignored\n");
+    expect(checkoutRevision(root)).toBe(tagged);
+    writeFileSync(join(root, "new.txt"), "added\n");
+    const status = git("status", "--porcelain");
+    const recorded = checkoutRevision(root);
+    expect(recorded).not.toBe(tagged);
+    expect(git("show", `${recorded}:new.txt`)).toBe("added");
+    expect(git("status", "--porcelain")).toBe(status);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
