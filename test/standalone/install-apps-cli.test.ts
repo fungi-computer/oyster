@@ -213,6 +213,11 @@ it("records a checkout with uncommitted edits as a commit no release tag has", a
     expect(edited).not.toBe(tagged);
     expect(git("show", `${edited}:a.txt`)).toBe("edited");
     expect(git("status", "--porcelain")).toBe("M a.txt");
+    // Another git process holding the checkout's index must not fail the
+    // install: `git stash create` exits 1 silently in exactly this state.
+    writeFileSync(join(root, ".git", "index.lock"), "");
+    writeFileSync(join(root, "a.txt"), "edited again\n");
+    expect(git("show", `${checkoutRevision(root)}:a.txt`)).toBe("edited again");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

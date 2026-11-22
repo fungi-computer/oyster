@@ -8,6 +8,7 @@
 //     [--repositories <base URL>] [--ref <branch or tag>]
 //     [--from <checkout directory>] [--concurrency 1-3] [--timings <file>] [--only <app>[,<app>]]
 import { execFileSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -67,14 +68,49 @@ Options:
 
 /**
  * The commit a checkout installs from. A checkout with uncommitted edits is
- * the owner's own, so it is recorded as a commit holding those edits (made
- * with `git stash create`, which leaves the stash and the tree alone), never
- * as the release tag's commit it started from.
+ * the owner's own, so it is recorded as a commit holding those edits (the
+ * tracked files as they are on disk, plus anything staged), never as the
+ * release tag's commit it started from.
+ *
+ * The edits are captured through a private copy of the index. The command
+ * `git stash create` rewrites the checkout's own index, and when another git
+ * process (an editor, a file watcher, a second command) holds `index.lock` it
+ * exits 1 with no message, which would fail the install for a reason the
+ * owner cannot see.
  */
 export function checkoutRevision(directory: string): string {
-  const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
-  return git("stash", "create") || git("rev-parse", "HEAD");
+  const git = (env: NodeJS.ProcessEnv, ...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    }).trim();
+  const head = git({}, "rev-parse", "HEAD");
+  const scratch = mkdtempSync(join(tmpdir(), "oyster-checkout-index-"));
+  try {
+    const index = join(scratch, "index");
+    const realIndex = resolve(
+      directory,
+      git({}, "rev-parse", "--git-path", "index"),
+    );
+    if (existsSync(realIndex)) copyFileSync(realIndex, index);
+    const env = { GIT_INDEX_FILE: index };
+    if (!existsSync(index)) git(env, "read-tree", "HEAD");
+    git(env, "add", "--update");
+    const tree = git(env, "write-tree");
+    if (tree === git({}, "rev-parse", "HEAD^{tree}")) return head;
+    return git(
+      env,
+      "commit-tree",
+      tree,
+      "-p",
+      head,
+      "-m",
+      "On HEAD: install-apps checkout",
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function missingVariableMessage(

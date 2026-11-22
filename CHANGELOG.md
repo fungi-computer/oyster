@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.57.8
+
+### Patch Changes
+
+- Changes since 0.57.7:
+
+  - fix(oyster): install-apps reads a checkout through a private index
+
 ## 0.57.7
 
 ### Patch Changes
