@@ -420,7 +420,7 @@ Parse an ls-refs response into refs.
 ### signStandardWebhook()
 
 ```ts
-function signStandardWebhook(secret, id, timestamp, body): Promise<string>;
+function signStandardWebhook(secret, id, timestamp, body): string;
 ```
 
 The Standard Webhooks `webhook-signature` value for one delivery.
@@ -436,7 +436,7 @@ The Standard Webhooks `webhook-signature` value for one delivery.
 
 #### Returns
 
-`Promise`\<`string`\>
+`string`
 
 ---
 

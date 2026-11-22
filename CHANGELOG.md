@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.57.11
+
+### Patch Changes
+
+- Changes since 0.57.10:
+
+  - fix(oyster): sign webhooks with the maintained libraries
+
 ## 0.57.10
 
 ### Patch Changes

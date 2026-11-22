@@ -7,7 +7,9 @@
  */
 import { readPacketLines, pktLine } from "@fungi.computer/agar/git-wire";
 import type { GitBinding } from "@fungi.computer/agar/git";
+import { sign as signGitHubWebhook } from "@octokit/webhooks-methods";
 import * as Schema from "effect/Schema";
+import { Webhook } from "standardwebhooks";
 /** The EVENTS binding: an App emits typed events the host routes. */
 export type EventSink = Readonly<{
   /**
@@ -53,41 +55,23 @@ export function parseLsRefs(
   return refs;
 }
 
-async function hmac(key: Uint8Array, message: string): Promise<Uint8Array> {
-  const imported = await crypto.subtle.importKey(
-    "raw",
-    new Uint8Array(key),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return new Uint8Array(
-    await crypto.subtle.sign("HMAC", imported, encoder.encode(message)),
-  );
-}
-
-/** A `whsec_` secret is base64 key bytes; any other secret is its own UTF-8. */
-function secretBytes(secret: string): Uint8Array {
-  if (!secret.startsWith("whsec_")) return encoder.encode(secret);
-  return Uint8Array.from(atob(secret.slice(6)), (char) => char.charCodeAt(0));
-}
-
-function hex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+/**
+ * A `whsec_` secret is base64 key bytes, which is the Standard Webhooks
+ * convention; any other secret is its own UTF-8 bytes.
+ */
+function standardWebhook(secret: string): Webhook {
+  if (secret.startsWith("whsec_")) return new Webhook(secret);
+  return new Webhook(encoder.encode(secret), { format: "raw" });
 }
 
 /** The Standard Webhooks `webhook-signature` value for one delivery. */
-export async function signStandardWebhook(
+export function signStandardWebhook(
   secret: string,
   id: string,
   timestamp: number,
   body: string,
-): Promise<string> {
-  const signature = await hmac(
-    secretBytes(secret),
-    `${id}.${String(timestamp)}.${body}`,
-  );
-  return `v1,${btoa(String.fromCharCode(...signature))}`;
+): string {
+  return standardWebhook(secret).sign(id, new Date(timestamp * 1000), body);
 }
 
 /**
@@ -105,11 +89,9 @@ export async function webhookHeaders(
   body: string,
   previousSecret?: string,
 ): Promise<Record<string, string>> {
-  const signatures = [await signStandardWebhook(secret, id, timestamp, body)];
+  const signatures = [signStandardWebhook(secret, id, timestamp, body)];
   if (previousSecret !== undefined)
-    signatures.push(
-      await signStandardWebhook(previousSecret, id, timestamp, body),
-    );
+    signatures.push(signStandardWebhook(previousSecret, id, timestamp, body));
   return {
     "content-type": "application/json",
     "user-agent": "Oyster-Webhooks/1",
@@ -117,7 +99,7 @@ export async function webhookHeaders(
     "webhook-timestamp": String(timestamp),
     "webhook-signature": signatures.join(" "),
     // The headers receivers built for git hosts check.
-    "x-hub-signature-256": `sha256=${hex(await hmac(encoder.encode(secret), body))}`,
+    "x-hub-signature-256": await signGitHubWebhook(secret, body),
     "x-github-delivery": id,
     "x-github-event": type,
   };

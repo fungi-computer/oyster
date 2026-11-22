@@ -16,6 +16,7 @@ export default defineConfig({
       "test/storage-claim.test.mjs",
       "test/apps-*.test.ts",
       "test/git-journal.test.ts",
+      "test/git-webhook-signing.test.ts",
       "test/event-recipients.test.ts",
       "test/build-jobs.test.ts",
       "test/template-repository.test.ts",
