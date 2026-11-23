@@ -1,5 +1,30 @@
 # @fungi.computer/oyster
 
+## 0.58.7
+
+### Patch Changes
+
+- Changes since 0.58.6:
+
+  - Updated starter Apps for the Shiitake release.
+  - Updated starter Apps for the Mule release.
+  - Updated starter Apps for the Mycelium release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/mycelium@0.5.0
+  - @fungi.computer/shiitake@0.23.0
+  - @fungi.computer/knapsack@0.4.30
+  - @fungi.computer/nacre@0.9.12
+  - @fungi.computer/parakeet@0.17.14
+  - @fungi.computer/shiitake-extensions@0.13.10
+  - @fungi.computer/braid@0.6.19
+  - @fungi.computer/veil@0.11.12
+  - @fungi.computer/zookeeper@0.0.73
+  - @fungi.computer/computer@0.18.8
+  - @fungi.computer/computer-contract@0.6.7
+  - @fungi.computer/workflows-wire@0.7.20
+
 ## 0.58.6
 
 ### Patch Changes
