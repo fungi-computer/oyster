@@ -184,6 +184,7 @@ type OysterAuth = Readonly<{
   authenticate: (request) => Promise<OysterAuthResult>;
   login?: (request) => Promise<Response>;
   logout?: (request) => Promise<Response>;
+  logoutEverywhere?: (request) => Promise<Response>;
 }>;
 ```
 

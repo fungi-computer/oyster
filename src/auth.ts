@@ -4,6 +4,7 @@ import { parse } from "hono/utils/cookie";
 import type { OysterAuth, OysterAuthResult } from "./host.js";
 import { presentedGitKey } from "./git-auth.js";
 import { sha256 } from "./release.js";
+import { originMismatchRefusal } from "./owner-sign-out.js";
 import { sameOriginRequest } from "./request-origin.js";
 import { isLoopbackHttp } from "./tenancy/registry-record.js";
 import type { OysterKeyStore } from "./keys.js";
@@ -100,6 +101,18 @@ function newSessionId(): string {
 const cookieFlags = (request: Request) =>
   `Path=/; HttpOnly;${isLoopbackHttp(new URL(request.url)) ? "" : " Secure;"} SameSite=Strict`;
 
+/** A successful sign-out always clears the browser cookie and returns to sign-in. */
+function signedOutResponse(request: Request): Response {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      Location: "/login",
+      "Set-Cookie": `${ownerKeyCookieName}=; ${cookieFlags(request)}; Max-Age=0`,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 /**
  * Single-owner sign-in: a bearer token, a Git Basic-auth password, or a
  * browser session. A session is a random id in the cookie; `sessions` keeps
@@ -116,7 +129,7 @@ export function ownerKeyAuth(
     kind: "admitted",
     principal: { actor: { kind: "member", memberId: ownerId }, role: "owner" },
   };
-  return {
+  const auth: OysterAuth = {
     resolve: (actor) =>
       Promise.resolve(
         actor.kind === "member" && actor.memberId === ownerId
@@ -162,6 +175,9 @@ export function ownerKeyAuth(
         await sessionDigest(ownerKey, session),
         Date.now(),
       );
+      const previous = presentedSession(request);
+      if (previous !== null)
+        await sessions.revoke(await sessionDigest(ownerKey, previous));
       const flags = cookieFlags(request);
       const headers = new Headers({ Location: "/" });
       headers.append(
@@ -184,16 +200,25 @@ export function ownerKeyAuth(
       const session = presentedSession(request);
       if (session !== null)
         await sessions.revoke(await sessionDigest(ownerKey, session));
-      return new Response(null, {
-        status: 303,
-        headers: {
-          Location: "/login",
-          "Set-Cookie": `${ownerKeyCookieName}=; ${cookieFlags(request)}; Max-Age=0`,
-          "Cache-Control": "no-store",
-        },
-      });
+      return signedOutResponse(request);
+    },
+    async logoutEverywhere(request) {
+      if (!sameOriginRequest(request))
+        return Response.json(originMismatchRefusal, {
+          status: 403,
+          headers: { "Cache-Control": "no-store" },
+        });
+      const admission = await auth.authenticate(request);
+      if (admission.kind === "refused")
+        return new Response("Sign in to sign out everywhere", {
+          status: admission.status,
+          headers: { "Cache-Control": "no-store" },
+        });
+      await sessions.revokeOwner(ownerId);
+      return signedOutResponse(request);
     },
   };
+  return auth;
 }
 
 /** How stale a key's last-used time may be: calls inside this window do not re-stamp it. */
@@ -259,6 +284,11 @@ export function ownerOrKeyAuth(
       owner.logout?.(request) ??
       Promise.resolve(
         new Response("Sign-out is not available", { status: 404 }),
+      ),
+    logoutEverywhere: (request) =>
+      owner.logoutEverywhere?.(request) ??
+      Promise.resolve(
+        new Response("Sign-out everywhere is not available", { status: 404 }),
       ),
   };
 }

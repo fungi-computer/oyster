@@ -20,6 +20,8 @@ const hooks = registerHooks({
 const { OysterRegistry, createOysterWorker } =
   await import("../src/workers.ts");
 const { ownerSessionStore } = await import("../src/owner-sessions.ts");
+const { originMismatchRefusal, signOutRefusalSchema } =
+  await import("../src/owner-sign-out.ts");
 hooks.deregister();
 
 const { Request, URLSearchParams } = globalThis;
@@ -142,4 +144,120 @@ test("the session store keeps only digests and drops an expired session", async 
   assert.equal(await sessions.owner("sha256:live", 3_000), "owner");
   await sessions.revoke("sha256:live");
   assert.equal(await sessions.owner("sha256:live", 1_500), null);
+});
+
+test("a fresh login replaces the held session and preserves another browser", async () => {
+  const db = releasedRegistryDb();
+  try {
+    const retained = db.prepare("SELECT * FROM boot_capabilities").all();
+    const fetch = worker(registryOver(db));
+    const login = async (cookie, key = ownerKey) => {
+      const response = await fetch("/login", {
+        method: "POST",
+        headers: cookie === undefined ? {} : { Cookie: cookie },
+        body: new URLSearchParams({ key }),
+      });
+      return {
+        response,
+        cookie: response.headers
+          .getSetCookie()
+          .find((header) => header.startsWith("oyster_session="))
+          ?.split(";")[0],
+      };
+    };
+    const held = await login();
+    const other = await login();
+    assert.equal(held.response.status, 303);
+    assert.equal(other.response.status, 303);
+    assert.equal(
+      (await login(held.cookie, "wrong-owner-key")).response.status,
+      401,
+    );
+    assert.notEqual((await fetch("/", page(held.cookie))).status, 302);
+
+    const fresh = await login(held.cookie);
+    assert.equal(fresh.response.status, 303);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM oyster_owner_sessions").get().n,
+      2,
+      "replacement removes the row the browser previously held",
+    );
+    assert.equal((await fetch("/", page(held.cookie))).status, 302);
+    assert.notEqual((await fetch("/", page(fresh.cookie))).status, 302);
+    assert.notEqual((await fetch("/", page(other.cookie))).status, 302);
+    assert.deepEqual(
+      db.prepare("SELECT * FROM boot_capabilities").all(),
+      retained,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("sign out everywhere revokes existing owner sessions and preserves other stored data", async () => {
+  const db = releasedRegistryDb();
+  try {
+    const retained = db.prepare("SELECT * FROM boot_capabilities").all();
+    const initial = worker(registryOver(db));
+    const cookies = [];
+    for (let browser = 0; browser < 2; browser += 1) {
+      const response = await initial("/login", {
+        method: "POST",
+        body: new URLSearchParams({ key: ownerKey }),
+      });
+      assert.equal(response.status, 303);
+      cookies.push(
+        response.headers
+          .getSetCookie()
+          .find((header) => header.startsWith("oyster_session="))
+          ?.split(";")[0],
+      );
+    }
+    // Existing session rows survive reopening with the same released schema.
+    await ownerSessionStore(fromNodeSqlite(db).sql).open(
+      "another-owner",
+      `hmac-sha256:${"a".repeat(64)}`,
+      Date.now(),
+    );
+    const fetch = worker(registryOver(db));
+    const signOut = (cookie, requestOrigin = origin) =>
+      fetch("/logout/everywhere", {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: requestOrigin,
+          Accept: "application/json",
+        },
+      });
+    const crossSite = await signOut(cookies[0], "https://attacker.example");
+    assert.equal(crossSite.status, 403);
+    // The page decodes this exact body, so the real server names its cause.
+    assert.deepEqual(
+      signOutRefusalSchema.parse(await crossSite.json()),
+      originMismatchRefusal,
+    );
+    assert.equal((await signOut("")).status, 401);
+    assert.equal((await signOut("oyster_session=unknown")).status, 401);
+    for (const cookie of cookies)
+      assert.notEqual((await fetch("/", page(cookie))).status, 302);
+    const result = await signOut(cookies[0]);
+    assert.equal(result.status, 303);
+    assert.equal(result.headers.get("Location"), "/login");
+    assert.match(result.headers.get("Set-Cookie") ?? "", /Max-Age=0/);
+    for (const cookie of cookies)
+      assert.equal((await fetch("/", page(cookie))).status, 302);
+    assert.deepEqual(
+      db
+        .prepare("SELECT owner FROM oyster_owner_sessions")
+        .all()
+        .map((row) => row.owner),
+      ["another-owner"],
+    );
+    assert.deepEqual(
+      db.prepare("SELECT * FROM boot_capabilities").all(),
+      retained,
+    );
+  } finally {
+    db.close();
+  }
 });

@@ -207,6 +207,8 @@ export type HostPageOptions = Readonly<{
   returning?: boolean;
   /** Login only: the visitor arrived through a one-time link that was already used. */
   usedLink?: boolean;
+  /** This host can revoke all of the current owner's browser sessions. */
+  canSignOutEverywhere?: boolean;
   /** Open preview only: the port and Computer it opens, and where the owner's own click posts. */
   previewEntry?: PortPreviewEntry;
   /** Only the single-use helper passes a key, in a POST field, never a URL. */
@@ -433,6 +435,7 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
           "data-action": options.previewEntry.action,
           "data-port": options.previewEntry.port,
           "data-computer-id": options.previewEntry.computerId,
+          "data-computer-name": options.previewEntry.computerName,
           "data-refusal": options.previewEntry.refusal,
         },
         h(
@@ -441,7 +444,12 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
           h(
             "div",
             { className: "actions" },
-            h(Button, { type: "submit" }, "Open preview"),
+            h(Button, { type: "submit", disabled: true }, "Open preview"),
+            h(
+              "noscript",
+              null,
+              "Enable JavaScript to confirm a private preview.",
+            ),
             link("Back to your Oyster", url("/"), true),
           ),
         ),
@@ -537,9 +545,29 @@ function pageContent(options: HostPageOptions, url: (path: string) => string) {
       h(
         "form",
         { method: "post", action: url("/logout") },
-        h(Button, { type: "submit", variant: "outline" }, "Sign out"),
+        h(
+          Button,
+          { type: "submit", variant: "outline", size: "sm" },
+          "Sign out",
+        ),
       ),
     );
+    if (options.canSignOutEverywhere)
+      actions.push(
+        h(
+          "form",
+          {
+            method: "post",
+            action: url("/logout/everywhere"),
+            "data-sign-out-everywhere": "",
+          },
+          h(
+            Button,
+            { type: "submit", variant: "outline", size: "sm" },
+            "Sign out everywhere",
+          ),
+        ),
+      );
   } else {
     if (state === "server-error")
       content.push(
@@ -640,8 +668,13 @@ function illustration(
 /** One server-rendered Caps composition, usable without styles, art or JS. */
 export async function hostPage(options: HostPageOptions): Promise<Response> {
   const { state, title = "Oyster" } = options;
+  // Native owner forms need a same-origin Origin; previews keep their own policy.
   const referrerPolicy =
-    state === "open-preview" ? portPreviewReferrerPolicy : "no-referrer";
+    state === "open-preview"
+      ? portPreviewReferrerPolicy
+      : state === "root" || state === "empty" || state === "desktop-missing"
+        ? "same-origin"
+        : "no-referrer";
   const [baseHeading, eyebrow, baseDescription] = copy[state];
   const description =
     state === "open-preview" && options.previewEntry

@@ -17,6 +17,7 @@ type OwnerSessions = Readonly<{
   open: Promise<void>;
   owner: Promise<string | null>;
   revoke: Promise<void>;
+  revokeOwner: Promise<void>;
 }>;
 ```
 

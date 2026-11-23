@@ -351,7 +351,7 @@ test("a port preview opens only from the owner's click on a styled confirm page"
     body,
     /method="post" action="\/computers\/workspace\/ports\/5173"/,
   );
-  assert.match(body, /type="submit"[^>]*>Open preview</);
+  assert.match(body, /type="submit"[^>]*disabled[^>]*>Open preview</);
   for (const invalid of [
     "/computers/workspace/ports/0",
     "/computers/workspace/ports/05173",
@@ -376,4 +376,52 @@ test("a port preview opens only from the owner's click on a styled confirm page"
   // Nothing on the page submits the form for the owner: no inline script runs.
   for (const script of body.match(/<script[^>]*>/g) ?? [])
     assert.match(script, /src="[^"]+"/);
+});
+
+test("preview Computer names are shown only to the selected Computer's owner", async () => {
+  const name = "Levi’s <Studio> Computer";
+  for (const [principal, target, named] of [
+    [null, "workspace", false],
+    [
+      { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+      "workspace",
+      true,
+    ],
+    [
+      { actor: { kind: "member", memberId: "member" }, role: "member" },
+      "workspace",
+      false,
+    ],
+    [
+      { actor: { kind: "member", memberId: "owner" }, role: "owner" },
+      "other",
+      false,
+    ],
+  ]) {
+    const host = await computerHost(principal, "workspace");
+    const response = await createOyster({
+      ...host,
+      computerName: name,
+      portPreviewEntry: true,
+    }).request(`/computers/${target}/ports/5173`, { headers: documentHeaders });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(
+      body.includes('data-computer-name="Levi’s &lt;Studio&gt; Computer"'),
+      named,
+    );
+    assert.equal(body.includes("Levi’s <Studio> Computer"), false);
+    const metadata = await createOyster({
+      ...host,
+      computerName: name,
+      portPreviewEntry: true,
+    }).request(`/computers/${target}/ports/5173`, {
+      headers: { Accept: "application/json" },
+    });
+    assert.equal(metadata.headers.get("Cache-Control"), "no-store");
+    assert.equal(
+      (await metadata.json()).computerName,
+      named ? name : undefined,
+    );
+  }
 });

@@ -1,5 +1,51 @@
 # @fungi.computer/oyster
 
+## 0.58.0
+
+### Minor Changes
+
+- Changes since 0.57.15:
+
+  - fix(oyster): restart the confirmation delay when the name lands
+  - fix(oyster): open the preview confirmation at once and name a failed name
+    read
+  - fix(oyster): name sign out everywhere refusals with a code
+  - fix(oyster): let a failed refusal read reach the unreachable notice
+  - fix(oyster): satisfy the template literal lint on status codes
+  - fix(oyster): name the real cause when sign out everywhere fails
+  - fix(oyster): select the preview target when reading its name
+  - fix(oyster): report preview metadata load failures
+  - fix(oyster): delay preview confirmation and identify its Computer
+  - fix(oyster): use the directory state for native owner forms
+  - feat(oyster): add the owner sign-out-everywhere action
+  - feat(oyster): revoke every browser session for the current owner
+  - fix(oyster): replace the held browser session on fresh login
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/shiitake@0.22.10
+  - @fungi.computer/watchdog@0.1.6
+  - @fungi.computer/parakeet@0.17.9
+  - @fungi.computer/shiitake-extensions@0.13.6
+  - @fungi.computer/zookeeper@0.0.69
+  - @fungi.computer/agar@0.28.4
+  - @fungi.computer/bird-dog@0.3.9
+  - @fungi.computer/braid@0.6.15
+  - @fungi.computer/carrier@0.2.7
+  - @fungi.computer/computer@0.18.6
+  - @fungi.computer/puffball@0.15.1
+  - @fungi.computer/veil@0.11.10
+  - @fungi.computer/workflows-wire@0.7.16
+  - @fungi.computer/seam@0.2.8
+  - @fungi.computer/forage@0.5.3
+  - @fungi.computer/mycelium@0.4.13
+  - @fungi.computer/nacre@0.9.8
+  - @fungi.computer/darkroom@0.11.23
+  - @fungi.computer/knapsack@0.4.28
+  - @fungi.computer/computer-contract@0.6.5
+
 ## 0.57.15
 
 ### Patch Changes

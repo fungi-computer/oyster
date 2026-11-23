@@ -75,6 +75,7 @@ export default {
           open: () => Promise.resolve(),
           owner: () => Promise.resolve(null),
           revoke: () => Promise.resolve(),
+          revokeOwner: () => Promise.resolve(),
         }).authenticate,
         { liveKey: () => Promise.resolve(null), appToolPolicy: () => null },
       ).fetch(request, env, context);

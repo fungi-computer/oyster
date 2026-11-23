@@ -367,6 +367,7 @@ const app = createOyster({
   }),
   auth: ownerKeyAuth(ownerKey, owner.actor.memberId, memoryOwnerSessions()),
   computerId: "workspace",
+  computerName: "Studio Computer",
   artifacts: { get: async (ref) => artifacts.get(ref) ?? null },
   installations: {
     get: async (id) => (id === "shed" ? installation : null),
@@ -463,8 +464,8 @@ async function responseStatus(page, url) {
 
 try {
   for (const { width, height, colorScheme } of [
-    { width: 1280, height: 900, colorScheme: "light" },
-    { width: 1280, height: 900, colorScheme: "dark" },
+    { width: 1440, height: 900, colorScheme: "light" },
+    { width: 1440, height: 900, colorScheme: "dark" },
     { width: 390, height: 844, colorScheme: "light" },
     { width: 390, height: 844, colorScheme: "dark" },
   ]) {
@@ -515,10 +516,18 @@ try {
       new URL(`before-${width}-${colorScheme}.png`, work).pathname,
     );
     let connectUrl;
+    let metadataTarget;
     const recordConnect = (request) => {
       const url = new URL(request.url());
       if (url.origin === previewOrigin && url.searchParams.has("token"))
         connectUrl = url.href;
+      if (
+        url.origin === canonicalOrigin &&
+        url.pathname === "/computers/workspace/ports/3000" &&
+        request.method() === "GET" &&
+        url.searchParams.has("computerId")
+      )
+        metadataTarget = url.searchParams.get("computerId");
     };
     context.on("request", recordConnect);
     const issuedBefore = issuedTickets;
@@ -533,6 +542,18 @@ try {
     await popup.getByRole("dialog", { name: "Open this preview?" }).waitFor();
     const dialog = popup.getByRole("dialog", { name: "Open this preview?" });
     await dialog.getByText("workspace", { exact: true }).waitFor();
+    await dialog.getByText("Studio Computer", { exact: false }).waitFor();
+    assert.equal(
+      metadataTarget,
+      "workspace",
+      "The name read must select the preview’s Computer, not the default Computer",
+    );
+    assert.equal(
+      await dialog
+        .getByRole("button", { name: "Cancel", exact: true })
+        .evaluate((button) => button === globalThis.document.activeElement),
+      true,
+    );
     await dialog.getByText("3000", { exact: true }).waitFor();
     const factHeights = await dialog
       .locator("[data-preview-fact]")
@@ -551,6 +572,139 @@ try {
     // at the entry path: its script submit carries no user activation, so
     // the owner route refuses it even with the owner's cookie.
     const entryUrl = `${canonicalOrigin}/computers/workspace/ports/3000`;
+
+    // Control browser time to prove the safety interval without a wall-clock sleep.
+    const cancelPage = await context.newPage();
+    const clockStart = new Date("2026-11-21T12:00:00Z");
+    await cancelPage.clock.install({ time: clockStart });
+    await cancelPage.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+    await cancelPage.goto(entryUrl);
+    const cancelDialog = cancelPage.getByRole("dialog", {
+      name: "Open this preview?",
+    });
+    await cancelDialog.waitFor();
+    await cancelDialog.getByText("Studio Computer", { exact: false }).waitFor();
+    const confirmButton = cancelDialog.getByRole("button", {
+      name: "Open preview",
+      exact: true,
+    });
+    const cancelButton = cancelDialog.getByRole("button", {
+      name: "Cancel",
+      exact: true,
+    });
+    // Let the dialog complete its two initial focus frames.
+    await cancelPage.clock.runFor(32);
+    assert.equal(
+      await cancelButton.evaluate(
+        (button) => button === globalThis.document.activeElement,
+      ),
+      true,
+    );
+    assert.equal(await confirmButton.isDisabled(), true);
+    // A second click on the newly opened dialog cannot confirm early.
+    await confirmButton.click({ force: true });
+    assert.equal(issuedTickets, issuedBefore);
+    await cancelPage.clock.runFor(567);
+    assert.equal(await confirmButton.isDisabled(), true);
+    await cancelPage.clock.runFor(17);
+    assert.equal(await confirmButton.isEnabled(), true);
+    await cancelPage.clock.resume();
+    await cancelButton.click();
+    await cancelPage.waitForURL(`${canonicalOrigin}/`);
+    assert.equal(
+      issuedTickets,
+      issuedBefore,
+      "Cancel must never mint a ticket",
+    );
+    assert.equal(Boolean(connectUrl), false);
+    await cancelPage.close();
+
+    // The name read can fail. The dialog still opens at once, the toast names
+    // the real cause, and the owner may open the preview by Computer id.
+    const nameRead = (route) =>
+      route.request().method() === "GET" &&
+      route.request().headers().accept === "application/json";
+    const isNameRead = (url) =>
+      url.origin === canonicalOrigin &&
+      url.pathname === "/computers/workspace/ports/3000" &&
+      url.searchParams.has("computerId");
+    // A cross-site popup arrives without the owner cookie, so the page has no
+    // name of its own and reads it. A fresh context carries no cookie.
+    const anonymous = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      viewport: { width, height },
+      colorScheme,
+      reducedMotion: "reduce",
+    });
+    const failedName = await anonymous.newPage();
+    await failedName.route(isNameRead, (route) =>
+      nameRead(route)
+        ? route.fulfill({ status: 503, body: "" })
+        : route.continue(),
+    );
+    await failedName.goto(entryUrl);
+    await failedName
+      .locator("[data-sonner-toast]")
+      .getByText(
+        "The Computer's name could not load: server error 503. You can still open the preview.",
+        { exact: true },
+      )
+      .waitFor();
+    const failedDialog = failedName.getByRole("dialog", {
+      name: "Open this preview?",
+    });
+    await failedDialog.getByText("workspace", { exact: true }).waitFor();
+    // The failed name read does not strand the owner; the delay still applies.
+    await failedName.waitForFunction(
+      () =>
+        globalThis.document.querySelector("button[type=submit]")?.disabled ===
+        false,
+    );
+    await capture(
+      failedName,
+      new URL(`name-failed-${width}-${colorScheme}.png`, work).pathname,
+    );
+    await failedName.close();
+
+    // A name read that never answers cannot leave the owner on a silent page.
+    const hungName = await anonymous.newPage();
+    await hungName.clock.install({ time: clockStart });
+    await hungName.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+    await hungName.route(isNameRead, (route) =>
+      nameRead(route) ? undefined : route.continue(),
+    );
+    await hungName.goto(entryUrl);
+    const hungDialog = hungName.getByRole("dialog", {
+      name: "Open this preview?",
+    });
+    await hungDialog.waitFor();
+    await hungDialog.getByText("Loading name", { exact: false }).waitFor();
+    assert.equal(
+      await hungDialog
+        .getByRole("button", { name: "Open preview", exact: true })
+        .isDisabled(),
+      true,
+    );
+    await hungName.clock.runFor(5001);
+    await hungName
+      .locator("[data-sonner-toast]")
+      .getByText(
+        "The Computer's name could not load: your Oyster did not answer within 5 seconds. You can still open the preview.",
+        { exact: true },
+      )
+      .waitFor();
+    // The delay restarts when the failure lands, so it can be read first.
+    const hungConfirm = hungDialog.getByRole("button", {
+      name: "Open preview",
+      exact: true,
+    });
+    await hungName.clock.runFor(500);
+    assert.equal(await hungConfirm.isDisabled(), true);
+    await hungName.clock.runFor(101);
+    assert.equal(await hungConfirm.isEnabled(), true);
+    await hungName.close();
+    await anonymous.close();
+
     const autoSubmit = await context.newPage();
     await autoSubmit.route(entryUrl, (route) =>
       route.request().method() === "GET"

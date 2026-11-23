@@ -1,4 +1,5 @@
 import { ownerKeyAuth, ownerKeyCookieName } from "../auth.js";
+import { ownerRemovedRefusal } from "../owner-sign-out.js";
 import type { OwnerSessions } from "../owner-sessions.js";
 import type { TenantId } from "../tenant.js";
 import { Hono } from "hono";
@@ -28,7 +29,7 @@ export type OwnerKeyOptions = Readonly<{
   }>;
   /** Host-owned owner browser sessions for one tenant; the cookie names one of these. */
   sessions(tenantId: TenantId): OwnerSessions;
-  /** Optional relative POST /login and POST /logout routes, explicitly mounted by the host. */
+  /** Optional relative sign-in and sign-out routes, explicitly mounted by the host. */
   login?: Readonly<{
     /** Resolve the tenant through the kit, not from form/body data. */
     resolveTenant: ReadonlyTenancy["resolve"];
@@ -54,13 +55,19 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
       const record = await options.keys.get(tenant.id);
       if (record === null) return context.json({ error: "unauthorized" }, 401);
       // The session is stored only once the signed-in member is still the
-      // tenant's owner, so a refused sign-in leaves no session behind.
+      // tenant's owner. A refused sign-in neither creates a session nor
+      // revokes the one the browser already holds.
       const sessions = options.sessions(tenant.id);
       const opened: Parameters<typeof sessions.open>[] = [];
+      const revoked: Parameters<typeof sessions.revoke>[] = [];
       const helper = ownerKeyAuth(record.key, record.memberId, {
         ...sessions,
         open: (...session) => {
           opened.push(session);
+          return Promise.resolve();
+        },
+        revoke: (...session) => {
+          revoked.push(session);
           return Promise.resolve();
         },
       });
@@ -71,6 +78,7 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
       if (!(await currentOwner(tenant, record.memberId)))
         return context.json({ error: "forbidden" }, 403);
       for (const session of opened) await sessions.open(...session);
+      for (const session of revoked) await sessions.revoke(...session);
       response.headers.set("Cache-Control", "no-store");
       return response;
     });
@@ -88,6 +96,28 @@ export function ownerKey(options: OwnerKeyOptions): AuthAdapter {
       if (helper.logout === undefined)
         throw new Error("Oyster owner authentication has no logout handler");
       return await helper.logout(context.req.raw);
+    });
+  if (login !== undefined)
+    routes.post("/logout/everywhere", async (context) => {
+      const tenant = await login.resolveTenant(context.req.raw);
+      if (tenant === null) return context.json({ error: "not_found" }, 404);
+      const record = await options.keys.get(tenant.id);
+      if (record === null) return context.json({ error: "unauthorized" }, 401);
+      const helper = ownerKeyAuth(
+        record.key,
+        record.memberId,
+        options.sessions(tenant.id),
+      );
+      const admission = await helper.authenticate(context.req.raw);
+      if (admission.kind === "refused")
+        return context.body(null, admission.status);
+      if (!(await currentOwner(tenant, record.memberId)))
+        return context.json(ownerRemovedRefusal, 403);
+      if (helper.logoutEverywhere === undefined)
+        throw new Error(
+          "Oyster owner authentication has no global sign-out handler",
+        );
+      return await helper.logoutEverywhere(context.req.raw);
     });
   const adapter: AuthAdapter = {
     id: "owner-key",

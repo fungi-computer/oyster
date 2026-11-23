@@ -656,6 +656,40 @@ test("HTTP and root readers share the stored canonical owner and live membership
     );
     assert.equal(logout.status, 303);
     assert.equal((await selected.auth.authenticate(signedIn)).kind, "refused");
+    const ownerCookies = [];
+    for (let browser = 0; browser < 2; browser += 1) {
+      const response = await selected.auth.login(
+        new globalThis.Request(`${input.origin}/login`, {
+          method: "POST",
+          body: new globalThis.URLSearchParams({ key: credential }),
+        }),
+      );
+      assert.equal(response.status, 303);
+      ownerCookies.push(
+        response.headers
+          .getSetCookie()
+          .find((value) => value.startsWith("oyster_session="))
+          ?.split(";")[0],
+      );
+    }
+    const ended = await selected.auth.logoutEverywhere(
+      new globalThis.Request(`${input.origin}/logout/everywhere`, {
+        method: "POST",
+        headers: { Cookie: ownerCookies[0], Origin: input.origin },
+      }),
+    );
+    assert.equal(ended.status, 303);
+    for (const cookie of ownerCookies)
+      assert.equal(
+        (
+          await selected.auth.authenticate(
+            new globalThis.Request(`${input.origin}/api/apps`, {
+              headers: { Cookie: cookie },
+            }),
+          )
+        ).kind,
+        "refused",
+      );
     const namedKey = new globalThis.Request(`${input.origin}/api/apps`, {
       headers: { Authorization: "Bearer named-key-fixture" },
     });

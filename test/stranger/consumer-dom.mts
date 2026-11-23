@@ -45,6 +45,7 @@ const strangerSessions: OwnerSessions = {
   open: () => Promise.resolve(),
   owner: () => Promise.resolve(null),
   revoke: () => Promise.resolve(),
+  revokeOwner: () => Promise.resolve(),
 };
 export const canonicalOwnerSignIn = ownerKeyAuth(
   "stranger-owner-key-1234567890",

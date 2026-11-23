@@ -433,9 +433,15 @@ test(
         },
       );
 
-      for (const javascript of [true, false])
+      for (const [width, javascript, scheme] of [
+        [1440, true, "light"],
+        [1440, true, "dark"],
+        [390, true, "light"],
+        [390, true, "dark"],
+        [390, false, "dark"],
+      ])
         await t.test(
-          `the one-time helper signs in over HTTP with JS ${javascript ? "on" : "off"}`,
+          `owner sessions at ${width}px ${scheme} with JS ${javascript ? "on" : "off"}`,
           async () => {
             const app = createOyster(authHost);
             const server = createServer(async (request, response) => {
@@ -477,6 +483,10 @@ test(
             try {
               const context = await realBrowser.newContext({
                 javaScriptEnabled: javascript,
+                viewport: { width, height: 900 },
+                deviceScaleFactor: 1,
+                colorScheme: scheme,
+                reducedMotion: "reduce",
               });
               const page = await context.newPage();
               await page.goto(helper.url);
@@ -493,6 +503,155 @@ test(
               );
               assert.ok(cookie?.httpOnly);
               assert.equal(cookie.value.includes(key), false);
+              const everywhere = page.getByRole("button", {
+                name: "Sign out everywhere",
+                exact: true,
+              });
+              assert.equal(
+                await everywhere.count(),
+                1,
+                "the owner has a Caps sign-out-everywhere action",
+              );
+              const actionHeight = (await everywhere.boundingBox())?.height;
+              assert.ok(
+                actionHeight !== undefined && actionHeight <= 32,
+                `the sign-out-everywhere row is at most 32px tall, got ${actionHeight}`,
+              );
+              const secondLogin = await fetch(`${origin}/login`, {
+                method: "POST",
+                body: new URLSearchParams({ key }),
+                redirect: "manual",
+              });
+              assert.equal(secondLogin.status, 303);
+              const secondCookie = secondLogin.headers
+                .getSetCookie()
+                .find((value) => value.startsWith("oyster_session="))
+                ?.split(";")[0];
+              assert.ok(secondCookie);
+              if (javascript) {
+                await page.evaluate(() => document.fonts.ready);
+                await page.locator(".ink-art[data-ready]").waitFor();
+                assert.equal(
+                  await page.evaluate(
+                    () => document.documentElement.scrollWidth > innerWidth,
+                  ),
+                  false,
+                );
+                await page.screenshot({
+                  path: join(shots, `owner-sessions-${width}-${scheme}.png`),
+                  fullPage: true,
+                  animations: "disabled",
+                });
+                for (const [status, body, message, name] of [
+                  [
+                    403,
+                    '{"error":"origin_mismatch"}',
+                    "This request didn't come from your Oyster's page.",
+                    "same-origin",
+                  ],
+                  [
+                    403,
+                    '{"error":"owner_removed"}',
+                    "You are no longer this Oyster's owner.",
+                    "removed",
+                  ],
+                  [
+                    403,
+                    '{"error":"forbidden"}',
+                    "Your Oyster refused to end the sessions (403), so they may still be active.",
+                    "unknown-403",
+                  ],
+                  [
+                    403,
+                    "Owner only",
+                    "Your Oyster refused to end the sessions (403), so they may still be active.",
+                    "unparseable-403",
+                  ],
+                  [
+                    418,
+                    "Private storage failure",
+                    "Your Oyster refused to end the sessions (status 418), so they may still be active.",
+                    "other",
+                  ],
+                  [
+                    503,
+                    "Private storage failure",
+                    "Your Oyster couldn't end the sessions (server error 503), so they may still be active.",
+                    "server",
+                  ],
+                ]) {
+                  await page.route(`${origin}/logout/everywhere`, (route) =>
+                    route.fulfill({
+                      status,
+                      contentType: "text/plain",
+                      body,
+                    }),
+                  );
+                  await everywhere.click();
+                  await page
+                    .getByText(message, { exact: true })
+                    .first()
+                    .waitFor();
+                  assert.equal(new URL(page.url()).pathname, "/");
+                  assert.equal(
+                    (await page.locator("body").innerText()).includes(
+                      "Private storage failure",
+                    ),
+                    false,
+                  );
+                  await page.screenshot({
+                    path: join(
+                      shots,
+                      `owner-sessions-error-${name}-${width}-${scheme}.png`,
+                    ),
+                    fullPage: true,
+                    animations: "disabled",
+                  });
+                  await page.unroute(`${origin}/logout/everywhere`);
+                }
+              }
+              const nativeReply = javascript
+                ? null
+                : page.waitForResponse(
+                    (response) =>
+                      response.url() === `${origin}/logout/everywhere` &&
+                      response.request().method() === "POST",
+                  );
+              await everywhere.click();
+              if (nativeReply) {
+                const response = await nativeReply;
+                assert.equal(
+                  response.status(),
+                  303,
+                  "the native owner form signs out successfully",
+                );
+              }
+              await page.waitForURL(`${origin}/login`);
+              await page.screenshot({
+                path: join(
+                  shots,
+                  `owner-sessions-signed-out-${width}-${scheme}${javascript ? "" : "-nojs"}.png`,
+                ),
+                fullPage: true,
+                animations: "disabled",
+              });
+              assert.equal(
+                (await context.cookies()).some(
+                  (item) => item.name === "oyster_session",
+                ),
+                false,
+              );
+              for (const held of [
+                `oyster_session=${cookie.value}`,
+                secondCookie,
+              ]) {
+                const replay = await fetch(`${origin}/`, {
+                  headers: { Cookie: held, Accept: "text/html" },
+                  redirect: "manual",
+                });
+                assert.equal(replay.status, 302);
+                assert.equal(replay.headers.get("Location"), "/login");
+              }
             } finally {
               await helper.close();
               await realBrowser.close();

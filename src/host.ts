@@ -245,6 +245,8 @@ export type OysterAuth = Readonly<{
   login?: (request: Request) => Promise<Response>;
   /** End this browser's session on the server and clear its cookie. */
   logout?: (request: Request) => Promise<Response>;
+  /** End all of this owner's browser sessions and clear this browser's cookie. */
+  logoutEverywhere?: (request: Request) => Promise<Response>;
 }>;
 
 /** A serializable registry commit result, including across native DO RPC. */
@@ -1054,6 +1056,7 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       state,
       title,
       stylesheets: [styles.path, loginFonts.path],
+      canSignOutEverywhere: host.auth.logoutEverywhere !== undefined,
       ...options,
     });
   };
@@ -1064,6 +1067,25 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     // Chromium applies form-action to the POST redirect too.
     "Content-Security-Policy":
       "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src data:; form-action 'self' https:; frame-ancestors 'none'; base-uri 'none'",
+  };
+  const namedPreviewEntry = async (
+    request: Pick<Request, "url" | "method" | "headers">,
+    entry: PortPreviewEntry,
+  ) => {
+    const caller = await authenticate(
+      request instanceof Request
+        ? request
+        : new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+          }),
+    );
+    return caller.kind === "admitted" &&
+      oysterPrincipalIsOwner(caller.principal) &&
+      host.computerId === entry.computerId &&
+      host.computerName != null
+      ? { ...entry, computerName: host.computerName }
+      : entry;
   };
   const previewPage = async (entry: PortPreviewEntry, status = 200) => {
     const response = await page("open-preview", {
@@ -1092,17 +1114,21 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
         "the owner's preview confirm page; only their own click posts to the owner route",
       ),
       async (context) => {
-        // Only route text is shown: this public page reads nothing about the
-        // Computer, so a visitor learns nothing from it.
+        // Anonymous visitors see route text only; the host adds its selected
+        // Computer’s name only after authenticating its owner.
         const computerId = context.req.param("computerId");
         const portParam = context.req.param("port");
         const port = parsePortPreviewPort(portParam);
         if (port === undefined) return context.body(null, 404);
-        return previewPage({
+        const entry = await namedPreviewEntry(context.req.raw, {
           action: context.req.path,
           port,
           computerId,
         });
+        return parseAccept(context.req.header("Accept") ?? "")[0]?.type ===
+          "application/json"
+          ? context.json(entry, 200, previewHeaders)
+          : previewPage(entry);
       },
     );
   table.get(
@@ -1125,6 +1151,11 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
       host.auth.logout === undefined
         ? refusal(404, "Sign-out is not available")
         : host.auth.logout(context.req.raw),
+  );
+  table.post("/logout/everywhere", owner("direct"), (context) =>
+    host.auth.logoutEverywhere === undefined
+      ? refusal(404, "Sign-out everywhere is not available")
+      : host.auth.logoutEverywhere(context.req.raw),
   );
 
   if (host.mcp !== undefined) {
@@ -2862,7 +2893,10 @@ export function oysterRouteTable(host: OysterHost): OysterRouteTable {
     let rendered: Response;
     try {
       rendered = previewEntry
-        ? await previewPage(previewEntry, response.status)
+        ? await previewPage(
+            await namedPreviewEntry(request, previewEntry),
+            response.status,
+          )
         : await page(state, { status: response.status });
     } catch (cause) {
       if (!(cause instanceof PageAssetsLoadError)) throw cause;

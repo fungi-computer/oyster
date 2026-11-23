@@ -239,6 +239,7 @@ type Admitted = Readonly<{
   owner: StandaloneOwner | null;
   login(request: Request): Promise<Response>;
   logout(request: Request): Promise<Response>;
+  logoutEverywhere(request: Request): Promise<Response>;
 }>;
 
 async function composeTenancy(
@@ -405,6 +406,12 @@ async function composeTenancy(
         routes === undefined
           ? new Response("Sign-out is not available", { status: 404 })
           : await routes.fetch(request),
+      logoutEverywhere: async (request) =>
+        routes === undefined
+          ? new Response("Sign-out everywhere is not available", {
+              status: 404,
+            })
+          : await routes.fetch(request),
     };
   };
   /**
@@ -493,6 +500,9 @@ async function composeTenancy(
             new Response("Not found", { status: 404 }),
           logout: async (incoming) =>
             (await (await forRequest(incoming))?.logout(incoming)) ??
+            new Response("Not found", { status: 404 }),
+          logoutEverywhere: async (incoming) =>
+            (await (await forRequest(incoming))?.logoutEverywhere(incoming)) ??
             new Response("Not found", { status: 404 }),
         },
       };

@@ -586,9 +586,12 @@ keys and secrets never ride an App.
 A browser signs in only with the owner key, through `/login` and its
 `SameSite=Strict` session cookie; named keys sign in only by header. The cookie
 holds a random session id. The tenant registry keeps an HMAC of it, keyed by the
-owner key, with a 30-day expiry; `POST /logout` revokes it, and rotating the
-owner key ends every session. Anonymous requests reach only `/login`,
-`robots.txt`, digest-pinned shell and App UI bytes and the website chat.
+owner key, with an absolute 30-day expiry from sign-in; activity does not extend
+it. A fresh login replaces the session this browser already held. `POST /logout`
+revokes that session; **Sign out everywhere** (`POST /logout/everywhere`)
+revokes all browser sessions for the current owner. Rotating the owner key also
+ends every session. Anonymous requests reach only `/login`, `robots.txt`,
+digest-pinned shell and App UI bytes and the website chat.
 
 ### Owner state and selection
 

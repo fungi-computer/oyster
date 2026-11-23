@@ -78,6 +78,7 @@ export const portPreviewRefusalStatus = {
 export const portPreviewEntrySchema = computerPortInputSchema.extend({
   action: z.string(),
   computerId: z.string(),
+  computerName: z.string().optional(),
   refusal: portPreviewRefusalSchema.optional(),
 });
 export type PortPreviewEntry = z.infer<typeof portPreviewEntrySchema>;

@@ -189,6 +189,24 @@ Revoke one owner browser session.
 
 `Promise`\<`void`\>
 
+##### revokeOwnerSessions()
+
+```ts
+revokeOwnerSessions(owner): Promise<void>;
+```
+
+Revoke every browser session for the admitted owner.
+
+###### Parameters
+
+| Parameter | Type     |
+| --------- | -------- |
+| `owner`   | `string` |
+
+###### Returns
+
+`Promise`\<`void`\>
+
 ##### approvalSubmit()
 
 ```ts
@@ -3514,9 +3532,9 @@ A tenant registry's owner sessions as the `OwnerSessions` port.
 
 #### Parameters
 
-| Parameter  | Type                                                                                                                         |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `registry` | () => `Pick`\<[`OysterRegistry`](#oysterregistry), `"openOwnerSession"` \| `"ownerSessionOwner"` \| `"revokeOwnerSession"`\> |
+| Parameter  | Type                                                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registry` | () => `Pick`\<[`OysterRegistry`](#oysterregistry), \| `"openOwnerSession"` \| `"ownerSessionOwner"` \| `"revokeOwnerSession"` \| `"revokeOwnerSessions"`\> |
 
 #### Returns
 

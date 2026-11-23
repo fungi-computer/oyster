@@ -15,6 +15,8 @@ export type OwnerSessions = Readonly<{
   owner(digest: string, now: number): Promise<string | null>;
   /** Revoke one session; revoking an unknown session does nothing. */
   revoke(digest: string): Promise<void>;
+  /** Revoke every browser session belonging to this owner. */
+  revokeOwner(owner: string): Promise<void>;
 }>;
 
 /** The synchronous SQL a Durable Object or SQLite host gives the store. */
@@ -93,6 +95,10 @@ export function ownerSessionStore(sql: OwnerSessionSql): OwnerSessions {
         "DELETE FROM oyster_owner_sessions WHERE session_digest = ?",
         digest,
       );
+      return Promise.resolve();
+    },
+    revokeOwner(owner) {
+      table().exec("DELETE FROM oyster_owner_sessions WHERE owner = ?", owner);
       return Promise.resolve();
     },
   };

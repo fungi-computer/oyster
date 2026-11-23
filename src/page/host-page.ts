@@ -1,5 +1,9 @@
 import { mountInkDrawing, type InkDrawing } from "@fungi.computer/sprite/ink";
 import * as z from "zod/mini";
+import { signOutRefusalSchema } from "../owner-sign-out.js";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { Toaster, showNotice } from "@fungi.computer/caps/components/toaster";
 import "../host-page/styles.css";
 
 const artSchema = z.object({
@@ -92,3 +96,85 @@ if (panel && live && panel.dataset.ink) {
 }
 
 document.querySelector<HTMLFormElement>("[data-auto-sign-in]")?.requestSubmit();
+
+const signOutForm = document.querySelector<HTMLFormElement>(
+  "[data-sign-out-everywhere]",
+);
+const signOutButton = signOutForm?.querySelector<HTMLButtonElement>(
+  'button[type="submit"]',
+);
+/** The refusal's named cause, or "unrecognised" when the body is not one of the server's codes. */
+async function refusalCause(
+  response: Response,
+): Promise<z.infer<typeof signOutRefusalSchema>["error"] | "unrecognised"> {
+  try {
+    return signOutRefusalSchema.parse(await response.json()).error;
+  } catch {
+    return "unrecognised";
+  }
+}
+
+/** Name the real cause of a refused sign-out in plain words, never echoing the server body. */
+async function signOutRefusal(response: Response): Promise<string> {
+  const { status } = response;
+  if (status === 401)
+    return "Your sign-in has ended. Sign in again to sign out everywhere.";
+  if (status === 403) {
+    const cause = await refusalCause(response);
+    if (cause === "origin_mismatch")
+      return "This request didn't come from your Oyster's page.";
+    if (cause === "owner_removed")
+      return "You are no longer this Oyster's owner.";
+    return "Your Oyster refused to end the sessions (403), so they may still be active.";
+  }
+  if (status >= 500)
+    return `Your Oyster couldn't end the sessions (server error ${String(status)}), so they may still be active.`;
+  return `Your Oyster refused to end the sessions (status ${String(status)}), so they may still be active.`;
+}
+
+if (signOutForm && signOutButton) {
+  const toasterId = "oyster-owner-session-notices";
+  let mounted = false;
+  const notify = (message: string) => {
+    if (!mounted) {
+      mounted = true;
+      const root = document.createElement("div");
+      document.body.append(root);
+      createRoot(root).render(createElement(Toaster, { id: toasterId }));
+    }
+    showNotice({ tone: "error", message }, toasterId);
+  };
+  // Retain bounded diagnostics without logging exception messages or credentials.
+  const reportFailure = (cause: unknown): void => {
+    console.error("Owner sign-out request failed", {
+      errorKind: cause instanceof Error ? "error" : "non-error",
+    });
+  };
+  const signOut = async () => {
+    if (signOutButton.disabled) return;
+    signOutButton.disabled = true;
+    signOutButton.setAttribute("aria-busy", "true");
+    try {
+      const response = await fetch(signOutForm.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        notify(await signOutRefusal(response));
+        return;
+      }
+      window.location.assign(response.url);
+    } catch (cause) {
+      reportFailure(cause);
+      notify("Could not reach your Oyster to sign out everywhere.");
+    } finally {
+      signOutButton.disabled = false;
+      signOutButton.removeAttribute("aria-busy");
+    }
+  };
+  signOutForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void signOut();
+  });
+}

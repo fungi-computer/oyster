@@ -25,6 +25,10 @@ function memorySessions() {
     revoke: async (digest) => {
       rows.delete(digest);
     },
+    revokeOwner: async (owner) => {
+      for (const [digest, session] of rows)
+        if (session.owner === owner) rows.delete(digest);
+    },
   };
 }
 

@@ -12,6 +12,10 @@ export function memoryOwnerSessions() {
     revoke: async (digest) => {
       rows.delete(digest);
     },
+    revokeOwner: async (owner) => {
+      for (const [digest, session] of rows)
+        if (session.owner === owner) rows.delete(digest);
+    },
   };
 }
 
@@ -22,5 +26,6 @@ export function memoryRegistrySessions() {
     openOwnerSession: (owner, digest, now) => sessions.open(owner, digest, now),
     ownerSessionOwner: (digest, now) => sessions.owner(digest, now),
     revokeOwnerSession: (digest) => sessions.revoke(digest),
+    revokeOwnerSessions: (owner) => sessions.revokeOwner(owner),
   };
 }

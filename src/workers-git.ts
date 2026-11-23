@@ -2204,6 +2204,18 @@ function pinnedTenantAuth(
         new Response("Sign-out is not available", { status: 404 })
       );
     },
+    logoutEverywhere: async (incoming) => {
+      const current = await admitted(incoming);
+      if (
+        current?.scope.tenantId !== scope.tenantId ||
+        current.scope.origin !== scope.origin
+      )
+        return new Response("Not found", { status: 404 });
+      return (
+        current.auth.logoutEverywhere?.(incoming) ??
+        new Response("Sign-out everywhere is not available", { status: 404 })
+      );
+    },
   };
 }
 

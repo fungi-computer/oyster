@@ -321,6 +321,10 @@ export class OysterRegistry<
   revokeOwnerSession(digest: string) {
     return this.ownerSessions().revoke(digest);
   }
+  /** Revoke every browser session for the admitted owner. */
+  revokeOwnerSessions(owner: string) {
+    return this.ownerSessions().revokeOwner(owner);
+  }
 
   /** Trusted host RPC; an operation input cannot select actor, namespace or tenant. */
   approvalSubmit(
@@ -2555,7 +2559,10 @@ function ownerKeyRootHost(
 export function registryOwnerSessions(
   registry: () => Pick<
     OysterRegistry,
-    "openOwnerSession" | "ownerSessionOwner" | "revokeOwnerSession"
+    | "openOwnerSession"
+    | "ownerSessionOwner"
+    | "revokeOwnerSession"
+    | "revokeOwnerSessions"
   >,
 ): OwnerSessions {
   return {
@@ -2566,6 +2573,9 @@ export function registryOwnerSessions(
       await registry().ownerSessionOwner(digest, now),
     revoke: async (digest) => {
       await registry().revokeOwnerSession(digest);
+    },
+    revokeOwner: async (owner) => {
+      await registry().revokeOwnerSessions(owner);
     },
   };
 }

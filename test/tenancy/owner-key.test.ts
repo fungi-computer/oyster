@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  originMismatchRefusal,
+  ownerRemovedRefusal,
+  signOutRefusalSchema,
+} from "../../src/owner-sign-out.js";
 import { ownerKey } from "../../src/tenancy/owner-key.js";
 import { memoryRegistry } from "../../src/tenancy/registry.js";
 import { ownerKeyAuth } from "@fungi.computer/oyster/auth";
@@ -278,6 +283,106 @@ it("logs out through the adapter's route, revoking the session", async () => {
     kind: "refused",
     status: 401,
   });
+});
+
+it("a refused login preserves the held session when owner membership returns", async () => {
+  const { tenant, memberId, get, sessions } = await fixture();
+  const current = { ...tenant };
+  const adapter = ownerKey({
+    keys: { get },
+    registry: { get: () => Promise.resolve(current) },
+    sessions: () => sessions,
+    login: { resolveTenant: () => Promise.resolve(tenant) },
+  });
+  const routes = present(adapter.routes);
+  const signedIn = await routes.request(`${tenant.origin}/login`, {
+    method: "POST",
+    body: new URLSearchParams({ key }),
+  });
+  expect(signedIn.status).toBe(303);
+  const cookie = present(
+    present(signedIn.headers.get("Set-Cookie")).split(";")[0],
+  );
+  current.owners = [];
+  const refused = await routes.request(`${tenant.origin}/login`, {
+    method: "POST",
+    headers: { Cookie: cookie },
+    body: new URLSearchParams({ key }),
+  });
+  expect(refused.status).toBe(403);
+  expect(refused.headers.get("Set-Cookie")).toBeNull();
+  current.owners = tenant.owners;
+  await expect(
+    adapter.authenticate(
+      new Request(tenant.origin, { headers: { Cookie: cookie } }),
+      tenant,
+    ),
+  ).resolves.toMatchObject({
+    kind: "principal",
+    principal: { actor: { kind: "member", memberId } },
+  });
+});
+
+it("signs out all current-owner browsers through the tenancy route", async () => {
+  const { tenant, get, sessions } = await fixture();
+  const current = { ...tenant };
+  const adapter = ownerKey({
+    keys: { get },
+    registry: { get: () => Promise.resolve(current) },
+    sessions: () => sessions,
+    login: { resolveTenant: () => Promise.resolve(tenant) },
+  });
+  const routes = present(adapter.routes);
+  const cookies: string[] = [];
+  for (let browser = 0; browser < 2; browser += 1) {
+    const response = await routes.request(`${tenant.origin}/login`, {
+      method: "POST",
+      body: new URLSearchParams({ key }),
+    });
+    expect(response.status).toBe(303);
+    cookies.push(
+      present(present(response.headers.get("Set-Cookie")).split(";")[0]),
+    );
+  }
+  const heldCookie = present(cookies[0]);
+  const signOut = (origin = tenant.origin) =>
+    routes.request(`${tenant.origin}/logout/everywhere`, {
+      method: "POST",
+      headers: { Cookie: heldCookie, Origin: origin },
+    });
+  current.owners = [];
+  const removed = await signOut();
+  expect(removed.status).toBe(403);
+  expect(signOutRefusalSchema.parse(await removed.json())).toEqual(
+    ownerRemovedRefusal,
+  );
+  current.owners = tenant.owners;
+  const crossSite = await signOut("https://attacker.example");
+  expect(crossSite.status).toBe(403);
+  expect(signOutRefusalSchema.parse(await crossSite.json())).toEqual(
+    originMismatchRefusal,
+  );
+  expect(
+    (
+      await adapter.authenticate(
+        new Request(tenant.origin, {
+          headers: { Cookie: heldCookie },
+        }),
+        tenant,
+      )
+    ).kind,
+  ).toBe("principal");
+  expect((await signOut()).status).toBe(303);
+  for (const cookie of cookies) {
+    await expect(
+      adapter.authenticate(
+        new Request(tenant.origin, {
+          headers: { Cookie: cookie },
+        }),
+        tenant,
+      ),
+    ).resolves.toEqual({ kind: "refused", status: 401 });
+  }
 });
 
 function present<T>(value: T | null | undefined): T {
