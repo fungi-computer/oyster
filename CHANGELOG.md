@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.58.3
+
+### Patch Changes
+
+- Changes since 0.58.2:
+
+  - Updated starter Apps for the Ear-tag release.
+  - Updated starter Apps for the Mule release.
+
+- Updated dependencies
+  - @fungi.computer/ear-tag@0.3.0
+  - @fungi.computer/nacre@0.9.11
+  - @fungi.computer/knapsack@0.4.29
+  - @fungi.computer/mycelium@0.4.14
+  - @fungi.computer/parakeet@0.17.12
+  - @fungi.computer/shiitake@0.22.13
+  - @fungi.computer/shiitake-extensions@0.13.9
+  - @fungi.computer/computer@0.18.7
+  - @fungi.computer/computer-contract@0.6.6
+  - @fungi.computer/braid@0.6.18
+  - @fungi.computer/veil@0.11.11
+  - @fungi.computer/zookeeper@0.0.72
+  - @fungi.computer/workflows-wire@0.7.19
+
 ## 0.58.2
 
 ### Patch Changes
