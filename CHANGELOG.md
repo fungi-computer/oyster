@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.58.2
+
+### Patch Changes
+
+- Changes since 0.58.1:
+
+  - Updated starter Apps for the Inkcap release.
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Agar release.
+  - Updated starter Apps for the Caps release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.29.0
+  - @fungi.computer/caps@0.14.0
+  - @fungi.computer/braid@0.6.17
+  - @fungi.computer/darkroom@0.11.25
+  - @fungi.computer/nacre@0.9.10
+  - @fungi.computer/parakeet@0.17.11
+  - @fungi.computer/shiitake@0.22.12
+  - @fungi.computer/workflows-wire@0.7.18
+  - @fungi.computer/shiitake-extensions@0.13.8
+  - @fungi.computer/zookeeper@0.0.71
+
 ## 0.58.1
 
 ### Patch Changes
