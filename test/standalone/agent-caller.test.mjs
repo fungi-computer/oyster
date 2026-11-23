@@ -29,6 +29,7 @@ import {
 } from "@fungi.computer/oyster/host";
 import { agentCapabilities } from "@fungi.computer/oyster/agents";
 import { invocationCallerContext } from "@fungi.computer/oyster/invocation";
+import { appApprovalInstructions } from "@fungi.computer/oyster/mcp";
 import { defaultTenant, tenantScope } from "@fungi.computer/oyster/tenant";
 import { deriveDeclaredOperations } from "@fungi.computer/oyster/apps";
 import { instanceIds } from "@fungi.computer/oyster";
@@ -3691,12 +3692,7 @@ test("the agent host captures one App source per acquisition and retains agent a
   const waitForApproval =
     "A write needing approval waits in this call. Approval returns its output; denial or expiry returns here, never as a Session message.";
   assert.equal(text.split(waitForApproval).length - 1, 1);
-  assert.ok(
-    text.includes(
-      '  | { kind: "refused"; reason: string; denialNote?: string };\n' +
-        waitForApproval,
-    ),
-  );
+  assert.ok(text.includes(appApprovalInstructions));
   assert.match(text, /kind: "denied"; by: string/u);
   assert.match(text, /kind: "refused"; reason: string; denialNote\?: string/u);
   const acquired = [];

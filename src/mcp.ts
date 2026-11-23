@@ -76,8 +76,9 @@ export const appApprovalInstructions = [
   "A write (including Effect: external) may instead return AppApprovalResult:",
   "type AppApprovalResult =",
   '  | { kind: "denied"; by: string; note?: string; message: string }',
-  '  | { kind: "refused"; reason: string; denialNote?: string };',
+  '  | { kind: "refused"; reason: string; denialNote?: string; refusalDetail?: string; refusalCode?: "too_large" };',
   "A write needing approval waits in this call. Approval returns its output; denial or expiry returns here, never as a Session message.",
+  'A "not-executed" refusal confirms the write did not run. refusalDetail states the host\'s cause.',
 ].join("\n");
 
 const fleetIds = defineIdFamily({

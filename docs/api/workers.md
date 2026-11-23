@@ -352,10 +352,13 @@ approvalGet(
         | "fenced"
         | "not-granted"
         | "read-only"
+        | "not-executed"
         | "in-flight"
         | "outcome-unknown"
         | "identity-conflict"
         | null;
+     refusalDetail?: string;
+     refusalCode?: "too_large";
      denialNote?: string;
      requestedAt: number;
      expiresAt: number;
@@ -393,10 +396,11 @@ Read one member-scoped view; the native home resolves membership again.
 \{ `kind`: `"policy"`; \} \| `null`; `reason`: \| `"pending"` \| `"expired"` \|
 `"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
 \| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
-`"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"` \| `null`;
-`denialNote?`: `string`; `requestedAt`: `number`; `expiresAt`: `number`;
-`updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`: `boolean`;
-`canSetAutoApprove`: `boolean`; \} \| `null`\>
+`"not-executed"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"` \| `null`; `refusalDetail?`: `string`; `refusalCode?`:
+`"too_large"`; `denialNote?`: `string`; `requestedAt`: `number`; `expiresAt`:
+`number`; `updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`:
+`boolean`; `canSetAutoApprove`: `boolean`; \} \| `null`\>
 
 ##### approvalAnswer()
 
@@ -418,10 +422,13 @@ approvalAnswer(
      | "fenced"
      | "not-granted"
      | "read-only"
+     | "not-executed"
      | "in-flight"
      | "outcome-unknown"
      | "identity-conflict";
   denialNote?: string;
+  refusalDetail?: string;
+  refusalCode?: "too_large";
 }>
   | Readonly<{
   kind: "answered";
@@ -475,10 +482,13 @@ approvalAnswer(
            | "fenced"
            | "not-granted"
            | "read-only"
+           | "not-executed"
            | "in-flight"
            | "outcome-unknown"
            | "identity-conflict"
            | null;
+        refusalDetail?: string;
+        refusalCode?: "too_large";
         denialNote?: string;
         requestedAt: number;
         expiresAt: number;
@@ -510,24 +520,27 @@ Persist an eligible answer and attempt its native decision work once.
 `Promise`\< \| `Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \|
 `"expired"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
 `"stale-revision"` \| `"declined"` \| `"fenced"` \| `"not-granted"` \|
-`"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`;
-`denialNote?`: `string`; \}\> \| `Readonly`\<\{ `kind`: `"answered"`; `view`: \{
-`record`: \{ `recordId`: `string`; `requester`: \{ `principalId`: `string`;
-`agentId`: `string` \| `null`; `sessionId`: `string` \| `null`; `displayName`:
-`string`; \}; `module`: `string`; `operation`: `string`; `access`: `"write"` \|
-`"external"`; `description`: \{ `title`: `string`; `app?`: \{ `displayName`:
-`string`; `operationLabel`: `string`; \}; `inputBytes`: `number`; `inputSha256`:
-`string`; \}; `evidence?`: readonly `object`[]; `authorityFence`: `string`;
-`reversibility`: `"reversible"` \| `"irreversible-external"`; `state`: \|
-`"pending"` \| `"expired"` \| `"denied"` \| `"applied"` \| `"requested"` \|
-`"approved"` \| `"claimed"` \| `"outcome_unknown"`; `by`: \| \{ `kind`:
-`"human"`; `memberId`: `string`; \} \| \{ `kind`: `"policy"`; \} \| `null`;
-`reason`: \| `"pending"` \| `"expired"` \| `"not-found"` \| `"not-eligible"` \|
-`"already-answered"` \| `"stale-revision"` \| `"declined"` \| `"fenced"` \|
-`"not-granted"` \| `"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \|
-`"identity-conflict"` \| `null`; `denialNote?`: `string`; `requestedAt`:
-`number`; `expiresAt`: `number`; `updatedAt`: `number`; `revision`: `number`;
-\}; `canAnswer`: `boolean`; `canSetAutoApprove`: `boolean`; \}; \}\>\>
+`"read-only"` \| `"not-executed"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"`; `denialNote?`: `string`; `refusalDetail?`: `string`;
+`refusalCode?`: `"too_large"`; \}\> \| `Readonly`\<\{ `kind`: `"answered"`;
+`view`: \{ `record`: \{ `recordId`: `string`; `requester`: \{ `principalId`:
+`string`; `agentId`: `string` \| `null`; `sessionId`: `string` \| `null`;
+`displayName`: `string`; \}; `module`: `string`; `operation`: `string`;
+`access`: `"write"` \| `"external"`; `description`: \{ `title`: `string`;
+`app?`: \{ `displayName`: `string`; `operationLabel`: `string`; \};
+`inputBytes`: `number`; `inputSha256`: `string`; \}; `evidence?`: readonly
+`object`[]; `authorityFence`: `string`; `reversibility`: `"reversible"` \|
+`"irreversible-external"`; `state`: \| `"pending"` \| `"expired"` \| `"denied"`
+\| `"applied"` \| `"requested"` \| `"approved"` \| `"claimed"` \|
+`"outcome_unknown"`; `by`: \| \{ `kind`: `"human"`; `memberId`: `string`; \} \|
+\{ `kind`: `"policy"`; \} \| `null`; `reason`: \| `"pending"` \| `"expired"` \|
+`"not-found"` \| `"not-eligible"` \| `"already-answered"` \| `"stale-revision"`
+\| `"declined"` \| `"fenced"` \| `"not-granted"` \| `"read-only"` \|
+`"not-executed"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"` \| `null`; `refusalDetail?`: `string`; `refusalCode?`:
+`"too_large"`; `denialNote?`: `string`; `requestedAt`: `number`; `expiresAt`:
+`number`; `updatedAt`: `number`; `revision`: `number`; \}; `canAnswer`:
+`boolean`; `canSetAutoApprove`: `boolean`; \}; \}\>\>
 
 ##### approvalSetAutoApprove()
 
@@ -549,10 +562,13 @@ approvalSetAutoApprove(
      | "fenced"
      | "not-granted"
      | "read-only"
+     | "not-executed"
      | "in-flight"
      | "outcome-unknown"
      | "identity-conflict";
   denialNote?: string;
+  refusalDetail?: string;
+  refusalCode?: "too_large";
 }>
   | Readonly<{
   kind: "updated";
@@ -591,11 +607,12 @@ it.
 `Promise`\< \| `Readonly`\<\{ `kind`: `"refused"`; `reason`: \| `"pending"` \|
 `"expired"` \| `"not-found"` \| `"not-eligible"` \| `"already-answered"` \|
 `"stale-revision"` \| `"declined"` \| `"fenced"` \| `"not-granted"` \|
-`"read-only"` \| `"in-flight"` \| `"outcome-unknown"` \| `"identity-conflict"`;
-`denialNote?`: `string`; \}\> \| `Readonly`\<\{ `kind`: `"updated"`; `rule`: \{
-`scope`: \{ `agentId`: `string` \| `null`; \}; `family`: \{ `module`: `string`
-\| `null`; `access`: `"write"` \| `"external"`; \}; `enabled`: `boolean`; \};
-\}\>\>
+`"read-only"` \| `"not-executed"` \| `"in-flight"` \| `"outcome-unknown"` \|
+`"identity-conflict"`; `denialNote?`: `string`; `refusalDetail?`: `string`;
+`refusalCode?`: `"too_large"`; \}\> \| `Readonly`\<\{ `kind`: `"updated"`;
+`rule`: \{ `scope`: \{ `agentId`: `string` \| `null`; \}; `family`: \{ `module`:
+`string` \| `null`; `access`: `"write"` \| `"external"`; \}; `enabled`:
+`boolean`; \}; \}\>\>
 
 ##### installationOperation()
 

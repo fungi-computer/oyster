@@ -1,5 +1,29 @@
 # @fungi.computer/oyster
 
+## 0.58.1
+
+### Patch Changes
+
+- Changes since 0.58.0:
+
+  - fix(oyster): list the refusal code in the approval guidance
+  - fix(approvals): treat a disable during a running write as uncertain
+  - fix(approvals): align refusal guidance and preserve typed host verdicts
+  - fix(approvals): keep certain App refusals terminal with their causes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/nacre@0.9.9
+  - @fungi.computer/parakeet@0.17.10
+  - @fungi.computer/shiitake@0.22.11
+  - @fungi.computer/agar@0.28.5
+  - @fungi.computer/shiitake-extensions@0.13.7
+  - @fungi.computer/zookeeper@0.0.70
+  - @fungi.computer/braid@0.6.16
+  - @fungi.computer/darkroom@0.11.24
+  - @fungi.computer/workflows-wire@0.7.17
+
 ## 0.58.0
 
 ### Minor Changes

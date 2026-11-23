@@ -25,6 +25,7 @@ import { forageDiscoveryInstructions } from "@fungi.computer/mycelium/effect";
 import { directSandbox } from "@fungi.computer/mycelium/testing";
 import { instanceIds } from "../dist/index.js";
 import {
+  appApprovalInstructions,
   appSurfaceCache,
   oysterAppMethods,
   oysterMcpCatalogLoad,
@@ -746,12 +747,7 @@ test("App discovery describes the declaration and states approval results once i
     1,
   );
   assert.equal(snapshot.instructions.split(waitForApproval).length - 1, 1);
-  assert.ok(
-    snapshot.instructions.includes(
-      '  | { kind: "refused"; reason: string; denialNote?: string };\n' +
-        waitForApproval,
-    ),
-  );
+  assert.ok(snapshot.instructions.includes(appApprovalInstructions));
   assert.match(snapshot.instructions, /kind: "denied"; by: string/u);
   assert.match(
     snapshot.instructions,
