@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.58.9
+
+### Patch Changes
+
+- Changes since 0.58.8:
+
+  - Updated starter Apps for the Prints release.
+
 ## 0.58.8
 
 ### Patch Changes
