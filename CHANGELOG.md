@@ -1,5 +1,47 @@
 # @fungi.computer/oyster
 
+## 0.58.10
+
+### Patch Changes
+
+- Changes since 0.58.9:
+
+  - fix(deps): update the Cloudflare Vitest plugin to the release that exits
+    cleanly
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/cairn@0.1.1
+  - @fungi.computer/carrier@0.2.8
+  - @fungi.computer/darkroom@0.11.27
+  - @fungi.computer/ear-tag@0.3.1
+  - @fungi.computer/knapsack@0.4.31
+  - @fungi.computer/mycelium@0.5.1
+  - @fungi.computer/puffball@0.15.2
+  - @fungi.computer/agar@0.29.1
+  - @fungi.computer/braid@0.6.20
+  - @fungi.computer/computer@0.18.9
+  - @fungi.computer/computer-contract@0.6.8
+  - @fungi.computer/parakeet@0.17.16
+  - @fungi.computer/shiitake@0.23.1
+  - @fungi.computer/shiitake-extensions@0.13.11
+  - @fungi.computer/sprite@0.2.3
+  - @fungi.computer/veil@0.11.13
+  - @fungi.computer/watchdog@0.1.7
+  - @fungi.computer/workflows-wire@0.7.21
+  - @fungi.computer/seam@0.2.9
+  - @fungi.computer/nacre@0.9.14
+  - @fungi.computer/forage@0.5.4
+  - @fungi.computer/zookeeper@0.0.74
+  - @fungi.computer/caps@0.14.2
+  - @fungi.computer/sprite-zdog@0.3.3
+  - @fungi.computer/bird-dog@0.3.10
+
 ## 0.58.9
 
 ### Patch Changes
