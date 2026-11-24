@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.58.8
+
+### Patch Changes
+
+- Changes since 0.58.7:
+
+  - fix(oyster): list the packed files the stranger proof found missing
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.14.2
+  - @fungi.computer/darkroom@0.11.26
+  - @fungi.computer/nacre@0.9.13
+  - @fungi.computer/parakeet@0.17.15
+
 ## 0.58.7
 
 ### Patch Changes
