@@ -1,5 +1,26 @@
 # @fungi.computer/oyster
 
+## 0.59.1
+
+### Patch Changes
+
+- Changes since 0.59.0:
+
+  - Updated starter Apps for the Knapsack release.
+  - Updated starter Apps for the Computer release.
+  - Updated starter Apps for the Computer-contract release.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/computer-contract@0.6.10
+  - @fungi.computer/computer@0.18.11
+  - @fungi.computer/knapsack@0.4.33
+  - @fungi.computer/parakeet@0.17.18
+  - @fungi.computer/shiitake@0.23.3
+  - @fungi.computer/shiitake-extensions@0.13.13
+  - @fungi.computer/zookeeper@0.0.76
+
 ## 0.59.0
 
 ### Minor Changes
