@@ -701,6 +701,48 @@ Open the chosen-avatar table in the Agent directory's own SQLite.
 
 ---
 
+### appFacetRequest()
+
+```ts
+function appFacetRequest(request): Request;
+```
+
+Second boundary before an admitted request enters customer backend code. Hub
+normally builds this shape itself; callers of the App runtime must not be able
+to pass their own headers through the facet.
+
+#### Parameters
+
+| Parameter | Type      |
+| --------- | --------- |
+| `request` | `Request` |
+
+#### Returns
+
+`Request`
+
+---
+
+### appFacetResponse()
+
+```ts
+function appFacetResponse(response): Response;
+```
+
+Only content metadata crosses back from a guest; origin policy is host-owned.
+
+#### Parameters
+
+| Parameter  | Type       |
+| ---------- | ---------- |
+| `response` | `Response` |
+
+#### Returns
+
+`Response`
+
+---
+
 ### selectionOf()
 
 ```ts

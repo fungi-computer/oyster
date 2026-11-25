@@ -1,5 +1,35 @@
 # @fungi.computer/oyster
 
+## 0.59.0
+
+### Minor Changes
+
+- Changes since 0.58.10:
+
+  - fix(sites): close lifecycle and HTTP delivery gaps
+  - feat(sites): serve promoted public and unlisted Sites
+  - feat(sites): capture Computer output as immutable App Releases
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/puffball@0.16.0
+  - @fungi.computer/agar@0.29.2
+  - @fungi.computer/braid@0.6.21
+  - @fungi.computer/forage@0.5.5
+  - @fungi.computer/mycelium@0.5.2
+  - @fungi.computer/nacre@0.9.15
+  - @fungi.computer/workflows-wire@0.7.22
+  - @fungi.computer/darkroom@0.11.28
+  - @fungi.computer/parakeet@0.17.17
+  - @fungi.computer/shiitake@0.23.2
+  - @fungi.computer/knapsack@0.4.32
+  - @fungi.computer/veil@0.11.14
+  - @fungi.computer/shiitake-extensions@0.13.12
+  - @fungi.computer/zookeeper@0.0.75
+  - @fungi.computer/computer@0.18.10
+  - @fungi.computer/computer-contract@0.6.9
+
 ## 0.58.10
 
 ### Patch Changes

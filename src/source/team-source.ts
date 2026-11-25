@@ -34,6 +34,7 @@ function seedKind(
   templateSeed: NonNullable<TeamAppPublisherRegistration["templateSeed"]>,
 ): "template" | "fork" {
   return templateSeed.appId === registration.appId &&
+    registration.source.provider !== "captured-output" &&
     registration.source.repository ===
       templateRepositoryForApp(registration.appId)
     ? "template"

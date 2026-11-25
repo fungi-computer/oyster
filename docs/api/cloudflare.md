@@ -829,6 +829,136 @@ Guest code gets only host gatekeeper bindings and no ambient outbound access.
 
 ---
 
+### captureSiteHttpRequest()
+
+```ts
+function captureSiteHttpRequest(request): Promise<{
+  url: string;
+  method: string;
+  contentType: string | null;
+  bodyBase64: string;
+}>;
+```
+
+Strip ambient browser credentials before the signed stateless dispatch boundary.
+
+#### Parameters
+
+| Parameter | Type      |
+| --------- | --------- |
+| `request` | `Request` |
+
+#### Returns
+
+`Promise`\<\{ `url`: `string`; `method`: `string`; `contentType`: `string` \|
+`null`; `bodyBase64`: `string`; \}\>
+
+---
+
+### siteHttpResponse()
+
+```ts
+function siteHttpResponse(raw): Response;
+```
+
+Reconstruct only bounded content metadata; guest cookies and origin policy never
+cross.
+
+#### Parameters
+
+| Parameter | Type      |
+| --------- | --------- |
+| `raw`     | `unknown` |
+
+#### Returns
+
+`Response`
+
+---
+
+### runStatelessSiteBackend()
+
+```ts
+function runStatelessSiteBackend(
+  loader,
+  id,
+  backend,
+  raw,
+): Promise<{
+  status: number;
+  headers: readonly (readonly [string, string][]);
+  bodyBase64: string;
+}>;
+```
+
+One admitted Site request, no native state, bindings or ambient outbound access.
+
+#### Parameters
+
+| Parameter         | Type                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `loader`          | `WorkerLoader`                                                                                        |
+| `id`              | `string`                                                                                              |
+| `backend`         | `DurableBackend`                                                                                      |
+| `raw`             | \{ `url`: `string`; `method`: `string`; `contentType`: `string` \| `null`; `bodyBase64`: `string`; \} |
+| `raw.url`         | `string`                                                                                              |
+| `raw.method`      | `string`                                                                                              |
+| `raw.contentType` | `string` \| `null`                                                                                    |
+| `raw.bodyBase64`  | `string`                                                                                              |
+
+#### Returns
+
+`Promise`\<\{ `status`: `number`; `headers`: readonly readonly \[`string`,
+`string`\][]; `bodyBase64`: `string`; \}\>
+
+---
+
+### siteHttpRequest()
+
+```ts
+function siteHttpRequest(raw): Request;
+```
+
+Decode the bounded HTTP wire once before native Request construction.
+
+#### Parameters
+
+| Parameter | Type      |
+| --------- | --------- |
+| `raw`     | `unknown` |
+
+#### Returns
+
+`Request`
+
+---
+
+### captureSiteHttpReply()
+
+```ts
+function captureSiteHttpReply(response): Promise<{
+  status: number;
+  headers: readonly (readonly [string, string][]);
+  bodyBase64: string;
+}>;
+```
+
+Close a guest response into bounded content-only JSON, never HTML on the Hub
+bridge.
+
+#### Parameters
+
+| Parameter  | Type       |
+| ---------- | ---------- |
+| `response` | `Response` |
+
+#### Returns
+
+`Promise`\<\{ `status`: `number`; `headers`: readonly readonly \[`string`,
+`string`\][]; `bodyBase64`: `string`; \}\>
+
+---
+
 ### createFrameFailureSlot()
 
 ```ts

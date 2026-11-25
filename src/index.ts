@@ -703,3 +703,5 @@ export function createAppInstance<Host>(
     inspect: () => lock.withPermits(1)(read),
   };
 }
+
+export { appFacetRequest, appFacetResponse } from "./backend-request.js";

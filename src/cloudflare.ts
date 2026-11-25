@@ -3,6 +3,7 @@ import { nativeGitFrameMethods } from "@fungi.computer/agar/git-rpc";
 import { rpcHandleSchema, rpcMethod } from "@fungi.computer/agar/rpc";
 import {
   facetInvocationModule,
+  siteInvocationModule,
   facetFrameBindingModule,
 } from "./facet-invocation.js";
 import {
@@ -26,7 +27,15 @@ import {
   gitPushVerdictSchema,
 } from "@fungi.computer/agar/git";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { appRegionReplySchema } from "@fungi.computer/puffball/backend";
+import {
+  siteHttpRequestSchema,
+  siteHttpReplySchema,
+  type SiteHttpRequest,
+  type SiteHttpReply,
+  type DurableBackend,
+  appRegionReplySchema,
+} from "@fungi.computer/puffball/backend";
+import { APP_INVOCATION_CEILING_MS } from "./invocation.js";
 import { guestLimits, type GuestLimits } from "./guest-policy.js";
 export type { GuestLimits } from "./guest-policy.js";
 import { headContentObject } from "./build/content-objects.js";
@@ -718,7 +727,10 @@ export function createCloudflareAppTestCopies<FacetClass>(
           new Response(body, {
             status: reply.status,
             statusText: reply.statusText,
-            headers: reply.headers,
+            headers: reply.headers.map(([name, value]): [string, string] => [
+              name,
+              value,
+            ]),
           }),
         );
       }),
@@ -1032,7 +1044,9 @@ export function createCloudflareAppInstance<FacetClass, Host>(
                 return new Response(body, {
                   status: reply.status,
                   statusText: reply.statusText,
-                  headers: reply.headers,
+                  headers: reply.headers.map(
+                    ([name, value]): [string, string] => [name, value],
+                  ),
                 });
               },
               catch: (error) =>
@@ -1135,4 +1149,100 @@ export function createCloudflareAppInstance<FacetClass, Host>(
         };
       }),
   });
+}
+
+/** Strip ambient browser credentials before the signed stateless dispatch boundary. */
+export async function captureSiteHttpRequest(
+  request: Request,
+): Promise<SiteHttpRequest> {
+  const clean = appFacetRequest(request);
+  const body = await readHttpBody(clean.body, requestBodyCeiling);
+  return Schema.decodeUnknownSync(siteHttpRequestSchema)({
+    url: clean.url,
+    method: clean.method,
+    contentType: clean.headers.get("Content-Type"),
+    bodyBase64: Schema.encodeSync(Schema.Uint8ArrayFromBase64)(
+      body ?? new Uint8Array(),
+    ),
+  });
+}
+/** Reconstruct only bounded content metadata; guest cookies and origin policy never cross. */
+export function siteHttpResponse(raw: unknown): Response {
+  const reply = Schema.decodeUnknownSync(siteHttpReplySchema)(raw);
+  const body = Schema.decodeUnknownSync(Schema.Uint8ArrayFromBase64)(
+    reply.bodyBase64,
+  );
+  if (body.byteLength > replyBodyCeiling.bytes)
+    throw new Error(replyBodyCeiling.message);
+  return appFacetResponse(
+    new Response(
+      [204, 205, 304].includes(reply.status) ? null : new Uint8Array(body),
+      {
+        status: reply.status,
+        headers: reply.headers.map(([name, value]): [string, string] => [
+          name,
+          value,
+        ]),
+      },
+    ),
+  );
+}
+/** One admitted Site request, no native state, bindings or ambient outbound access. */
+export async function runStatelessSiteBackend(
+  loader: WorkerLoader,
+  id: string,
+  backend: DurableBackend,
+  raw: SiteHttpRequest,
+): Promise<SiteHttpReply> {
+  const request = siteHttpRequest(raw);
+  const stub = loader
+    .get(id, () => ({
+      compatibilityDate: backend.compatibilityDate,
+      mainModule: "invocation.js",
+      modules: {
+        "invocation.js": siteInvocationModule(backend.exportName),
+        "backend.js": backend.code,
+      },
+      env: {},
+      globalOutbound: null,
+      limits: guestLimits(),
+    }))
+    .getEntrypoint();
+  const response = appFacetResponse(await stub.fetch(request));
+  return captureSiteHttpReply(response);
+}
+
+/** Decode the bounded HTTP wire once before native Request construction. */
+export function siteHttpRequest(raw: unknown): Request {
+  const input = Schema.decodeUnknownSync(siteHttpRequestSchema)(raw);
+  const bytes = Schema.decodeUnknownSync(Schema.Uint8ArrayFromBase64)(
+    input.bodyBase64,
+  );
+  if (bytes.byteLength > requestBodyCeiling.bytes)
+    throw new Error(requestBodyCeiling.message);
+  const init: RequestInit = {
+    method: input.method,
+    redirect: "manual",
+    headers:
+      input.contentType === null ? {} : { "Content-Type": input.contentType },
+    signal: AbortSignal.timeout(APP_INVOCATION_CEILING_MS),
+  };
+  if (input.method !== "GET" && input.method !== "HEAD")
+    init.body = new Uint8Array(bytes);
+  return new Request(input.url, init);
+}
+
+/** Close a guest response into bounded content-only JSON, never HTML on the Hub bridge. */
+export async function captureSiteHttpReply(
+  response: Response,
+): Promise<SiteHttpReply> {
+  const clean = appFacetResponse(response);
+  const body = await readHttpBody(clean.body, replyBodyCeiling);
+  return {
+    status: clean.status,
+    headers: [...clean.headers],
+    bodyBase64: Schema.encodeSync(Schema.Uint8ArrayFromBase64)(
+      body ?? new Uint8Array(),
+    ),
+  };
 }
