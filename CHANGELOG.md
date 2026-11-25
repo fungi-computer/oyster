@@ -1,5 +1,27 @@
 # @fungi.computer/oyster
 
+## 0.60.0
+
+### Minor Changes
+
+- Changes since 0.59.2:
+
+  - fix(oyster): regenerate the built-in skills after the merge
+  - feat(hub): park approvals until the person answers
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.18.0
+  - @fungi.computer/agar@0.29.3
+  - @fungi.computer/braid@0.6.23
+  - @fungi.computer/darkroom@0.11.29
+  - @fungi.computer/nacre@0.9.16
+  - @fungi.computer/shiitake@0.23.5
+  - @fungi.computer/workflows-wire@0.7.24
+  - @fungi.computer/shiitake-extensions@0.13.15
+  - @fungi.computer/zookeeper@0.0.78
+
 ## 0.59.2
 
 ### Patch Changes
