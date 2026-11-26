@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.62.2
+
+### Patch Changes
+
+- Changes since 0.62.1:
+
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Parakeet release.
+  - Updated starter Apps for the Shiitake-extensions release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/parakeet@0.19.9
+  - @fungi.computer/shiitake-extensions@0.15.6
+
 ## 0.62.1
 
 ### Patch Changes
