@@ -1,5 +1,30 @@
 # @fungi.computer/oyster
 
+## 0.60.2
+
+### Patch Changes
+
+- Changes since 0.60.1:
+
+  - fix(hub): park a late ask before the transport cut and keep distinct asks
+    apart
+  - fix(hub): park a waiting question early and stop refusing for other Apps'
+    churn
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/mycelium@0.5.4
+  - @fungi.computer/shiitake-extensions@0.13.16
+  - @fungi.computer/braid@0.6.24
+  - @fungi.computer/knapsack@0.4.35
+  - @fungi.computer/shiitake@0.23.6
+  - @fungi.computer/veil@0.11.16
+  - @fungi.computer/workflows-wire@0.7.25
+  - @fungi.computer/computer@0.18.13
+  - @fungi.computer/computer-contract@0.6.12
+  - @fungi.computer/parakeet@0.18.2
+  - @fungi.computer/zookeeper@0.0.79
+
 ## 0.60.1
 
 ### Patch Changes
