@@ -105,6 +105,20 @@ export type StarterCreateResult =
   | Readonly<{ status: "created"; agentId: string }>
   | Readonly<{ status: "unfunded" }>;
 
+/** What running one Home seed needs; `runStarterSeed` takes only this. */
+export type StarterSeedHost = Pick<
+  StarterAgentHost,
+  | "ledger"
+  | "seedHome"
+  | "keepAlive"
+  | "timeoutMs"
+  | "seedRetryMs"
+  | "noteRetry"
+  | "describeSeedFailure"
+  | "report"
+  | "now"
+>;
+
 export type StarterAgentHost = Readonly<{
   ledger: StarterLedger;
   /** Only the Team owner's read may trigger the starter. */
@@ -121,6 +135,14 @@ export type StarterAgentHost = Readonly<{
    * bounded by `timeoutMs`; a failure leaves a retryable ledger row.
    */
   seedHome?(agentId: string): Promise<void>;
+  /**
+   * A host whose reads must not own the seed's I/O (a Durable Object, where
+   * work a request leaves running cannot use that request's connections)
+   * records the seed as due and arms its own wake here, then calls
+   * `runStarterSeed` from that wake. Omitted, the seed runs in the background
+   * of the read that created the starter.
+   */
+  deferSeed?(): void | Promise<void>;
   /**
    * Keep background work alive after the read answers: a stateless Worker
    * passes its `waitUntil`. A host whose process outlives the read omits it;
@@ -338,7 +360,7 @@ function withDeadline<T>(work: Promise<T>, timeoutMs: number): Deadlined<T> {
   return { bounded, timedOut: () => expired };
 }
 
-function describe(host: StarterAgentHost, cause: unknown): string {
+function describe(host: StarterSeedHost, cause: unknown): string {
   if (host.describeSeedFailure !== undefined)
     return host.describeSeedFailure(cause);
   return cause instanceof Error
@@ -348,7 +370,7 @@ function describe(host: StarterAgentHost, cause: unknown): string {
 
 /** Record why `attempt` failed; a row that has moved on since keeps its state. */
 async function fail(
-  host: StarterAgentHost,
+  host: StarterSeedHost,
   attempt: StarterLedgerRow,
   cause: unknown,
 ): Promise<void> {
@@ -360,7 +382,7 @@ async function fail(
 }
 
 /** Whether `row`'s attempt may still be running somewhere. */
-function attemptLive(host: StarterAgentHost, row: StarterLedgerRow): boolean {
+function attemptLive(host: StarterSeedHost, row: StarterLedgerRow): boolean {
   return (
     row.failure === null &&
     row.attemptAt !== null &&
@@ -374,7 +396,7 @@ function attemptLive(host: StarterAgentHost, row: StarterLedgerRow): boolean {
  * failure the attempt's row records why. The read never awaits it.
  */
 function runBounded<T>(
-  host: StarterAgentHost,
+  host: StarterSeedHost,
   attempt: StarterLedgerRow,
   work: Promise<T>,
 ): Promise<T | "failed"> {
@@ -403,22 +425,14 @@ function runBounded<T>(
   return settled;
 }
 
-/** Start the Home seed for an existing starter, recording the attempt first. */
-async function startSeed(
-  host: StarterAgentHost,
+/** The seed with its one quiet retry; a second failure is the one that is recorded. */
+function seedWithQuietRetry(
+  host: StarterSeedHost,
   seedHome: (agentId: string) => Promise<void>,
-  row: StarterLedgerRow,
+  attempt: StarterLedgerRow,
   agentId: string,
 ): Promise<void> {
-  const attempt: StarterLedgerRow = {
-    ...row,
-    outcome: "seed-pending",
-    agentId,
-    attemptAt: (host.now ?? Date.now)(),
-    failure: null,
-  };
-  await host.ledger.record(attempt);
-  const seeded = Promise.resolve()
+  return Promise.resolve()
     .then(() => seedHome(agentId))
     .catch(async (first: unknown) => {
       // One quiet retry before anyone is told the seed failed; a second failure
@@ -430,7 +444,70 @@ async function startSeed(
       await seedHome(agentId);
     })
     .then(() => host.ledger.record({ ...attempt, outcome: "created" }));
-  void runBounded(host, attempt, seeded);
+}
+
+/**
+ * Start the Home seed for an existing starter. A deferring host gets it
+ * recorded as due and wakes itself to run it; any other runs it now in the
+ * background, recording the attempt first.
+ */
+async function startSeed(
+  host: StarterAgentHost,
+  seedHome: (agentId: string) => Promise<void>,
+  row: StarterLedgerRow,
+  agentId: string,
+): Promise<void> {
+  const deferred = host.deferSeed !== undefined;
+  const attempt: StarterLedgerRow = {
+    ...row,
+    outcome: "seed-pending",
+    agentId,
+    attemptAt: deferred ? null : (host.now ?? Date.now)(),
+    failure: null,
+  };
+  await host.ledger.record(attempt);
+  if (host.deferSeed !== undefined) {
+    await host.deferSeed();
+    return;
+  }
+  void runBounded(
+    host,
+    attempt,
+    seedWithQuietRetry(host, seedHome, attempt, agentId),
+  );
+}
+
+/** When a deferred Home seed is next due to run: now when owed, past its bound when cut off. */
+export function starterSeedRowDueAt(
+  host: StarterSeedHost,
+  row: StarterLedgerRow | undefined,
+): number | null {
+  if (row?.outcome !== "seed-pending" || row.failure !== null) return null;
+  if (row.attemptAt === null) return (host.now ?? Date.now)();
+  return row.attemptAt + (host.timeoutMs ?? starterTimeoutMs);
+}
+
+/**
+ * Run the deferred Home seed from the host's own wake, where its I/O belongs.
+ * It runs only a seed that is due; one that is still within its bound is
+ * somewhere else, and a failed one waits for the owner's retry.
+ */
+export async function runStarterSeed(host: StarterSeedHost): Promise<void> {
+  const row = await host.ledger.read();
+  const due = starterSeedRowDueAt(host, row);
+  if (due === null || due > (host.now ?? Date.now)()) return;
+  const seedHome = host.seedHome;
+  if (row?.agentId == null || seedHome === undefined) return;
+  const attempt: StarterLedgerRow = {
+    ...row,
+    attemptAt: (host.now ?? Date.now)(),
+  };
+  await host.ledger.record(attempt);
+  await runBounded(
+    host,
+    attempt,
+    seedWithQuietRetry(host, seedHome, attempt, row.agentId),
+  );
 }
 
 /**
@@ -518,6 +595,11 @@ async function settle(host: StarterAgentHost): Promise<StarterOutcome> {
     const { agentId } = row;
     if (agentId === null || host.seedHome === undefined)
       throw new Error("Pending starter has no Home seed owner");
+    if (host.deferSeed !== undefined && row.failure === null) {
+      // The host's own wake owns this seed; make sure it is armed.
+      await host.deferSeed();
+      return "seeding";
+    }
     if (live) return "seeding";
     if (row.failure !== null && !retry) return "failed";
     await startSeed(host, host.seedHome, row, agentId);

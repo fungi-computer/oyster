@@ -1,5 +1,21 @@
 # @fungi.computer/oyster
 
+## 0.61.1
+
+### Patch Changes
+
+- Changes since 0.61.0:
+
+  - fix(oyster): keep the starter seed lint clean and refresh shiitake docs
+  - fix(hub): run the starter's Home seed from the Team alarm
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.15.0
+  - @fungi.computer/shiitake@0.24.0
+  - @fungi.computer/parakeet@0.19.3
+  - @fungi.computer/zookeeper@0.0.83
+
 ## 0.61.0
 
 ### Minor Changes
