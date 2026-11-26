@@ -1,5 +1,32 @@
 # @fungi.computer/oyster
 
+## 0.62.3
+
+### Patch Changes
+
+- Changes since 0.62.2:
+
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Puffball release.
+
+- Updated dependencies
+  - @fungi.computer/puffball@0.18.1
+  - @fungi.computer/agar@0.30.2
+  - @fungi.computer/braid@0.6.29
+  - @fungi.computer/forage@0.6.3
+  - @fungi.computer/mycelium@0.5.9
+  - @fungi.computer/nacre@0.9.20
+  - @fungi.computer/workflows-wire@0.7.30
+  - @fungi.computer/darkroom@0.11.33
+  - @fungi.computer/parakeet@0.19.10
+  - @fungi.computer/shiitake@0.24.5
+  - @fungi.computer/knapsack@0.4.40
+  - @fungi.computer/veil@0.11.21
+  - @fungi.computer/shiitake-extensions@0.15.7
+  - @fungi.computer/zookeeper@0.0.88
+  - @fungi.computer/computer@0.19.1
+  - @fungi.computer/computer-contract@0.6.17
+
 ## 0.62.2
 
 ### Patch Changes
