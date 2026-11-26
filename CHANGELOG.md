@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.61.4
+
+### Patch Changes
+
+- Changes since 0.61.3:
+
+  - Updated starter Apps for the Grove release.
+
 ## 0.61.3
 
 ### Patch Changes
