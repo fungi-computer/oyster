@@ -19,6 +19,25 @@ describe("the built-in skill bundle", () => {
     expect(await renderPlatformSkills()).toBe(committed);
   });
 
+  it("caps setup at three question cards and says which three, so the chip's promise holds", () => {
+    const setup = platformSkillFiles.find(
+      ({ path }) => path === "setup-fungi/SKILL.md",
+    );
+    const text = (setup?.content ?? "").replace(/\s+/gu, " ");
+    expect(text).toContain(
+      "Ask at most 3 `question.ask` cards in the whole setup",
+    );
+    expect(text).toContain("(1) one interview card");
+    expect(text).toContain('(2) the "Do it?" plan card');
+    expect(text).toContain("(3) the name offer");
+    expect(text).toContain("Never add a fourth");
+    expect(text).toContain(
+      "The widget offer is an approval, not a question card",
+    );
+    // No step reopens the interview with a follow-up card.
+    expect(text).not.toContain("at most 1 follow-up card");
+  });
+
   it("holds only well-formed skills: each folder has a SKILL.md that parses and is admitted without a diagnostic", () => {
     const folders = new Set(
       platformSkillFiles.map(({ path }) => path.slice(0, path.indexOf("/"))),
@@ -72,7 +91,7 @@ describe("the built-in skill bundle", () => {
     const raw = setup?.content ?? "";
     const text = raw.replace(/\s+/gu, " ");
     expect(parseSkill(raw, "setup-fungi").metadata.name).toBe("setup-fungi");
-    expect(text).toContain("at most 3 cards");
+    expect(text).toContain("at most 3 `question.ask` cards");
     expect(text).toContain('"Do it", "Change something", "Skip"');
     expect(text).toContain('Delete the "First conversation" section');
     expect(text).toContain("call `setup.finish()` once");
@@ -302,7 +321,7 @@ describe("the built-in skill bundle", () => {
         ?.content ?? ""
     ).replace(/\s+/gu, " ");
     expect(text).toMatch(
-      /Ask at most 3 cards in total, counting the "Do it\?" plan and the name offer/u,
+      /Ask at most 3 `question.ask` cards in the whole setup.*\(2\) the "Do it\?" plan card and \(3\) the name offer/u,
     );
     expect(text).toMatch(/Do not ask for the person's own name/u);
     expect(text).not.toMatch(/never add an option that only means/u);

@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.60.3
+
+### Patch Changes
+
+- Changes since 0.60.2:
+
+  - fix(oyster): note the first seed failure instead of dropping it
+  - fix(hub): keep an approval valid through bookkeeping changes
+
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.13.17
+
 ## 0.60.2
 
 ### Patch Changes

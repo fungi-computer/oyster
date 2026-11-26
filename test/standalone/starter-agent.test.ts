@@ -56,6 +56,7 @@ function team() {
       return Promise.resolve({ status: "created", agentId: agent.agentId });
     },
     report: (cause) => reports.push(cause),
+    seedRetryMs: 5,
   });
   return { directory, host, sqlite };
 }
@@ -246,6 +247,31 @@ describe("starter Agent laws", () => {
       });
     }, 3_000);
     expect(reports).toEqual([expect.any(StarterTimeout)]);
+  });
+
+  it("retries a failed first Home seed quietly and tells nobody when the second works", async () => {
+    const { host } = team();
+    let attempts = 0;
+    const retried: unknown[] = [];
+    const seeding: StarterAgentHost = {
+      ...host(),
+      noteRetry: (cause) => retried.push(cause),
+      seedHome: () => {
+        attempts += 1;
+        return attempts === 1
+          ? Promise.reject(
+              new Error("Cannot perform I/O on behalf of a different request"),
+            )
+          : Promise.resolve();
+      },
+    };
+    expect(await ensureStarterAgent(seeding)).toBe("seeding");
+    await vi.waitFor(async () => {
+      expect((await starterSeedStatus(seeding.ledger)).state).toBe("ready");
+    });
+    expect(attempts).toBe(2);
+    expect(reports).toEqual([]);
+    expect(retried).toHaveLength(1);
   });
 
   it("names a refused Home seed in the host's words", async () => {

@@ -129,6 +129,15 @@ export type StarterAgentHost = Readonly<{
   keepAlive?: ((work: Promise<unknown>) => void) | undefined;
   /** How long the create or one Home seed may take before it counts as failed; default 60 s. */
   timeoutMs?: number;
+  /**
+   * How long to wait before the Home seed's one quiet second attempt; default
+   * 1 s. A first attempt often fails for a reason that clears by itself (a
+   * Computer still waking, a request context that ended), so the person is
+   * told only when the second attempt fails too.
+   */
+  seedRetryMs?: number;
+  /** The first attempt's failure, noted (never shown) when the quiet retry starts. */
+  noteRetry?(cause: unknown): void;
   /** How long a read waits for the create before answering `starting`; default 5 s. */
   readWaitMs?: number;
   /**
@@ -411,6 +420,15 @@ async function startSeed(
   await host.ledger.record(attempt);
   const seeded = Promise.resolve()
     .then(() => seedHome(agentId))
+    .catch(async (first: unknown) => {
+      // One quiet retry before anyone is told the seed failed; a second failure
+      // is the one that is reported and recorded. The first is only noted.
+      host.noteRetry?.(first);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, host.seedRetryMs ?? 1_000);
+      });
+      await seedHome(agentId);
+    })
     .then(() => host.ledger.record({ ...attempt, outcome: "created" }));
   void runBounded(host, attempt, seeded);
 }
