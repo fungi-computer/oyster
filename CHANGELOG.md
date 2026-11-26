@@ -1,5 +1,33 @@
 # @fungi.computer/oyster
 
+## 0.61.0
+
+### Minor Changes
+
+- Changes since 0.60.7:
+
+  - feat(hub): a parked approval holds the asking Session until it ends
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/forage@0.6.0
+  - @fungi.computer/shiitake-extensions@0.14.0
+  - @fungi.computer/agar@0.29.4
+  - @fungi.computer/knapsack@0.4.36
+  - @fungi.computer/mycelium@0.5.5
+  - @fungi.computer/veil@0.11.17
+  - @fungi.computer/braid@0.6.25
+  - @fungi.computer/darkroom@0.11.30
+  - @fungi.computer/nacre@0.9.17
+  - @fungi.computer/parakeet@0.19.2
+  - @fungi.computer/shiitake@0.23.9
+  - @fungi.computer/workflows-wire@0.7.26
+  - @fungi.computer/computer@0.18.14
+  - @fungi.computer/computer-contract@0.6.13
+  - @fungi.computer/zookeeper@0.0.82
+
 ## 0.60.7
 
 ### Patch Changes

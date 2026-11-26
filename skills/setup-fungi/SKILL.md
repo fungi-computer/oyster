@@ -256,11 +256,20 @@ offer is pending.
      needs something the person must do first, say so in one line and skip that
      widget. Never place one without that approval, and never add one for a
      person who denied. If `env.TOURTOIS` is missing or a call fails, skip it.
-   - Delete the "First conversation" section from Home `AGENTS.md`.
+   - After the widget approval. Its result arrives later as a message that
+     starts "Approval update for". Do not call `layout.place` again for that
+     widget and make no file edit except the cleanup below. Say one short line
+     (it ran, was denied or expired), then carry on with the cleanup and the
+     finish step.
+   - Delete the "First conversation" section from Home `AGENTS.md`. Read the
+     file first and skip the patch when the section is already gone: a patch
+     that no longer matches changes nothing, and you never retry it.
    - When the `setup.finish` tool is available, say one more line: "That's you
      set up. To keep going with me, start Pro, or link your wallet if you're a
-     holder." Then call `setup.finish()` once in your final `execute`. If you
-     created the setup goal, that same invocation must first await
+     holder." Then call `setup.finish()` once in your final `execute`, by
+     exactly `await env.setup.finish({})`: never search or list with `forage` to
+     find it. If you created the setup goal, that same invocation must first
+     await
      `env.goal.update_goal({status: "complete", reason: "Useful result delivered; name and widget offers settled; setup progress cleaned up."})`,
      then await `env.setup.finish({})`. Keep the two calls together so the
      hand-off cannot leave the setup goal unfinished. Leave any other current

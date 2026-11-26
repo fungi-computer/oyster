@@ -38,6 +38,19 @@ describe("the built-in skill bundle", () => {
     expect(text).not.toContain("at most 1 follow-up card");
   });
 
+  it("tells setup exactly what to do after the widget approval: one line, no retry, the finish call by its path", () => {
+    const text = (
+      platformSkillFiles.find(({ path }) => path === "setup-fungi/SKILL.md")
+        ?.content ?? ""
+    ).replace(/\s+/gu, " ");
+    expect(text).toContain('starts "Approval update for"');
+    expect(text).toContain("make no file edit except the cleanup below");
+    expect(text).toContain("skip the patch when the section is already gone");
+    expect(text).toContain("you never retry it");
+    expect(text).toContain("by exactly `await env.setup.finish({})`");
+    expect(text).toContain("never search or list with `forage` to find it");
+  });
+
   it("holds only well-formed skills: each folder has a SKILL.md that parses and is admitted without a diagnostic", () => {
     const folders = new Set(
       platformSkillFiles.map(({ path }) => path.slice(0, path.indexOf("/"))),
