@@ -1,5 +1,19 @@
 # @fungi.computer/oyster
 
+## 0.60.6
+
+### Patch Changes
+
+- Changes since 0.60.5:
+
+  - Updated starter Apps for the Caps release.
+  - Updated starter Apps for the Parakeet release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.14.3
+  - @fungi.computer/parakeet@0.19.0
+
 ## 0.60.5
 
 ### Patch Changes
