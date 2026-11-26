@@ -1,5 +1,16 @@
 # @fungi.computer/oyster
 
+## 0.60.7
+
+### Patch Changes
+
+- Changes since 0.60.6:
+
+  - Updated starter Apps for the Parakeet release.
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.19.1
+
 ## 0.60.6
 
 ### Patch Changes
