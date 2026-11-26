@@ -852,6 +852,12 @@ try {
       );
       await popup.getByRole("link", { name: label, exact: true }).click();
       await navigation;
+      // The fenced origin answers an empty 404, which Chromium replaces with
+      // its error page in a navigation of its own that commits after the
+      // response. Starting the next goto before it lands makes Playwright
+      // report the goto interrupted by chrome-error://chromewebdata/ (seen on
+      // a loaded runner), so wait for that final state first.
+      await popup.waitForURL("chrome-error://chromewebdata/");
     }
     await popup.goto(previewUrl);
     const ownerProbe = calls.length;

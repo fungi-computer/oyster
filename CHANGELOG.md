@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.61.3
+
+### Patch Changes
+
+- Changes since 0.61.2:
+
+  - Updated starter Apps for the Trellis release.
+  - Updated starter Apps for the Caps release.
+  - Updated starter Apps for the Parakeet release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/caps@0.14.4
+  - @fungi.computer/parakeet@0.19.5
+
 ## 0.61.2
 
 ### Patch Changes
