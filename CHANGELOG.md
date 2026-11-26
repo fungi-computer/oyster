@@ -1,5 +1,35 @@
 # @fungi.computer/oyster
 
+## 0.61.6
+
+### Patch Changes
+
+- Changes since 0.61.5:
+
+  - Updated starter Apps for the Tourtois release.
+  - Updated starter Apps for the Prints release.
+  - Updated starter Apps for the Grove release.
+  - Updated starter Apps for the Parakeet release.
+  - Updated starter Apps for the Shiitake release.
+  - Updated starter Apps for the Mycelium release.
+  - Updated starter Apps for the Shiitake-extensions release.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/mycelium@0.5.7
+  - @fungi.computer/parakeet@0.19.6
+  - @fungi.computer/shiitake-extensions@0.15.2
+  - @fungi.computer/shiitake@0.24.2
+  - @fungi.computer/braid@0.6.27
+  - @fungi.computer/knapsack@0.4.38
+  - @fungi.computer/veil@0.11.19
+  - @fungi.computer/zookeeper@0.0.85
+  - @fungi.computer/workflows-wire@0.7.28
+  - @fungi.computer/computer@0.18.16
+  - @fungi.computer/computer-contract@0.6.15
+
 ## 0.61.5
 
 ### Patch Changes
