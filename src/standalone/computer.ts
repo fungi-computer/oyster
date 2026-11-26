@@ -548,6 +548,8 @@ export class ComputerDO
         endedByIdleSleep: (backendId) => {
           this.endedByIdleSleep(backendId);
         },
+        hasRunningProcesses: (backendId, since) =>
+          this.hasRunningProcesses(backendId, since),
         // Standalone boots use the native host directly, not Hub's admission queue.
         vmQueuePosition: () => Promise.resolve(null),
       },

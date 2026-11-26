@@ -1,5 +1,20 @@
 # @fungi.computer/oyster
 
+## 0.62.0
+
+### Minor Changes
+
+- Changes since 0.61.9:
+
+  - fix(computer): count open terminals, trust no stale process rows and shout
+    when saves keep failing
+  - feat(computer): save files and stop an idle Computer after ten minutes
+
+### Patch Changes
+
+- Updated dependencies
+  - @fungi.computer/computer@0.19.0
+
 ## 0.61.9
 
 ### Patch Changes
