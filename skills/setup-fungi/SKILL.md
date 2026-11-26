@@ -2,8 +2,8 @@
 name: setup-fungi
 description:
   Set yourself up for a new person in your first conversation, or when asked to
-  set up Fungi or a project. Interview briefly, then do the setup yourself with
-  their approval.
+  set up Fungi or a project, including a bare "Set me up". Interview briefly,
+  then do the setup yourself with their approval.
 ---
 
 # Set up Fungi for your person

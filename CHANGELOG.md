@@ -1,5 +1,17 @@
 # @fungi.computer/oyster
 
+## 0.60.1
+
+### Patch Changes
+
+- Changes since 0.60.0:
+
+  - fix(parakeet): show a refused answer as a toast and keep a disabled Send
+    neutral
+
+- Updated dependencies
+  - @fungi.computer/parakeet@0.18.1
+
 ## 0.60.0
 
 ### Minor Changes
