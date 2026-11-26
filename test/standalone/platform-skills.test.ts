@@ -1,10 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import {
   admitSkill,
   newSkillAdmission,
   parseSkill,
 } from "@fungi.computer/shiitake-extensions/skills/discovery";
+import { Questions } from "@fungi.computer/shiitake-extensions/question";
+import { questionAskInput } from "@fungi.computer/shiitake-extensions/question/ask-input";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import { platformSkillFiles } from "../../src/platform-skills.generated.js";
@@ -17,6 +21,88 @@ describe("the built-in skill bundle", () => {
       "utf8",
     );
     expect(await renderPlatformSkills()).toBe(committed);
+  });
+
+  it("ships example question cards the question tool accepts", async () => {
+    // Every shipped skill, every fenced example, whatever its language tag: a
+    // card the tool refuses is a failed script in a new person's chat.
+    const fences = platformSkillFiles
+      .flatMap(({ path, content }) =>
+        [...content.matchAll(/```[a-z]*\n([\s\S]*?)```/gu)].map(([, code]) => ({
+          path,
+          code: code ?? "",
+        })),
+      )
+      .filter(({ code }) => code.includes("env.question.ask"));
+    // The name card's example refers to values the Agent binds first.
+    const names = {
+      currentName: "Shiitake",
+      firstSuggestion: "Moss",
+      secondSuggestion: "Fern",
+    };
+    const asked: { questions: unknown }[] = [];
+    const env = {
+      question: {
+        ask: (call: { questions: unknown }) => {
+          asked.push(call);
+          return Promise.resolve({ status: "answered" });
+        },
+      },
+    };
+    for (const { code } of fences)
+      await runInNewContext(`(async () => {\n${code}\n})()`, {
+        env,
+        ...names,
+      });
+    // The interview card and the name card, at least; and every mention of the
+    // call in a skill sits in a fence this test ran.
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    const mentions = platformSkillFiles.reduce(
+      (count, { content }) =>
+        count + (content.match(/env\.question\.ask\(/gu) ?? []).length,
+      0,
+    );
+    expect(asked.length).toBe(mentions);
+    for (const call of asked) {
+      // The tool's own input first (strict objects, the id rule, limits), then
+      // the contract the owner decodes.
+      const parsed = questionAskInput.parse(call);
+      expect(() =>
+        Schema.decodeUnknownSync(Questions)(parsed.questions),
+      ).not.toThrow();
+    }
+  });
+
+  it("refuses a card the tool would refuse", () => {
+    const card = {
+      id: "setup_interview",
+      header: "Your goal",
+      question: "What should I help with?",
+      options: [
+        { label: "One", description: "First." },
+        { label: "Two", description: "Second." },
+      ],
+    };
+    expect(questionAskInput.safeParse({ questions: [card] }).success).toBe(
+      true,
+    );
+    for (const bad of [
+      { ...card, header: "Getting started" },
+      { ...card, id: "SetupGoal" },
+      { ...card, extra: true },
+      { ...card, question: "   " },
+      { ...card, options: [card.options[0], card.options[0]] },
+      {
+        ...card,
+        options: [{ ...card.options[0], value: "x" }, card.options[1]],
+      },
+    ])
+      expect(questionAskInput.safeParse({ questions: [bad] }).success).toBe(
+        false,
+      );
+    expect(
+      questionAskInput.safeParse({ questions: [card, card] }).success,
+    ).toBe(false);
   });
 
   it("caps setup at three question cards and says which three, so the chip's promise holds", () => {

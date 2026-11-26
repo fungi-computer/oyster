@@ -1,5 +1,18 @@
 # @fungi.computer/oyster
 
+## 0.62.1
+
+### Patch Changes
+
+- Changes since 0.62.0:
+
+  - fix(oyster): check example cards against the question tool's strict input
+  - fix(oyster): give the setup Agent a valid interview card and state the
+    question limits
+
+- Updated dependencies
+  - @fungi.computer/shiitake-extensions@0.15.5
+
 ## 0.62.0
 
 ### Minor Changes
