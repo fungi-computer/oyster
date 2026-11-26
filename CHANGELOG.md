@@ -1,5 +1,13 @@
 # @fungi.computer/oyster
 
+## 0.61.5
+
+### Patch Changes
+
+- Changes since 0.61.4:
+
+  - Updated starter Apps for the Tourtois release.
+
 ## 0.61.4
 
 ### Patch Changes
