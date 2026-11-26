@@ -1,5 +1,31 @@
 # @fungi.computer/oyster
 
+## 0.61.8
+
+### Patch Changes
+
+- Changes since 0.61.7:
+
+  - fix(sites): limit every request and require the bridge key
+
+- Updated dependencies
+  - @fungi.computer/puffball@0.18.0
+  - @fungi.computer/agar@0.30.1
+  - @fungi.computer/braid@0.6.28
+  - @fungi.computer/forage@0.6.2
+  - @fungi.computer/mycelium@0.5.8
+  - @fungi.computer/nacre@0.9.19
+  - @fungi.computer/workflows-wire@0.7.29
+  - @fungi.computer/darkroom@0.11.32
+  - @fungi.computer/parakeet@0.19.7
+  - @fungi.computer/shiitake@0.24.3
+  - @fungi.computer/knapsack@0.4.39
+  - @fungi.computer/veil@0.11.20
+  - @fungi.computer/shiitake-extensions@0.15.3
+  - @fungi.computer/zookeeper@0.0.86
+  - @fungi.computer/computer@0.18.17
+  - @fungi.computer/computer-contract@0.6.16
+
 ## 0.61.7
 
 ### Patch Changes

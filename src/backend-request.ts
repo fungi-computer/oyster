@@ -28,6 +28,7 @@ export function appFacetResponse(response: Response): Response {
     "Content-Disposition",
     "Content-Range",
     "Accept-Ranges",
+    "Retry-After",
     "ETag",
     "Last-Modified",
   ]) {
