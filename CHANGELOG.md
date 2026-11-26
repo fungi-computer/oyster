@@ -1,5 +1,33 @@
 # @fungi.computer/oyster
 
+## 0.61.2
+
+### Patch Changes
+
+- Changes since 0.61.1:
+
+  - Updated starter Apps for the Agar release.
+  - Updated starter Apps for the Puffball release.
+
+- Updated dependencies
+- Updated dependencies
+  - @fungi.computer/agar@0.30.0
+  - @fungi.computer/puffball@0.17.0
+  - @fungi.computer/braid@0.6.26
+  - @fungi.computer/darkroom@0.11.31
+  - @fungi.computer/nacre@0.9.18
+  - @fungi.computer/parakeet@0.19.4
+  - @fungi.computer/shiitake@0.24.1
+  - @fungi.computer/workflows-wire@0.7.27
+  - @fungi.computer/forage@0.6.1
+  - @fungi.computer/mycelium@0.5.6
+  - @fungi.computer/shiitake-extensions@0.15.1
+  - @fungi.computer/zookeeper@0.0.84
+  - @fungi.computer/knapsack@0.4.37
+  - @fungi.computer/veil@0.11.18
+  - @fungi.computer/computer@0.18.15
+  - @fungi.computer/computer-contract@0.6.14
+
 ## 0.61.1
 
 ### Patch Changes
